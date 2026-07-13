@@ -65,19 +65,20 @@ AI와 자동화가 이해할 수 있을 만큼 일관되면서 팀별 업무 방
 
 ## 우선순위 6. 작업 모델
 
-- 모든 Kanban 카드가 GitHub Issue인지
 - 사용자 시나리오와 처리 케이스가 Issue와 어떤 관계인지
+- GitHub Issue 상태와 Board 컬럼을 어떻게 매핑할지
 - 오프라인 초안과 GitHub 동기화 충돌 처리
 - 배포 상태를 어떤 GitHub 데이터에서 가져올지
 
-## 우선순위 7. 화면 정보 구조
+## 우선순위 7. 화면별 세부 구성
 
-- 간결한 전역 메뉴와 상황별 트리 조합
+- Home의 진행 상황·확인할 요청·타임라인 배치
 - Knowledge에서만 제품 구조 트리를 확장할지
-- Work의 Board와 Issues를 같은 영역에 둘지
+- Issues의 Board·List·My Issues·Milestones 하위 탐색
 - 문서·코드·리뷰 패널을 동시에 여는 방식
+- Home의 요청 목록에서 대상 문서·PR로 이동하는 방식
 
-화면 결정은 대표 유스케이스와 정보 모델을 승인한 뒤 다시 진행합니다.
+전역 메뉴는 `Home / Knowledge / Issues / Settings`로 합의했습니다. Work와 Activity는 Home·Issues로 흡수하고, Reviews는 대상 문서나 PR의 문맥 안에서 처리합니다.
 
 ## 우선순위 8. 이름
 
