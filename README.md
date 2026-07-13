@@ -46,7 +46,7 @@
 ## 아직 확정하지 않은 것
 
 - 제품 구조 트리의 기본 깊이와 커스텀 범위
-- 팀마다 달라질 수 있는 Knowledge 문서 타입 체계
+- 팀마다 달라질 수 있는 문서 타입 체계
 - OpenAPI와 Postman의 역할 및 API 명세 저장 위치
-- Kanban 항목과 GitHub Issue의 정확한 관계
+- GitHub Project 필드와 Hub 진행 상태의 세부 매핑
 - 최종 제품명과 최종 화면 정보 구조

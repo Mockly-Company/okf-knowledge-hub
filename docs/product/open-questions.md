@@ -18,7 +18,7 @@
 
 기본 3단계를 사용하고 기능 그룹은 컬렉션 또는 필터로 처리합니다. 실제 예시 여러 개를 넣어 탐색성과 진행률 표현을 비교해야 합니다.
 
-## 우선순위 2. Knowledge 문서 타입
+## 우선순위 2. 문서 타입
 
 ### 질문
 
@@ -66,19 +66,22 @@ AI와 자동화가 이해할 수 있을 만큼 일관되면서 팀별 업무 방
 ## 우선순위 6. 작업 모델
 
 - 사용자 시나리오와 처리 케이스가 Issue와 어떤 관계인지
-- GitHub Issue 상태와 Board 컬럼을 어떻게 매핑할지
+- GitHub Project의 상태·사용자 정의 필드와 Hub 상태를 어떻게 매핑할지
 - 오프라인 초안과 GitHub 동기화 충돌 처리
 - 배포 상태를 어떤 GitHub 데이터에서 가져올지
 
+워크스페이스당 하나의 GitHub Project를 연결하고 실제 작업은 GitHub Issue를 원본으로 사용하는 구조는 합의했습니다. 초기 Project 항목은 실제 Issue와 PR로 제한합니다.
+
 ## 우선순위 7. 화면별 세부 구성
 
-- Home의 진행 상황·확인할 요청·타임라인 배치
-- Knowledge에서만 제품 구조 트리를 확장할지
-- Issues의 Board·List·My Issues·Milestones 하위 탐색
+- Documents에서만 제품 구조 트리를 확장할지
+- Project의 Board·List·My Issues·Milestones 하위 탐색
 - 문서·코드·리뷰 패널을 동시에 여는 방식
-- Home의 요청 목록에서 대상 문서·PR로 이동하는 방식
+- Home의 확인할 항목에서 대상 문서·Issue·PR로 이동하는 방식
 
-전역 메뉴는 `Home / Knowledge / Issues / Settings`로 합의했습니다. Work와 Activity는 Home·Issues로 흡수하고, Reviews는 대상 문서나 PR의 문맥 안에서 처리합니다.
+전역 메뉴는 `Home / Documents / Project / Settings`로 합의했습니다. Activity는 Home으로 흡수하고, Issues는 Project 안의 실제 작업 항목으로 다루며, Reviews는 대상 문서나 PR의 문맥 안에서 처리합니다.
+
+Home의 기본 배치는 합의했습니다. 상단에 Issue 요약을 두고, 기능 진행률, 내가 확인할 항목과 시간이 표시된 최근 활동을 이어서 보여줍니다. 세부 카드 크기와 반응형 배치는 화면 시안에서 조정합니다.
 
 ## 우선순위 8. 이름
 

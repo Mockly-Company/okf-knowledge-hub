@@ -28,8 +28,8 @@
 
 ```text
 Home
-Knowledge
-Issues
+Documents
+Project
 ────────
 Settings
 ```
@@ -37,19 +37,28 @@ Settings
 - `Work`는 독자적인 데이터와 행동이 없어 전역 메뉴에서 제외합니다.
 - `Activity`는 Home의 타임라인으로 흡수합니다.
 - `Reviews`는 독립 콘텐츠가 아니라 문서나 PR에 붙는 처리 과정이므로 전역 메뉴에서 제외합니다.
-- 사용자가 처리해야 할 리뷰와 결정 요청은 Home에서 모아 보여주고, 실제 검토는 원래 문서나 PR 문맥에서 진행합니다.
+- 사용자가 확인해야 할 검토, 결정과 작업 시작 알림은 Home에서 모아 보여주고, 실제 처리는 원래 문서, Issue나 PR 문맥에서 진행합니다.
 
 ### Home
 
-워크스페이스에 들어왔을 때 무엇을 먼저 처리해야 하는지 보여줍니다.
+워크스페이스에 들어왔을 때 프로젝트 진행 상황과 다음 행동을 보여줍니다.
 
-- 최근 활동
-- 전체 진행 상황과 막힌 작업
-- 내가 검토할 요청
-- 최근 완료와 배포
-- 날짜별 활동 타임라인
+- 인사말과 오늘 날짜
+- `프로젝트 진행 상황` 제목
+- 열린 Issue, 진행 중인 Issue, 이번 주 완료 Issue 요약
+- 기능별 진행률과 완료 Issue 수
+- 내가 확인할 항목
+  - 검토 필요
+  - 결정 필요
+  - 작업 시작 가능
+  - 응답 필요
+- 발생 시간을 포함한 최근 활동
 
-### Knowledge
+기능 진행률은 초기에는 연결된 Issue의 `완료 수 / 전체 수`로 계산하고 퍼센트와 실제 개수를 함께 보여줍니다. 작업 크기를 반영한 가중 진행률은 초기 범위에서 제외합니다.
+
+백엔드 API 완료처럼 누군가의 승인이 필요하지 않더라도 후속 작업자가 다음 행동을 시작해야 하는 이벤트는 `작업 시작 가능` 항목으로 표시합니다. 연결된 선행 Issue 종료나 PR 병합을 기준으로 만들며, 정확한 연결이 없으면 자동으로 추론하지 않습니다.
+
+### Documents
 
 - 제품 구조 탐색
 - 문서 라이브러리
@@ -58,30 +67,32 @@ Settings
 - 관련 분석·테스트·API·코드
 - 현재 버전과 제안 버전 전환
 
-Knowledge는 문서가 중심인 공간입니다. 진행 중인 작업을 별도 목록으로 소유하지 않으며, 문서에서 관련 Issue나 리뷰 상태를 참조 정보로 확인할 수 있습니다.
+Documents는 문서가 중심인 공간입니다. `History`는 별도 전역 메뉴가 아니라 각 문서의 커밋·변경·승인 이력을 보여주는 상세 보기입니다. 진행 중인 작업을 별도 목록으로 소유하지 않으며, 문서에서 관련 Issue나 리뷰 상태를 참조 정보로 확인할 수 있습니다.
 
-### Issues
+### Project
 
-- GitHub Issue Board
-- 전체 Issue 목록
-- 나에게 할당된 Issue
-- Milestone과 필터
+- 워크스페이스에 연결된 GitHub Project
+- Project의 Board와 List
+- 전체 Issue와 나에게 할당된 Issue
+- Milestone, 사용자 정의 필드와 필터
 - Issue 생성, 수정, 댓글과 종료
 - 관련 기능·시나리오·처리 케이스·문서 표시
 - 연결된 PR과 코드 확인
 
-Board의 카드 원본은 GitHub Issue로 둡니다. 사용자 시나리오 전체 진행률은 Home에서 관련 Knowledge 상태와 Issue를 조합해 보여줍니다.
+기본 정책은 `워크스페이스 1개 ↔ GitHub Project 1개`입니다. Project는 연결된 여러 저장소의 Issue와 PR을 모아 진행 상황을 보여주는 화면이고, 실제 구현 작업의 원본은 GitHub Issue입니다. 초기에는 추적 가능한 실제 Issue와 PR만 Project 항목으로 사용하고 Draft Issue 지원은 제외합니다.
+
+사용자 시나리오 전체 진행률은 Home에서 관련 문서 상태와 Project의 Issue를 조합해 보여줍니다. `Issues`를 별도 전역 메뉴로 중복 제공하지 않으며, Issue 상세는 Project 문맥 안에서 엽니다.
 
 ### 문맥 안의 리뷰
 
-- Knowledge의 변경 제안에서 문서·Mermaid diff와 댓글을 확인합니다.
+- Documents의 변경 제안에서 문서·Mermaid diff와 댓글을 확인합니다.
 - Issue 또는 PR에서 코드 diff, 댓글, 승인과 수정 요청을 처리합니다.
 - 선택형 결정은 대상 문서나 PR의 맥락 안에서 처리합니다.
-- Home의 확인할 요청에서 해당 문서나 PR로 이동합니다.
+- Home의 확인할 항목에서 해당 문서, Issue나 PR로 이동합니다.
 
 ### API Catalog
 
-OpenAPI를 원본으로 사용할 경우 Knowledge 안에 API 탐색 화면을 제공합니다.
+OpenAPI를 원본으로 사용할 경우 Documents 안에 API 탐색 화면을 제공합니다.
 
 - 서비스 또는 태그별 API 목록
 - Path, method와 `operationId` 검색
@@ -117,8 +128,7 @@ API를 제품 구조 트리에 직접 중첩하지 않습니다.
 
 ### 미결정
 
-- Home의 진행 상황·확인할 요청·타임라인 배치
-- Knowledge의 Documents·Structure·History·APIs 하위 탐색 방식
+- Documents의 Library·Structure·History·APIs 하위 탐색 방식
 - 제품 구조 트리를 항상 표시할지 필요할 때만 표시할지
-- Home의 요청 목록에서 문서·PR 검토 화면으로 전환하는 방식
-- Issues의 Board·List·My Issues·Milestones 하위 탐색 방식
+- Home의 확인할 항목에서 문서·Issue·PR 화면으로 전환하는 방식
+- Project의 Board·List·My Issues·Milestones 하위 탐색 방식
