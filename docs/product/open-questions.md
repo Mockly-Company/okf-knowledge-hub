@@ -70,12 +70,12 @@ AI와 자동화가 이해할 수 있을 만큼 일관되면서 팀별 업무 방
 - 오프라인 초안과 GitHub 동기화 충돌 처리
 - 배포 상태를 어떤 GitHub 데이터에서 가져올지
 
-워크스페이스당 하나의 GitHub Project를 연결하고 실제 작업은 GitHub Issue를 원본으로 사용하는 구조는 합의했습니다. 초기 Project 항목은 실제 Issue와 PR로 제한합니다.
+`OKF 지식 저장소 1개 = 단일 워크스페이스 1개`로 사용하고 워크스페이스 정의는 `.okf/workspace.yml`로 공유하기로 합의했습니다. 앱은 여러 워크스페이스 목록과 전환 UI를 제공하지 않습니다. 이 워크스페이스에는 GitHub Project 하나를 연결하고 실제 작업은 GitHub Issue를 원본으로 사용합니다. 초기 Project 항목은 실제 Issue와 PR로 제한합니다.
 
 ## 우선순위 7. 화면별 세부 구성
 
 - Documents에서만 제품 구조 트리를 확장할지
-- Project의 Board·List·My Issues·Milestones 하위 탐색
+- Project의 Board·List·My Issues·Iterations 하위 탐색
 - 문서·코드·리뷰 패널을 동시에 여는 방식
 - Home의 확인할 항목에서 대상 문서·Issue·PR로 이동하는 방식
 
