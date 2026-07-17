@@ -27,6 +27,7 @@
 | 문서 | 내용 |
 |---|---|
 | [제품 개요](docs/product/overview.md) | 문제, 목표, 사용자와 제품 원칙 |
+| [문서 변경 워크플로](docs/product/workflow.html) | 문서 생성부터 잠금, 편집, 검수, 병합과 오프라인 복구까지의 전체 흐름 |
 | [유스케이스와 작업 흐름](docs/product/use-cases.md) | 실제 개발 과정에서 Hub를 사용하는 흐름 |
 | [기능 정의](docs/product/features.md) | 기능 영역과 현재 범위 |
 | [화면 구성](docs/product/screens.md) | 화면 후보와 화면별 책임 |

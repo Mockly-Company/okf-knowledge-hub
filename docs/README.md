@@ -5,12 +5,13 @@
 ## 권장 읽기 순서
 
 1. [제품 개요](product/overview.md)
-2. [유스케이스와 작업 흐름](product/use-cases.md)
-3. [기능 정의](product/features.md)
-4. [정보 모델](product/information-model.md)
-5. [화면 구성](product/screens.md)
-6. [기술 구조](architecture/system-design.md)
-7. [미결정 사항](product/open-questions.md)
+2. [문서 변경 워크플로](product/workflow.html) — 지금까지 합의한 흐름을 다이어그램으로 한 번에 보기
+3. [유스케이스와 작업 흐름](product/use-cases.md)
+4. [기능 정의](product/features.md)
+5. [정보 모델](product/information-model.md)
+6. [화면 구성](product/screens.md)
+7. [기술 구조](architecture/system-design.md)
+8. [미결정 사항](product/open-questions.md)
 
 ## 문서 상태 표기
 
