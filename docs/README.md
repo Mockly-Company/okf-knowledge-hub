@@ -20,3 +20,7 @@
 - **미결정**: 선택지 조사와 팀 합의가 필요한 내용
 
 이 문서들은 최종 구현 명세가 아닙니다. 제품 흐름과 핵심 선택이 승인된 뒤 별도의 설계 명세와 구현 계획으로 전환합니다.
+
+## 개발 화면
+
+앱 골격 구현 뒤 `pnpm dev`를 실행하고 `http://localhost:1420/#/dev/design-system`에서 실제 디자인 token, Button variant와 Default/Compact 표시 밀도를 확인합니다. 제품 기준은 [`product/design-system.md`](product/design-system.md)이며 preview는 구현 검증 도구입니다.
