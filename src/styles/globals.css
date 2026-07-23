@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./tokens.css";
 
 * {
   box-sizing: border-box;
@@ -13,8 +14,12 @@ body,
 }
 
 body {
+  background: var(--color-canvas);
+  color: var(--color-text-default);
   font-family: "Pretendard Variable", Pretendard, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: var(--font-ui-size);
+  line-height: var(--font-ui-line);
 }
 
 button,
@@ -22,4 +27,20 @@ input,
 textarea,
 select {
   font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }
