@@ -1,13 +1,17 @@
 import { useState } from "react";
+import { HashRouter } from "react-router-dom";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { createPreferencesRepository } from "@/infrastructure/preferences/createPreferencesRepository";
+import { AppRoutes } from "./AppRoutes";
 
 export function App() {
   const [repository] = useState(createPreferencesRepository);
 
   return (
     <PreferencesProvider repository={repository}>
-      <main aria-label="OkHub">OkHub</main>
+      <HashRouter>
+        <AppRoutes />
+      </HashRouter>
     </PreferencesProvider>
   );
 }
