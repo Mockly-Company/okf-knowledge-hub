@@ -1,0 +1,47 @@
+:root {
+  color-scheme: light;
+  --color-primary: #009e8e;
+  --color-primary-hover: #00a394;
+  --color-primary-text: #007c71;
+  --color-primary-soft: #e5f5f3;
+  --color-on-primary: #082b28;
+  --color-on-logo: #ffffff;
+  --color-text-strong: #16181d;
+  --color-text-default: #343941;
+  --color-text-muted: #6b717c;
+  --color-border: #e2e5e9;
+  --color-canvas: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-success: #11764f;
+  --color-success-soft: #e9f7f1;
+  --color-info: #2563b5;
+  --color-info-soft: #eaf2ff;
+  --color-warning: #a15c00;
+  --color-warning-soft: #fff4df;
+  --color-error: #b23b4a;
+  --color-error-soft: #fff0f1;
+  --color-error-hover: #ffe2e5;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --shadow-overlay: 0 12px 28px rgba(25, 30, 38, 0.13);
+  --font-ui-size: 13px;
+  --font-ui-line: 20px;
+  --font-document-size: 16px;
+  --font-document-line: 28px;
+  --font-h1-size: 28px;
+  --font-h1-line: 36px;
+  --control-height: 36px;
+  --icon-size: 16px;
+}
+
+:root[data-density="compact"] {
+  --font-ui-size: 12px;
+  --font-ui-line: 18px;
+  --font-document-size: 15px;
+  --font-document-line: 25px;
+  --font-h1-size: 24px;
+  --font-h1-line: 32px;
+  --control-height: 32px;
+  --icon-size: 14px;
+}
