@@ -40,6 +40,15 @@ describe("AppShell", () => {
     expect(screen.getByRole("heading", { name: "Documents" })).toBeInTheDocument();
   });
 
+  it("separates product navigation from settings", () => {
+    renderShell();
+
+    expect(screen.getByRole("navigation", { name: "주 메뉴" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "설정" })).toContainElement(
+      screen.getByRole("link", { name: "Settings" }),
+    );
+  });
+
   it("collapses and restores the sidebar", async () => {
     renderShell();
     await userEvent.click(screen.getByRole("button", { name: "사이드바 접기" }));

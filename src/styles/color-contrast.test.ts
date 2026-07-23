@@ -29,11 +29,16 @@ function contrast(a: string, b: string): number {
 describe("OkHub color tokens", () => {
   it.each([
     ["--color-on-primary", "--color-primary"],
+    ["--color-on-primary", "--color-primary-hover"],
     ["--color-primary-text", "--color-surface"],
-    ["--color-success", "--color-surface"],
-    ["--color-info", "--color-surface"],
-    ["--color-warning", "--color-surface"],
-    ["--color-error", "--color-surface"],
+    ["--color-primary-text", "--color-primary-soft"],
+    ["--color-text-muted", "--color-surface"],
+    ["--color-text-muted", "--color-canvas"],
+    ["--color-success", "--color-success-soft"],
+    ["--color-info", "--color-info-soft"],
+    ["--color-warning", "--color-warning-soft"],
+    ["--color-error", "--color-error-soft"],
+    ["--color-error", "--color-error-hover"],
   ])("keeps %s readable on %s", (foreground, background) => {
     expect(contrast(token(css, foreground), token(css, background))).toBeGreaterThanOrEqual(4.5);
   });

@@ -11,11 +11,23 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-const navigation = [
-  { to: "/", label: "Home", icon: House, end: true },
-  { to: "/documents", label: "Documents", icon: FolderOpen, end: false },
-  { to: "/project", label: "Project", icon: SquareKanban, end: false },
-  { to: "/settings", label: "Settings", icon: Settings, end: false },
+const navigationGroups = [
+  {
+    label: "주 메뉴",
+    className: "app-sidebar__nav",
+    items: [
+      { to: "/", label: "Home", icon: House, end: true },
+      { to: "/documents", label: "Documents", icon: FolderOpen, end: false },
+      { to: "/project", label: "Project", icon: SquareKanban, end: false },
+    ],
+  },
+  {
+    label: "설정",
+    className: "app-sidebar__nav app-sidebar__nav--settings",
+    items: [
+      { to: "/settings", label: "Settings", icon: Settings, end: false },
+    ],
+  },
 ] as const;
 
 interface AppSidebarProps {
@@ -44,21 +56,26 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
         </Tooltip>
       </div>
       <div className="app-sidebar__workspace">연결된 워크스페이스 없음</div>
-      <nav aria-label="주 메뉴" className="app-sidebar__nav">
-        {navigation.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              cn("app-sidebar__link", isActive && "app-sidebar__link--active")
-            }
-          >
-            <Icon aria-hidden="true" strokeWidth={1.75} />
-            <span>{label}</span>
-          </NavLink>
-        ))}
-      </nav>
+      {navigationGroups.map(({ label: groupLabel, className, items }) => (
+        <nav key={groupLabel} aria-label={groupLabel} className={className}>
+          {items.map(({ to, label, icon: Icon, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              className={({ isActive }) =>
+                cn(
+                  "app-sidebar__link",
+                  isActive && "app-sidebar__link--active",
+                )
+              }
+            >
+              <Icon aria-hidden="true" strokeWidth={1.75} />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      ))}
       <div className="app-sidebar__user">
         <span className="app-sidebar__avatar" aria-hidden="true">
           GH

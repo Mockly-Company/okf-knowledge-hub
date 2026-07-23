@@ -27,12 +27,13 @@
 | 토큰 | 값 | 용도 |
 |---|---|---|
 | `color.primary` | `#009E8E` | 로고 배경, 주요 버튼 배경, 선택 표시, 포커스 |
-| `color.primary.text` | `#007D72` | 흰 배경의 링크와 활성 텍스트 |
+| `color.primary.hover` | `#00A394` | 주요 버튼 hover 배경 |
+| `color.primary.text` | `#007C71` | 흰 배경의 링크와 활성 텍스트 |
 | `color.primary.soft` | `#E5F5F3` | 선택 배경, badge와 avatar 배경 |
 | `color.on-primary` | `#082B28` | Primary 배경의 작은 버튼 텍스트 |
 | `color.on-logo` | `#FFFFFF` | 로고 마크의 `OK`에만 사용하는 예외 |
 
-`#009E8E` 위 흰색의 대비는 일반적인 작은 본문 기준에 부족하므로, 주요 버튼에는 `#082B28`을 사용합니다. 흰 배경에 Primary 계열 텍스트가 필요할 때는 `#007D72`를 사용합니다.
+`#009E8E` 위 흰색의 대비는 일반적인 작은 본문 기준에 부족하므로, 주요 버튼에는 `#082B28`을 사용합니다. 흰 배경에 Primary 계열 텍스트가 필요할 때는 `#007C71`을 사용합니다.
 
 ### Neutral
 
@@ -40,7 +41,7 @@
 |---|---|---|
 | `color.text.strong` | `#16181D` | 제목과 주요 본문 |
 | `color.text.default` | `#343941` | 일반 본문 |
-| `color.text.muted` | `#737985` | 보조 설명과 metadata |
+| `color.text.muted` | `#6B717C` | 보조 설명과 metadata |
 | `color.border` | `#E2E5E9` | 기본 테두리 |
 | `color.canvas` | `#F6F7F9` | 앱 본문 배경 |
 | `color.surface` | `#FFFFFF` | 카드, 패널과 입력 표면 |
@@ -49,7 +50,7 @@
 
 | 의미 | 전경 | 연한 배경 | 사용 예 |
 |---|---|---|---|
-| Success | `#16845B` | `#E9F7F1` | 완료, 연결 정상, 승인 |
+| Success | `#11764F` | `#E9F7F1` | 완료, 연결 정상, 승인 |
 | Information | `#2563B5` | `#EAF2FF` | 검토, 안내, 일반 정보 |
 | Warning | `#A15C00` | `#FFF4DF` | 결정 필요, 지연, 주의 |
 | Error | `#B23B4A` | `#FFF0F1` | 실패, 충돌, 파괴적 행동 |

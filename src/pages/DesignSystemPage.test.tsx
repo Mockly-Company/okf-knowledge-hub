@@ -48,7 +48,9 @@ describe("DesignSystemPage", () => {
 
     await user.hover(screen.getByRole("button", { name: "설정 열기" }));
 
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("설정 열기");
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("설정 열기");
+    expect(tooltip).toHaveClass("text-[var(--color-canvas)]");
   });
 
   it("has no automatically detectable accessibility violations", async () => {

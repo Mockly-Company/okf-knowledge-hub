@@ -1,18 +1,18 @@
 :root {
   color-scheme: light;
   --color-primary: #009e8e;
-  --color-primary-hover: #008d7f;
-  --color-primary-text: #007d72;
+  --color-primary-hover: #00a394;
+  --color-primary-text: #007c71;
   --color-primary-soft: #e5f5f3;
   --color-on-primary: #082b28;
   --color-on-logo: #ffffff;
   --color-text-strong: #16181d;
   --color-text-default: #343941;
-  --color-text-muted: #737985;
+  --color-text-muted: #6b717c;
   --color-border: #e2e5e9;
   --color-canvas: #f6f7f9;
   --color-surface: #ffffff;
-  --color-success: #16845b;
+  --color-success: #11764f;
   --color-success-soft: #e9f7f1;
   --color-info: #2563b5;
   --color-info-soft: #eaf2ff;
