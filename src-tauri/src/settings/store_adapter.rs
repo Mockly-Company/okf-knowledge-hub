@@ -4,7 +4,7 @@ use tauri::Runtime;
 use tauri_plugin_store::Store;
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
-use crate::settings::service::LocalSettingsStore;
+use crate::settings::service::{LocalSettingsStore, DISPLAY_DENSITY_KEY};
 
 pub const SETTINGS_FILE_NAME: &str = "settings.json";
 
@@ -67,6 +67,7 @@ impl LocalSettingsStore for TauriLocalSettingsStore {
         match self.store.get(key) {
             None => Ok(None),
             Some(serde_json::Value::String(value)) => Ok(Some(value)),
+            Some(_) if key == DISPLAY_DENSITY_KEY => Ok(None),
             Some(_) => Err(settings_error(
                 "read",
                 "로컬 설정의 현재 워크스페이스 경로 형식이 올바르지 않습니다.",
@@ -134,7 +135,7 @@ mod tests {
     use std::thread;
 
     use super::*;
-    use crate::settings::service::CURRENT_WORKSPACE_PATH_KEY;
+    use crate::settings::service::{CURRENT_WORKSPACE_PATH_KEY, DISPLAY_DENSITY_KEY};
 
     #[derive(Default)]
     struct EquivalentSettingsStore {
@@ -339,6 +340,25 @@ mod tests {
         assert_eq!(
             backend.value("future-setting"),
             Some(serde_json::json!({ "enabled": true }))
+        );
+    }
+
+    #[test]
+    fn unsupported_density_json_falls_back_without_rewriting_the_cached_value() {
+        let (adapter, backend) = concurrent_adapter(Some("/workspace/current"));
+        backend.values.lock().unwrap().insert(
+            DISPLAY_DENSITY_KEY.into(),
+            serde_json::json!({ "unexpected": true }),
+        );
+
+        assert_eq!(adapter.read(DISPLAY_DENSITY_KEY).unwrap(), None);
+        assert_eq!(
+            backend.value(DISPLAY_DENSITY_KEY),
+            Some(serde_json::json!({ "unexpected": true }))
+        );
+        assert_eq!(
+            backend.value(CURRENT_WORKSPACE_PATH_KEY),
+            Some(serde_json::json!("/workspace/current"))
         );
     }
 }

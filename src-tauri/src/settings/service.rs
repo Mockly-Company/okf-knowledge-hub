@@ -2,10 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
-use crate::settings::model::CurrentWorkspace;
+use crate::settings::model::{CurrentWorkspace, DisplayDensity};
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
 pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
+pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 
 pub trait LocalSettingsStore: Send + Sync {
     fn read(&self, key: &str) -> Result<Option<String>, AppError>;
@@ -125,6 +126,15 @@ impl LocalSettingsService {
     pub fn clear_current(&self) -> Result<(), AppError> {
         self.store.remove(CURRENT_WORKSPACE_PATH_KEY)
     }
+
+    pub fn load_display_density(&self) -> Result<DisplayDensity, AppError> {
+        let value = self.store.read(DISPLAY_DENSITY_KEY)?;
+        Ok(DisplayDensity::from_stored(value.as_deref()))
+    }
+
+    pub fn set_display_density(&self, density: DisplayDensity) -> Result<(), AppError> {
+        self.store.write(DISPLAY_DENSITY_KEY, density.as_stored())
+    }
 }
 
 fn ready_summary(
@@ -182,10 +192,9 @@ mod tests {
 
     use super::*;
     use crate::error::AppError;
-    use crate::settings::model::CurrentWorkspaceStatus;
+    use crate::settings::model::{CurrentWorkspaceStatus, DisplayDensity};
     use crate::workspace::service::{WorkspaceInspection, WorkspaceSummary};
 
-    const DISPLAY_DENSITY_KEY: &str = "display-density";
     const UNKNOWN_KEY: &str = "future-setting";
 
     #[derive(Clone, Default)]
@@ -336,6 +345,46 @@ mod tests {
         let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
 
         assert!(service.load_current().unwrap().is_none());
+    }
+
+    #[test]
+    fn display_density_round_trip_preserves_the_current_workspace_and_unknown_keys() {
+        let store = MemoryLocalSettingsStore::with_values([
+            (CURRENT_WORKSPACE_PATH_KEY, "/workspace/current".into()),
+            (DISPLAY_DENSITY_KEY, "default".into()),
+            (UNKNOWN_KEY, "keep-me".into()),
+        ]);
+        let service = LocalSettingsService::new(store.clone());
+
+        service
+            .set_display_density(DisplayDensity::Compact)
+            .unwrap();
+
+        assert_eq!(
+            service.load_display_density().unwrap(),
+            DisplayDensity::Compact
+        );
+        assert_eq!(
+            store.raw(CURRENT_WORKSPACE_PATH_KEY).as_deref(),
+            Some("/workspace/current")
+        );
+        assert_eq!(store.raw(UNKNOWN_KEY).as_deref(), Some("keep-me"));
+    }
+
+    #[test]
+    fn unsupported_saved_density_falls_back_without_rewriting_the_raw_value() {
+        let store =
+            MemoryLocalSettingsStore::with_values([(DISPLAY_DENSITY_KEY, "comfortable".into())]);
+        let service = LocalSettingsService::new(store.clone());
+
+        assert_eq!(
+            service.load_display_density().unwrap(),
+            DisplayDensity::Default
+        );
+        assert_eq!(
+            store.raw(DISPLAY_DENSITY_KEY).as_deref(),
+            Some("comfortable")
+        );
     }
 
     struct RetargetingPathResolver {

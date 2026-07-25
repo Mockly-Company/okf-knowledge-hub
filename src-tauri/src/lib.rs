@@ -24,6 +24,10 @@ pub fn run() {
             app.manage(state::AppServices::new(local_settings));
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            settings::commands::get_display_density,
+            settings::commands::set_display_density,
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run OkHub");
 }

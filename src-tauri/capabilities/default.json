@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop capability for OkHub",
   "windows": ["main"],
-  "permissions": ["core:default", "store:default"]
+  "permissions": ["core:default"]
 }
