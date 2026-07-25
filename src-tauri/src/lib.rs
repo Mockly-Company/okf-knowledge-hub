@@ -1,4 +1,5 @@
 pub mod error;
+pub mod settings;
 pub mod state;
 pub mod workspace;
 
@@ -8,7 +9,21 @@ pub const APP_TITLE: &str = "OkHub";
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
-        .manage(state::AppServices::default())
+        .setup(|app| {
+            use tauri::Manager;
+
+            let store = tauri_plugin_store::StoreBuilder::new(
+                app,
+                settings::store_adapter::SETTINGS_FILE_NAME,
+            )
+            .disable_auto_save()
+            .build()?;
+            let local_settings = settings::service::LocalSettingsService::new(
+                settings::store_adapter::TauriLocalSettingsStore::new(store),
+            );
+            app.manage(state::AppServices::new(local_settings));
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("failed to run OkHub");
 }

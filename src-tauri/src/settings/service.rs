@@ -1,0 +1,438 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use crate::error::{AppError, ErrorCode, RecoveryAction};
+use crate::settings::model::CurrentWorkspace;
+use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
+
+pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
+
+pub trait LocalSettingsStore: Send + Sync {
+    fn read(&self, key: &str) -> Result<Option<String>, AppError>;
+    fn write(&self, key: &str, value: &str) -> Result<(), AppError>;
+    fn remove(&self, key: &str) -> Result<(), AppError>;
+}
+
+trait WorkspaceInspector: Send + Sync {
+    fn inspect(&self, path: &Path) -> Result<WorkspaceInspection, AppError>;
+}
+
+struct FileWorkspaceInspector;
+
+impl WorkspaceInspector for FileWorkspaceInspector {
+    fn inspect(&self, path: &Path) -> Result<WorkspaceInspection, AppError> {
+        WorkspaceService::inspect(path)
+    }
+}
+
+trait CanonicalPathResolver: Send + Sync {
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, AppError>;
+}
+
+struct FileCanonicalPathResolver;
+
+impl CanonicalPathResolver for FileCanonicalPathResolver {
+    fn canonicalize(&self, path: &Path) -> Result<PathBuf, AppError> {
+        path.canonicalize()
+            .map_err(|error| local_path_error(path, error))
+    }
+}
+
+pub struct LocalSettingsService {
+    store: Arc<dyn LocalSettingsStore>,
+    workspace_inspector: Arc<dyn WorkspaceInspector>,
+    path_resolver: Arc<dyn CanonicalPathResolver>,
+}
+
+impl LocalSettingsService {
+    pub fn new(store: impl LocalSettingsStore + 'static) -> Self {
+        Self {
+            store: Arc::new(store),
+            workspace_inspector: Arc::new(FileWorkspaceInspector),
+            path_resolver: Arc::new(FileCanonicalPathResolver),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_boundaries(
+        store: impl LocalSettingsStore + 'static,
+        workspace_inspector: impl WorkspaceInspector + 'static,
+        path_resolver: impl CanonicalPathResolver + 'static,
+    ) -> Self {
+        Self {
+            store: Arc::new(store),
+            workspace_inspector: Arc::new(workspace_inspector),
+            path_resolver: Arc::new(path_resolver),
+        }
+    }
+
+    pub fn load_current(&self) -> Result<Option<CurrentWorkspace>, AppError> {
+        let Some(raw_path) = self.store.read(CURRENT_WORKSPACE_PATH_KEY)? else {
+            return Ok(None);
+        };
+        let saved_path = PathBuf::from(&raw_path);
+        let canonical_path = match self.path_resolver.canonicalize(&saved_path) {
+            Ok(path) => path,
+            Err(_) => return Ok(Some(CurrentWorkspace::recovery_required(saved_path))),
+        };
+        let inspection = match self.workspace_inspector.inspect(&canonical_path) {
+            Ok(inspection) => inspection,
+            Err(_) => return Ok(Some(CurrentWorkspace::recovery_required(saved_path))),
+        };
+
+        match inspection {
+            WorkspaceInspection::Ready { summary } => {
+                Ok(Some(CurrentWorkspace::connected(canonical_path, summary)))
+            }
+            WorkspaceInspection::InitializationRequired
+            | WorkspaceInspection::Invalid { .. }
+            | WorkspaceInspection::UnsupportedVersion { .. } => {
+                Ok(Some(CurrentWorkspace::recovery_required(saved_path)))
+            }
+        }
+    }
+
+    pub fn set_current(&self, repository_path: &Path) -> Result<CurrentWorkspace, AppError> {
+        let inspected_summary = ready_summary(self.workspace_inspector.as_ref(), repository_path)?;
+        let canonical_path = self.path_resolver.canonicalize(repository_path)?;
+
+        // Inspect the exact path that will be persisted. This avoids accepting a
+        // different target if a symlink changes between inspection and storage.
+        let summary = match self.workspace_inspector.inspect(&canonical_path)? {
+            WorkspaceInspection::Ready { summary } => summary,
+            inspection => return Err(workspace_not_ready_error(inspection)),
+        };
+        if summary.id != inspected_summary.id {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "검증 중 워크스페이스 경로가 변경되었습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry));
+        }
+        let encoded_path = canonical_path.to_str().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "현재 워크스페이스 경로를 로컬 설정에 저장할 수 없습니다.",
+            )
+            .with_recovery(RecoveryAction::ChooseAnotherDirectory)
+        })?;
+
+        self.store.write(CURRENT_WORKSPACE_PATH_KEY, encoded_path)?;
+
+        Ok(CurrentWorkspace::connected(canonical_path, summary))
+    }
+
+    pub fn clear_current(&self) -> Result<(), AppError> {
+        self.store.remove(CURRENT_WORKSPACE_PATH_KEY)
+    }
+}
+
+fn ready_summary(
+    inspector: &dyn WorkspaceInspector,
+    repository_path: &Path,
+) -> Result<crate::workspace::service::WorkspaceSummary, AppError> {
+    match inspector.inspect(repository_path)? {
+        WorkspaceInspection::Ready { summary } => Ok(summary),
+        inspection => Err(workspace_not_ready_error(inspection)),
+    }
+}
+
+fn workspace_not_ready_error(inspection: WorkspaceInspection) -> AppError {
+    match inspection {
+        WorkspaceInspection::Ready { .. } => unreachable!("ready workspaces are handled above"),
+        WorkspaceInspection::InitializationRequired => AppError::new(
+            ErrorCode::WorkspaceMissing,
+            "선택한 저장소에 .okf/workspace.yml이 없습니다.",
+        )
+        .with_recovery(RecoveryAction::OpenWorkspaceFile),
+        WorkspaceInspection::Invalid { .. } => AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "선택한 저장소의 워크스페이스 설정이 유효하지 않습니다.",
+        )
+        .with_recovery(RecoveryAction::OpenWorkspaceFile),
+        WorkspaceInspection::UnsupportedVersion { found_version } => AppError::new(
+            ErrorCode::WorkspaceVersionUnsupported,
+            "현재 버전의 OkHub에서 이 워크스페이스를 열 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::UpdateOkhub)
+        .with_detail("foundVersion", found_version.to_string()),
+    }
+}
+
+fn local_path_error(path: &Path, error: std::io::Error) -> AppError {
+    AppError::new(
+        ErrorCode::LocalSettingsUnavailable,
+        "현재 워크스페이스 경로를 확인할 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::ChooseAnotherDirectory)
+    .with_detail("path", path.display().to_string())
+    .with_detail("reason", error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use tempfile::TempDir;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::error::AppError;
+    use crate::settings::model::CurrentWorkspaceStatus;
+    use crate::workspace::service::{WorkspaceInspection, WorkspaceSummary};
+
+    const DISPLAY_DENSITY_KEY: &str = "display-density";
+    const UNKNOWN_KEY: &str = "future-setting";
+
+    #[derive(Clone, Default)]
+    struct MemoryLocalSettingsStore {
+        values: Arc<Mutex<BTreeMap<String, String>>>,
+    }
+
+    impl MemoryLocalSettingsStore {
+        fn with_values(values: impl IntoIterator<Item = (&'static str, String)>) -> Self {
+            Self {
+                values: Arc::new(Mutex::new(
+                    values
+                        .into_iter()
+                        .map(|(key, value)| (key.to_owned(), value))
+                        .collect(),
+                )),
+            }
+        }
+
+        fn raw(&self, key: &str) -> Option<String> {
+            self.values.lock().unwrap().get(key).cloned()
+        }
+    }
+
+    impl LocalSettingsStore for MemoryLocalSettingsStore {
+        fn read(&self, key: &str) -> Result<Option<String>, AppError> {
+            Ok(self.raw(key))
+        }
+
+        fn write(&self, key: &str, value: &str) -> Result<(), AppError> {
+            self.values
+                .lock()
+                .unwrap()
+                .insert(key.to_owned(), value.to_owned());
+            Ok(())
+        }
+
+        fn remove(&self, key: &str) -> Result<(), AppError> {
+            self.values.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
+    fn ready_workspace(name: &str) -> TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        fs::create_dir_all(directory.path().join("docs")).unwrap();
+        fs::write(
+            directory.path().join(".okf/workspace.yml"),
+            format!(
+                "schema_version: 1\nworkspace:\n  id: {}\n  name: {name}\ndocuments:\n  roots:\n    - path: docs\nrepositories: []\n",
+                Uuid::new_v4()
+            ),
+        )
+        .unwrap();
+        directory
+    }
+
+    #[test]
+    fn setting_a_new_workspace_replaces_only_the_current_path() {
+        let first = ready_workspace("First");
+        let second = ready_workspace("Second");
+        let store = MemoryLocalSettingsStore::with_values([
+            (DISPLAY_DENSITY_KEY, "compact".into()),
+            (UNKNOWN_KEY, "keep-me".into()),
+        ]);
+        let service = LocalSettingsService::new(store.clone());
+
+        service.set_current(first.path()).unwrap();
+        service.set_current(second.path()).unwrap();
+
+        let current = service.load_current().unwrap().unwrap();
+        assert_eq!(current.path, second.path().canonicalize().unwrap());
+        assert_eq!(current.status, CurrentWorkspaceStatus::Connected);
+        assert_eq!(store.raw(DISPLAY_DENSITY_KEY).as_deref(), Some("compact"));
+        assert_eq!(store.raw(UNKNOWN_KEY).as_deref(), Some("keep-me"));
+    }
+
+    #[test]
+    fn a_missing_saved_folder_requires_recovery_without_deleting_the_raw_value() {
+        let missing = PathBuf::from("/definitely/missing/okhub-workspace");
+        let raw = missing.display().to_string();
+        let store = MemoryLocalSettingsStore::with_values([
+            (CURRENT_WORKSPACE_PATH_KEY, raw.clone()),
+            (DISPLAY_DENSITY_KEY, "default".into()),
+        ]);
+        let service = LocalSettingsService::new(store.clone());
+
+        let current = service.load_current().unwrap().unwrap();
+
+        assert_eq!(current.status, CurrentWorkspaceStatus::RecoveryRequired);
+        assert_eq!(current.path, missing);
+        assert_eq!(store.raw(CURRENT_WORKSPACE_PATH_KEY), Some(raw));
+        assert_eq!(store.raw(DISPLAY_DENSITY_KEY).as_deref(), Some("default"));
+    }
+
+    #[test]
+    fn an_invalid_saved_workspace_requires_recovery_without_rewriting_it() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        fs::write(
+            directory.path().join(".okf/workspace.yml"),
+            "schema_version: 1\nworkspace: invalid\n",
+        )
+        .unwrap();
+        let raw = directory.path().display().to_string();
+        let store =
+            MemoryLocalSettingsStore::with_values([(CURRENT_WORKSPACE_PATH_KEY, raw.clone())]);
+        let service = LocalSettingsService::new(store.clone());
+
+        let current = service.load_current().unwrap().unwrap();
+
+        assert_eq!(current.status, CurrentWorkspaceStatus::RecoveryRequired);
+        assert_eq!(store.raw(CURRENT_WORKSPACE_PATH_KEY), Some(raw));
+    }
+
+    #[test]
+    fn invalid_candidate_does_not_replace_the_current_workspace() {
+        let ready = ready_workspace("Ready");
+        let invalid = tempfile::tempdir().unwrap();
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store.clone());
+        service.set_current(ready.path()).unwrap();
+        let saved = store.raw(CURRENT_WORKSPACE_PATH_KEY);
+
+        assert!(service.set_current(invalid.path()).is_err());
+        assert_eq!(store.raw(CURRENT_WORKSPACE_PATH_KEY), saved);
+    }
+
+    #[test]
+    fn clearing_the_workspace_preserves_other_settings() {
+        let store = MemoryLocalSettingsStore::with_values([
+            (CURRENT_WORKSPACE_PATH_KEY, "/workspace".into()),
+            (DISPLAY_DENSITY_KEY, "compact".into()),
+            (UNKNOWN_KEY, "keep-me".into()),
+        ]);
+        let service = LocalSettingsService::new(store.clone());
+
+        service.clear_current().unwrap();
+
+        assert_eq!(store.raw(CURRENT_WORKSPACE_PATH_KEY), None);
+        assert_eq!(store.raw(DISPLAY_DENSITY_KEY).as_deref(), Some("compact"));
+        assert_eq!(store.raw(UNKNOWN_KEY).as_deref(), Some("keep-me"));
+    }
+
+    #[test]
+    fn no_saved_path_is_disconnected() {
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+
+        assert!(service.load_current().unwrap().is_none());
+    }
+
+    struct RetargetingPathResolver {
+        first_target: PathBuf,
+        later_target: PathBuf,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl CanonicalPathResolver for RetargetingPathResolver {
+        fn canonicalize(&self, _path: &Path) -> Result<PathBuf, AppError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(if call == 0 {
+                self.first_target.clone()
+            } else {
+                self.later_target.clone()
+            })
+        }
+    }
+
+    struct RecordingInspector {
+        expected_path: PathBuf,
+        inspected_paths: Arc<Mutex<Vec<PathBuf>>>,
+        summary: WorkspaceSummary,
+    }
+
+    impl WorkspaceInspector for RecordingInspector {
+        fn inspect(&self, path: &Path) -> Result<WorkspaceInspection, AppError> {
+            self.inspected_paths
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            assert_eq!(path, self.expected_path);
+            Ok(WorkspaceInspection::Ready {
+                summary: self.summary.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn load_uses_one_canonical_target_even_if_the_saved_alias_would_retarget() {
+        let raw_path = "/saved/workspace-alias";
+        let first_target = PathBuf::from("/canonical/workspace-a");
+        let later_target = PathBuf::from("/canonical/workspace-b");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inspected_paths = Arc::new(Mutex::new(Vec::new()));
+        let workspace_id = Uuid::new_v4();
+        let store =
+            MemoryLocalSettingsStore::with_values([(CURRENT_WORKSPACE_PATH_KEY, raw_path.into())]);
+        let service = LocalSettingsService::with_boundaries(
+            store.clone(),
+            RecordingInspector {
+                expected_path: first_target.clone(),
+                inspected_paths: inspected_paths.clone(),
+                summary: WorkspaceSummary {
+                    id: workspace_id,
+                    name: "Workspace A".into(),
+                    document_roots: vec!["docs".into()],
+                    repository_count: 0,
+                },
+            },
+            RetargetingPathResolver {
+                first_target: first_target.clone(),
+                later_target,
+                calls: calls.clone(),
+            },
+        );
+
+        let current = service.load_current().unwrap().unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*inspected_paths.lock().unwrap(), vec![first_target.clone()]);
+        assert_eq!(current.path, first_target);
+        assert_eq!(current.status, CurrentWorkspaceStatus::Connected);
+        assert_eq!(current.summary.unwrap().id, workspace_id);
+        assert_eq!(
+            store.raw(CURRENT_WORKSPACE_PATH_KEY).as_deref(),
+            Some(raw_path)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn setting_a_symlinked_ready_workspace_persists_the_canonical_path() {
+        use std::os::unix::fs::symlink;
+
+        let ready = ready_workspace("Canonical");
+        let parent = tempfile::tempdir().unwrap();
+        let linked = parent.path().join("linked-workspace");
+        symlink(ready.path(), &linked).unwrap();
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store.clone());
+
+        service.set_current(&linked).unwrap();
+
+        assert_eq!(
+            store.raw(CURRENT_WORKSPACE_PATH_KEY),
+            Some(ready.path().canonicalize().unwrap().display().to_string())
+        );
+    }
+}
