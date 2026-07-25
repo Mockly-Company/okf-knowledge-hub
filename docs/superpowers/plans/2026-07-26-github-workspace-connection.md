@@ -6,14 +6,14 @@
 
 **Architecture:** React owns presentation and a pure connection state machine. Narrow Tauri commands delegate authentication, GitHub API, Git, workspace validation, and local settings to focused Rust services; only the Rust layer sees raw tokens. Team-shared configuration lives in the selected knowledge repository while the current absolute path stays in device-local settings.
 
-**Tech Stack:** Tauri 2, Rust 1.77.2, React 19, TypeScript 5, Vitest 4, reqwest 0.12.28, git2 0.19, keyring 3.6.3, serde_yaml_ng 0.10, UUID v4, Tauri Dialog and Opener plugins
+**Tech Stack:** Tauri 2, Rust 1.88.0, React 19, TypeScript 5, Vitest 4, reqwest 0.12.28, git2 0.19, keyring 3.6.3, serde_yaml_ng 0.10, UUID v4, Tauri Dialog and Opener plugins
 
 ## Global Constraints
 
 - Execute this plan from a new worktree and branch `feat/github-workspace-connection` after Foundation PR #1 is merged into `main`.
 - Bring commit `52bae2f` and this plan onto that branch if they are not already present after the merge.
 - Preserve the user's unrelated dirty documentation changes in `/Users/hyeeun/Documents/okf-knowledge-hub`; never build this feature in that checkout.
-- Keep `rust-version = "1.77.2"`, Node `>=22.12.0`, pnpm `10.0.0`, Tauri `2`, React `19`, and the existing macOS/Windows CI matrix.
+- Keep `rust-version = "1.88.0"`, Node `>=22.12.0`, pnpm `10.0.0`, Tauri `2`, React `19`, and the existing macOS/Windows CI matrix. This minimum matches the Foundation lock graph.
 - The GitHub App is public, owned by `Mockly-Company`, uses Device Flow, enables expiring user access tokens, and has no Client Secret or private key in the desktop binary.
 - Raw access and refresh tokens never cross the Tauri boundary and never appear in logs, command arguments, remote URLs, YAML, or `settings.json`.
 - Store tokens in macOS Keychain or Windows Credential Store; store only the current knowledge-repository absolute path in device-local settings.
@@ -1427,7 +1427,7 @@ Keep the macOS/Windows matrix and add:
 - run: pnpm tauri build --debug --no-bundle
 ```
 
-Add a separate `rust-minimum` job on `macos-latest` using Rust `1.77.2` that runs `cargo check --manifest-path src-tauri/Cargo.toml`. Keep the dependency lockfile compatible with that toolchain. Do not pass real GitHub tokens to pull-request jobs.
+Add a separate `rust-minimum` job on `macos-latest` using Rust `1.88.0` that runs `cargo check --manifest-path src-tauri/Cargo.toml`. Keep the dependency lockfile compatible with that toolchain. Do not pass real GitHub tokens to pull-request jobs.
 
 - [ ] **Step 4: Run the complete local verification suite**
 
