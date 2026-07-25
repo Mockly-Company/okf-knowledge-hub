@@ -151,7 +151,8 @@ impl AuthService {
             return Err(error);
         };
 
-        self.events
+        let _ = self
+            .events
             .emit(AuthStatusEvent::WaitingForUser { request_id });
 
         loop {
@@ -262,7 +263,7 @@ impl AuthService {
                     {
                         lifecycle.active.remove(&request_id);
                         drop(lifecycle);
-                        self.events.emit(AuthStatusEvent::Cancelled { request_id });
+                        let _ = self.events.emit(AuthStatusEvent::Cancelled { request_id });
                         return Ok(());
                     }
                     if let Err(error) = self.credentials.save(&tokens).await {
@@ -275,13 +276,17 @@ impl AuthService {
                         let delete_result = self.credentials.delete().await;
                         lifecycle.active.remove(&request_id);
                         drop(lifecycle);
-                        self.events.emit(AuthStatusEvent::Cancelled { request_id });
+                        let _ = self.events.emit(AuthStatusEvent::Cancelled { request_id });
                         return delete_result;
                     }
                     lifecycle.active.remove(&request_id);
                     drop(lifecycle);
-                    self.events
-                        .emit(AuthStatusEvent::Authenticated { request_id, user });
+                    if !self
+                        .events
+                        .emit(AuthStatusEvent::Authenticated { request_id, user })
+                    {
+                        self.credentials.delete().await?;
+                    }
                     return Ok(());
                 }
             }
@@ -418,7 +423,7 @@ impl AuthService {
     }
 
     fn emit_reauthentication_required(&self) {
-        self.events.emit(AuthStatusEvent::ReauthenticationRequired {
+        let _ = self.events.emit(AuthStatusEvent::ReauthenticationRequired {
             request_id: Uuid::new_v4(),
         });
     }
@@ -448,7 +453,7 @@ impl AuthService {
 
     async fn cancel_run(&self, request_id: Uuid) -> Result<(), AppError> {
         self.finish_job(request_id).await;
-        self.events.emit(AuthStatusEvent::Cancelled { request_id });
+        let _ = self.events.emit(AuthStatusEvent::Cancelled { request_id });
         Ok(())
     }
 
@@ -460,7 +465,7 @@ impl AuthService {
     }
 
     fn emit_failed(&self, request_id: Uuid, error: &AppError) {
-        self.events.emit(AuthStatusEvent::Failed {
+        let _ = self.events.emit(AuthStatusEvent::Failed {
             request_id,
             error: error.clone(),
         });
@@ -684,8 +689,9 @@ mod tests {
     }
 
     impl AuthEventSink for RecordingAuthEvents {
-        fn emit(&self, event: AuthStatusEvent) {
+        fn emit(&self, event: AuthStatusEvent) -> bool {
             self.0.lock().unwrap().push(event);
+            true
         }
     }
 

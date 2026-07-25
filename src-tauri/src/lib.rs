@@ -47,15 +47,23 @@ pub fn run() {
             );
             let credentials = auth::keyring_store::KeyringCredentialStore::new()
                 .map_err(|_| std::io::Error::other("failed to initialize credential storage"))?;
+            let auth_jobs = state::JobRegistry::default();
             let auth = auth::service::AuthService::new(
                 github_client_id(),
                 auth::reqwest_api::ReqwestDeviceFlowApi::new(),
                 credentials,
                 auth::ports::SystemClock,
                 auth::ports::TokioDelay,
-                commands::auth::TauriAuthEventSink::new(app.handle().clone()),
+                commands::auth::LifecycleAuthEventSink::new(
+                    commands::auth::TauriAuthEventSink::new(app.handle().clone()),
+                    auth_jobs.clone(),
+                ),
             );
-            app.manage(state::AppServices::with_auth(local_settings, auth));
+            app.manage(state::AppServices::with_auth_jobs(
+                local_settings,
+                auth,
+                auth_jobs,
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

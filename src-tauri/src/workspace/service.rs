@@ -181,6 +181,13 @@ impl PreviewRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&id)
     }
+
+    pub fn clear(&self) {
+        self.previews
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
 }
 
 impl WorkspaceService {

@@ -48,7 +48,8 @@ pub trait Delay: Send + Sync {
 }
 
 pub trait AuthEventSink: Send + Sync {
-    fn emit(&self, event: AuthStatusEvent);
+    /// Returns whether the original event won the command lifecycle gate.
+    fn emit(&self, event: AuthStatusEvent) -> bool;
 }
 
 pub struct SystemClock;
@@ -74,5 +75,7 @@ impl Delay for TokioDelay {
 pub struct NoopAuthEvents;
 
 impl AuthEventSink for NoopAuthEvents {
-    fn emit(&self, _event: AuthStatusEvent) {}
+    fn emit(&self, _event: AuthStatusEvent) -> bool {
+        true
+    }
 }

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::workspace::service::WorkspaceSummary;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -60,6 +61,21 @@ impl CurrentWorkspace {
             summary: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingInitializationContext {
+    pub preview_id: Uuid,
+    pub root: PathBuf,
+    pub repository_id: String,
+    pub repository_full_name: String,
+    pub author_id: u64,
+    pub author_login: String,
+    pub created_at_unix: i64,
+    pub expires_at_unix: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_result: Option<crate::repository::model::InitializationResult>,
 }
 
 #[cfg(test)]

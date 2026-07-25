@@ -25,6 +25,12 @@ use crate::workspace::service::{
 pub trait CloneProgressSink: Send + Sync {
     /// Returns `false` when the caller has cancelled the clone.
     fn emit(&self, progress: CloneProgress) -> bool;
+
+    /// Atomically makes publication non-cancellable. A `false` result keeps
+    /// the owned staging directory for explicit recovery.
+    fn begin_finalization(&self) -> bool {
+        true
+    }
 }
 
 pub(crate) trait GitRepositoryPort: Send + Sync {
@@ -320,8 +326,11 @@ impl RepositoryService {
         )?;
         let _snapshot = self
             .git
-            .clone_repository(&approved_url, &staging.path, token, progress)
+            .clone_repository(&approved_url, &staging.path, token, progress.clone())
             .map_err(|error| error.with_detail("stagingPath", staging.path.to_string_lossy()))?;
+        if !progress.begin_finalization() {
+            return Err(clone_finalization_cancelled(&staging.path));
+        }
         publish_owned_clone_with_hooks(&staging, &target, || {}, || {})?;
         self.git.inspect(&target)
     }
@@ -700,6 +709,12 @@ fn clone_reservation_error(path: &Path) -> AppError {
     .with_detail("path", path.to_string_lossy())
 }
 
+fn clone_finalization_cancelled(staging: &Path) -> AppError {
+    AppError::new(ErrorCode::CloneFailed, "저장소 clone이 취소되었습니다.")
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("stagingPath", staging.to_string_lossy())
+}
+
 fn stale_preview_error() -> AppError {
     AppError::new(
         ErrorCode::WorkspaceChangedSincePreview,
@@ -902,6 +917,8 @@ fn path_conflict(path: &Path) -> AppError {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Barrier;
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
@@ -922,6 +939,36 @@ mod tests {
     impl CloneProgressSink for NoopProgress {
         fn emit(&self, _progress: CloneProgress) -> bool {
             true
+        }
+    }
+
+    struct RejectFinalization;
+
+    impl CloneProgressSink for RejectFinalization {
+        fn emit(&self, _progress: CloneProgress) -> bool {
+            true
+        }
+
+        fn begin_finalization(&self) -> bool {
+            false
+        }
+    }
+
+    struct BarrierFinalization {
+        arrived: Arc<Barrier>,
+        release: Arc<Barrier>,
+        allow_publication: Arc<AtomicBool>,
+    }
+
+    impl CloneProgressSink for BarrierFinalization {
+        fn emit(&self, _progress: CloneProgress) -> bool {
+            true
+        }
+
+        fn begin_finalization(&self) -> bool {
+            self.arrived.wait();
+            self.release.wait();
+            self.allow_publication.load(Ordering::SeqCst)
         }
     }
 
@@ -1149,6 +1196,79 @@ mod tests {
         assert!(!target.join("owned.txt").exists());
         let staging = std::path::PathBuf::from(error.details.get("stagingPath").unwrap());
         assert!(staging.is_dir());
+        assert_eq!(
+            fs::read_to_string(staging.join("owned.txt")).unwrap(),
+            "clone content"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_at_finalization_keeps_the_owned_staging_and_never_publishes_target() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("knowledge");
+        let service = RepositoryService::for_clone(
+            Arc::new(CloneWritingGit::default()),
+            Arc::new(clone_test_remote()),
+            Arc::new(FakeCredentials),
+        );
+
+        let error = service
+            .clone(
+                CloneRequest {
+                    repository_id: "R_expected".into(),
+                    full_name: "example/knowledge".into(),
+                    https_url: "https://github.com/example/knowledge.git".into(),
+                    parent_directory: parent.path().to_path_buf(),
+                },
+                Arc::new(RejectFinalization),
+            )
+            .await
+            .unwrap_err();
+
+        let staging = std::path::PathBuf::from(error.details.get("stagingPath").unwrap());
+        assert_eq!(error.code, ErrorCode::CloneFailed);
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_to_string(staging.join("owned.txt")).unwrap(),
+            "clone content"
+        );
+    }
+
+    #[test]
+    fn cancellation_at_the_prepublication_barrier_retains_staging_and_target_absence() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("knowledge");
+        let service = RepositoryService::for_clone(
+            Arc::new(CloneWritingGit::default()),
+            Arc::new(clone_test_remote()),
+            Arc::new(FakeCredentials),
+        );
+        let arrived = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let allow_publication = Arc::new(AtomicBool::new(true));
+        let sink = Arc::new(BarrierFinalization {
+            arrived: arrived.clone(),
+            release: release.clone(),
+            allow_publication: allow_publication.clone(),
+        });
+        let request = CloneRequest {
+            repository_id: "R_expected".into(),
+            full_name: "example/knowledge".into(),
+            https_url: "https://github.com/example/knowledge.git".into(),
+            parent_directory: parent.path().to_path_buf(),
+        };
+
+        let worker = std::thread::spawn(move || {
+            tauri::async_runtime::block_on(service.clone(request, sink))
+        });
+        arrived.wait();
+        allow_publication.store(false, Ordering::SeqCst);
+        release.wait();
+        let error = worker.join().unwrap().unwrap_err();
+
+        let staging = std::path::PathBuf::from(error.details.get("stagingPath").unwrap());
+        assert_eq!(error.code, ErrorCode::CloneFailed);
+        assert!(!target.exists());
         assert_eq!(
             fs::read_to_string(staging.join("owned.txt")).unwrap(),
             "clone content"

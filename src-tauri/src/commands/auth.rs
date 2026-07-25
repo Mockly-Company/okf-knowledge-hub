@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::auth::model::{AuthStatusEvent, DeviceAuthorization, GithubUserSummary};
 use crate::auth::ports::AuthEventSink;
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
-use crate::state::AppServices;
+use crate::state::{AppServices, JobRegistry, JobTerminal};
 
 pub const GITHUB_AUTH_STATUS_EVENT: &str = "github-auth-status";
 
@@ -29,8 +29,44 @@ impl TauriAuthEventSink {
 }
 
 impl AuthEventSink for TauriAuthEventSink {
-    fn emit(&self, event: AuthStatusEvent) {
+    fn emit(&self, event: AuthStatusEvent) -> bool {
         let _ = self.app.emit(GITHUB_AUTH_STATUS_EVENT, event);
+        true
+    }
+}
+
+pub struct LifecycleAuthEventSink<E> {
+    inner: E,
+    jobs: JobRegistry,
+}
+
+impl<E> LifecycleAuthEventSink<E> {
+    pub(crate) fn new(inner: E, jobs: JobRegistry) -> Self {
+        Self { inner, jobs }
+    }
+}
+
+impl<E: AuthEventSink> AuthEventSink for LifecycleAuthEventSink<E> {
+    fn emit(&self, event: AuthStatusEvent) -> bool {
+        let request_id = match &event {
+            AuthStatusEvent::Authenticated { request_id, .. }
+            | AuthStatusEvent::Failed { request_id, .. }
+            | AuthStatusEvent::Cancelled { request_id } => Some(*request_id),
+            AuthStatusEvent::WaitingForUser { .. }
+            | AuthStatusEvent::ReauthenticationRequired { .. } => None,
+        };
+        let Some(request_id) = request_id else {
+            return self.inner.emit(event);
+        };
+        match self.jobs.finish(request_id) {
+            JobTerminal::Completed => self.inner.emit(event),
+            JobTerminal::Cancelled => {
+                let original_was_cancelled = matches!(event, AuthStatusEvent::Cancelled { .. });
+                let _ = self.inner.emit(AuthStatusEvent::Cancelled { request_id });
+                original_was_cancelled
+            }
+            JobTerminal::AlreadyTerminal => false,
+        }
     }
 }
 
@@ -66,14 +102,11 @@ pub(crate) async fn begin_github_auth_inner(
     let authorization = auth.begin().await?;
     let request_id = authorization.request_id;
     let cancellation = CancellationToken::new();
-    services
-        .auth_jobs
-        .insert(request_id, cancellation.clone())
-        .await;
+    services.auth_jobs.insert(request_id, cancellation.clone());
     let jobs = services.auth_jobs.clone();
     tauri::async_runtime::spawn(async move {
         let _ = auth.run(request_id, cancellation).await;
-        jobs.remove(request_id).await;
+        jobs.finish(request_id);
     });
     Ok(authorization)
 }
@@ -89,7 +122,7 @@ pub(crate) async fn cancel_github_auth_inner(
     services: &AppServices,
     request_id: Uuid,
 ) -> CommandResult<bool> {
-    Ok(services.auth_jobs.cancel(request_id).await)
+    Ok(services.auth_jobs.cancel(request_id))
 }
 
 #[tauri::command]
@@ -101,10 +134,13 @@ pub async fn cancel_github_auth(
 }
 
 pub(crate) async fn logout_github_inner(services: &AppServices) -> CommandResult<()> {
-    services.auth_jobs.cancel_all().await;
-    services.clone_jobs.cancel_all().await;
+    services.auth_jobs.cancel_all();
+    services.clone_jobs.cancel_all();
+    let pending_result =
+        crate::commands::workspace::clear_pending_initialization_inner(services).await;
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
-    auth.logout().await
+    auth.logout().await?;
+    pending_result
 }
 
 #[tauri::command]
@@ -122,7 +158,10 @@ fn auth_unavailable() -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Barrier, Mutex};
+    use std::thread;
 
     use async_trait::async_trait;
     use secrecy::SecretString;
@@ -135,6 +174,8 @@ mod tests {
     use crate::auth::ports::{AuthEventSink, Clock, CredentialStore, Delay, DeviceFlowApi};
     use crate::auth::service::AuthService;
     use crate::error::AppError;
+    use crate::settings::model::PendingInitializationContext;
+    use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
 
     struct ApprovedDeviceFlow;
 
@@ -206,6 +247,25 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct MemorySettings(Arc<Mutex<HashMap<String, String>>>);
+
+    impl LocalSettingsStore for MemorySettings {
+        fn read(&self, key: &str) -> Result<Option<String>, AppError> {
+            Ok(self.0.lock().unwrap().get(key).cloned())
+        }
+
+        fn write(&self, key: &str, value: &str) -> Result<(), AppError> {
+            self.0.lock().unwrap().insert(key.into(), value.into());
+            Ok(())
+        }
+
+        fn remove(&self, key: &str) -> Result<(), AppError> {
+            self.0.lock().unwrap().remove(key);
+            Ok(())
+        }
+    }
+
     struct FixedClock;
     impl Clock for FixedClock {
         fn now_unix(&self) -> i64 {
@@ -222,8 +282,24 @@ mod tests {
     #[derive(Clone, Default)]
     struct Events(Arc<Mutex<Vec<AuthStatusEvent>>>);
     impl AuthEventSink for Events {
-        fn emit(&self, event: AuthStatusEvent) {
+        fn emit(&self, event: AuthStatusEvent) -> bool {
             self.0.lock().unwrap().push(event);
+            true
+        }
+    }
+
+    struct BlockingEvents {
+        events: Events,
+        terminal_claimed: Arc<Barrier>,
+        release: Arc<Barrier>,
+    }
+
+    impl AuthEventSink for BlockingEvents {
+        fn emit(&self, event: AuthStatusEvent) -> bool {
+            self.events.0.lock().unwrap().push(event);
+            self.terminal_claimed.wait();
+            self.release.wait();
+            true
         }
     }
 
@@ -267,14 +343,14 @@ mod tests {
 
         let authorization = begin_github_auth_inner(&state).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            while state.auth_jobs.contains(authorization.request_id).await {
+            while state.auth_jobs.contains(authorization.request_id) {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .unwrap();
 
-        assert!(!state.auth_jobs.contains(authorization.request_id).await);
+        assert!(!state.auth_jobs.contains(authorization.request_id));
     }
 
     #[tokio::test]
@@ -284,16 +360,20 @@ mod tests {
         let second = uuid::Uuid::new_v4();
         let first_token = tokio_util::sync::CancellationToken::new();
         let second_token = tokio_util::sync::CancellationToken::new();
-        state.auth_jobs.insert(first, first_token.clone()).await;
-        state.auth_jobs.insert(second, second_token.clone()).await;
+        state.auth_jobs.insert(first, first_token.clone());
+        state.auth_jobs.insert(second, second_token.clone());
 
         assert!(cancel_github_auth_inner(&state, first).await.unwrap());
 
         assert!(first_token.is_cancelled());
         assert!(!second_token.is_cancelled());
-        assert!(!state.auth_jobs.contains(first).await);
-        assert!(state.auth_jobs.contains(second).await);
+        assert!(state.auth_jobs.contains(first));
+        assert!(state.auth_jobs.contains(second));
         assert!(!cancel_github_auth_inner(&state, first).await.unwrap());
+        assert_eq!(
+            state.auth_jobs.finish(first),
+            crate::state::JobTerminal::Cancelled
+        );
     }
 
     #[test]
@@ -339,5 +419,114 @@ mod tests {
         let json = serde_json::to_string(&auth_state).unwrap();
 
         assert_eq!(json, r#"{"status":"signed_out"}"#);
+    }
+
+    #[tokio::test]
+    async fn logout_invalidates_pending_initialization_for_the_next_account() {
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            ApprovedDeviceFlow,
+            MemoryCredentials::default(),
+            FixedClock,
+            ImmediateDelay,
+            Events::default(),
+        );
+        let settings = LocalSettingsService::new(MemorySettings::default());
+        let context = PendingInitializationContext {
+            preview_id: Uuid::new_v4(),
+            root: PathBuf::from("/tmp/mockly-knowledge"),
+            repository_id: "R_kgDOMockly".into(),
+            repository_full_name: "Mockly-Company/mockly-knowledge".into(),
+            author_id: 7,
+            author_login: "hyeeun".into(),
+            created_at_unix: 1_000,
+            expires_at_unix: 1_900,
+            completed_result: None,
+        };
+        settings.set_pending_initialization(&context).unwrap();
+        let state = AppServices::with_auth(settings.clone(), auth);
+        state
+            .initialization_contexts
+            .insert(context.clone())
+            .unwrap();
+
+        logout_github_inner(&state).await.unwrap();
+
+        assert_eq!(settings.load_pending_initialization().unwrap(), None);
+        assert!(state
+            .initialization_contexts
+            .claim(context.preview_id)
+            .is_err());
+    }
+
+    #[test]
+    fn auth_terminal_event_is_cancelled_when_cancel_wins_and_completed_when_worker_wins() {
+        let jobs = crate::state::JobRegistry::default();
+        let events = Events::default();
+
+        let cancelled_id = uuid::Uuid::new_v4();
+        jobs.insert(cancelled_id, CancellationToken::new());
+        let worker_ready = Arc::new(Barrier::new(2));
+        let worker_release = Arc::new(Barrier::new(2));
+        let worker_jobs = jobs.clone();
+        let worker_events = events.clone();
+        let worker_ready_clone = worker_ready.clone();
+        let worker_release_clone = worker_release.clone();
+        let cancelled_worker = thread::spawn(move || {
+            worker_ready_clone.wait();
+            worker_release_clone.wait();
+            LifecycleAuthEventSink::new(worker_events, worker_jobs).emit(
+                AuthStatusEvent::Authenticated {
+                    request_id: cancelled_id,
+                    user: GithubUserSummary {
+                        id: 1,
+                        login: "first".into(),
+                        avatar_url: String::new(),
+                    },
+                },
+            )
+        });
+        worker_ready.wait();
+        assert!(jobs.cancel(cancelled_id));
+        worker_release.wait();
+        assert!(!cancelled_worker.join().unwrap());
+
+        let completed_id = uuid::Uuid::new_v4();
+        jobs.insert(completed_id, CancellationToken::new());
+        let terminal_claimed = Arc::new(Barrier::new(2));
+        let terminal_release = Arc::new(Barrier::new(2));
+        let completed_sink = LifecycleAuthEventSink::new(
+            BlockingEvents {
+                events: events.clone(),
+                terminal_claimed: terminal_claimed.clone(),
+                release: terminal_release.clone(),
+            },
+            jobs.clone(),
+        );
+        let completed_worker = thread::spawn(move || {
+            completed_sink.emit(AuthStatusEvent::Authenticated {
+                request_id: completed_id,
+                user: GithubUserSummary {
+                    id: 2,
+                    login: "second".into(),
+                    avatar_url: String::new(),
+                },
+            })
+        });
+        terminal_claimed.wait();
+        assert!(!jobs.cancel(completed_id));
+        terminal_release.wait();
+        assert!(completed_worker.join().unwrap());
+
+        let recorded = events.0.lock().unwrap();
+        assert!(matches!(
+            recorded[0],
+            AuthStatusEvent::Cancelled { request_id } if request_id == cancelled_id
+        ));
+        assert!(matches!(
+            recorded[1],
+            AuthStatusEvent::Authenticated { request_id, .. } if request_id == completed_id
+        ));
+        assert_eq!(recorded.len(), 2);
     }
 }

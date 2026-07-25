@@ -38,7 +38,7 @@ pub struct CloneProgress {
     pub total: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializationResult {
     pub root: PathBuf,

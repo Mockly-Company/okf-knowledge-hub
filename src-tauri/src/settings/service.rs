@@ -2,11 +2,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
-use crate::settings::model::{CurrentWorkspace, DisplayDensity};
+use crate::settings::model::{CurrentWorkspace, DisplayDensity, PendingInitializationContext};
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
 pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
 pub const DISPLAY_DENSITY_KEY: &str = "display-density";
+pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
 
 pub trait LocalSettingsStore: Send + Sync {
     fn read(&self, key: &str) -> Result<Option<String>, AppError>;
@@ -136,6 +137,70 @@ impl LocalSettingsService {
     pub fn set_display_density(&self, density: DisplayDensity) -> Result<(), AppError> {
         self.store.write(DISPLAY_DENSITY_KEY, density.as_stored())
     }
+
+    pub fn load_pending_initialization(
+        &self,
+    ) -> Result<Option<PendingInitializationContext>, AppError> {
+        let Some(encoded) = self.store.read(PENDING_INITIALIZATION_KEY)? else {
+            return Ok(None);
+        };
+        let context: PendingInitializationContext =
+            serde_json::from_str(&encoded).map_err(|_| pending_initialization_error())?;
+        validate_pending_initialization(&context)?;
+        Ok(Some(context))
+    }
+
+    pub fn set_pending_initialization(
+        &self,
+        context: &PendingInitializationContext,
+    ) -> Result<(), AppError> {
+        validate_pending_initialization(context)?;
+        let encoded = serde_json::to_string(context).map_err(|_| pending_initialization_error())?;
+        self.store.write(PENDING_INITIALIZATION_KEY, &encoded)
+    }
+
+    pub fn clear_pending_initialization(&self) -> Result<(), AppError> {
+        self.store.remove(PENDING_INITIALIZATION_KEY)
+    }
+}
+
+fn validate_pending_initialization(context: &PendingInitializationContext) -> Result<(), AppError> {
+    if !context.root.is_absolute()
+        || context.repository_id.trim().is_empty()
+        || !valid_repository_full_name(&context.repository_full_name)
+        || context.author_id == 0
+        || context.author_login.trim().is_empty()
+        || context.created_at_unix <= 0
+        || context.expires_at_unix <= context.created_at_unix
+        || context
+            .completed_result
+            .as_ref()
+            .is_some_and(|result| result.root != context.root)
+    {
+        return Err(pending_initialization_error());
+    }
+    Ok(())
+}
+
+fn valid_repository_full_name(full_name: &str) -> bool {
+    let mut parts = full_name.split('/');
+    let owner = parts.next().unwrap_or_default();
+    let repository = parts.next().unwrap_or_default();
+    !owner.is_empty()
+        && !repository.is_empty()
+        && parts.next().is_none()
+        && owner.trim() == owner
+        && repository.trim() == repository
+        && !owner.chars().any(char::is_whitespace)
+        && !repository.chars().any(char::is_whitespace)
+}
+
+fn pending_initialization_error() -> AppError {
+    AppError::new(
+        ErrorCode::LocalSettingsUnavailable,
+        "저장된 워크스페이스 초기화 복구 정보를 사용할 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
 }
 
 fn ready_summary(
@@ -193,7 +258,9 @@ mod tests {
 
     use super::*;
     use crate::error::AppError;
-    use crate::settings::model::{CurrentWorkspaceStatus, DisplayDensity};
+    use crate::settings::model::{
+        CurrentWorkspaceStatus, DisplayDensity, PendingInitializationContext,
+    };
     use crate::workspace::service::{WorkspaceInspection, WorkspaceSummary};
 
     const UNKNOWN_KEY: &str = "future-setting";
@@ -252,6 +319,77 @@ mod tests {
         )
         .unwrap();
         directory
+    }
+
+    #[test]
+    fn one_token_free_pending_initialization_context_round_trips_and_clears() {
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store.clone());
+        let context = PendingInitializationContext {
+            preview_id: Uuid::new_v4(),
+            root: PathBuf::from("/tmp/mockly-knowledge"),
+            repository_id: "R_kgDOMockly".into(),
+            repository_full_name: "Mockly-Company/mockly-knowledge".into(),
+            author_id: 42,
+            author_login: "hyeeun".into(),
+            created_at_unix: 1_000,
+            expires_at_unix: 1_900,
+            completed_result: None,
+        };
+
+        service.set_pending_initialization(&context).unwrap();
+        assert_eq!(
+            service.load_pending_initialization().unwrap(),
+            Some(context)
+        );
+        let raw = store.raw(PENDING_INITIALIZATION_KEY).unwrap();
+        assert!(!raw.contains("token"));
+        assert!(!raw.contains("https_url"));
+
+        service.clear_pending_initialization().unwrap();
+        assert_eq!(service.load_pending_initialization().unwrap(), None);
+    }
+
+    #[test]
+    fn pending_initialization_rejects_invalid_account_repository_and_completion_identity() {
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+        let base = PendingInitializationContext {
+            preview_id: Uuid::new_v4(),
+            root: PathBuf::from("/tmp/mockly-knowledge"),
+            repository_id: "R_kgDOMockly".into(),
+            repository_full_name: "Mockly-Company/mockly-knowledge".into(),
+            author_id: 42,
+            author_login: "hyeeun".into(),
+            created_at_unix: 1_000,
+            expires_at_unix: 1_900,
+            completed_result: None,
+        };
+
+        let mut zero_author = base.clone();
+        zero_author.author_id = 0;
+        assert!(service.set_pending_initialization(&zero_author).is_err());
+
+        for full_name in ["mockly", "/knowledge", "mockly/", "a/b/c", "a /b"] {
+            let mut invalid_repository = base.clone();
+            invalid_repository.repository_full_name = full_name.into();
+            assert!(service
+                .set_pending_initialization(&invalid_repository)
+                .is_err());
+        }
+
+        let mut mismatched_completion = base;
+        mismatched_completion.completed_result =
+            Some(crate::repository::model::InitializationResult {
+                root: PathBuf::from("/tmp/different-repository"),
+                branch: "okf/init-workspace".into(),
+                commit_oid: "abc123".into(),
+                commit_message: "chore: initialize OkHub workspace".into(),
+                pushed: true,
+                draft_pull_request_url: None,
+            });
+        assert!(service
+            .set_pending_initialization(&mismatched_completion)
+            .is_err());
     }
 
     #[test]
