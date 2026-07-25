@@ -301,22 +301,24 @@ impl RepositoryService {
             &request.parent_directory,
             repository_name(&request.full_name)?,
         )?;
+        let resolved = self
+            .github
+            .resolve_remote_repository(&clean_url, &request.repository_id)
+            .await?;
+        if resolved.id != request.repository_id {
+            return Err(remote_mismatch_error(&request.repository_id, &resolved.id));
+        }
+        let approved_url = clean_github_https_url(&resolved.https_url, &resolved.full_name)
+            .map_err(|_| remote_mismatch_error(&request.repository_id, &resolved.id))?;
         let token = self.credentials()?.valid_access_token().await?;
         Self::ensure_clone_target(&target)?;
         let staging = create_clone_staging(
             target.parent().ok_or_else(|| path_conflict(&target))?,
             repository_name(&request.full_name)?,
         )?;
-        let snapshot = self
+        let _snapshot = self
             .git
-            .clone_repository(&clean_url, &staging, token, progress)
-            .map_err(|error| error.with_detail("stagingPath", staging.to_string_lossy()))?;
-        self.github
-            .resolve_remote_repository(
-                snapshot.remote_url.as_deref().unwrap_or(&clean_url),
-                &request.repository_id,
-            )
-            .await
+            .clone_repository(&approved_url, &staging, token, progress)
             .map_err(|error| error.with_detail("stagingPath", staging.to_string_lossy()))?;
         publish_clone_no_replace(&staging, &target).map_err(|error| {
             let mut app_error = if fs::symlink_metadata(&target).is_ok() {
@@ -892,6 +894,7 @@ mod tests {
             resolved_id: "R_expected".into(),
             accepted_remote_url: Default::default(),
             resolve_requests: Default::default(),
+            resolve_action: Default::default(),
             origin_swap_after_resolve: Default::default(),
             draft_requests: Default::default(),
             draft_failures_remaining: Default::default(),
@@ -901,12 +904,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clone_resolves_repository_identity_before_any_staging_entry_exists() {
+        let parent = tempfile::tempdir().unwrap();
+        let parent_path = parent.path().to_path_buf();
+        let resolution_observed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed_in_callback = resolution_observed.clone();
+        let remote = clone_test_remote();
+        *remote.resolve_action.lock().unwrap() = Some(Box::new(move || {
+            observed_in_callback.store(true, std::sync::atomic::Ordering::SeqCst);
+            assert!(fs::read_dir(&parent_path).unwrap().all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".okhub-clone-")));
+        }));
+        let service = RepositoryService::for_clone(
+            Arc::new(CloneWritingGit::default()),
+            Arc::new(remote),
+            Arc::new(FakeCredentials),
+        );
+
+        let snapshot = service
+            .clone(
+                CloneRequest {
+                    repository_id: "R_expected".into(),
+                    full_name: "example/knowledge".into(),
+                    https_url: "https://github.com/example/knowledge.git".into(),
+                    parent_directory: parent.path().to_path_buf(),
+                },
+                Arc::new(NoopProgress),
+            )
+            .await
+            .unwrap();
+
+        assert!(resolution_observed.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(snapshot.root, parent.path().join("knowledge"));
+        assert_eq!(
+            fs::read_to_string(snapshot.root.join("owned.txt")).unwrap(),
+            "clone content"
+        );
+    }
+
+    #[tokio::test]
     async fn clone_authentication_precedes_final_path_ownership_and_preserves_attacker_directory() {
         let parent = tempfile::tempdir().unwrap();
         let target = parent.path().join("knowledge");
         let attack_target = target.clone();
+        let attack_parent = parent.path().to_path_buf();
         let credentials = AttackingCredentials {
             attack: Mutex::new(Some(Box::new(move || {
+                assert!(fs::read_dir(&attack_parent).unwrap().all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".okhub-clone-")));
                 let _ = fs::remove_dir(&attack_target);
                 fs::create_dir(&attack_target).unwrap();
                 fs::write(attack_target.join("mine.txt"), "user content").unwrap();
@@ -1052,11 +1103,14 @@ mod tests {
         }
     }
 
+    type ResolveAction = Box<dyn Fn() + Send + Sync>;
+
     #[derive(Clone)]
     struct FakeRemote {
         resolved_id: String,
         accepted_remote_url: Arc<Mutex<Option<String>>>,
         resolve_requests: Arc<Mutex<Vec<String>>>,
+        resolve_action: Arc<Mutex<Option<ResolveAction>>>,
         origin_swap_after_resolve: Arc<Mutex<Option<(std::path::PathBuf, String)>>>,
         draft_requests: Arc<Mutex<Vec<DraftPullRequestRequest>>>,
         draft_failures_remaining: Arc<Mutex<usize>>,
@@ -1075,6 +1129,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(remote_url.to_owned());
+            if let Some(action) = self.resolve_action.lock().unwrap().take() {
+                action();
+            }
             if let Some((root, replacement)) = self.origin_swap_after_resolve.lock().unwrap().take()
             {
                 Repository::open(root)
@@ -1347,7 +1404,12 @@ mod tests {
         ) -> Result<(), crate::error::AppError> {
             assert_eq!(approved_remote_url, self.approved_url);
             self.inner
-                .push_branch(root, branch, &self.transport_url, access_token)
+                .push_branch(root, branch, &self.transport_url, access_token)?;
+            Repository::open_bare(&self.transport_url)
+                .unwrap()
+                .set_head(&format!("refs/heads/{branch}"))
+                .unwrap();
+            Ok(())
         }
 
         fn checkout_initialization(
@@ -1509,6 +1571,7 @@ mod tests {
                 resolved_id: "R_expected".into(),
                 accepted_remote_url: Default::default(),
                 resolve_requests: Default::default(),
+                resolve_action: Default::default(),
                 origin_swap_after_resolve: Default::default(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
@@ -1535,6 +1598,7 @@ mod tests {
                 resolved_id: "R_other".into(),
                 accepted_remote_url: Default::default(),
                 resolve_requests: Default::default(),
+                resolve_action: Default::default(),
                 origin_swap_after_resolve: Default::default(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
@@ -1561,6 +1625,7 @@ mod tests {
                 resolved_id: "R_expected".into(),
                 accepted_remote_url: Default::default(),
                 resolve_requests: Default::default(),
+                resolve_action: Default::default(),
                 origin_swap_after_resolve: Default::default(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
@@ -1647,6 +1712,10 @@ mod tests {
             .unwrap()
             .push(&["refs/heads/main:refs/heads/main"], None)
             .unwrap();
+        Repository::open_bare(bare_remote.path())
+            .unwrap()
+            .set_head("refs/heads/main")
+            .unwrap();
         let root = directory.path().to_path_buf();
         drop(branch);
         drop(repository);
@@ -1655,6 +1724,7 @@ mod tests {
             resolved_id: "R_expected".into(),
             accepted_remote_url: Default::default(),
             resolve_requests: Default::default(),
+            resolve_action: Default::default(),
             origin_swap_after_resolve: Default::default(),
             draft_requests: Default::default(),
             draft_failures_remaining: Default::default(),
@@ -2296,6 +2366,7 @@ mod tests {
             resolved_id: "R_empty".into(),
             accepted_remote_url: Default::default(),
             resolve_requests: Default::default(),
+            resolve_action: Default::default(),
             origin_swap_after_resolve: Default::default(),
             draft_requests: Default::default(),
             draft_failures_remaining: Default::default(),
