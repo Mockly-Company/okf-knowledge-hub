@@ -12,7 +12,9 @@ use crate::github::model::{GithubRepositorySummary, Page};
 use crate::repository::model::{
     CloneProgress, CloneRequest, InitializationResult, RepositoryIdentity, RepositorySnapshot,
 };
-use crate::repository::service::{CloneProgressSink, RepositoryService};
+use crate::repository::service::{
+    CloneProgressSink, RepositoryCredentialPort, RepositoryRemotePort, RepositoryService,
+};
 use crate::settings::model::{CurrentWorkspace, PendingInitializationContext};
 use crate::state::AppServices;
 use crate::workspace::service::{
@@ -431,24 +433,39 @@ pub(crate) async fn initialize_workspace_inner(
         clear_completed_initialization(services, claim).await?;
         return Ok(result);
     }
-    let auth = services.auth.clone().ok_or_else(service_unavailable)?;
-    let github = services.github.clone().ok_or_else(service_unavailable)?;
-    let user = github.current_user().await?;
+    #[cfg(test)]
+    let test_boundaries = services.initialization_test_boundaries.clone();
+    #[cfg(test)]
+    let resolved_boundaries = match test_boundaries {
+        Some(boundaries) => Some((
+            boundaries.user,
+            boundaries.repository,
+            boundaries.remote,
+            boundaries.credentials,
+            boundaries.git,
+        )),
+        None => None,
+    };
+    #[cfg(test)]
+    let resolved_boundaries = match resolved_boundaries {
+        Some(boundaries) => boundaries,
+        None => resolve_production_initialization_boundaries(services, &context).await?,
+    };
+    #[cfg(not(test))]
+    let resolved_boundaries =
+        resolve_production_initialization_boundaries(services, &context).await?;
+    let (user, repository, remote, credentials, git) = resolved_boundaries;
     ensure_pending_initialization_account(services, &context, &user).await?;
-    let repository = github
-        .repository_detail(&context.repository_id, &context.repository_full_name)
-        .await?;
     let expired = now_unix()? > context.expires_at_unix;
     if expired {
         services.initialization_previews.remove(preview_id);
     }
-    let git = services.repository_git.clone();
     let previews = services.initialization_previews.clone();
     let result = run_blocking(move || {
         let service = RepositoryService::new(
             git,
-            github,
-            auth,
+            remote,
+            credentials,
             previews,
             context.root,
             repository,
@@ -471,6 +488,36 @@ pub(crate) async fn initialize_workspace_inner(
     drop(_mutation);
     claim.complete();
     Ok(result)
+}
+
+type InitializationBoundaries = (
+    crate::auth::model::GithubUserSummary,
+    crate::github::model::GithubRepositoryDetail,
+    Arc<dyn RepositoryRemotePort>,
+    Arc<dyn RepositoryCredentialPort>,
+    Arc<dyn crate::repository::service::GitRepositoryPort>,
+);
+
+async fn resolve_production_initialization_boundaries(
+    services: &AppServices,
+    context: &PendingInitializationContext,
+) -> CommandResult<InitializationBoundaries> {
+    let auth = services.auth.clone().ok_or_else(service_unavailable)?;
+    let github = services.github.clone().ok_or_else(service_unavailable)?;
+    let user = github.current_user().await?;
+    ensure_pending_initialization_account(services, context, &user).await?;
+    let repository = github
+        .repository_detail(&context.repository_id, &context.repository_full_name)
+        .await?;
+    let remote: Arc<dyn RepositoryRemotePort> = github;
+    let credentials: Arc<dyn RepositoryCredentialPort> = auth;
+    Ok((
+        user,
+        repository,
+        remote,
+        credentials,
+        services.repository_git.clone(),
+    ))
 }
 
 async fn handle_initialization_failure(
@@ -711,6 +758,9 @@ mod tests {
     use crate::auth::ports::{AuthEventSink, Clock, CredentialStore, Delay, DeviceFlowApi};
     use crate::auth::service::AuthService;
     use crate::error::ErrorCode;
+    use crate::github::model::{DraftPullRequest, DraftPullRequestRequest, GithubRepositoryDetail};
+    use crate::repository::model::CommitOutcome;
+    use crate::repository::service::{GitRepositoryPort, RepositoryRemotePort};
     use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
 
     #[derive(Clone, Default)]
@@ -833,6 +883,239 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct AccountACredentials(Arc<Mutex<Option<StoredTokens>>>);
+
+    impl AccountACredentials {
+        fn new() -> Self {
+            Self(Arc::new(Mutex::new(Some(StoredTokens::new(
+                "account-a-access",
+                "account-a-refresh",
+                i64::MAX,
+                i64::MAX,
+            )))))
+        }
+    }
+
+    #[async_trait]
+    impl CredentialStore for AccountACredentials {
+        async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+
+        async fn save(&self, tokens: &StoredTokens) -> Result<(), AppError> {
+            *self.0.lock().unwrap() = Some(tokens.clone());
+            Ok(())
+        }
+
+        async fn delete(&self) -> Result<(), AppError> {
+            *self.0.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+
+    struct AccountBDeviceFlow;
+
+    #[async_trait]
+    impl DeviceFlowApi for AccountBDeviceFlow {
+        async fn request_device_code(
+            &self,
+            _client_id: &str,
+        ) -> Result<DeviceCodeResponse, AppError> {
+            Ok(DeviceCodeResponse::new(
+                SecretString::new("account-b-device-code".into()),
+                "B-LOGIN",
+                "https://github.com/login/device",
+                900,
+                0,
+            ))
+        }
+
+        async fn poll_access_token(
+            &self,
+            _client_id: &str,
+            _device_code: &SecretString,
+        ) -> Result<DeviceTokenPoll, AppError> {
+            Ok(DeviceTokenPoll::Authorized(TokenGrant::new(
+                "account-b-access",
+                "account-b-refresh",
+                3_600,
+                7_200,
+            )))
+        }
+
+        async fn refresh_access_token(
+            &self,
+            _client_id: &str,
+            _refresh_token: &SecretString,
+        ) -> Result<TokenGrant, AppError> {
+            unreachable!()
+        }
+
+        async fn authenticated_user(
+            &self,
+            _access_token: &SecretString,
+        ) -> Result<GithubUserSummary, AppError> {
+            Ok(GithubUserSummary {
+                id: 84,
+                login: "account-b".into(),
+                avatar_url: "https://avatars.example/account-b".into(),
+            })
+        }
+    }
+
+    struct DurableAttemptBarrierGit {
+        commit_entered: Arc<Barrier>,
+        release_commit: Arc<Barrier>,
+        remote_tokens: Arc<Mutex<Vec<String>>>,
+        push_tokens: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl GitRepositoryPort for DurableAttemptBarrierGit {
+        fn inspect(&self, path: &std::path::Path) -> Result<RepositorySnapshot, AppError> {
+            Ok(RepositorySnapshot {
+                root: path.to_path_buf(),
+                head_oid: Some("base-oid".into()),
+                default_branch: Some("main".into()),
+                is_dirty: false,
+                has_content: true,
+                remote_url: Some("https://github.com/Mockly-Company/mockly-knowledge.git".into()),
+                fingerprint: "fixture".into(),
+            })
+        }
+
+        fn clone_repository(
+            &self,
+            _clean_remote_url: &str,
+            _target: &std::path::Path,
+            _access_token: crate::auth::model::AccessToken,
+            _progress: Arc<dyn CloneProgressSink>,
+        ) -> Result<RepositorySnapshot, AppError> {
+            unreachable!()
+        }
+
+        fn commit_initialization(
+            &self,
+            _root: &std::path::Path,
+            _preview: &InitializationPreview,
+            _identity: &RepositoryIdentity,
+        ) -> Result<CommitOutcome, AppError> {
+            self.commit_entered.wait();
+            self.release_commit.wait();
+            Ok(CommitOutcome {
+                branch: "okf/init-workspace".into(),
+                commit_oid: "initialization-oid".into(),
+                original_branch: Some("main".into()),
+            })
+        }
+
+        fn verify_initialization_commit(
+            &self,
+            _root: &std::path::Path,
+            _preview: &InitializationPreview,
+            _outcome: &CommitOutcome,
+            _identity: &RepositoryIdentity,
+        ) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        fn push_branch(
+            &self,
+            _root: &std::path::Path,
+            _branch: &str,
+            _approved_remote_url: &str,
+            access_token: crate::auth::model::AccessToken,
+        ) -> Result<(), AppError> {
+            self.push_tokens
+                .lock()
+                .unwrap()
+                .push(access_token.expose_secret().to_owned());
+            Ok(())
+        }
+
+        fn checkout_initialization(
+            &self,
+            _root: &std::path::Path,
+            _preview: &InitializationPreview,
+            _outcome: &CommitOutcome,
+        ) -> Result<(), AppError> {
+            unreachable!()
+        }
+
+        fn origin_url(&self, _root: &std::path::Path) -> Result<String, AppError> {
+            Ok("https://github.com/Mockly-Company/mockly-knowledge.git".into())
+        }
+
+        fn attempt_directory(&self, root: &std::path::Path) -> Result<PathBuf, AppError> {
+            Ok(root.join(".git/okhub"))
+        }
+
+        fn remote_branch_oid(
+            &self,
+            _root: &std::path::Path,
+            _branch: &str,
+            _approved_remote_url: &str,
+            access_token: crate::auth::model::AccessToken,
+        ) -> Result<Option<String>, AppError> {
+            self.remote_tokens
+                .lock()
+                .unwrap()
+                .push(access_token.expose_secret().to_owned());
+            Ok(None)
+        }
+    }
+
+    struct AccountAInitializationRemote {
+        auth: Arc<AuthService>,
+        pr_tokens: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl RepositoryRemotePort for AccountAInitializationRemote {
+        async fn resolve_remote_repository(
+            &self,
+            _remote_url: &str,
+            _expected_repository_id: &str,
+        ) -> Result<GithubRepositoryDetail, AppError> {
+            Ok(initialization_repository())
+        }
+
+        async fn create_draft_pull_request(
+            &self,
+            _request: &DraftPullRequestRequest,
+        ) -> Result<DraftPullRequest, AppError> {
+            let token = self.auth.valid_access_token().await?;
+            self.pr_tokens
+                .lock()
+                .unwrap()
+                .push(token.expose_secret().to_owned());
+            Ok(DraftPullRequest {
+                number: 1,
+                html_url: "https://github.com/Mockly-Company/mockly-knowledge/pull/1".into(),
+                is_draft: true,
+            })
+        }
+
+        async fn find_open_pull_request(
+            &self,
+            _request: &DraftPullRequestRequest,
+        ) -> Result<Option<DraftPullRequest>, AppError> {
+            Ok(None)
+        }
+    }
+
+    fn initialization_repository() -> GithubRepositoryDetail {
+        GithubRepositoryDetail {
+            id: "R_kgDOMockly".into(),
+            owner: "Mockly-Company".into(),
+            name: "mockly-knowledge".into(),
+            full_name: "Mockly-Company/mockly-knowledge".into(),
+            default_branch: Some("main".into()),
+            is_empty: false,
+            https_url: "https://github.com/Mockly-Company/mockly-knowledge.git".into(),
+        }
+    }
+
     fn services_with_auth(settings: LocalSettingsService) -> AppServices {
         AppServices::with_auth(
             settings,
@@ -908,6 +1191,185 @@ mod tests {
             },
             files: Vec::new(),
         }
+    }
+
+    struct ActualInitializationFixture {
+        _directory: tempfile::TempDir,
+        services: Arc<AppServices>,
+        context: PendingInitializationContext,
+        commit_entered: Arc<Barrier>,
+        release_commit: Arc<Barrier>,
+        remote_tokens: Arc<Mutex<Vec<String>>>,
+        push_tokens: Arc<Mutex<Vec<String>>>,
+        pr_tokens: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ActualInitializationFixture {
+        fn new() -> Self {
+            let directory = tempfile::tempdir().unwrap();
+            let mut context = pending_context(7);
+            context.root = directory.path().to_path_buf();
+            context.expires_at_unix = i64::MAX;
+            let preview = initialization_preview(context.preview_id);
+            let store = MemorySettings::default();
+            let settings = LocalSettingsService::new(store);
+            settings.set_pending_initialization(&context).unwrap();
+            let auth = AuthService::new(
+                "Iv1.public-client-id",
+                AccountBDeviceFlow,
+                AccountACredentials::new(),
+                FixedClock,
+                NoDelay,
+                NoEvents,
+            );
+            let mut services = AppServices::with_auth(settings, auth);
+            let auth = services.auth.clone().unwrap();
+            let commit_entered = Arc::new(Barrier::new(2));
+            let release_commit = Arc::new(Barrier::new(2));
+            let remote_tokens = Arc::new(Mutex::new(Vec::new()));
+            let push_tokens = Arc::new(Mutex::new(Vec::new()));
+            let pr_tokens = Arc::new(Mutex::new(Vec::new()));
+            let git = Arc::new(DurableAttemptBarrierGit {
+                commit_entered: commit_entered.clone(),
+                release_commit: release_commit.clone(),
+                remote_tokens: remote_tokens.clone(),
+                push_tokens: push_tokens.clone(),
+            });
+            let remote = Arc::new(AccountAInitializationRemote {
+                auth: auth.clone(),
+                pr_tokens: pr_tokens.clone(),
+            });
+            services.set_initialization_test_boundaries(
+                git,
+                remote,
+                auth,
+                GithubUserSummary {
+                    id: 7,
+                    login: "hyeeun".into(),
+                    avatar_url: "https://avatars.example/hyeeun".into(),
+                },
+                initialization_repository(),
+            );
+            services
+                .initialization_contexts
+                .insert(context.clone())
+                .unwrap();
+            services.initialization_previews.insert(preview).unwrap();
+            Self {
+                _directory: directory,
+                services: Arc::new(services),
+                context,
+                commit_entered,
+                release_commit,
+                remote_tokens,
+                push_tokens,
+                pr_tokens,
+            }
+        }
+
+        fn prepared_attempt_path(&self) -> PathBuf {
+            self.context
+                .root
+                .join(".git/okhub")
+                .join(self.context.preview_id.to_string())
+                .join("prepared.json")
+        }
+    }
+
+    enum AuthTransition {
+        Logout,
+        AccountSwitch,
+    }
+
+    fn assert_actual_initialization_rejects_auth_transition(transition: AuthTransition) {
+        let fixture = ActualInitializationFixture::new();
+        let worker_services = fixture.services.clone();
+        let preview_id = fixture.context.preview_id;
+        let worker = thread::spawn(move || {
+            tauri::async_runtime::block_on(initialize_workspace_inner(&worker_services, preview_id))
+        });
+
+        fixture.commit_entered.wait();
+        assert!(fixture.prepared_attempt_path().is_file());
+        let duplicate = tauri::async_runtime::block_on(initialize_workspace_inner(
+            &fixture.services,
+            preview_id,
+        ))
+        .unwrap_err();
+        let generation_before = tauri::async_runtime::block_on(
+            fixture
+                .services
+                .auth
+                .as_ref()
+                .unwrap()
+                .lifecycle_generation(),
+        )
+        .unwrap();
+        let unrelated_job = Uuid::new_v4();
+        let unrelated_cancellation = CancellationToken::new();
+        fixture
+            .services
+            .auth_jobs
+            .insert(unrelated_job, unrelated_cancellation.clone());
+        let transition_error = match transition {
+            AuthTransition::Logout => tauri::async_runtime::block_on(
+                crate::commands::auth::logout_github_inner(&fixture.services),
+            )
+            .unwrap_err(),
+            AuthTransition::AccountSwitch => tauri::async_runtime::block_on(
+                crate::commands::auth::begin_github_auth_inner(&fixture.services),
+            )
+            .unwrap_err(),
+        };
+
+        assert_eq!(duplicate.code, ErrorCode::WorkspaceChangedSincePreview);
+        assert_eq!(
+            transition_error.code,
+            ErrorCode::WorkspaceChangedSincePreview
+        );
+        assert!(!unrelated_cancellation.is_cancelled());
+        assert_eq!(
+            tauri::async_runtime::block_on(
+                fixture
+                    .services
+                    .auth
+                    .as_ref()
+                    .unwrap()
+                    .lifecycle_generation()
+            ),
+            Some(generation_before)
+        );
+
+        fixture.release_commit.wait();
+        let result = worker.join().unwrap().unwrap();
+        assert!(result.pushed);
+        assert_eq!(
+            fixture.remote_tokens.lock().unwrap().as_slice(),
+            ["account-a-access"]
+        );
+        assert_eq!(
+            fixture.push_tokens.lock().unwrap().as_slice(),
+            ["account-a-access"]
+        );
+        assert_eq!(
+            fixture.pr_tokens.lock().unwrap().as_slice(),
+            ["account-a-access"]
+        );
+        assert_eq!(
+            fixture.services.auth_jobs.finish(unrelated_job),
+            crate::state::JobTerminal::Completed
+        );
+    }
+
+    #[test]
+    fn actual_initialization_rejects_logout_after_durable_attempt_before_remote_mutations() {
+        assert_actual_initialization_rejects_auth_transition(AuthTransition::Logout);
+    }
+
+    #[test]
+    fn actual_initialization_rejects_account_switch_after_durable_attempt_before_remote_mutations()
+    {
+        assert_actual_initialization_rejects_auth_transition(AuthTransition::AccountSwitch);
     }
 
     #[tokio::test]

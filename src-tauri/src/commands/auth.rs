@@ -98,6 +98,14 @@ pub async fn get_auth_state(state: State<'_, AppServices>) -> CommandResult<Auth
 pub(crate) async fn begin_github_auth_inner(
     services: &AppServices,
 ) -> CommandResult<DeviceAuthorization> {
+    begin_github_auth_with_publication_hook(services, || {}, || {}).await
+}
+
+async fn begin_github_auth_with_publication_hook(
+    services: &AppServices,
+    before_publication: impl FnOnce(),
+    before_run: impl FnOnce() + Send + 'static,
+) -> CommandResult<DeviceAuthorization> {
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
     let _mutation = services.initialization_contexts.lock_mutation().await;
     crate::commands::workspace::invalidate_pending_initialization_for_auth_transition_locked(
@@ -108,15 +116,17 @@ pub(crate) async fn begin_github_auth_inner(
     let _ =
         crate::commands::workspace::remove_pending_initialization_tombstone_locked(services).await;
     let authorization = authorization_result?;
-    drop(_mutation);
+    before_publication();
     let request_id = authorization.request_id;
     let cancellation = CancellationToken::new();
     services.auth_jobs.insert(request_id, cancellation.clone());
     let jobs = services.auth_jobs.clone();
     tauri::async_runtime::spawn(async move {
+        before_run();
         let _ = auth.run(request_id, cancellation).await;
         jobs.finish(request_id);
     });
+    drop(_mutation);
     Ok(authorization)
 }
 
@@ -286,6 +296,41 @@ mod tests {
         }
     }
 
+    struct PendingDeviceFlow;
+
+    #[async_trait]
+    impl DeviceFlowApi for PendingDeviceFlow {
+        async fn request_device_code(
+            &self,
+            client_id: &str,
+        ) -> Result<DeviceCodeResponse, AppError> {
+            ApprovedDeviceFlow.request_device_code(client_id).await
+        }
+
+        async fn poll_access_token(
+            &self,
+            _client_id: &str,
+            _device_code: &SecretString,
+        ) -> Result<DeviceTokenPoll, AppError> {
+            std::future::pending().await
+        }
+
+        async fn refresh_access_token(
+            &self,
+            _client_id: &str,
+            _refresh_token: &SecretString,
+        ) -> Result<TokenGrant, AppError> {
+            unreachable!()
+        }
+
+        async fn authenticated_user(
+            &self,
+            _access_token: &SecretString,
+        ) -> Result<GithubUserSummary, AppError> {
+            unreachable!()
+        }
+    }
+
     #[derive(Clone, Default)]
     struct MemoryCredentials {
         tokens: Arc<Mutex<Option<StoredTokens>>>,
@@ -402,6 +447,15 @@ mod tests {
         async fn wait(&self, _seconds: u64) {}
     }
 
+    struct PendingDelay;
+
+    #[async_trait]
+    impl Delay for PendingDelay {
+        async fn wait(&self, _seconds: u64) {
+            std::future::pending().await
+        }
+    }
+
     #[derive(Clone, Default)]
     struct Events(Arc<Mutex<Vec<AuthStatusEvent>>>);
     impl AuthEventSink for Events {
@@ -474,6 +528,93 @@ mod tests {
         .unwrap();
 
         assert!(!state.auth_jobs.contains(authorization.request_id));
+    }
+
+    #[test]
+    fn logout_after_device_authorization_observes_the_published_login_job() {
+        let events = Events::default();
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            PendingDeviceFlow,
+            MemoryCredentials::default(),
+            FixedClock,
+            PendingDelay,
+            events.clone(),
+        );
+        let state = Arc::new(AppServices::with_auth(
+            LocalSettingsService::new(MemorySettings::default()),
+            auth,
+        ));
+        let authorization_ready = Arc::new(Barrier::new(2));
+        let publish = Arc::new(Barrier::new(2));
+        let worker_started = Arc::new(Barrier::new(2));
+        let run_worker = Arc::new(Barrier::new(2));
+        let begin_state = state.clone();
+        let begin_ready = authorization_ready.clone();
+        let begin_publish = publish.clone();
+        let begin_worker_started = worker_started.clone();
+        let begin_run_worker = run_worker.clone();
+        let begin = thread::spawn(move || {
+            tauri::async_runtime::block_on(begin_github_auth_with_publication_hook(
+                &begin_state,
+                move || {
+                    begin_ready.wait();
+                    begin_publish.wait();
+                },
+                move || {
+                    begin_worker_started.wait();
+                    begin_run_worker.wait();
+                },
+            ))
+        });
+
+        authorization_ready.wait();
+        let (logout_sent, logout_received) = std::sync::mpsc::channel();
+        let logout_state = state.clone();
+        let logout = thread::spawn(move || {
+            let result = tauri::async_runtime::block_on(logout_github_inner(&logout_state));
+            logout_sent.send(result).unwrap();
+        });
+        assert!(matches!(
+            logout_received.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+
+        publish.wait();
+        let authorization = begin.join().unwrap().unwrap();
+        worker_started.wait();
+        logout_received.recv().unwrap().unwrap();
+        logout.join().unwrap();
+        run_worker.wait();
+        tauri::async_runtime::block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while state.auth_jobs.contains(authorization.request_id) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        });
+
+        let recorded = events.0.lock().unwrap();
+        let terminal = recorded
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    AuthStatusEvent::Authenticated { request_id, .. }
+                        | AuthStatusEvent::Cancelled { request_id }
+                        | AuthStatusEvent::Failed { request_id, .. }
+                        if *request_id == authorization.request_id
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(terminal.len(), 1);
+        assert!(matches!(
+            terminal[0],
+            AuthStatusEvent::Cancelled { request_id }
+                if *request_id == authorization.request_id
+        ));
     }
 
     #[tokio::test]
@@ -721,161 +862,6 @@ mod tests {
                 .await
                 .unwrap_err();
         assert_eq!(restart_error.code, ErrorCode::WorkspaceChangedSincePreview);
-    }
-
-    #[test]
-    fn logout_is_rejected_after_initialization_claim_and_durable_attempt() {
-        let credentials = MemoryCredentials::with_tokens(StoredTokens::new(
-            "account-a-access",
-            "account-a-refresh",
-            4_600,
-            8_200,
-        ));
-        let auth = AuthService::new(
-            "Iv1.public-client-id",
-            ApprovedDeviceFlow,
-            credentials.clone(),
-            FixedClock,
-            ImmediateDelay,
-            Events::default(),
-        );
-        let store = MemorySettings::default();
-        let settings = LocalSettingsService::new(store);
-        let context = pending_context();
-        settings.set_pending_initialization(&context).unwrap();
-        let state = Arc::new(AppServices::with_auth(settings.clone(), auth));
-        state
-            .initialization_contexts
-            .insert(context.clone())
-            .unwrap();
-        let durable_written = Arc::new(Barrier::new(2));
-        let release_remote_mutations = Arc::new(Barrier::new(2));
-        let worker_state = state.clone();
-        let worker_durable_written = durable_written.clone();
-        let worker_release = release_remote_mutations.clone();
-        let preview_id = context.preview_id;
-
-        let worker = thread::spawn(move || {
-            let claim = worker_state
-                .initialization_contexts
-                .claim(preview_id)
-                .unwrap();
-            worker_durable_written.wait();
-            worker_release.wait();
-            let push_token = tauri::async_runtime::block_on(
-                worker_state.auth.as_ref().unwrap().valid_access_token(),
-            )
-            .map(|token| token.expose_secret().to_owned());
-            let pr_token = tauri::async_runtime::block_on(
-                worker_state.auth.as_ref().unwrap().valid_access_token(),
-            )
-            .map(|token| token.expose_secret().to_owned());
-            claim.complete();
-            (push_token, pr_token)
-        });
-
-        durable_written.wait();
-        let generation_before =
-            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation())
-                .unwrap();
-        let transition = tauri::async_runtime::block_on(logout_github_inner(&state)).unwrap_err();
-        let duplicate = state.initialization_contexts.insert(context.clone());
-        release_remote_mutations.wait();
-        let (push_token, pr_token) = worker.join().unwrap();
-
-        assert_eq!(transition.code, ErrorCode::WorkspaceChangedSincePreview);
-        assert!(duplicate.is_err());
-        assert_eq!(push_token.unwrap(), "account-a-access");
-        assert_eq!(pr_token.unwrap(), "account-a-access");
-        assert!(!credentials.delete_attempted.load(Ordering::SeqCst));
-        assert_eq!(
-            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation()),
-            Some(generation_before)
-        );
-        assert_eq!(
-            settings.load_pending_initialization().unwrap(),
-            Some(context)
-        );
-    }
-
-    #[test]
-    fn account_switch_is_rejected_after_initialization_claim_and_durable_attempt() {
-        let credentials = MemoryCredentials::with_tokens(StoredTokens::new(
-            "account-a-access",
-            "account-a-refresh",
-            4_600,
-            8_200,
-        ));
-        let events = Events::default();
-        let auth = AuthService::new(
-            "Iv1.public-client-id",
-            OtherAccountDeviceFlow,
-            credentials,
-            FixedClock,
-            ImmediateDelay,
-            events.clone(),
-        );
-        let store = MemorySettings::default();
-        let settings = LocalSettingsService::new(store);
-        let context = pending_context();
-        settings.set_pending_initialization(&context).unwrap();
-        let state = Arc::new(AppServices::with_auth(settings.clone(), auth));
-        state
-            .initialization_contexts
-            .insert(context.clone())
-            .unwrap();
-        let durable_written = Arc::new(Barrier::new(2));
-        let release_remote_mutations = Arc::new(Barrier::new(2));
-        let worker_state = state.clone();
-        let worker_durable_written = durable_written.clone();
-        let worker_release = release_remote_mutations.clone();
-        let preview_id = context.preview_id;
-
-        let worker = thread::spawn(move || {
-            let claim = worker_state
-                .initialization_contexts
-                .claim(preview_id)
-                .unwrap();
-            worker_durable_written.wait();
-            worker_release.wait();
-            let push_token = tauri::async_runtime::block_on(
-                worker_state.auth.as_ref().unwrap().valid_access_token(),
-            )
-            .map(|token| token.expose_secret().to_owned());
-            let pr_token = tauri::async_runtime::block_on(
-                worker_state.auth.as_ref().unwrap().valid_access_token(),
-            )
-            .map(|token| token.expose_secret().to_owned());
-            claim.complete();
-            (push_token, pr_token)
-        });
-
-        durable_written.wait();
-        let generation_before =
-            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation())
-                .unwrap();
-        let transition =
-            tauri::async_runtime::block_on(begin_github_auth_inner(&state)).unwrap_err();
-        let duplicate = state.initialization_contexts.insert(context.clone());
-        release_remote_mutations.wait();
-        let (push_token, pr_token) = worker.join().unwrap();
-
-        assert_eq!(transition.code, ErrorCode::WorkspaceChangedSincePreview);
-        assert!(duplicate.is_err());
-        assert_eq!(push_token.unwrap(), "account-a-access");
-        assert_eq!(pr_token.unwrap(), "account-a-access");
-        assert_eq!(
-            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation()),
-            Some(generation_before)
-        );
-        assert_eq!(
-            settings.load_pending_initialization().unwrap(),
-            Some(context)
-        );
-        assert!(!events.0.lock().unwrap().iter().any(|event| matches!(
-            event,
-            AuthStatusEvent::Authenticated { user, .. } if user.id == 84
-        )));
     }
 
     #[test]

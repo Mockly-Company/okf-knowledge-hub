@@ -24,6 +24,18 @@ pub struct AppServices {
     pub(crate) auth_jobs: JobRegistry,
     pub(crate) clone_jobs: JobRegistry,
     pub(crate) initialization_contexts: InitializationContextRegistry,
+    #[cfg(test)]
+    pub(crate) initialization_test_boundaries: Option<InitializationTestBoundaries>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+pub(crate) struct InitializationTestBoundaries {
+    pub(crate) git: Arc<dyn crate::repository::service::GitRepositoryPort>,
+    pub(crate) remote: Arc<dyn crate::repository::service::RepositoryRemotePort>,
+    pub(crate) credentials: Arc<dyn crate::repository::service::RepositoryCredentialPort>,
+    pub(crate) user: crate::auth::model::GithubUserSummary,
+    pub(crate) repository: crate::github::model::GithubRepositoryDetail,
 }
 
 #[derive(Clone, Default)]
@@ -412,6 +424,8 @@ impl AppServices {
             auth_jobs: JobRegistry::default(),
             clone_jobs: JobRegistry::default(),
             initialization_contexts: InitializationContextRegistry::default(),
+            #[cfg(test)]
+            initialization_test_boundaries: None,
         }
     }
 
@@ -438,7 +452,28 @@ impl AppServices {
             auth_jobs,
             clone_jobs: JobRegistry::default(),
             initialization_contexts: InitializationContextRegistry::default(),
+            #[cfg(test)]
+            initialization_test_boundaries: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_initialization_test_boundaries(
+        &mut self,
+        git: Arc<dyn crate::repository::service::GitRepositoryPort>,
+        remote: Arc<dyn crate::repository::service::RepositoryRemotePort>,
+        credentials: Arc<dyn crate::repository::service::RepositoryCredentialPort>,
+        user: crate::auth::model::GithubUserSummary,
+        repository: crate::github::model::GithubRepositoryDetail,
+    ) {
+        self.repository_git = git.clone();
+        self.initialization_test_boundaries = Some(InitializationTestBoundaries {
+            git,
+            remote,
+            credentials,
+            user,
+            repository,
+        });
     }
 
     #[cfg(test)]

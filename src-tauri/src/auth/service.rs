@@ -146,6 +146,9 @@ impl AuthService {
     ) -> Result<(), AppError> {
         let authorization = self.lifecycle.lock().await.pending.remove(&request_id);
         let Some(mut authorization) = authorization else {
+            if cancellation.is_cancelled() {
+                return self.cancel_run(request_id).await;
+            }
             let error = authentication_expired_error();
             self.emit_failed(request_id, &error);
             return Err(error);
