@@ -561,7 +561,12 @@ impl GithubHttpClient {
         &self,
         request: &DraftPullRequestRequest,
     ) -> Result<DraftPullRequest, AppError> {
-        let (owner, name) = split_repository_full_name(&request.repository_full_name)?;
+        let (owner, name) =
+            split_repository_full_name(&request.repository_full_name).map_err(|error| {
+                error
+                    .with_recovery(RecoveryAction::Retry)
+                    .with_detail("branch", &request.head)
+            })?;
         let response = self
             .send(
                 HttpMethod::Post,
@@ -1306,6 +1311,30 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::GithubUnavailable);
+        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
+        assert_eq!(error.details["branch"], "okf/init-workspace");
+    }
+
+    #[tokio::test]
+    async fn malformed_draft_pull_request_repository_preserves_the_pushed_branch() {
+        let service = client(
+            SequenceTokenProvider::default(),
+            RecordingTransport::default(),
+        );
+        let request = DraftPullRequestRequest {
+            repository_full_name: "missing-owner-or-name".into(),
+            head: "okf/init-workspace".into(),
+            base: "main".into(),
+            title: "ignored caller title".into(),
+            body: "ignored caller body".into(),
+        };
+
+        let error = service
+            .create_draft_pull_request(&request)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::RepositoryRemoteMismatch);
         assert_eq!(error.recovery, Some(RecoveryAction::Retry));
         assert_eq!(error.details["branch"], "okf/init-workspace");
     }
