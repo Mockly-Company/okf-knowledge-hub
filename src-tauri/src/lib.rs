@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod error;
+pub mod github;
 pub mod settings;
 pub mod state;
 pub mod workspace;

@@ -1,0 +1,28 @@
+{
+  "total_count": 1,
+  "repositories": [
+    {
+      "id": 2001,
+      "node_id": "R_kgDOExample",
+      "name": "mockly-knowledge",
+      "full_name": "Mockly-Company/mockly-knowledge",
+      "private": true,
+      "owner": {
+        "login": "Mockly-Company",
+        "id": 1001,
+        "node_id": "O_kgDOExample",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1001?v=4",
+        "html_url": "https://github.com/Mockly-Company",
+        "type": "Organization"
+      },
+      "html_url": "https://github.com/Mockly-Company/mockly-knowledge",
+      "clone_url": "https://github.com/Mockly-Company/mockly-knowledge.git",
+      "ssh_url": "git@github.com:Mockly-Company/mockly-knowledge.git",
+      "default_branch": "main",
+      "size": 12,
+      "archived": false,
+      "disabled": false,
+      "visibility": "private"
+    }
+  ]
+}
