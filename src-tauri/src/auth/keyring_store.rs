@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +13,7 @@ pub const ACCOUNT_NAME: &str = "current-user";
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 pub struct KeyringCredentialStore {
-    entry: keyring::Entry,
+    entry: Arc<keyring::Entry>,
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -20,7 +23,9 @@ impl KeyringCredentialStore {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub fn new() -> Result<Self, AppError> {
         let entry = keyring::Entry::new(SERVICE_NAME, ACCOUNT_NAME).map_err(|_| store_error())?;
-        Ok(Self { entry })
+        Ok(Self {
+            entry: Arc::new(entry),
+        })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -29,40 +34,54 @@ impl KeyringCredentialStore {
     }
 }
 
+#[async_trait]
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 impl CredentialStore for KeyringCredentialStore {
-    fn load(&self) -> Result<Option<StoredTokens>, AppError> {
-        match self.entry.get_password() {
+    async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
+        let entry = self.entry.clone();
+        let result = tokio::task::spawn_blocking(move || entry.get_password())
+            .await
+            .map_err(|_| store_error())?;
+        match result {
             Ok(record) => decode_tokens(&record).map(Some),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(store_error()),
         }
     }
 
-    fn save(&self, tokens: &StoredTokens) -> Result<(), AppError> {
+    async fn save(&self, tokens: &StoredTokens) -> Result<(), AppError> {
         let record = encode_tokens(tokens)?;
-        self.entry.set_password(&record).map_err(|_| store_error())
+        let entry = self.entry.clone();
+        tokio::task::spawn_blocking(move || entry.set_password(&record))
+            .await
+            .map_err(|_| store_error())?
+            .map_err(|_| store_error())
     }
 
-    fn delete(&self) -> Result<(), AppError> {
-        match self.entry.delete_credential() {
+    async fn delete(&self) -> Result<(), AppError> {
+        let entry = self.entry.clone();
+        let result = tokio::task::spawn_blocking(move || entry.delete_credential())
+            .await
+            .map_err(|_| store_error())?;
+        match result {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(store_error()),
         }
     }
 }
 
+#[async_trait]
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 impl CredentialStore for KeyringCredentialStore {
-    fn load(&self) -> Result<Option<StoredTokens>, AppError> {
+    async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
         Err(store_error())
     }
 
-    fn save(&self, _tokens: &StoredTokens) -> Result<(), AppError> {
+    async fn save(&self, _tokens: &StoredTokens) -> Result<(), AppError> {
         Err(store_error())
     }
 
-    fn delete(&self) -> Result<(), AppError> {
+    async fn delete(&self) -> Result<(), AppError> {
         Err(store_error())
     }
 }

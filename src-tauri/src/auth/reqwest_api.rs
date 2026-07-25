@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use reqwest::header::{ACCEPT, USER_AGENT};
 use secrecy::{ExposeSecret, SecretString};
@@ -11,6 +13,8 @@ const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const CURRENT_USER_URL: &str = "https://api.github.com/user";
 const DEVICE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ReqwestDeviceFlowApi {
@@ -20,7 +24,11 @@ pub struct ReqwestDeviceFlowApi {
 impl ReqwestDeviceFlowApi {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(CONNECT_TIMEOUT)
+                .timeout(TOTAL_TIMEOUT)
+                .build()
+                .expect("static GitHub HTTP client configuration must be valid"),
         }
     }
 
@@ -248,9 +256,11 @@ fn github_unavailable() -> AppError {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use secrecy::SecretString;
 
-    use super::RefreshForm;
+    use super::{RefreshForm, CONNECT_TIMEOUT, TOTAL_TIMEOUT};
 
     #[test]
     fn refresh_form_omits_client_secret() {
@@ -263,5 +273,12 @@ mod tests {
         assert_eq!(json["grant_type"], "refresh_token");
         assert_eq!(json["refresh_token"], "ghr_private");
         assert!(json.get("client_secret").is_none());
+    }
+
+    #[test]
+    fn github_http_client_uses_finite_connect_and_total_timeouts() {
+        assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(10));
+        assert_eq!(TOTAL_TIMEOUT, Duration::from_secs(30));
+        assert!(CONNECT_TIMEOUT < TOTAL_TIMEOUT);
     }
 }

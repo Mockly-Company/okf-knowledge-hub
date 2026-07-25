@@ -9,10 +9,11 @@ use crate::auth::model::{
 };
 use crate::error::AppError;
 
+#[async_trait]
 pub trait CredentialStore: Send + Sync {
-    fn load(&self) -> Result<Option<StoredTokens>, AppError>;
-    fn save(&self, tokens: &StoredTokens) -> Result<(), AppError>;
-    fn delete(&self) -> Result<(), AppError>;
+    async fn load(&self) -> Result<Option<StoredTokens>, AppError>;
+    async fn save(&self, tokens: &StoredTokens) -> Result<(), AppError>;
+    async fn delete(&self) -> Result<(), AppError>;
 }
 
 #[async_trait]

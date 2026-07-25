@@ -131,15 +131,28 @@ impl TokenGrant {
         &self.access_token
     }
 
-    pub(crate) fn into_stored(self, now_unix: i64) -> StoredTokens {
-        StoredTokens {
+    pub(crate) fn into_stored(self, now_unix: i64) -> Result<StoredTokens, AppError> {
+        let access_lifetime =
+            i64::try_from(self.access_expires_in_seconds).map_err(|_| invalid_token_lifetime())?;
+        let refresh_lifetime =
+            i64::try_from(self.refresh_expires_in_seconds).map_err(|_| invalid_token_lifetime())?;
+        Ok(StoredTokens {
             access_token: self.access_token,
             refresh_token: self.refresh_token,
-            access_expires_at_unix: now_unix.saturating_add(self.access_expires_in_seconds as i64),
-            refresh_expires_at_unix: now_unix
-                .saturating_add(self.refresh_expires_in_seconds as i64),
-        }
+            access_expires_at_unix: now_unix.saturating_add(access_lifetime),
+            refresh_expires_at_unix: now_unix.saturating_add(refresh_lifetime),
+        })
     }
+}
+
+fn invalid_token_lifetime() -> AppError {
+    use crate::error::{ErrorCode, RecoveryAction};
+
+    AppError::new(
+        ErrorCode::ReauthenticationRequired,
+        "GitHub 인증 응답의 만료 시간을 사용할 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::RestartLogin)
 }
 
 pub enum DeviceTokenPoll {
