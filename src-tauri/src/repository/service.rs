@@ -55,6 +55,7 @@ pub(crate) trait GitRepositoryPort: Send + Sync {
         &self,
         root: &Path,
         branch: &str,
+        approved_remote_url: &str,
         access_token: AccessToken,
     ) -> Result<(), AppError>;
 
@@ -73,6 +74,7 @@ pub(crate) trait GitRepositoryPort: Send + Sync {
         &self,
         root: &Path,
         branch: &str,
+        approved_remote_url: &str,
         access_token: AccessToken,
     ) -> Result<Option<String>, AppError>;
 }
@@ -262,19 +264,6 @@ impl RepositoryService {
         }
     }
 
-    fn reserve_clone_target(target: &Path) -> Result<(), AppError> {
-        std::fs::create_dir(target).map_err(|error| {
-            if matches!(
-                error.kind(),
-                std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::NotADirectory
-            ) {
-                path_conflict(target)
-            } else {
-                clone_reservation_error(target)
-            }
-        })
-    }
-
     pub async fn inspect_existing(
         &self,
         path: &Path,
@@ -312,18 +301,35 @@ impl RepositoryService {
             &request.parent_directory,
             repository_name(&request.full_name)?,
         )?;
-        Self::reserve_clone_target(&target)?;
         let token = self.credentials()?.valid_access_token().await?;
+        Self::ensure_clone_target(&target)?;
+        let staging = create_clone_staging(
+            target.parent().ok_or_else(|| path_conflict(&target))?,
+            repository_name(&request.full_name)?,
+        )?;
         let snapshot = self
             .git
-            .clone_repository(&clean_url, &target, token, progress)?;
+            .clone_repository(&clean_url, &staging, token, progress)
+            .map_err(|error| error.with_detail("stagingPath", staging.to_string_lossy()))?;
         self.github
             .resolve_remote_repository(
                 snapshot.remote_url.as_deref().unwrap_or(&clean_url),
                 &request.repository_id,
             )
-            .await?;
-        Ok(snapshot)
+            .await
+            .map_err(|error| error.with_detail("stagingPath", staging.to_string_lossy()))?;
+        publish_clone_no_replace(&staging, &target).map_err(|error| {
+            let mut app_error = if fs::symlink_metadata(&target).is_ok() {
+                path_conflict(&target)
+            } else {
+                clone_reservation_error(&target)
+            };
+            app_error = app_error
+                .with_detail("stagingPath", staging.to_string_lossy())
+                .with_detail("publishError", error.to_string());
+            app_error
+        })?;
+        self.git.inspect(&target)
     }
 
     pub async fn initialize(&self, preview_id: Uuid) -> Result<InitializationResult, AppError> {
@@ -396,10 +402,13 @@ impl RepositoryService {
                 &resolved.id,
             ));
         }
+        let selected_repository_id = self.repository()?.id.clone();
+        let approved_remote_url = clean_github_https_url(&resolved.https_url, &resolved.full_name)
+            .map_err(|_| remote_mismatch_error(&selected_repository_id, &resolved.id))?;
         let token = self.credentials()?.valid_access_token().await?;
         let remote_oid = self
             .git
-            .remote_branch_oid(self.root()?, &outcome.branch, token)
+            .remote_branch_oid(self.root()?, &outcome.branch, &approved_remote_url, token)
             .map_err(|error| {
                 error
                     .with_detail("branch", &outcome.branch)
@@ -421,7 +430,7 @@ impl RepositoryService {
             None => {
                 let token = self.credentials()?.valid_access_token().await?;
                 self.git
-                    .push_branch(self.root()?, &outcome.branch, token)
+                    .push_branch(self.root()?, &outcome.branch, &approved_remote_url, token)
                     .map_err(|error| {
                         error
                             .with_detail("branch", &outcome.branch)
@@ -438,7 +447,7 @@ impl RepositoryService {
         if let InitializationStrategy::DraftPullRequest { base_branch } = &attempt.preview.strategy
         {
             let request = DraftPullRequestRequest::initialize_workspace(
-                &self.repository()?.full_name,
+                &resolved.full_name,
                 &outcome.branch,
                 base_branch,
             );
@@ -712,6 +721,98 @@ fn service_unavailable() -> AppError {
     .with_recovery(RecoveryAction::Retry)
 }
 
+fn create_clone_staging(parent: &Path, repository_name: &str) -> Result<PathBuf, AppError> {
+    for _ in 0..16 {
+        let staging = parent.join(format!(".okhub-clone-{repository_name}-{}", Uuid::new_v4()));
+        match fs::create_dir(&staging) {
+            Ok(()) => return Ok(staging),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(_) => return Err(clone_reservation_error(&staging)),
+        }
+    }
+    Err(clone_reservation_error(parent))
+}
+
+#[cfg(target_os = "linux")]
+fn publish_clone_no_replace(staging: &Path, target: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    unsafe extern "C" {
+        fn renameat2(
+            olddirfd: i32,
+            oldpath: *const std::ffi::c_char,
+            newdirfd: i32,
+            newpath: *const std::ffi::c_char,
+            flags: u32,
+        ) -> i32;
+    }
+    const AT_FDCWD: i32 = -100;
+    const RENAME_NOREPLACE: u32 = 1;
+    let old = CString::new(staging.as_os_str().as_bytes())?;
+    let new = CString::new(target.as_os_str().as_bytes())?;
+    // SAFETY: both C strings are NUL-terminated and remain alive for the call.
+    let result = unsafe {
+        renameat2(
+            AT_FDCWD,
+            old.as_ptr(),
+            AT_FDCWD,
+            new.as_ptr(),
+            RENAME_NOREPLACE,
+        )
+    };
+    (result == 0)
+        .then_some(())
+        .ok_or_else(std::io::Error::last_os_error)
+}
+
+#[cfg(target_os = "macos")]
+fn publish_clone_no_replace(staging: &Path, target: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    unsafe extern "C" {
+        fn renamex_np(
+            old: *const std::ffi::c_char,
+            new: *const std::ffi::c_char,
+            flags: u32,
+        ) -> i32;
+    }
+    const RENAME_EXCL: u32 = 0x0000_0004;
+    let old = CString::new(staging.as_os_str().as_bytes())?;
+    let new = CString::new(target.as_os_str().as_bytes())?;
+    // SAFETY: both C strings are NUL-terminated and remain alive for the call.
+    let result = unsafe { renamex_np(old.as_ptr(), new.as_ptr(), RENAME_EXCL) };
+    (result == 0)
+        .then_some(())
+        .ok_or_else(std::io::Error::last_os_error)
+}
+
+#[cfg(target_os = "windows")]
+fn publish_clone_no_replace(staging: &Path, target: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "Kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+    let old = staging
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let new = target
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    // SAFETY: both UTF-16 buffers are NUL-terminated and remain alive for the call.
+    let result = unsafe { MoveFileExW(old.as_ptr(), new.as_ptr(), 0) };
+    (result != 0)
+        .then_some(())
+        .ok_or_else(std::io::Error::last_os_error)
+}
+
 fn path_conflict(path: &Path) -> AppError {
     AppError::new(
         ErrorCode::RepositoryPathConflict,
@@ -733,11 +834,17 @@ mod tests {
     use crate::error::ErrorCode;
     use crate::github::model::{DraftPullRequest, DraftPullRequestRequest, GithubRepositoryDetail};
     use crate::repository::git2_adapter::Git2RepositoryAdapter;
-    use crate::repository::model::RepositoryIdentity;
+    use crate::repository::model::{CloneProgress, CloneRequest, RepositoryIdentity};
     use crate::repository::service::{
-        GitRepositoryPort, RepositoryCredentialPort, RepositoryRemotePort,
+        CloneProgressSink, GitRepositoryPort, RepositoryCredentialPort, RepositoryRemotePort,
     };
     use crate::workspace::service::{PreviewRegistry, RepositoryPopulation, WorkspaceService};
+
+    struct NoopProgress;
+
+    impl CloneProgressSink for NoopProgress {
+        fn emit(&self, _progress: CloneProgress) {}
+    }
 
     #[test]
     fn clone_target_is_repository_name_below_the_selected_parent() {
@@ -780,38 +887,144 @@ mod tests {
             .is_symlink());
     }
 
-    #[test]
-    fn clone_target_reservation_is_atomic_across_concurrent_attempts() {
-        let parent = tempfile::tempdir().unwrap();
-        let target = Arc::new(parent.path().join("knowledge"));
-        let barrier = Arc::new(std::sync::Barrier::new(3));
-        let workers = (0..2)
-            .map(|_| {
-                let target = target.clone();
-                let barrier = barrier.clone();
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    RepositoryService::reserve_clone_target(&target)
-                })
-            })
-            .collect::<Vec<_>>();
-        barrier.wait();
-        let results = workers
-            .into_iter()
-            .map(|worker| worker.join().unwrap())
-            .collect::<Vec<_>>();
+    fn clone_test_remote() -> FakeRemote {
+        FakeRemote {
+            resolved_id: "R_expected".into(),
+            accepted_remote_url: Default::default(),
+            resolve_requests: Default::default(),
+            origin_swap_after_resolve: Default::default(),
+            draft_requests: Default::default(),
+            draft_failures_remaining: Default::default(),
+            draft_failures_after_create: Default::default(),
+            open_pull_request: Default::default(),
+        }
+    }
 
-        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
-        assert_eq!(
-            results
-                .iter()
-                .filter(|result| result
-                    .as_ref()
-                    .is_err_and(|error| error.code == ErrorCode::RepositoryPathConflict))
-                .count(),
-            1
+    #[tokio::test]
+    async fn clone_authentication_precedes_final_path_ownership_and_preserves_attacker_directory() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("knowledge");
+        let attack_target = target.clone();
+        let credentials = AttackingCredentials {
+            attack: Mutex::new(Some(Box::new(move || {
+                let _ = fs::remove_dir(&attack_target);
+                fs::create_dir(&attack_target).unwrap();
+                fs::write(attack_target.join("mine.txt"), "user content").unwrap();
+            }))),
+        };
+        let git = Arc::new(CloneWritingGit::default());
+        let service = RepositoryService::for_clone(
+            git.clone(),
+            Arc::new(clone_test_remote()),
+            Arc::new(credentials),
         );
-        assert!(target.is_dir());
+
+        let error = service
+            .clone(
+                CloneRequest {
+                    repository_id: "R_expected".into(),
+                    full_name: "example/knowledge".into(),
+                    https_url: "https://github.com/example/knowledge.git".into(),
+                    parent_directory: parent.path().to_path_buf(),
+                },
+                Arc::new(NoopProgress),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::RepositoryPathConflict);
+        assert_eq!(
+            fs::read_to_string(target.join("mine.txt")).unwrap(),
+            "user content"
+        );
+        assert!(!target.join("owned.txt").exists());
+        assert!(git.clone_targets.lock().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn clone_authentication_precedes_final_path_ownership_and_preserves_external_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = parent.path().join("knowledge");
+        let attack_target = target.clone();
+        let outside_path = outside.path().to_path_buf();
+        let credentials = AttackingCredentials {
+            attack: Mutex::new(Some(Box::new(move || {
+                let _ = fs::remove_dir(&attack_target);
+                symlink(&outside_path, &attack_target).unwrap();
+            }))),
+        };
+        let git = Arc::new(CloneWritingGit::default());
+        let service = RepositoryService::for_clone(
+            git.clone(),
+            Arc::new(clone_test_remote()),
+            Arc::new(credentials),
+        );
+
+        let error = service
+            .clone(
+                CloneRequest {
+                    repository_id: "R_expected".into(),
+                    full_name: "example/knowledge".into(),
+                    https_url: "https://github.com/example/knowledge.git".into(),
+                    parent_directory: parent.path().to_path_buf(),
+                },
+                Arc::new(NoopProgress),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::RepositoryPathConflict);
+        assert!(fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert!(fs::read_dir(outside.path()).unwrap().next().is_none());
+        assert!(git.clone_targets.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn clone_publish_collision_preserves_final_path_and_reports_owned_staging() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("knowledge");
+        let git = Arc::new(CloneWritingGit {
+            clone_targets: Default::default(),
+            publish_collision: Some(target.clone()),
+        });
+        let service = RepositoryService::for_clone(
+            git.clone(),
+            Arc::new(clone_test_remote()),
+            Arc::new(FakeCredentials),
+        );
+
+        let error = service
+            .clone(
+                CloneRequest {
+                    repository_id: "R_expected".into(),
+                    full_name: "example/knowledge".into(),
+                    https_url: "https://github.com/example/knowledge.git".into(),
+                    parent_directory: parent.path().to_path_buf(),
+                },
+                Arc::new(NoopProgress),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::RepositoryPathConflict);
+        assert_eq!(
+            fs::read_to_string(target.join("mine.txt")).unwrap(),
+            "user content"
+        );
+        assert!(!target.join("owned.txt").exists());
+        let staging = std::path::PathBuf::from(error.details.get("stagingPath").unwrap());
+        assert!(staging.is_dir());
+        assert_eq!(
+            fs::read_to_string(staging.join("owned.txt")).unwrap(),
+            "clone content"
+        );
     }
 
     #[test]
@@ -844,6 +1057,7 @@ mod tests {
         resolved_id: String,
         accepted_remote_url: Arc<Mutex<Option<String>>>,
         resolve_requests: Arc<Mutex<Vec<String>>>,
+        origin_swap_after_resolve: Arc<Mutex<Option<(std::path::PathBuf, String)>>>,
         draft_requests: Arc<Mutex<Vec<DraftPullRequestRequest>>>,
         draft_failures_remaining: Arc<Mutex<usize>>,
         draft_failures_after_create: Arc<Mutex<usize>>,
@@ -861,6 +1075,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(remote_url.to_owned());
+            if let Some((root, replacement)) = self.origin_swap_after_resolve.lock().unwrap().take()
+            {
+                Repository::open(root)
+                    .unwrap()
+                    .remote_set_url("origin", &replacement)
+                    .unwrap();
+            }
             let accepted = self
                 .accepted_remote_url
                 .lock()
@@ -872,14 +1093,29 @@ mod tests {
             } else {
                 "R_other".into()
             };
+            let (name, full_name, https_url, is_empty) = if resolved_id == "R_empty" {
+                (
+                    "empty",
+                    "example/empty",
+                    "https://github.com/example/empty.git",
+                    true,
+                )
+            } else {
+                (
+                    "knowledge",
+                    "example/knowledge",
+                    "https://github.com/example/knowledge.git",
+                    false,
+                )
+            };
             Ok(GithubRepositoryDetail {
                 id: resolved_id,
                 owner: "example".into(),
-                name: "knowledge".into(),
-                full_name: "example/knowledge".into(),
+                name: name.into(),
+                full_name: full_name.into(),
                 default_branch: Some("main".into()),
-                is_empty: false,
-                https_url: "https://github.com/example/knowledge.git".into(),
+                is_empty,
+                https_url: https_url.into(),
             })
         }
 
@@ -938,8 +1174,217 @@ mod tests {
         }
     }
 
-    struct AmbiguousPushGit {
+    struct AttackingCredentials {
+        attack: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    }
+
+    #[async_trait]
+    impl RepositoryCredentialPort for AttackingCredentials {
+        async fn valid_access_token(
+            &self,
+        ) -> Result<crate::auth::model::AccessToken, crate::error::AppError> {
+            if let Some(attack) = self.attack.lock().unwrap().take() {
+                attack();
+            }
+            Ok(crate::auth::model::AccessToken::from_secret(
+                secrecy::SecretString::new("fixture-token".into()),
+            ))
+        }
+    }
+
+    #[derive(Default)]
+    struct CloneWritingGit {
+        clone_targets: Arc<Mutex<Vec<std::path::PathBuf>>>,
+        publish_collision: Option<std::path::PathBuf>,
+    }
+
+    impl GitRepositoryPort for CloneWritingGit {
+        fn inspect(
+            &self,
+            path: &std::path::Path,
+        ) -> Result<crate::repository::model::RepositorySnapshot, crate::error::AppError> {
+            Ok(crate::repository::model::RepositorySnapshot {
+                root: path.to_path_buf(),
+                head_oid: Some("fixture".into()),
+                default_branch: Some("main".into()),
+                is_dirty: false,
+                has_content: true,
+                remote_url: Some("https://github.com/example/knowledge.git".into()),
+                fingerprint: "fixture".into(),
+            })
+        }
+
+        fn clone_repository(
+            &self,
+            _clean_remote_url: &str,
+            target: &std::path::Path,
+            _access_token: crate::auth::model::AccessToken,
+            _progress: Arc<dyn crate::repository::service::CloneProgressSink>,
+        ) -> Result<crate::repository::model::RepositorySnapshot, crate::error::AppError> {
+            self.clone_targets
+                .lock()
+                .unwrap()
+                .push(target.to_path_buf());
+            fs::write(target.join("owned.txt"), "clone content").unwrap();
+            if let Some(final_path) = &self.publish_collision {
+                fs::create_dir(final_path).unwrap();
+                fs::write(final_path.join("mine.txt"), "user content").unwrap();
+            }
+            self.inspect(target)
+        }
+
+        fn commit_initialization(
+            &self,
+            _root: &std::path::Path,
+            _preview: &crate::workspace::service::InitializationPreview,
+            _identity: &RepositoryIdentity,
+        ) -> Result<crate::repository::model::CommitOutcome, crate::error::AppError> {
+            unreachable!()
+        }
+
+        fn verify_initialization_commit(
+            &self,
+            _root: &std::path::Path,
+            _preview: &crate::workspace::service::InitializationPreview,
+            _outcome: &crate::repository::model::CommitOutcome,
+            _identity: &RepositoryIdentity,
+        ) -> Result<(), crate::error::AppError> {
+            unreachable!()
+        }
+
+        fn push_branch(
+            &self,
+            _root: &std::path::Path,
+            _branch: &str,
+            _approved_remote_url: &str,
+            _access_token: crate::auth::model::AccessToken,
+        ) -> Result<(), crate::error::AppError> {
+            unreachable!()
+        }
+
+        fn checkout_initialization(
+            &self,
+            _root: &std::path::Path,
+            _preview: &crate::workspace::service::InitializationPreview,
+            _outcome: &crate::repository::model::CommitOutcome,
+        ) -> Result<(), crate::error::AppError> {
+            unreachable!()
+        }
+
+        fn origin_url(&self, _root: &std::path::Path) -> Result<String, crate::error::AppError> {
+            unreachable!()
+        }
+
+        fn attempt_directory(
+            &self,
+            _root: &std::path::Path,
+        ) -> Result<std::path::PathBuf, crate::error::AppError> {
+            unreachable!()
+        }
+
+        fn remote_branch_oid(
+            &self,
+            _root: &std::path::Path,
+            _branch: &str,
+            _approved_remote_url: &str,
+            _access_token: crate::auth::model::AccessToken,
+        ) -> Result<Option<String>, crate::error::AppError> {
+            unreachable!()
+        }
+    }
+
+    struct LocalRemoteGit {
         inner: Git2RepositoryAdapter,
+        transport_url: String,
+        approved_url: String,
+    }
+
+    impl GitRepositoryPort for LocalRemoteGit {
+        fn inspect(
+            &self,
+            path: &std::path::Path,
+        ) -> Result<crate::repository::model::RepositorySnapshot, crate::error::AppError> {
+            self.inner.inspect(path)
+        }
+
+        fn clone_repository(
+            &self,
+            clean_remote_url: &str,
+            target: &std::path::Path,
+            access_token: crate::auth::model::AccessToken,
+            progress: Arc<dyn crate::repository::service::CloneProgressSink>,
+        ) -> Result<crate::repository::model::RepositorySnapshot, crate::error::AppError> {
+            self.inner
+                .clone_repository(clean_remote_url, target, access_token, progress)
+        }
+
+        fn commit_initialization(
+            &self,
+            root: &std::path::Path,
+            preview: &crate::workspace::service::InitializationPreview,
+            identity: &RepositoryIdentity,
+        ) -> Result<crate::repository::model::CommitOutcome, crate::error::AppError> {
+            self.inner.commit_initialization(root, preview, identity)
+        }
+
+        fn verify_initialization_commit(
+            &self,
+            root: &std::path::Path,
+            preview: &crate::workspace::service::InitializationPreview,
+            outcome: &crate::repository::model::CommitOutcome,
+            identity: &RepositoryIdentity,
+        ) -> Result<(), crate::error::AppError> {
+            self.inner
+                .verify_initialization_commit(root, preview, outcome, identity)
+        }
+
+        fn push_branch(
+            &self,
+            root: &std::path::Path,
+            branch: &str,
+            approved_remote_url: &str,
+            access_token: crate::auth::model::AccessToken,
+        ) -> Result<(), crate::error::AppError> {
+            assert_eq!(approved_remote_url, self.approved_url);
+            self.inner
+                .push_branch(root, branch, &self.transport_url, access_token)
+        }
+
+        fn checkout_initialization(
+            &self,
+            root: &std::path::Path,
+            preview: &crate::workspace::service::InitializationPreview,
+            outcome: &crate::repository::model::CommitOutcome,
+        ) -> Result<(), crate::error::AppError> {
+            self.inner.checkout_initialization(root, preview, outcome)
+        }
+
+        fn origin_url(&self, root: &std::path::Path) -> Result<String, crate::error::AppError> {
+            self.inner.origin_url(root)
+        }
+
+        fn attempt_directory(
+            &self,
+            root: &std::path::Path,
+        ) -> Result<std::path::PathBuf, crate::error::AppError> {
+            self.inner.attempt_directory(root)
+        }
+
+        fn remote_branch_oid(
+            &self,
+            root: &std::path::Path,
+            branch: &str,
+            approved_remote_url: &str,
+            access_token: crate::auth::model::AccessToken,
+        ) -> Result<Option<String>, crate::error::AppError> {
+            assert_eq!(approved_remote_url, self.approved_url);
+            self.inner
+                .remote_branch_oid(root, branch, &self.transport_url, access_token)
+        }
+    }
+
+    struct AmbiguousPushGit {
+        inner: LocalRemoteGit,
         fail_after_push_once: Mutex<bool>,
     }
 
@@ -986,9 +1431,11 @@ mod tests {
             &self,
             root: &std::path::Path,
             branch: &str,
+            approved_remote_url: &str,
             access_token: crate::auth::model::AccessToken,
         ) -> Result<(), crate::error::AppError> {
-            self.inner.push_branch(root, branch, access_token)?;
+            self.inner
+                .push_branch(root, branch, approved_remote_url, access_token)?;
             let mut fail = self.fail_after_push_once.lock().unwrap();
             if *fail {
                 *fail = false;
@@ -1025,9 +1472,11 @@ mod tests {
             &self,
             root: &std::path::Path,
             branch: &str,
+            approved_remote_url: &str,
             access_token: crate::auth::model::AccessToken,
         ) -> Result<Option<String>, crate::error::AppError> {
-            self.inner.remote_branch_oid(root, branch, access_token)
+            self.inner
+                .remote_branch_oid(root, branch, approved_remote_url, access_token)
         }
     }
 
@@ -1060,6 +1509,7 @@ mod tests {
                 resolved_id: "R_expected".into(),
                 accepted_remote_url: Default::default(),
                 resolve_requests: Default::default(),
+                origin_swap_after_resolve: Default::default(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
                 draft_failures_after_create: Default::default(),
@@ -1085,6 +1535,7 @@ mod tests {
                 resolved_id: "R_other".into(),
                 accepted_remote_url: Default::default(),
                 resolve_requests: Default::default(),
+                origin_swap_after_resolve: Default::default(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
                 draft_failures_after_create: Default::default(),
@@ -1110,6 +1561,7 @@ mod tests {
                 resolved_id: "R_expected".into(),
                 accepted_remote_url: Default::default(),
                 resolve_requests: Default::default(),
+                origin_swap_after_resolve: Default::default(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
                 draft_failures_after_create: Default::default(),
@@ -1152,7 +1604,11 @@ mod tests {
 
         fn restarted_service(&self) -> RepositoryService {
             RepositoryService::new(
-                Arc::new(Git2RepositoryAdapter),
+                Arc::new(LocalRemoteGit {
+                    inner: Git2RepositoryAdapter,
+                    transport_url: self._bare_remote.path().to_string_lossy().into_owned(),
+                    approved_url: "https://github.com/example/knowledge.git".into(),
+                }),
                 Arc::new(self.remote.clone()),
                 Arc::new(FakeCredentials),
                 Arc::new(PreviewRegistry::default()),
@@ -1199,13 +1655,18 @@ mod tests {
             resolved_id: "R_expected".into(),
             accepted_remote_url: Default::default(),
             resolve_requests: Default::default(),
+            origin_swap_after_resolve: Default::default(),
             draft_requests: Default::default(),
             draft_failures_remaining: Default::default(),
             draft_failures_after_create: Default::default(),
             open_pull_request: Default::default(),
         };
         let service = RepositoryService::new(
-            Arc::new(Git2RepositoryAdapter),
+            Arc::new(LocalRemoteGit {
+                inner: Git2RepositoryAdapter,
+                transport_url: bare_remote.path().to_string_lossy().into_owned(),
+                approved_url: "https://github.com/example/knowledge.git".into(),
+            }),
             Arc::new(remote.clone()),
             Arc::new(FakeCredentials),
             previews.clone(),
@@ -1484,6 +1945,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_git_operations_stay_bound_to_the_resolved_https_url_after_origin_swap() {
+        let fixture = initialized_repository_with_existing_content();
+        let preview = fixture.preview();
+        *fixture.remote.origin_swap_after_resolve.lock().unwrap() = Some((
+            fixture.root.clone(),
+            "https://attacker.example/exfiltrate.git".into(),
+        ));
+
+        let result = fixture.service.initialize(preview.id).await.unwrap();
+
+        assert_eq!(result.branch, "okf/init-workspace");
+        assert_eq!(fixture.remote.draft_requests.lock().unwrap().len(), 1);
+        assert_eq!(
+            Repository::open(&fixture.root)
+                .unwrap()
+                .find_remote("origin")
+                .unwrap()
+                .url(),
+            Some("https://attacker.example/exfiltrate.git")
+        );
+        assert!(Repository::open_bare(fixture._bare_remote.path())
+            .unwrap()
+            .find_reference("refs/heads/okf/init-workspace")
+            .is_ok());
+    }
+
+    #[tokio::test]
     async fn target_created_after_preview_is_never_overwritten() {
         let fixture = initialized_repository_with_existing_content();
         let preview = fixture.preview();
@@ -1550,13 +2038,25 @@ mod tests {
     #[tokio::test]
     async fn push_failure_preserves_the_local_commit_and_branch_for_retry() {
         let fixture = initialized_repository_with_existing_content();
-        let repository = Repository::open(&fixture.root).unwrap();
-        repository
-            .remote_set_url("origin", "/definitely/missing/remote.git")
-            .unwrap();
         let preview = fixture.preview();
+        let service = RepositoryService::new(
+            Arc::new(LocalRemoteGit {
+                inner: Git2RepositoryAdapter,
+                transport_url: "/definitely/missing/remote.git".into(),
+                approved_url: "https://github.com/example/knowledge.git".into(),
+            }),
+            Arc::new(fixture.remote.clone()),
+            Arc::new(FakeCredentials),
+            fixture.previews.clone(),
+            fixture.root.clone(),
+            fixture.service.repository().unwrap().clone(),
+            RepositoryIdentity {
+                database_id: 42,
+                login: "hyeeun".into(),
+            },
+        );
 
-        let error = fixture.service.initialize(preview.id).await.unwrap_err();
+        let error = service.initialize(preview.id).await.unwrap_err();
 
         assert_eq!(error.code, ErrorCode::PushFailed);
         assert_eq!(
@@ -1604,16 +2104,25 @@ mod tests {
     #[tokio::test]
     async fn restart_after_local_commit_resumes_without_the_preview_registry() {
         let fixture = initialized_repository_with_existing_content();
-        let repository = Repository::open(&fixture.root).unwrap();
-        repository
-            .remote_set_url("origin", "/definitely/missing/remote.git")
-            .unwrap();
         let preview = fixture.preview();
-        let first_error = fixture.service.initialize(preview.id).await.unwrap_err();
+        let service = RepositoryService::new(
+            Arc::new(LocalRemoteGit {
+                inner: Git2RepositoryAdapter,
+                transport_url: "/definitely/missing/remote.git".into(),
+                approved_url: "https://github.com/example/knowledge.git".into(),
+            }),
+            Arc::new(fixture.remote.clone()),
+            Arc::new(FakeCredentials),
+            fixture.previews.clone(),
+            fixture.root.clone(),
+            fixture.service.repository().unwrap().clone(),
+            RepositoryIdentity {
+                database_id: 42,
+                login: "hyeeun".into(),
+            },
+        );
+        let first_error = service.initialize(preview.id).await.unwrap_err();
         assert_eq!(first_error.code, ErrorCode::PushFailed);
-        repository
-            .remote_set_url("origin", fixture._bare_remote.path().to_str().unwrap())
-            .unwrap();
 
         let result = fixture
             .restarted_service()
@@ -1671,7 +2180,11 @@ mod tests {
         let preview = fixture.preview();
         let service = RepositoryService::new(
             Arc::new(AmbiguousPushGit {
-                inner: Git2RepositoryAdapter,
+                inner: LocalRemoteGit {
+                    inner: Git2RepositoryAdapter,
+                    transport_url: fixture._bare_remote.path().to_string_lossy().into_owned(),
+                    approved_url: "https://github.com/example/knowledge.git".into(),
+                },
                 fail_after_push_once: Mutex::new(true),
             }),
             Arc::new(fixture.remote.clone()),
@@ -1712,7 +2225,11 @@ mod tests {
         let preview = fixture.preview();
         let service = RepositoryService::new(
             Arc::new(AmbiguousPushGit {
-                inner: Git2RepositoryAdapter,
+                inner: LocalRemoteGit {
+                    inner: Git2RepositoryAdapter,
+                    transport_url: fixture._bare_remote.path().to_string_lossy().into_owned(),
+                    approved_url: "https://github.com/example/knowledge.git".into(),
+                },
                 fail_after_push_once: Mutex::new(true),
             }),
             Arc::new(fixture.remote.clone()),
@@ -1779,13 +2296,18 @@ mod tests {
             resolved_id: "R_empty".into(),
             accepted_remote_url: Default::default(),
             resolve_requests: Default::default(),
+            origin_swap_after_resolve: Default::default(),
             draft_requests: Default::default(),
             draft_failures_remaining: Default::default(),
             draft_failures_after_create: Default::default(),
             open_pull_request: Default::default(),
         };
         let service = RepositoryService::new(
-            Arc::new(Git2RepositoryAdapter),
+            Arc::new(LocalRemoteGit {
+                inner: Git2RepositoryAdapter,
+                transport_url: bare_remote.path().to_string_lossy().into_owned(),
+                approved_url: "https://github.com/example/empty.git".into(),
+            }),
             Arc::new(remote.clone()),
             Arc::new(FakeCredentials),
             previews.clone(),

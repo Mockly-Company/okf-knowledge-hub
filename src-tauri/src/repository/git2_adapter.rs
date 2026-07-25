@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
-    Cred, ErrorCode as GitErrorCode, FetchOptions, IndexEntry, IndexTime, Oid, PushOptions,
-    RemoteCallbacks, Repository, Signature, StatusOptions,
+    CheckoutNotificationType, Cred, ErrorCode as GitErrorCode, FetchOptions, IndexEntry, IndexTime,
+    Oid, PushOptions, RemoteCallbacks, Repository, Signature, StatusOptions,
 };
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -77,8 +77,9 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         });
 
         let mut callbacks = RemoteCallbacks::new();
-        callbacks.credentials(move |_url, _username, _allowed| {
-            Cred::userpass_plaintext("x-access-token", access_token.expose_secret())
+        let approved_remote_url = clean_remote_url.to_owned();
+        callbacks.credentials(move |url, _username, _allowed| {
+            clone_credential_for_callback(url, &approved_remote_url, &access_token)
         });
         let transfer_progress = progress.clone();
         callbacks.transfer_progress(move |stats| {
@@ -267,18 +268,21 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         &self,
         root: &Path,
         branch: &str,
+        approved_remote_url: &str,
         access_token: AccessToken,
     ) -> Result<(), AppError> {
         let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
         let mut callbacks = RemoteCallbacks::new();
-        callbacks.credentials(move |_url, _username, _allowed| {
-            Cred::userpass_plaintext("x-access-token", access_token.expose_secret())
+        let remote_url = approved_remote_url.to_owned();
+        let callback_approved_url = remote_url.clone();
+        callbacks.credentials(move |url, _username, _allowed| {
+            credential_for_approved_remote(url, &callback_approved_url, &access_token)
         });
         let mut options = PushOptions::new();
         options.remote_callbacks(callbacks);
         let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
         repository
-            .find_remote("origin")
+            .remote_anonymous(&remote_url)
             .and_then(|mut remote| remote.push(&[&refspec], Some(&mut options)))
             .map_err(|_| push_error(branch))
     }
@@ -298,25 +302,47 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         let index_snapshot = FileSnapshot::capture(&repository.path().join("index"))
             .map_err(|_| repository_git_error("기존 Git index를 읽지 못했습니다."))?;
         let materialization = MaterializationSnapshot::capture(root, &preview.files)?;
+        let notified_paths = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
         let commit_oid = Oid::from_str(&outcome.commit_oid)
             .map_err(|_| repository_git_error("초기화 commit ID가 올바르지 않습니다."))?;
         let commit = repository
             .find_commit(commit_oid)
             .map_err(|_| repository_git_error("초기화 commit을 읽지 못했습니다."))?;
+        let notified_for_checkout = notified_paths.clone();
+        let mut checkout = CheckoutBuilder::new();
+        checkout
+            .safe()
+            .notify_on(CheckoutNotificationType::UPDATED)
+            .notify(move |kind, path, _baseline, _target, _workdir| {
+                if kind.is_updated() {
+                    if let Some(path) = path {
+                        notified_for_checkout
+                            .lock()
+                            .unwrap()
+                            .insert(path.to_path_buf());
+                    }
+                }
+                true
+            });
         let result = repository
             .checkout_tree(
                 commit.as_object(),
                 Some(CheckoutBuilder::new().safe().dry_run()),
             )
-            .and_then(|()| {
-                repository.checkout_tree(commit.as_object(), Some(CheckoutBuilder::new().safe()))
-            })
+            .and_then(|()| repository.checkout_tree(commit.as_object(), Some(&mut checkout)))
             .and_then(|()| repository.set_head(&format!("refs/heads/{}", outcome.branch)));
         if result.is_err() {
-            let _ = repository.set_head(&original_head);
-            let _ = index_snapshot.restore();
-            let _ = materialization.rollback(root, &preview.files);
-            return Err(repository_git_error("branch를 checkout하지 못했습니다."));
+            let head_restore = repository.set_head(&original_head).map_err(|_| ());
+            let index_restore = index_snapshot.restore().map_err(|_| ());
+            let notified_paths = notified_paths.lock().unwrap().clone();
+            let worktree_restore = materialization
+                .rollback(root, &notified_paths)
+                .map_err(|_| ());
+            return Err(checkout_failure_with_rollback(
+                head_restore,
+                index_restore,
+                worktree_restore,
+            ));
         }
         Ok(())
     }
@@ -344,25 +370,25 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         &self,
         root: &Path,
         branch: &str,
+        approved_remote_url: &str,
         access_token: AccessToken,
     ) -> Result<Option<String>, AppError> {
         let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
         let fetch_head = FileSnapshot::capture(&repository.path().join("FETCH_HEAD"))
             .map_err(|_| push_error(branch))?;
-        let result = (|| {
+        let local_reference = format!("refs/okhub/remote-check/{}", uuid::Uuid::new_v4());
+        let operation = (|| {
             let mut remote = repository
-                .find_remote("origin")
+                .remote_anonymous(approved_remote_url)
                 .map_err(|_| push_error(branch))?;
             let mut callbacks = RemoteCallbacks::new();
-            callbacks.credentials(move |_url, _username, _allowed| {
-                Cred::userpass_plaintext("x-access-token", access_token.expose_secret())
+            let approved_remote_url = approved_remote_url.to_owned();
+            callbacks.credentials(move |url, _username, _allowed| {
+                credential_for_approved_remote(url, &approved_remote_url, &access_token)
             });
             let mut fetch = FetchOptions::new();
             fetch.update_fetchhead(false);
             fetch.remote_callbacks(callbacks);
-            let local_reference = format!("refs/okhub/remote-check/{}", uuid::Uuid::new_v4());
-            let temporary_reference =
-                TemporaryReferenceGuard::new(&repository, local_reference.clone());
             let refspec = format!("+refs/heads/{branch}:{local_reference}");
             match remote.fetch(&[&refspec], Some(&mut fetch), None) {
                 Ok(()) => {}
@@ -374,14 +400,31 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
                 .ok()
                 .and_then(|reference| reference.target())
                 .map(|oid| oid.to_string());
-            temporary_reference
-                .remove()
-                .map_err(|_| push_error(branch))?;
             Ok(oid)
         })();
-        fetch_head.restore().map_err(|_| push_error(branch))?;
-        result
+        let cleanup = delete_temporary_reference(&repository, &local_reference).map_err(|_| ());
+        let restore = fetch_head.restore().map_err(|_| ());
+        finalize_remote_probe(operation, cleanup, restore, branch)
     }
+}
+
+fn credential_for_approved_remote(
+    callback_url: &str,
+    approved_remote_url: &str,
+    access_token: &AccessToken,
+) -> Result<Cred, git2::Error> {
+    if callback_url != approved_remote_url {
+        return Err(git2::Error::from_str("credential URL rejected"));
+    }
+    Cred::userpass_plaintext("x-access-token", access_token.expose_secret())
+}
+
+fn clone_credential_for_callback(
+    callback_url: &str,
+    approved_remote_url: &str,
+    access_token: &AccessToken,
+) -> Result<Cred, git2::Error> {
+    credential_for_approved_remote(callback_url, approved_remote_url, access_token)
 }
 
 struct FileSnapshot {
@@ -435,19 +478,13 @@ impl MaterializationSnapshot {
     fn rollback(
         self,
         root: &Path,
-        files: &[crate::workspace::service::PreviewFile],
+        notified_paths: &std::collections::HashSet<std::path::PathBuf>,
     ) -> std::io::Result<()> {
-        for file in files {
-            let path = root.join(&file.path);
+        for relative_path in notified_paths {
+            let path = root.join(relative_path);
             if self.absent_files.contains(&path) {
                 match std::fs::symlink_metadata(&path) {
-                    Ok(metadata)
-                        if metadata.is_file()
-                            && std::fs::read(&path).ok().as_deref()
-                                == Some(file.content.as_bytes()) =>
-                    {
-                        std::fs::remove_file(path)?;
-                    }
+                    Ok(metadata) if metadata.is_file() => std::fs::remove_file(path)?,
                     Ok(_) => {}
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error),
@@ -495,38 +532,31 @@ impl FileSnapshot {
     }
 }
 
-struct TemporaryReferenceGuard<'repository> {
-    repository: &'repository Repository,
-    name: String,
-    active: bool,
-}
-
-impl<'repository> TemporaryReferenceGuard<'repository> {
-    fn new(repository: &'repository Repository, name: String) -> Self {
-        Self {
-            repository,
-            name,
-            active: true,
-        }
-    }
-
-    fn remove(mut self) -> Result<(), git2::Error> {
-        if let Ok(mut reference) = self.repository.find_reference(&self.name) {
-            reference.delete()?;
-        }
-        self.active = false;
-        Ok(())
+fn delete_temporary_reference(repository: &Repository, name: &str) -> Result<(), git2::Error> {
+    match repository.find_reference(name) {
+        Ok(mut reference) => reference.delete(),
+        Err(error) if error.code() == GitErrorCode::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
-impl Drop for TemporaryReferenceGuard<'_> {
-    fn drop(&mut self) {
-        if self.active {
-            if let Ok(mut reference) = self.repository.find_reference(&self.name) {
-                let _ = reference.delete();
-            }
-        }
+fn finalize_remote_probe(
+    operation: Result<Option<String>, AppError>,
+    cleanup: Result<(), ()>,
+    fetch_head_restore: Result<(), ()>,
+    branch: &str,
+) -> Result<Option<String>, AppError> {
+    let failures = [
+        cleanup.is_err().then_some("temporaryReference"),
+        fetch_head_restore.is_err().then_some("fetchHead"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if !failures.is_empty() {
+        return Err(push_error(branch).with_detail("metadataCleanupFailures", failures.join(",")));
     }
+    operation
 }
 
 fn expected_initialization_tree(
@@ -684,6 +714,31 @@ fn repository_path_error(path: &Path) -> AppError {
 
 fn repository_git_error(message: &str) -> AppError {
     AppError::new(ErrorCode::GithubUnavailable, message).with_recovery(RecoveryAction::Retry)
+}
+
+fn checkout_failure_with_rollback(
+    head: Result<(), ()>,
+    index: Result<(), ()>,
+    worktree: Result<(), ()>,
+) -> AppError {
+    let failures = [
+        head.is_err().then_some("head"),
+        index.is_err().then_some("index"),
+        worktree.is_err().then_some("worktree"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if failures.is_empty() {
+        repository_git_error("branch를 checkout하지 못했습니다.")
+    } else {
+        AppError::new(
+            ErrorCode::RepositoryDirty,
+            "checkout 실패 후 저장소 상태를 완전히 복구하지 못했습니다.",
+        )
+        .with_recovery(RecoveryAction::CleanWorkingTree)
+        .with_detail("rollbackFailures", failures.join(","))
+    }
 }
 
 fn clone_error(path: &Path) -> AppError {
@@ -849,6 +904,39 @@ mod tests {
             Some("https://github.com/example/knowledge.git")
         );
         assert!(!json.contains("secret-value"));
+    }
+
+    #[test]
+    fn credential_callback_rejects_every_url_except_the_approved_repository_url() {
+        let token = AccessToken::from_secret(SecretString::new("secret-not-for-output".into()));
+        let approved = "https://github.com/example/knowledge.git";
+
+        assert!(super::credential_for_approved_remote(approved, approved, &token).is_ok());
+        for callback_url in [
+            "https://attacker.example/example/knowledge.git",
+            "https://github.com/example/other.git",
+            "https://token@github.com/example/knowledge.git",
+        ] {
+            assert!(super::credential_for_approved_remote(callback_url, approved, &token).is_err());
+        }
+    }
+
+    #[test]
+    fn clone_transport_never_issues_credentials_to_a_redirected_or_mismatched_url() {
+        let token = AccessToken::from_secret(SecretString::new("secret-not-for-output".into()));
+        let approved = "https://github.com/example/knowledge.git";
+
+        assert!(super::clone_credential_for_callback(approved, approved, &token).is_ok());
+        for redirected in [
+            "https://attacker.example/collect.git",
+            "https://github.com/example/other.git",
+            "https://token@github.com/example/knowledge.git",
+        ] {
+            assert!(
+                super::clone_credential_for_callback(redirected, approved, &token).is_err(),
+                "redirected callback unexpectedly received credentials: {redirected}"
+            );
+        }
     }
 
     #[test]
@@ -1047,6 +1135,7 @@ mod tests {
             .remote_branch_oid(
                 source_directory.path(),
                 "main",
+                bare_directory.path().to_str().unwrap(),
                 AccessToken::from_secret(SecretString::new("secret-not-for-output".into())),
             )
             .unwrap();
@@ -1072,6 +1161,7 @@ mod tests {
             .remote_branch_oid(
                 source_directory.path(),
                 "missing",
+                bare_directory.path().to_str().unwrap(),
                 AccessToken::from_secret(SecretString::new("secret-not-for-output".into())),
             )
             .unwrap();
@@ -1095,12 +1185,52 @@ mod tests {
             .remote_branch_oid(
                 source_directory.path(),
                 "main",
+                "/definitely/missing/remote.git",
                 AccessToken::from_secret(SecretString::new("secret-not-for-output".into())),
             )
             .unwrap_err();
 
         assert_eq!(error.code, crate::error::ErrorCode::PushFailed);
         assert_remote_probe_metadata_is_untouched(&source, original_fetch_head);
+    }
+
+    #[test]
+    fn remote_probe_surfaces_temporary_ref_cleanup_failure_for_every_operation_outcome() {
+        let outcomes = [
+            Ok(Some("commit".to_owned())),
+            Ok(None),
+            Err(super::push_error("main")),
+        ];
+        for outcome in outcomes {
+            let error = super::finalize_remote_probe(outcome, Err(()), Ok(()), "main").unwrap_err();
+            assert_eq!(error.code, crate::error::ErrorCode::PushFailed);
+            assert_eq!(
+                error
+                    .details
+                    .get("metadataCleanupFailures")
+                    .map(String::as_str),
+                Some("temporaryReference")
+            );
+        }
+    }
+
+    #[test]
+    fn temporary_ref_deletion_failure_is_deterministic_and_never_silently_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        commit_file(&repository, "README.md", "ready");
+        let oid = repository.head().unwrap().target().unwrap();
+        let reference_name = "refs/okhub/remote-check/fixture";
+        repository
+            .reference(reference_name, oid, false, "fixture")
+            .unwrap();
+        let lock_path = repository
+            .path()
+            .join("refs/okhub/remote-check/fixture.lock");
+        fs::write(&lock_path, "held by fixture").unwrap();
+
+        assert!(super::delete_temporary_reference(&repository, reference_name).is_err());
+        assert!(repository.find_reference(reference_name).is_ok());
     }
 
     #[test]
@@ -1186,6 +1316,46 @@ mod tests {
             "approved workspace"
         );
         assert!(directory.path().join("docs/.gitkeep").exists());
+    }
+
+    #[test]
+    fn failed_empty_checkout_preserves_a_concurrent_same_content_file() {
+        let directory = tempfile::tempdir().unwrap();
+        Repository::init(directory.path()).unwrap();
+        let preview = direct_initialization_preview();
+        let outcome = Git2RepositoryAdapter
+            .commit_initialization(directory.path(), &preview, &identity("hyeeun"))
+            .unwrap();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        let collision = directory.path().join(".okf/workspace.yml");
+        fs::write(&collision, b"approved workspace").unwrap();
+
+        Git2RepositoryAdapter
+            .checkout_initialization(directory.path(), &preview, &outcome)
+            .unwrap_err();
+
+        assert_eq!(fs::read(&collision).unwrap(), b"approved workspace");
+        assert!(!directory.path().join("docs/.gitkeep").exists());
+    }
+
+    #[test]
+    fn checkout_rollback_failure_reports_each_unrestored_state_explicitly() {
+        for (head, index, worktree, expected) in [
+            (Err(()), Ok(()), Ok(()), "head"),
+            (Ok(()), Err(()), Ok(()), "index"),
+            (Ok(()), Ok(()), Err(()), "worktree"),
+        ] {
+            let error = super::checkout_failure_with_rollback(head, index, worktree);
+            assert_eq!(error.code, crate::error::ErrorCode::RepositoryDirty);
+            assert_eq!(
+                error.recovery,
+                Some(crate::error::RecoveryAction::CleanWorkingTree)
+            );
+            assert_eq!(
+                error.details.get("rollbackFailures").map(String::as_str),
+                Some(expected)
+            );
+        }
     }
 
     #[test]
