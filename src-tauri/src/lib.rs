@@ -1,5 +1,6 @@
 pub mod error;
 pub mod state;
+pub mod workspace;
 
 pub const APP_TITLE: &str = "OkHub";
 
