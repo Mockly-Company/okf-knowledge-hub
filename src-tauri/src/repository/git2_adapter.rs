@@ -1,10 +1,10 @@
 use std::path::Path;
 use std::sync::Arc;
-use std::{fs, io::Write};
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
-    Cred, FetchOptions, PushOptions, RemoteCallbacks, Repository, Signature, StatusOptions,
+    Cred, ErrorCode as GitErrorCode, FetchOptions, IndexEntry, IndexTime, Oid, PushOptions,
+    RemoteCallbacks, Repository, Signature, StatusOptions,
 };
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -43,7 +43,7 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             .find_remote("origin")
             .ok()
             .and_then(|remote| remote.url().map(str::to_owned));
-        let remote_url = raw_remote_url.as_deref().map(public_remote_url);
+        let remote_url = raw_remote_url.as_deref().and_then(public_remote_url);
         let status_entries = status_entries(&repository)?;
         let fingerprint = repository_fingerprint(
             &root,
@@ -106,13 +106,7 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         builder.fetch_options(fetch).with_checkout(checkout);
         let repository = match builder.clone(clean_remote_url, target) {
             Ok(repository) => repository,
-            Err(_) => {
-                // libgit2 may clean an incomplete checkout. Keep an explicit
-                // recovery location so the app never silently deletes the
-                // path it reported to the user.
-                let _ = fs::create_dir_all(target);
-                return Err(clone_error(target));
-            }
+            Err(_) => return Err(clone_error(target)),
         };
         progress.emit(CloneProgress {
             stage: CloneProgressStage::ResolvingDeltas,
@@ -144,76 +138,54 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             .and_then(|head| head.shorthand().map(str::to_owned));
         let parent_oid = repository.head().ok().and_then(|head| head.target());
 
-        if repository
-            .find_reference(&format!("refs/heads/{}", preview.branch))
-            .is_ok()
-            && original_branch.as_deref() != Some(preview.branch.as_str())
+        if matches!(
+            preview.strategy,
+            InitializationStrategy::DraftPullRequest { .. }
+        ) && parent_oid.is_none()
         {
-            return Err(AppError::new(
-                ErrorCode::RepositoryPathConflict,
-                "초기화 branch가 이미 존재합니다.",
-            )
-            .with_detail("branch", &preview.branch));
+            return Err(repository_git_error("기준 commit이 없습니다."));
         }
 
-        match (&preview.strategy, parent_oid) {
-            (InitializationStrategy::DraftPullRequest { .. }, Some(oid)) => {
-                let commit = repository
-                    .find_commit(oid)
-                    .map_err(|_| repository_git_error("기준 commit을 찾지 못했습니다."))?;
-                repository
-                    .branch(&preview.branch, &commit, false)
-                    .map_err(|_| repository_git_error("초기화 branch를 만들지 못했습니다."))?;
-                checkout(&repository, &preview.branch)?;
-            }
-            (InitializationStrategy::DirectPush, Some(oid)) => {
-                if original_branch.as_deref() != Some(preview.branch.as_str()) {
-                    let commit = repository
-                        .find_commit(oid)
-                        .map_err(|_| repository_git_error("기준 commit을 찾지 못했습니다."))?;
-                    repository
-                        .branch(&preview.branch, &commit, false)
-                        .map_err(|_| repository_git_error("기본 branch를 만들지 못했습니다."))?;
-                    checkout(&repository, &preview.branch)?;
-                }
-            }
-            (InitializationStrategy::DraftPullRequest { .. }, None) => {
-                return Err(repository_git_error("기준 commit이 없습니다."));
-            }
-            (InitializationStrategy::DirectPush, None) => repository
-                .set_head(&format!("refs/heads/{}", preview.branch))
-                .map_err(|_| repository_git_error("기본 branch를 준비하지 못했습니다."))?,
-        }
-
-        for file in &preview.files {
-            let path = root.join(&file.path);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|_| initialization_write_error(&file.path))?;
-            }
-            let mut output = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-                .map_err(|_| initialization_write_error(&file.path))?;
-            output
-                .write_all(file.content.as_bytes())
-                .and_then(|()| output.sync_all())
-                .map_err(|_| initialization_write_error(&file.path))?;
-        }
-
+        // `Index::new` has no repository ODB owner, so `add_frombuffer`
+        // cannot create blobs. This handle is ODB-backed but remains isolated
+        // because we replace its in-memory contents and never call `write`.
         let mut index = repository
             .index()
-            .map_err(|_| repository_git_error("Git index를 열지 못했습니다."))?;
-        for file in &preview.files {
-            index.add_path(Path::new(&file.path)).map_err(|_| {
-                repository_git_error("초기화 파일을 Git index에 추가하지 못했습니다.")
-            })?;
+            .map_err(|_| repository_git_error("격리된 Git index를 만들지 못했습니다."))?;
+        if let Some(oid) = parent_oid {
+            let tree = repository
+                .find_commit(oid)
+                .and_then(|commit| commit.tree())
+                .map_err(|_| repository_git_error("기준 tree를 읽지 못했습니다."))?;
+            index
+                .read_tree(&tree)
+                .map_err(|_| repository_git_error("기준 tree를 복제하지 못했습니다."))?;
+        } else {
+            index
+                .clear()
+                .map_err(|_| repository_git_error("격리된 Git index를 비우지 못했습니다."))?;
         }
-        index
-            .write()
-            .map_err(|_| repository_git_error("Git index를 저장하지 못했습니다."))?;
+        for file in &preview.files {
+            let entry = IndexEntry {
+                ctime: IndexTime::new(0, 0),
+                mtime: IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o100644,
+                uid: 0,
+                gid: 0,
+                file_size: 0,
+                id: Oid::zero(),
+                flags: 0,
+                flags_extended: 0,
+                path: file.path.as_bytes().to_vec(),
+            };
+            index
+                .add_frombuffer(&entry, file.content.as_bytes())
+                .map_err(|_| repository_git_error("초기화 blob을 만들지 못했습니다."))?;
+        }
         let tree_oid = index
-            .write_tree()
+            .write_tree_to(&repository)
             .map_err(|_| repository_git_error("초기화 tree를 만들지 못했습니다."))?;
         let tree = repository
             .find_tree(tree_oid)
@@ -229,9 +201,34 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             .transpose()
             .map_err(|_| repository_git_error("기준 commit을 읽지 못했습니다."))?;
         let parents = parent.iter().collect::<Vec<_>>();
+        let reference_name = format!("refs/heads/{}", preview.branch);
+        if let Ok(reference) = repository.find_reference(&reference_name) {
+            let existing = reference
+                .peel_to_commit()
+                .map_err(|_| repository_git_error("기존 초기화 branch를 읽지 못했습니다."))?;
+            if commit_matches(
+                &existing,
+                tree_oid,
+                parent_oid,
+                &preview.commit_message,
+                &identity.login,
+                &email,
+            ) {
+                return Ok(CommitOutcome {
+                    branch: preview.branch.clone(),
+                    commit_oid: existing.id().to_string(),
+                    original_branch,
+                });
+            }
+            return Err(AppError::new(
+                ErrorCode::RepositoryPathConflict,
+                "초기화 branch가 다른 변경을 포함하고 있습니다.",
+            )
+            .with_detail("branch", &preview.branch));
+        }
         let commit_oid = repository
             .commit(
-                Some("HEAD"),
+                None,
                 &signature,
                 &signature,
                 &preview.commit_message,
@@ -239,6 +236,14 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
                 &parents,
             )
             .map_err(|_| repository_git_error("초기화 commit을 만들지 못했습니다."))?;
+        repository
+            .reference(
+                &reference_name,
+                commit_oid,
+                false,
+                "OkHub workspace initialization",
+            )
+            .map_err(|_| repository_git_error("초기화 branch를 기록하지 못했습니다."))?;
 
         Ok(CommitOutcome {
             branch: preview.branch.clone(),
@@ -271,20 +276,94 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
         checkout(&repository, branch)
     }
+
+    fn attempt_directory(&self, root: &Path) -> Result<std::path::PathBuf, AppError> {
+        let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
+        Ok(repository.path().join("okhub"))
+    }
+
+    fn remote_branch_oid(
+        &self,
+        root: &Path,
+        branch: &str,
+        access_token: AccessToken,
+    ) -> Result<Option<String>, AppError> {
+        let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
+        let mut remote = repository
+            .find_remote("origin")
+            .map_err(|_| push_error(branch))?;
+        let mut callbacks = RemoteCallbacks::new();
+        callbacks.credentials(move |_url, _username, _allowed| {
+            Cred::userpass_plaintext("x-access-token", access_token.expose_secret())
+        });
+        let mut fetch = FetchOptions::new();
+        fetch.remote_callbacks(callbacks);
+        let local_reference = format!("refs/okhub/remote-check/{}", uuid::Uuid::new_v4());
+        let refspec = format!("+refs/heads/{branch}:{local_reference}");
+        match remote.fetch(&[&refspec], Some(&mut fetch), None) {
+            Ok(()) => {}
+            Err(error) if error.code() == GitErrorCode::NotFound => return Ok(None),
+            Err(_) => return Err(push_error(branch)),
+        }
+        let oid = repository
+            .find_reference(&local_reference)
+            .ok()
+            .and_then(|reference| reference.target())
+            .map(|oid| oid.to_string());
+        if let Ok(mut reference) = repository.find_reference(&local_reference) {
+            reference.delete().map_err(|_| push_error(branch))?;
+        }
+        Ok(oid)
+    }
 }
 
-fn public_remote_url(value: &str) -> String {
-    let Ok(mut url) = Url::parse(value) else {
-        return value.to_owned();
-    };
-    if matches!(url.scheme(), "http" | "https" | "ssh") {
-        let _ = url.set_username("");
-        let _ = url.set_password(None);
-        url.set_query(None);
-        url.set_fragment(None);
-        return url.into();
+fn commit_matches(
+    commit: &git2::Commit<'_>,
+    tree_oid: Oid,
+    parent_oid: Option<Oid>,
+    message: &str,
+    author_name: &str,
+    author_email: &str,
+) -> bool {
+    commit.tree_id() == tree_oid
+        && commit.parent_count() == usize::from(parent_oid.is_some())
+        && parent_oid.is_none_or(|oid| commit.parent_id(0).ok() == Some(oid))
+        && commit.message() == Some(message)
+        && commit.author().name() == Some(author_name)
+        && commit.author().email() == Some(author_email)
+}
+
+fn public_remote_url(value: &str) -> Option<String> {
+    if let Some(path) = value.strip_prefix("git@github.com:") {
+        return valid_github_repository_path(path).then(|| format!("git@github.com:{path}"));
     }
-    value.to_owned()
+    let Ok(mut url) = Url::parse(value) else {
+        return None;
+    };
+    if url.host_str() != Some("github.com")
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !valid_github_repository_path(url.path().trim_start_matches('/'))
+    {
+        return None;
+    }
+    match url.scheme() {
+        "https" => {
+            let _ = url.set_username("");
+            let _ = url.set_password(None);
+            Some(url.into())
+        }
+        "ssh" if url.username() == "git" && url.password().is_none() => Some(url.into()),
+        _ => None,
+    }
+}
+
+fn valid_github_repository_path(path: &str) -> bool {
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let mut parts = path.split('/');
+    let owner = parts.next().unwrap_or_default();
+    let repository = parts.next().unwrap_or_default();
+    !owner.is_empty() && !repository.is_empty() && parts.next().is_none()
 }
 
 fn status_entries(repository: &Repository) -> Result<Vec<String>, AppError> {
@@ -361,14 +440,6 @@ fn checkout(repository: &Repository, branch: &str) -> Result<(), AppError> {
         .map_err(|_| repository_git_error("branch를 checkout하지 못했습니다."))
 }
 
-fn initialization_write_error(path: &str) -> AppError {
-    AppError::new(
-        ErrorCode::WorkspaceChangedSincePreview,
-        "초기화 파일을 새 파일로 만들지 못했습니다.",
-    )
-    .with_detail("path", path)
-}
-
 fn push_error(branch: &str) -> AppError {
     AppError::new(
         ErrorCode::PushFailed,
@@ -388,8 +459,11 @@ mod tests {
 
     use super::Git2RepositoryAdapter;
     use crate::auth::model::AccessToken;
+    use crate::repository::model::RepositoryIdentity;
     use crate::repository::model::{CloneProgress, CloneProgressStage};
     use crate::repository::service::{CloneProgressSink, GitRepositoryPort};
+    use crate::workspace::service::{InitializationPreview, InitializationStrategy, PreviewFile};
+    use uuid::Uuid;
 
     #[derive(Clone, Default)]
     struct RecordingProgress(Arc<Mutex<Vec<CloneProgress>>>);
@@ -412,6 +486,32 @@ mod tests {
         repository
             .commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
             .unwrap();
+    }
+
+    fn initialization_preview() -> InitializationPreview {
+        InitializationPreview {
+            id: Uuid::new_v4(),
+            workspace_id: Uuid::new_v4(),
+            workspace_name: "Mockly".into(),
+            repository_fingerprint: "fixture".into(),
+            branch: "okf/init-workspace".into(),
+            commit_message: "chore: initialize OkHub workspace".into(),
+            strategy: InitializationStrategy::DraftPullRequest {
+                base_branch: "master".into(),
+            },
+            files: vec![PreviewFile {
+                path: ".okf/workspace.yml".into(),
+                content: "schema_version: 1\n".into(),
+                overwrites_existing: false,
+            }],
+        }
+    }
+
+    fn identity(login: &str) -> RepositoryIdentity {
+        RepositoryIdentity {
+            database_id: 42,
+            login: login.into(),
+        }
     }
 
     #[test]
@@ -473,6 +573,51 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_omits_credential_like_scp_and_unsupported_remote_schemes() {
+        for remote in [
+            "secret-value@github.com:example/knowledge.git",
+            "ftp://github.com/example/knowledge.git",
+            "helper::github.com/example/knowledge.git",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let repository = Repository::init(directory.path()).unwrap();
+            commit_file(&repository, "README.md", "ready");
+            repository.remote("origin", remote).unwrap();
+
+            let snapshot = Git2RepositoryAdapter.inspect(directory.path()).unwrap();
+            let json = serde_json::to_string(&snapshot).unwrap();
+
+            assert_eq!(snapshot.remote_url, None, "{remote}");
+            assert!(!json.contains("secret-value"));
+            assert!(!json.contains("ftp://"));
+            assert!(!json.contains("helper::"));
+        }
+    }
+
+    #[test]
+    fn snapshot_normalizes_supported_github_ssh_and_scp_remotes() {
+        for (remote, expected) in [
+            (
+                "git@github.com:example/knowledge.git",
+                "git@github.com:example/knowledge.git",
+            ),
+            (
+                "ssh://git@github.com/example/knowledge.git",
+                "ssh://git@github.com/example/knowledge.git",
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let repository = Repository::init(directory.path()).unwrap();
+            commit_file(&repository, "README.md", "ready");
+            repository.remote("origin", remote).unwrap();
+
+            let snapshot = Git2RepositoryAdapter.inspect(directory.path()).unwrap();
+
+            assert_eq!(snapshot.remote_url.as_deref(), Some(expected));
+        }
+    }
+
+    #[test]
     fn clones_a_temporary_bare_remote_and_emits_only_public_stages() {
         let source_directory = tempfile::tempdir().unwrap();
         let source = Repository::init(source_directory.path()).unwrap();
@@ -489,6 +634,7 @@ mod tests {
             .unwrap();
         let target_parent = tempfile::tempdir().unwrap();
         let target = target_parent.path().join("knowledge");
+        fs::create_dir(&target).unwrap();
         let progress = RecordingProgress::default();
         let adapter = Git2RepositoryAdapter;
 
@@ -523,6 +669,7 @@ mod tests {
     fn failed_clone_reports_and_preserves_the_incomplete_target_path() {
         let target_parent = tempfile::tempdir().unwrap();
         let target = target_parent.path().join("knowledge");
+        fs::create_dir(&target).unwrap();
         let adapter = Git2RepositoryAdapter;
 
         let error = adapter
@@ -540,8 +687,137 @@ mod tests {
             error.details.get("path").map(String::as_str),
             target.to_str()
         );
-        if target.exists() {
-            assert!(target.is_dir());
-        }
+        assert!(target.is_dir());
+    }
+
+    #[test]
+    fn failed_clone_never_removes_or_rewrites_a_preexisting_target_file() {
+        let source_directory = tempfile::tempdir().unwrap();
+        let source = Repository::init(source_directory.path()).unwrap();
+        commit_file(&source, "README.md", "remote content");
+        let bare_directory = tempfile::tempdir().unwrap();
+        Repository::init_bare(bare_directory.path()).unwrap();
+        source
+            .remote("origin", bare_directory.path().to_str().unwrap())
+            .unwrap();
+        source
+            .find_remote("origin")
+            .unwrap()
+            .push(&["refs/heads/master:refs/heads/master"], None)
+            .unwrap();
+
+        let target_parent = tempfile::tempdir().unwrap();
+        let target = target_parent.path().join("knowledge");
+        fs::create_dir(&target).unwrap();
+        let sentinel = target.join("keep.txt");
+        fs::write(&sentinel, b"local content that must survive").unwrap();
+
+        let error = Git2RepositoryAdapter
+            .clone_repository(
+                bare_directory.path().to_str().unwrap(),
+                &target,
+                AccessToken::from_secret(SecretString::new("secret-not-for-output".into())),
+                Arc::new(RecordingProgress::default()),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, crate::error::ErrorCode::CloneFailed);
+        assert_eq!(
+            fs::read(&sentinel).unwrap(),
+            b"local content that must survive"
+        );
+        assert!(!target.join("README.md").exists());
+    }
+
+    #[test]
+    fn object_tree_commit_leaves_the_user_worktree_index_and_head_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        commit_file(&repository, "README.md", "ready");
+        let original_head = repository.head().unwrap().target().unwrap();
+        let original_index_tree = repository.index().unwrap().write_tree().unwrap();
+        drop(repository);
+
+        let outcome = Git2RepositoryAdapter
+            .commit_initialization(
+                directory.path(),
+                &initialization_preview(),
+                &identity("hyeeun"),
+            )
+            .unwrap();
+
+        let repository = Repository::open(directory.path()).unwrap();
+        assert_eq!(repository.head().unwrap().target(), Some(original_head));
+        assert_eq!(repository.head().unwrap().shorthand(), Some("master"));
+        assert_eq!(
+            repository.index().unwrap().write_tree().unwrap(),
+            original_index_tree
+        );
+        assert!(!directory.path().join(".okf/workspace.yml").exists());
+        assert_eq!(
+            repository
+                .find_reference("refs/heads/okf/init-workspace")
+                .unwrap()
+                .target()
+                .map(|oid| oid.to_string()),
+            Some(outcome.commit_oid)
+        );
+    }
+
+    #[test]
+    fn pre_ref_commit_failure_leaves_the_user_repository_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        commit_file(&repository, "README.md", "ready");
+        let original_head = repository.head().unwrap().target().unwrap();
+        let original_index_tree = repository.index().unwrap().write_tree().unwrap();
+        drop(repository);
+
+        let error = Git2RepositoryAdapter
+            .commit_initialization(
+                directory.path(),
+                &initialization_preview(),
+                &identity("bad\0login"),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, crate::error::ErrorCode::GithubUnavailable);
+        let repository = Repository::open(directory.path()).unwrap();
+        assert_eq!(repository.head().unwrap().target(), Some(original_head));
+        assert_eq!(
+            repository.index().unwrap().write_tree().unwrap(),
+            original_index_tree
+        );
+        assert!(repository
+            .find_reference("refs/heads/okf/init-workspace")
+            .is_err());
+        assert!(!directory.path().join(".okf/workspace.yml").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn object_tree_commit_never_follows_a_swapped_parent_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        commit_file(&repository, "README.md", "ready");
+        symlink(outside.path(), directory.path().join(".okf")).unwrap();
+        drop(repository);
+
+        Git2RepositoryAdapter
+            .commit_initialization(
+                directory.path(),
+                &initialization_preview(),
+                &identity("hyeeun"),
+            )
+            .unwrap();
+
+        assert!(!outside.path().join("workspace.yml").exists());
+        assert!(fs::symlink_metadata(directory.path().join(".okf"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 }

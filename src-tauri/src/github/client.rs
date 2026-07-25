@@ -588,6 +588,34 @@ impl GithubHttpClient {
             .map_err(|_| draft_pull_request_invalid_response(&request.head))
     }
 
+    pub(crate) async fn find_open_pull_request(
+        &self,
+        request: &DraftPullRequestRequest,
+    ) -> Result<Option<DraftPullRequest>, AppError> {
+        let (owner, name) =
+            split_repository_full_name(&request.repository_full_name).map_err(|error| {
+                error
+                    .with_recovery(RecoveryAction::Retry)
+                    .with_detail("branch", &request.head)
+            })?;
+        let response: Vec<DraftPullRequestResponse> = self
+            .get_json(
+                &["repos", owner, name, "pulls"],
+                &[
+                    ("state", "open".to_owned()),
+                    ("head", format!("{owner}:{}", request.head)),
+                    ("base", request.base.clone()),
+                ],
+                HttpFailureContext::Repository,
+            )
+            .await
+            .map_err(|error| error.with_detail("branch", &request.head))?;
+        Ok(response
+            .into_iter()
+            .map(DraftPullRequestResponse::into_public)
+            .next())
+    }
+
     async fn list_installations(&self) -> Result<Vec<u64>, AppError> {
         let mut page = 1_u32;
         let mut installation_ids = Vec::new();
@@ -1246,6 +1274,35 @@ mod tests {
             INITIALIZATION_DRAFT_PR_BODY
         );
         assert_eq!(sent.body.as_ref().unwrap()["draft"], true);
+    }
+
+    #[tokio::test]
+    async fn finds_an_existing_open_initialization_pull_request_without_posting() {
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"[{"number":18,"html_url":"https://github.com/Mockly-Company/mockly-knowledge/pull/18","draft":true}]"#,
+        )]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+        let request = DraftPullRequestRequest::initialize_workspace(
+            "Mockly-Company/mockly-knowledge",
+            "okf/init-workspace",
+            "main",
+        );
+
+        let pull_request = service
+            .find_open_pull_request(&request)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(pull_request.number, 18);
+        let sent = &transport.requests()[0];
+        assert_eq!(sent.method, HttpMethod::Get);
+        assert_eq!(
+            sent.url,
+            "https://api.example.test/repos/Mockly-Company/mockly-knowledge/pulls?state=open&head=Mockly-Company%3Aokf%2Finit-workspace&base=main"
+        );
+        assert!(sent.body.is_none());
     }
 
     #[tokio::test]

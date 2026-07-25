@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_yaml_ng::Value;
 use uuid::{Uuid, Variant, Version};
 
@@ -33,7 +33,7 @@ pub enum WorkspaceInspection {
     },
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceSummary {
     pub id: Uuid,
@@ -100,7 +100,7 @@ pub struct WorkspaceDiagnostic {
     pub value: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct InitializationPreview {
     pub id: Uuid,
@@ -113,7 +113,7 @@ pub struct InitializationPreview {
     pub files: Vec<PreviewFile>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -124,7 +124,7 @@ pub enum RepositoryPopulation {
     ExistingContent { default_branch: String },
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -135,7 +135,7 @@ pub enum InitializationStrategy {
     DraftPullRequest { base_branch: String },
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewFile {
     pub path: String,

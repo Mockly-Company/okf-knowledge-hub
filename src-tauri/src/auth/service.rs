@@ -288,7 +288,7 @@ impl AuthService {
         }
     }
 
-    pub async fn valid_access_token(&self) -> Result<AccessToken, AppError> {
+    pub(crate) async fn valid_access_token(&self) -> Result<AccessToken, AppError> {
         self.ensure_client_id()?;
         let _single_flight = self.refresh.lock().await;
         let job_id = Uuid::new_v4();

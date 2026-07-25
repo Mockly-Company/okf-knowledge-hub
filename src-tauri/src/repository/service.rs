@@ -1,7 +1,9 @@
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::{fs, io::Write};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
 use uuid::Uuid;
@@ -23,7 +25,7 @@ pub trait CloneProgressSink: Send + Sync {
     fn emit(&self, progress: CloneProgress);
 }
 
-pub trait GitRepositoryPort: Send + Sync {
+pub(crate) trait GitRepositoryPort: Send + Sync {
     fn inspect(&self, path: &Path) -> Result<RepositorySnapshot, AppError>;
 
     fn clone_repository(
@@ -49,10 +51,19 @@ pub trait GitRepositoryPort: Send + Sync {
     ) -> Result<(), AppError>;
 
     fn checkout_branch(&self, root: &Path, branch: &str) -> Result<(), AppError>;
+
+    fn attempt_directory(&self, root: &Path) -> Result<PathBuf, AppError>;
+
+    fn remote_branch_oid(
+        &self,
+        root: &Path,
+        branch: &str,
+        access_token: AccessToken,
+    ) -> Result<Option<String>, AppError>;
 }
 
 #[async_trait]
-pub trait RepositoryCredentialPort: Send + Sync {
+pub(crate) trait RepositoryCredentialPort: Send + Sync {
     async fn valid_access_token(&self) -> Result<AccessToken, AppError>;
 }
 
@@ -64,7 +75,7 @@ impl RepositoryCredentialPort for AuthService {
 }
 
 #[async_trait]
-pub trait RepositoryRemotePort: Send + Sync {
+pub(crate) trait RepositoryRemotePort: Send + Sync {
     async fn resolve_remote_repository(
         &self,
         remote_url: &str,
@@ -75,6 +86,11 @@ pub trait RepositoryRemotePort: Send + Sync {
         &self,
         request: &DraftPullRequestRequest,
     ) -> Result<DraftPullRequest, AppError>;
+
+    async fn find_open_pull_request(
+        &self,
+        request: &DraftPullRequestRequest,
+    ) -> Result<Option<DraftPullRequest>, AppError>;
 }
 
 #[async_trait]
@@ -93,6 +109,13 @@ impl RepositoryRemotePort for GithubService {
     ) -> Result<DraftPullRequest, AppError> {
         GithubService::create_draft_pull_request(self, request).await
     }
+
+    async fn find_open_pull_request(
+        &self,
+        request: &DraftPullRequestRequest,
+    ) -> Result<Option<DraftPullRequest>, AppError> {
+        GithubService::find_open_pull_request(self, request).await
+    }
 }
 
 pub struct RepositoryService {
@@ -103,19 +126,31 @@ pub struct RepositoryService {
     root: Option<PathBuf>,
     repository: Option<GithubRepositoryDetail>,
     identity: Option<RepositoryIdentity>,
-    attempts: Mutex<std::collections::HashMap<Uuid, InitializationAttempt>>,
     initialization: Mutex<()>,
 }
 
-#[derive(Clone)]
-struct InitializationAttempt {
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct DurableInitializationAttempt {
     preview: InitializationPreview,
-    outcome: CommitOutcome,
+    outcome: Option<CommitOutcome>,
     pushed: bool,
 }
 
+impl DurableInitializationAttempt {
+    fn phase_file(&self) -> &'static str {
+        if self.pushed {
+            "pushed.json"
+        } else if self.outcome.is_some() {
+            "committed.json"
+        } else {
+            "prepared.json"
+        }
+    }
+}
+
 impl RepositoryService {
-    pub fn for_inspection(
+    #[allow(dead_code)] // Consumed by Task 8 command wiring.
+    pub(crate) fn for_inspection(
         git: Arc<dyn GitRepositoryPort>,
         github: Arc<dyn RepositoryRemotePort>,
     ) -> Self {
@@ -127,12 +162,12 @@ impl RepositoryService {
             root: None,
             repository: None,
             identity: None,
-            attempts: Mutex::new(Default::default()),
             initialization: Mutex::new(()),
         }
     }
 
-    pub fn for_clone(
+    #[allow(dead_code)] // Consumed by Task 8 command wiring.
+    pub(crate) fn for_clone(
         git: Arc<dyn GitRepositoryPort>,
         github: Arc<dyn RepositoryRemotePort>,
         credentials: Arc<dyn RepositoryCredentialPort>,
@@ -145,12 +180,12 @@ impl RepositoryService {
             root: None,
             repository: None,
             identity: None,
-            attempts: Mutex::new(Default::default()),
             initialization: Mutex::new(()),
         }
     }
 
-    pub fn new(
+    #[allow(dead_code)] // Consumed by Task 8 command wiring.
+    pub(crate) fn new(
         git: Arc<dyn GitRepositoryPort>,
         github: Arc<dyn RepositoryRemotePort>,
         credentials: Arc<dyn RepositoryCredentialPort>,
@@ -167,7 +202,6 @@ impl RepositoryService {
             root: Some(root),
             repository: Some(repository),
             identity: Some(identity),
-            attempts: Mutex::new(Default::default()),
             initialization: Mutex::new(()),
         }
     }
@@ -184,10 +218,24 @@ impl RepositoryService {
     }
 
     pub fn ensure_clone_target(target: &Path) -> Result<(), AppError> {
-        if target.exists() {
-            return Err(path_conflict(target));
+        match std::fs::symlink_metadata(target) {
+            Ok(_) => Err(path_conflict(target)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(clone_reservation_error(target)),
         }
-        Ok(())
+    }
+
+    fn reserve_clone_target(target: &Path) -> Result<(), AppError> {
+        std::fs::create_dir(target).map_err(|error| {
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::NotADirectory
+            ) {
+                path_conflict(target)
+            } else {
+                clone_reservation_error(target)
+            }
+        })
     }
 
     pub async fn inspect_existing(
@@ -227,7 +275,7 @@ impl RepositoryService {
             &request.parent_directory,
             repository_name(&request.full_name)?,
         )?;
-        Self::ensure_clone_target(&target)?;
+        Self::reserve_clone_target(&target)?;
         let token = self.credentials()?.valid_access_token().await?;
         let snapshot = self
             .git
@@ -243,92 +291,120 @@ impl RepositoryService {
 
     pub async fn initialize(&self, preview_id: Uuid) -> Result<InitializationResult, AppError> {
         let _initialization = self.initialization.lock().await;
-        let existing_attempt = {
-            let attempts = self.attempts.lock().await;
-            attempts.get(&preview_id).cloned()
-        };
-        if let Some(attempt) = existing_attempt {
-            return self.resume_initialization(preview_id, attempt).await;
-        }
-
         let root = self.root()?;
-        let preview = self
-            .previews()?
-            .get(preview_id)
-            .ok_or_else(stale_preview_error)?;
-        let snapshot = self.git.inspect(root)?;
-        if snapshot.fingerprint != preview.repository_fingerprint || snapshot.is_dirty {
-            return Err(stale_preview_error());
-        }
-        if let InitializationStrategy::DraftPullRequest { base_branch } = &preview.strategy {
-            if snapshot.default_branch.as_deref() != Some(base_branch.as_str()) {
-                return Err(stale_preview_error());
+        let mut attempt = match self.load_attempt(preview_id)? {
+            Some(attempt) => attempt,
+            None => {
+                let preview = self
+                    .previews()?
+                    .get(preview_id)
+                    .ok_or_else(stale_preview_error)?;
+                let snapshot = self.git.inspect(root)?;
+                if snapshot.fingerprint != preview.repository_fingerprint || snapshot.is_dirty {
+                    return Err(stale_preview_error());
+                }
+                if let InitializationStrategy::DraftPullRequest { base_branch } = &preview.strategy
+                {
+                    if snapshot.default_branch.as_deref() != Some(base_branch.as_str()) {
+                        return Err(stale_preview_error());
+                    }
+                }
+                WorkspaceService::validate_preview_paths(root, &preview.files)?;
+                for file in &preview.files {
+                    if fs::symlink_metadata(root.join(&file.path)).is_ok() {
+                        return Err(stale_preview_error());
+                    }
+                }
+                let attempt = DurableInitializationAttempt {
+                    preview,
+                    outcome: None,
+                    pushed: false,
+                };
+                self.write_attempt(&attempt)?;
+                attempt
             }
-        }
-        WorkspaceService::validate_preview_paths(root, &preview.files)?;
-        for file in &preview.files {
-            if std::fs::symlink_metadata(root.join(&file.path)).is_ok() {
-                return Err(stale_preview_error());
-            }
-        }
-
-        let outcome = self
-            .git
-            .commit_initialization(root, &preview, self.identity()?)?;
-        let attempt = InitializationAttempt {
-            preview,
-            outcome,
-            pushed: false,
         };
-        self.attempts
-            .lock()
-            .await
-            .insert(preview_id, attempt.clone());
+
+        if attempt.outcome.is_none() {
+            let snapshot = self.git.inspect(root)?;
+            if snapshot.fingerprint != attempt.preview.repository_fingerprint || snapshot.is_dirty {
+                return Err(stale_preview_error());
+            }
+            let outcome =
+                self.git
+                    .commit_initialization(root, &attempt.preview, self.identity()?)?;
+            attempt.outcome = Some(outcome);
+            self.write_attempt(&attempt)?;
+        }
         self.resume_initialization(preview_id, attempt).await
     }
 
     async fn resume_initialization(
         &self,
         preview_id: Uuid,
-        mut attempt: InitializationAttempt,
+        mut attempt: DurableInitializationAttempt,
     ) -> Result<InitializationResult, AppError> {
+        let outcome = attempt.outcome.clone().ok_or_else(stale_preview_error)?;
         if !attempt.pushed {
             let token = self.credentials()?.valid_access_token().await?;
-            self.git
-                .push_branch(self.root()?, &attempt.outcome.branch, token)
+            let remote_oid = self
+                .git
+                .remote_branch_oid(self.root()?, &outcome.branch, token)
                 .map_err(|error| {
                     error
-                        .with_detail("branch", &attempt.outcome.branch)
-                        .with_detail("commit", &attempt.outcome.commit_oid)
+                        .with_detail("branch", &outcome.branch)
+                        .with_detail("commit", &outcome.commit_oid)
                 })?;
+            match remote_oid {
+                Some(remote_oid) if remote_oid == outcome.commit_oid => {}
+                Some(remote_oid) => {
+                    return Err(AppError::new(
+                        ErrorCode::PushFailed,
+                        "원격 초기화 branch가 다른 commit을 가리킵니다.",
+                    )
+                    .with_recovery(RecoveryAction::Retry)
+                    .with_detail("branch", &outcome.branch)
+                    .with_detail("commit", &outcome.commit_oid)
+                    .with_detail("remoteCommit", remote_oid));
+                }
+                None => {
+                    let token = self.credentials()?.valid_access_token().await?;
+                    self.git
+                        .push_branch(self.root()?, &outcome.branch, token)
+                        .map_err(|error| {
+                            error
+                                .with_detail("branch", &outcome.branch)
+                                .with_detail("commit", &outcome.commit_oid)
+                        })?;
+                }
+            }
             attempt.pushed = true;
-            self.attempts
-                .lock()
-                .await
-                .insert(preview_id, attempt.clone());
+            self.write_attempt(&attempt)?;
         }
 
         let mut draft_pull_request_url = None;
         if let InitializationStrategy::DraftPullRequest { base_branch } = &attempt.preview.strategy
         {
-            if let Some(original) = &attempt.outcome.original_branch {
-                self.git.checkout_branch(self.root()?, original)?;
-            }
             let request = DraftPullRequestRequest::initialize_workspace(
                 &self.repository()?.full_name,
-                &attempt.outcome.branch,
+                &outcome.branch,
                 base_branch,
             );
-            let pull_request = self.github.create_draft_pull_request(&request).await?;
+            let pull_request = match self.github.find_open_pull_request(&request).await? {
+                Some(pull_request) => pull_request,
+                None => self.github.create_draft_pull_request(&request).await?,
+            };
             draft_pull_request_url = Some(pull_request.html_url);
+        } else {
+            self.git.checkout_branch(self.root()?, &outcome.branch)?;
         }
 
-        self.attempts.lock().await.remove(&preview_id);
+        self.remove_attempt(preview_id)?;
         self.previews()?.remove(preview_id);
         Ok(InitializationResult {
             root: self.root()?.to_path_buf(),
-            branch: attempt.outcome.branch,
-            commit_oid: attempt.outcome.commit_oid,
+            branch: outcome.branch,
+            commit_oid: outcome.commit_oid,
             commit_message: attempt.preview.commit_message,
             pushed: true,
             draft_pull_request_url,
@@ -354,6 +430,95 @@ impl RepositoryService {
     fn identity(&self) -> Result<&RepositoryIdentity, AppError> {
         self.identity.as_ref().ok_or_else(service_unavailable)
     }
+
+    fn attempt_path(&self, preview_id: Uuid) -> Result<PathBuf, AppError> {
+        Ok(self
+            .git
+            .attempt_directory(self.root()?)?
+            .join(preview_id.to_string()))
+    }
+
+    fn write_attempt(&self, attempt: &DurableInitializationAttempt) -> Result<(), AppError> {
+        let directory = self.attempt_path(attempt.preview.id)?;
+        fs::create_dir_all(&directory).map_err(|_| attempt_storage_error())?;
+        let destination = directory.join(attempt.phase_file());
+        if destination.exists() {
+            let existing = read_attempt_file(&destination)?;
+            if existing == *attempt {
+                return Ok(());
+            }
+            return Err(attempt_storage_error());
+        }
+        let temporary = directory.join(format!(".tmp-{}", Uuid::new_v4()));
+        let bytes = serde_json::to_vec(attempt).map_err(|_| attempt_storage_error())?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| attempt_storage_error())?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| attempt_storage_error())?;
+        match fs::rename(&temporary, &destination) {
+            Ok(()) => Ok(()),
+            Err(_) if destination.exists() => {
+                let _ = fs::remove_file(&temporary);
+                (read_attempt_file(&destination)? == *attempt)
+                    .then_some(())
+                    .ok_or_else(attempt_storage_error)
+            }
+            Err(_) => {
+                let _ = fs::remove_file(&temporary);
+                Err(attempt_storage_error())
+            }
+        }
+    }
+
+    fn load_attempt(
+        &self,
+        preview_id: Uuid,
+    ) -> Result<Option<DurableInitializationAttempt>, AppError> {
+        let directory = self.attempt_path(preview_id)?;
+        for phase in ["pushed.json", "committed.json", "prepared.json"] {
+            let path = directory.join(phase);
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.is_file() => return read_attempt_file(&path).map(Some),
+                Ok(_) => return Err(attempt_storage_error()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(attempt_storage_error()),
+            }
+        }
+        Ok(None)
+    }
+
+    fn remove_attempt(&self, preview_id: Uuid) -> Result<(), AppError> {
+        let directory = self.attempt_path(preview_id)?;
+        for phase in ["prepared.json", "committed.json", "pushed.json"] {
+            match fs::remove_file(directory.join(phase)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(attempt_storage_error()),
+            }
+        }
+        match fs::remove_dir(directory) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err(attempt_storage_error()),
+        }
+    }
+}
+
+fn read_attempt_file(path: &Path) -> Result<DurableInitializationAttempt, AppError> {
+    let bytes = fs::read(path).map_err(|_| attempt_storage_error())?;
+    serde_json::from_slice(&bytes).map_err(|_| attempt_storage_error())
+}
+
+fn attempt_storage_error() -> AppError {
+    AppError::new(
+        ErrorCode::WorkspaceChangedSincePreview,
+        "초기화 복구 상태를 안전하게 저장하거나 읽지 못했습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
 }
 
 fn repository_name(full_name: &str) -> Result<&str, AppError> {
@@ -390,6 +555,15 @@ fn clone_url_error() -> AppError {
         "GitHub clone 주소가 올바르지 않습니다.",
     )
     .with_recovery(RecoveryAction::Retry)
+}
+
+fn clone_reservation_error(path: &Path) -> AppError {
+    AppError::new(
+        ErrorCode::CloneFailed,
+        "clone 대상 폴더를 안전하게 예약하지 못했습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+    .with_detail("path", path.to_string_lossy())
 }
 
 fn stale_preview_error() -> AppError {
@@ -457,6 +631,58 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_clone_target_symlink_is_a_conflict() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let target = parent.path().join("knowledge");
+        symlink(parent.path().join("missing"), &target).unwrap();
+
+        let error = RepositoryService::ensure_clone_target(&target).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::RepositoryPathConflict);
+        assert!(fs::symlink_metadata(&target)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn clone_target_reservation_is_atomic_across_concurrent_attempts() {
+        let parent = tempfile::tempdir().unwrap();
+        let target = Arc::new(parent.path().join("knowledge"));
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let workers = (0..2)
+            .map(|_| {
+                let target = target.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    RepositoryService::reserve_clone_target(&target)
+                })
+            })
+            .collect::<Vec<_>>();
+        barrier.wait();
+        let results = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result
+                    .as_ref()
+                    .is_err_and(|error| error.code == ErrorCode::RepositoryPathConflict))
+                .count(),
+            1
+        );
+        assert!(target.is_dir());
+    }
+
     #[test]
     fn clone_url_must_be_clean_https_for_the_selected_repository() {
         assert_eq!(
@@ -487,6 +713,8 @@ mod tests {
         resolved_id: String,
         draft_requests: Arc<Mutex<Vec<DraftPullRequestRequest>>>,
         draft_failures_remaining: Arc<Mutex<usize>>,
+        draft_failures_after_create: Arc<Mutex<usize>>,
+        open_pull_request: Arc<Mutex<Option<DraftPullRequest>>>,
     }
 
     #[async_trait]
@@ -522,11 +750,30 @@ mod tests {
                 .with_recovery(crate::error::RecoveryAction::Retry)
                 .with_detail("branch", &request.head));
             }
-            Ok(DraftPullRequest {
+            let pull_request = DraftPullRequest {
                 number: 7,
                 html_url: "https://github.com/example/knowledge/pull/7".into(),
                 is_draft: true,
-            })
+            };
+            *self.open_pull_request.lock().unwrap() = Some(pull_request.clone());
+            let mut failures = self.draft_failures_after_create.lock().unwrap();
+            if *failures > 0 {
+                *failures -= 1;
+                return Err(crate::error::AppError::new(
+                    ErrorCode::GithubUnavailable,
+                    "fixture response lost after PR creation",
+                )
+                .with_recovery(crate::error::RecoveryAction::Retry)
+                .with_detail("branch", &request.head));
+            }
+            Ok(pull_request)
+        }
+
+        async fn find_open_pull_request(
+            &self,
+            _request: &DraftPullRequestRequest,
+        ) -> Result<Option<DraftPullRequest>, crate::error::AppError> {
+            Ok(self.open_pull_request.lock().unwrap().clone())
         }
     }
 
@@ -540,6 +787,83 @@ mod tests {
             Ok(crate::auth::model::AccessToken::from_secret(
                 secrecy::SecretString::new("fixture-token".into()),
             ))
+        }
+    }
+
+    struct AmbiguousPushGit {
+        inner: Git2RepositoryAdapter,
+        fail_after_push_once: Mutex<bool>,
+    }
+
+    impl GitRepositoryPort for AmbiguousPushGit {
+        fn inspect(
+            &self,
+            path: &std::path::Path,
+        ) -> Result<crate::repository::model::RepositorySnapshot, crate::error::AppError> {
+            self.inner.inspect(path)
+        }
+
+        fn clone_repository(
+            &self,
+            clean_remote_url: &str,
+            target: &std::path::Path,
+            access_token: crate::auth::model::AccessToken,
+            progress: Arc<dyn crate::repository::service::CloneProgressSink>,
+        ) -> Result<crate::repository::model::RepositorySnapshot, crate::error::AppError> {
+            self.inner
+                .clone_repository(clean_remote_url, target, access_token, progress)
+        }
+
+        fn commit_initialization(
+            &self,
+            root: &std::path::Path,
+            preview: &crate::workspace::service::InitializationPreview,
+            identity: &RepositoryIdentity,
+        ) -> Result<crate::repository::model::CommitOutcome, crate::error::AppError> {
+            self.inner.commit_initialization(root, preview, identity)
+        }
+
+        fn push_branch(
+            &self,
+            root: &std::path::Path,
+            branch: &str,
+            access_token: crate::auth::model::AccessToken,
+        ) -> Result<(), crate::error::AppError> {
+            self.inner.push_branch(root, branch, access_token)?;
+            let mut fail = self.fail_after_push_once.lock().unwrap();
+            if *fail {
+                *fail = false;
+                return Err(crate::error::AppError::new(
+                    ErrorCode::PushFailed,
+                    "fixture lost the successful push response",
+                )
+                .with_recovery(crate::error::RecoveryAction::Retry));
+            }
+            Ok(())
+        }
+
+        fn checkout_branch(
+            &self,
+            root: &std::path::Path,
+            branch: &str,
+        ) -> Result<(), crate::error::AppError> {
+            self.inner.checkout_branch(root, branch)
+        }
+
+        fn attempt_directory(
+            &self,
+            root: &std::path::Path,
+        ) -> Result<std::path::PathBuf, crate::error::AppError> {
+            self.inner.attempt_directory(root)
+        }
+
+        fn remote_branch_oid(
+            &self,
+            root: &std::path::Path,
+            branch: &str,
+            access_token: crate::auth::model::AccessToken,
+        ) -> Result<Option<String>, crate::error::AppError> {
+            self.inner.remote_branch_oid(root, branch, access_token)
         }
     }
 
@@ -572,6 +896,8 @@ mod tests {
                 resolved_id: "R_expected".into(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
+                draft_failures_after_create: Default::default(),
+                open_pull_request: Default::default(),
             }),
         );
 
@@ -593,6 +919,8 @@ mod tests {
                 resolved_id: "R_other".into(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
+                draft_failures_after_create: Default::default(),
+                open_pull_request: Default::default(),
             }),
         );
 
@@ -614,6 +942,8 @@ mod tests {
                 resolved_id: "R_expected".into(),
                 draft_requests: Default::default(),
                 draft_failures_remaining: Default::default(),
+                draft_failures_after_create: Default::default(),
+                open_pull_request: Default::default(),
             }),
         );
 
@@ -649,6 +979,29 @@ mod tests {
             self.previews.insert(preview.clone()).unwrap();
             preview
         }
+
+        fn restarted_service(&self) -> RepositoryService {
+            RepositoryService::new(
+                Arc::new(Git2RepositoryAdapter),
+                Arc::new(self.remote.clone()),
+                Arc::new(FakeCredentials),
+                Arc::new(PreviewRegistry::default()),
+                self.root.clone(),
+                GithubRepositoryDetail {
+                    id: "R_expected".into(),
+                    owner: "example".into(),
+                    name: "knowledge".into(),
+                    full_name: "example/knowledge".into(),
+                    default_branch: Some("main".into()),
+                    is_empty: false,
+                    https_url: "https://github.com/example/knowledge.git".into(),
+                },
+                RepositoryIdentity {
+                    database_id: 42,
+                    login: "hyeeun".into(),
+                },
+            )
+        }
     }
 
     fn initialized_repository_with_existing_content() -> InitializationFixture {
@@ -676,6 +1029,8 @@ mod tests {
             resolved_id: "R_expected".into(),
             draft_requests: Default::default(),
             draft_failures_remaining: Default::default(),
+            draft_failures_after_create: Default::default(),
+            open_pull_request: Default::default(),
         };
         let service = RepositoryService::new(
             Arc::new(Git2RepositoryAdapter),
@@ -822,11 +1177,11 @@ mod tests {
             Some("okf/init-workspace")
         );
         let repository = Repository::open(&fixture.root).unwrap();
-        assert_eq!(
-            repository.head().unwrap().shorthand(),
-            Some("okf/init-workspace")
-        );
-        assert!(fixture.root.join(".okf/workspace.yml").is_file());
+        assert_eq!(repository.head().unwrap().shorthand(), Some("main"));
+        assert!(!fixture.root.join(".okf/workspace.yml").exists());
+        assert!(repository
+            .find_reference("refs/heads/okf/init-workspace")
+            .is_ok());
         assert!(error.details.contains_key("commit"));
     }
 
@@ -860,6 +1215,168 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restart_after_local_commit_resumes_without_the_preview_registry() {
+        let fixture = initialized_repository_with_existing_content();
+        let repository = Repository::open(&fixture.root).unwrap();
+        repository
+            .remote_set_url("origin", "/definitely/missing/remote.git")
+            .unwrap();
+        let preview = fixture.preview();
+        let first_error = fixture.service.initialize(preview.id).await.unwrap_err();
+        assert_eq!(first_error.code, ErrorCode::PushFailed);
+        repository
+            .remote_set_url("origin", fixture._bare_remote.path().to_str().unwrap())
+            .unwrap();
+
+        let result = fixture
+            .restarted_service()
+            .initialize(preview.id)
+            .await
+            .unwrap();
+
+        assert_eq!(result.branch, "okf/init-workspace");
+        assert_eq!(fixture.remote.draft_requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn restart_after_push_resumes_pr_without_the_preview_registry() {
+        let fixture = initialized_repository_with_existing_content();
+        *fixture.remote.draft_failures_remaining.lock().unwrap() = 1;
+        let preview = fixture.preview();
+        let first_error = fixture.service.initialize(preview.id).await.unwrap_err();
+        assert_eq!(first_error.code, ErrorCode::DraftPullRequestFailed);
+
+        let result = fixture
+            .restarted_service()
+            .initialize(preview.id)
+            .await
+            .unwrap();
+
+        assert_eq!(result.branch, "okf/init-workspace");
+        assert_eq!(fixture.remote.draft_requests.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn restart_after_an_ambiguous_pr_response_finds_the_existing_pr() {
+        let fixture = initialized_repository_with_existing_content();
+        *fixture.remote.draft_failures_after_create.lock().unwrap() = 1;
+        let preview = fixture.preview();
+
+        let first_error = fixture.service.initialize(preview.id).await.unwrap_err();
+        assert_eq!(first_error.code, ErrorCode::GithubUnavailable);
+
+        let result = fixture
+            .restarted_service()
+            .initialize(preview.id)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.draft_pull_request_url.as_deref(),
+            Some("https://github.com/example/knowledge/pull/7")
+        );
+        assert_eq!(fixture.remote.draft_requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn restart_after_an_ambiguous_push_response_accepts_the_same_remote_oid() {
+        let fixture = initialized_repository_with_existing_content();
+        let preview = fixture.preview();
+        let service = RepositoryService::new(
+            Arc::new(AmbiguousPushGit {
+                inner: Git2RepositoryAdapter,
+                fail_after_push_once: Mutex::new(true),
+            }),
+            Arc::new(fixture.remote.clone()),
+            Arc::new(FakeCredentials),
+            fixture.previews.clone(),
+            fixture.root.clone(),
+            GithubRepositoryDetail {
+                id: "R_expected".into(),
+                owner: "example".into(),
+                name: "knowledge".into(),
+                full_name: "example/knowledge".into(),
+                default_branch: Some("main".into()),
+                is_empty: false,
+                https_url: "https://github.com/example/knowledge.git".into(),
+            },
+            RepositoryIdentity {
+                database_id: 42,
+                login: "hyeeun".into(),
+            },
+        );
+
+        let first_error = service.initialize(preview.id).await.unwrap_err();
+        assert_eq!(first_error.code, ErrorCode::PushFailed);
+
+        let result = fixture
+            .restarted_service()
+            .initialize(preview.id)
+            .await
+            .unwrap();
+
+        assert_eq!(result.branch, "okf/init-workspace");
+        assert_eq!(fixture.remote.draft_requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn retry_refuses_to_replace_a_different_remote_initialization_commit() {
+        let fixture = initialized_repository_with_existing_content();
+        let preview = fixture.preview();
+        let service = RepositoryService::new(
+            Arc::new(AmbiguousPushGit {
+                inner: Git2RepositoryAdapter,
+                fail_after_push_once: Mutex::new(true),
+            }),
+            Arc::new(fixture.remote.clone()),
+            Arc::new(FakeCredentials),
+            fixture.previews.clone(),
+            fixture.root.clone(),
+            GithubRepositoryDetail {
+                id: "R_expected".into(),
+                owner: "example".into(),
+                name: "knowledge".into(),
+                full_name: "example/knowledge".into(),
+                default_branch: Some("main".into()),
+                is_empty: false,
+                https_url: "https://github.com/example/knowledge.git".into(),
+            },
+            RepositoryIdentity {
+                database_id: 42,
+                login: "hyeeun".into(),
+            },
+        );
+        let first_error = service.initialize(preview.id).await.unwrap_err();
+        assert_eq!(first_error.code, ErrorCode::PushFailed);
+        let bare = Repository::open_bare(fixture._bare_remote.path()).unwrap();
+        let main_oid = bare
+            .find_reference("refs/heads/main")
+            .unwrap()
+            .target()
+            .unwrap();
+        bare.reference(
+            "refs/heads/okf/init-workspace",
+            main_oid,
+            true,
+            "fixture conflict",
+        )
+        .unwrap();
+
+        let error = fixture
+            .restarted_service()
+            .initialize(preview.id)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::PushFailed);
+        assert_eq!(
+            error.details.get("remoteCommit").map(String::as_str),
+            Some(main_oid.to_string()).as_deref()
+        );
+        assert!(fixture.remote.draft_requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn empty_repository_pushes_the_initial_default_branch_without_a_pr() {
         let directory = tempfile::tempdir().unwrap();
         let repository = Repository::init(directory.path()).unwrap();
@@ -875,6 +1392,8 @@ mod tests {
             resolved_id: "R_empty".into(),
             draft_requests: Default::default(),
             draft_failures_remaining: Default::default(),
+            draft_failures_after_create: Default::default(),
+            open_pull_request: Default::default(),
         };
         let service = RepositoryService::new(
             Arc::new(Git2RepositoryAdapter),

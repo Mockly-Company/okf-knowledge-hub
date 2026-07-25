@@ -12,7 +12,8 @@ pub struct AppServices {
     /// empty so they never initialize the developer's real credential store.
     pub auth: Option<Arc<AuthService>>,
     pub github: Option<Arc<GithubService>>,
-    pub repository_git: Arc<dyn GitRepositoryPort>,
+    #[allow(dead_code)] // Consumed by Task 8 command wiring.
+    pub(crate) repository_git: Arc<dyn GitRepositoryPort>,
     pub initialization_previews: Arc<PreviewRegistry>,
     pub local_settings: LocalSettingsService,
 }
