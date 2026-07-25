@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::auth::service::AuthService;
-use crate::github::client::{GithubService, ReqwestHttpTransport};
+use crate::github::GithubService;
 use crate::settings::service::LocalSettingsService;
 use crate::workspace::service::PreviewRegistry;
 
@@ -26,7 +26,7 @@ impl AppServices {
 
     pub fn with_auth(local_settings: LocalSettingsService, auth: AuthService) -> Self {
         let auth = Arc::new(auth);
-        let github = GithubService::with_shared_auth(auth.clone(), ReqwestHttpTransport::new())
+        let github = GithubService::production(auth.clone())
             .expect("the static GitHub API base URL must be valid");
         Self {
             auth: Some(auth),

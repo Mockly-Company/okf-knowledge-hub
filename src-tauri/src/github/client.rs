@@ -179,12 +179,7 @@ fn map_http_error(
         )
         .with_recovery(RecoveryAction::RestartLogin);
     }
-    if status == 429
-        || (status == 403
-            && response_headers
-                .get("x-ratelimit-remaining")
-                .is_some_and(|remaining| remaining == "0"))
-    {
+    if is_rate_limited(status, response_headers) {
         return github_unavailable_error();
     }
     if matches!(status, 403 | 404)
@@ -207,22 +202,28 @@ fn map_draft_pull_request_error(
     response_headers: &HeaderMap,
     branch: &str,
 ) -> AppError {
-    if status == 401 || status == 429 || is_rate_limited(status, response_headers) {
-        return map_http_error(HttpFailureContext::Repository, status, response_headers);
-    }
-    AppError::new(
-        ErrorCode::DraftPullRequestFailed,
-        "branch는 push되었지만 Draft PR을 만들지 못했습니다.",
-    )
-    .with_recovery(RecoveryAction::Retry)
-    .with_detail("branch", branch)
+    let error = if status == 401
+        || matches!(status, 403 | 404)
+        || is_rate_limited(status, response_headers)
+    {
+        map_http_error(HttpFailureContext::Repository, status, response_headers)
+    } else {
+        AppError::new(
+            ErrorCode::DraftPullRequestFailed,
+            "branch는 push되었지만 Draft PR을 만들지 못했습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+    };
+    error.with_detail("branch", branch)
 }
 
 fn is_rate_limited(status: u16, response_headers: &HeaderMap) -> bool {
-    status == 403
-        && response_headers
-            .get("x-ratelimit-remaining")
-            .is_some_and(|remaining| remaining == "0")
+    status == 429
+        || (status == 403
+            && (response_headers
+                .get("x-ratelimit-remaining")
+                .is_some_and(|remaining| remaining == "0")
+                || response_headers.contains_key("retry-after")))
 }
 
 fn github_unavailable_error() -> AppError {
@@ -267,7 +268,7 @@ fn invalid_cursor_error() -> AppError {
 }
 
 #[async_trait]
-pub trait AccessTokenProvider: Send + Sync {
+trait AccessTokenProvider: Send + Sync {
     async fn valid_access_token(&self) -> Result<AccessToken, AppError>;
 }
 
@@ -279,12 +280,12 @@ impl AccessTokenProvider for AuthService {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HttpMethod {
+enum HttpMethod {
     Get,
     Post,
 }
 
-pub struct HttpRequest {
+struct HttpRequest {
     method: HttpMethod,
     url: String,
     headers: HeaderMap,
@@ -293,37 +294,42 @@ pub struct HttpRequest {
 }
 
 impl HttpRequest {
-    pub fn method(&self) -> HttpMethod {
+    #[cfg(test)]
+    fn method(&self) -> HttpMethod {
         self.method
     }
 
-    pub fn url(&self) -> &str {
+    #[cfg(test)]
+    fn url(&self) -> &str {
         &self.url
     }
 
-    pub fn header(&self, name: &str) -> Option<&str> {
+    #[cfg(test)]
+    fn header(&self, name: &str) -> Option<&str> {
         self.headers
             .get(&name.to_ascii_lowercase())
             .map(String::as_str)
     }
 
-    pub fn bearer_token(&self) -> &str {
+    #[cfg(test)]
+    fn bearer_token(&self) -> &str {
         self.access_token.expose_secret()
     }
 
-    pub fn body(&self) -> Option<&serde_json::Value> {
+    #[cfg(test)]
+    fn body(&self) -> Option<&serde_json::Value> {
         self.body.as_ref()
     }
 }
 
-pub struct HttpResponse {
+struct HttpResponse {
     status: u16,
     headers: HeaderMap,
     body: Vec<u8>,
 }
 
 impl HttpResponse {
-    pub fn new(status: u16, headers: HeaderMap, body: Vec<u8>) -> Self {
+    fn new(status: u16, headers: HeaderMap, body: Vec<u8>) -> Self {
         Self {
             status,
             headers,
@@ -332,25 +338,26 @@ impl HttpResponse {
     }
 }
 
-pub struct TransportError;
+struct TransportError;
 
 impl TransportError {
-    pub fn unavailable() -> Self {
+    #[cfg(test)]
+    fn unavailable() -> Self {
         Self
     }
 }
 
 #[async_trait]
-pub trait HttpTransport: Send + Sync {
+trait HttpTransport: Send + Sync {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError>;
 }
 
-pub struct ReqwestHttpTransport {
+struct ReqwestHttpTransport {
     client: reqwest::Client,
 }
 
 impl ReqwestHttpTransport {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             client: reqwest::Client::builder()
                 .connect_timeout(CONNECT_TIMEOUT)
@@ -410,21 +417,16 @@ pub struct GithubHttpClient {
 pub type GithubService = GithubHttpClient;
 
 impl GithubHttpClient {
-    pub fn new(
-        auth: impl AccessTokenProvider + 'static,
-        transport: impl HttpTransport + 'static,
-    ) -> Result<Self, AppError> {
-        Self::with_base_url(auth, transport, "https://api.github.com/")
+    pub(crate) fn production(auth: Arc<AuthService>) -> Result<Self, AppError> {
+        Self::from_parts(
+            auth,
+            Arc::new(ReqwestHttpTransport::new()),
+            "https://api.github.com/",
+        )
     }
 
-    pub fn with_shared_auth(
-        auth: Arc<dyn AccessTokenProvider>,
-        transport: impl HttpTransport + 'static,
-    ) -> Result<Self, AppError> {
-        Self::from_parts(auth, Arc::new(transport), "https://api.github.com/")
-    }
-
-    pub fn with_base_url(
+    #[cfg(test)]
+    fn with_base_url(
         auth: impl AccessTokenProvider + 'static,
         transport: impl HttpTransport + 'static,
         api_base_url: &str,
@@ -500,11 +502,18 @@ impl GithubHttpClient {
                 HttpFailureContext::Installation,
             )
             .await?;
-        let next_cursor = if (cursor.page as usize).saturating_mul(100) < response.total_count {
+        let next_cursor = if u128::from(cursor.page) * 100 < response.total_count as u128 {
+            let next_page = cursor.page.checked_add(1).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::GithubUnavailable,
+                    "저장소 목록 cursor의 다음 페이지를 계산할 수 없습니다.",
+                )
+                .with_recovery(RecoveryAction::Retry)
+            })?;
             Some(
                 RepositoryCursor {
                     installation_id: cursor.installation_id,
-                    page: cursor.page.saturating_add(1),
+                    page: next_page,
                 }
                 .encode(),
             )
@@ -560,7 +569,8 @@ impl GithubHttpClient {
                 &[],
                 Some(request.payload()),
             )
-            .await?;
+            .await
+            .map_err(|error| error.with_detail("branch", &request.head))?;
         if !(200..300).contains(&response.status) {
             return Err(map_draft_pull_request_error(
                 response.status,
@@ -822,6 +832,10 @@ mod tests {
         HttpResponse::new(status, headers(&[]), body.as_bytes().to_vec())
     }
 
+    fn response_with_headers(status: u16, values: &[(&str, &str)]) -> HttpResponse {
+        HttpResponse::new(status, headers(values), Vec::new())
+    }
+
     #[test]
     fn maps_installation_repositories_to_public_summaries() {
         let response: GithubRepositoryPageResponse =
@@ -1019,6 +1033,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repository_listing_rejects_a_cursor_page_overflow() {
+        let transport = RecordingTransport::with_responses(vec![
+            response(200, include_str!("fixtures/installations-page.json")),
+            response(
+                200,
+                &format!(r#"{{"total_count":{},"repositories":[]}}"#, usize::MAX),
+            ),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport);
+
+        let error = service
+            .list_repositories(Some(&format!("installation:42:page:{}", u32::MAX)))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
+    }
+
+    #[tokio::test]
+    async fn repository_list_request_maps_auth_permission_and_rate_limit_responses() {
+        let cases = [
+            (
+                response_with_headers(401, &[]),
+                ErrorCode::ReauthenticationRequired,
+                RecoveryAction::RestartLogin,
+            ),
+            (
+                response_with_headers(403, &[]),
+                ErrorCode::GithubPermissionDenied,
+                RecoveryAction::ReinstallGithubApp,
+            ),
+            (
+                response_with_headers(404, &[]),
+                ErrorCode::GithubPermissionDenied,
+                RecoveryAction::ReinstallGithubApp,
+            ),
+            (
+                response_with_headers(403, &[("x-ratelimit-remaining", "0")]),
+                ErrorCode::GithubUnavailable,
+                RecoveryAction::Retry,
+            ),
+            (
+                response_with_headers(403, &[("retry-after", "60")]),
+                ErrorCode::GithubUnavailable,
+                RecoveryAction::Retry,
+            ),
+        ];
+
+        for (response, expected_code, expected_recovery) in cases {
+            let service = client(
+                SequenceTokenProvider::default(),
+                RecordingTransport::with_responses(vec![response]),
+            );
+            let error = service.list_repositories(None).await.unwrap_err();
+            assert_eq!(error.code, expected_code);
+            assert_eq!(error.recovery, Some(expected_recovery));
+        }
+
+        let service = client(
+            SequenceTokenProvider::default(),
+            RecordingTransport::with_network_failure(),
+        );
+        let error = service.list_repositories(None).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
+    }
+
+    #[tokio::test]
     async fn repository_detail_maps_clone_information_without_credentials() {
         let transport = RecordingTransport::with_responses(vec![response(
             200,
@@ -1158,6 +1241,73 @@ mod tests {
             INITIALIZATION_DRAFT_PR_BODY
         );
         assert_eq!(sent.body.as_ref().unwrap()["draft"], true);
+    }
+
+    #[tokio::test]
+    async fn draft_pull_request_maps_every_post_push_failure_and_preserves_the_branch() {
+        let cases = [
+            (
+                response_with_headers(401, &[]),
+                ErrorCode::ReauthenticationRequired,
+                RecoveryAction::RestartLogin,
+            ),
+            (
+                response_with_headers(403, &[]),
+                ErrorCode::GithubPermissionDenied,
+                RecoveryAction::ReinstallGithubApp,
+            ),
+            (
+                response_with_headers(404, &[]),
+                ErrorCode::GithubPermissionDenied,
+                RecoveryAction::ReinstallGithubApp,
+            ),
+            (
+                response_with_headers(403, &[("x-ratelimit-remaining", "0")]),
+                ErrorCode::GithubUnavailable,
+                RecoveryAction::Retry,
+            ),
+            (
+                response_with_headers(403, &[("retry-after", "60")]),
+                ErrorCode::GithubUnavailable,
+                RecoveryAction::Retry,
+            ),
+            (
+                response_with_headers(422, &[]),
+                ErrorCode::DraftPullRequestFailed,
+                RecoveryAction::Retry,
+            ),
+        ];
+        let request = DraftPullRequestRequest::initialize_workspace(
+            "Mockly-Company/mockly-knowledge",
+            "okf/init-workspace",
+            "main",
+        );
+
+        for (response, expected_code, expected_recovery) in cases {
+            let service = client(
+                SequenceTokenProvider::default(),
+                RecordingTransport::with_responses(vec![response]),
+            );
+            let error = service
+                .create_draft_pull_request(&request)
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, expected_code);
+            assert_eq!(error.recovery, Some(expected_recovery));
+            assert_eq!(error.details["branch"], "okf/init-workspace");
+        }
+
+        let service = client(
+            SequenceTokenProvider::default(),
+            RecordingTransport::with_network_failure(),
+        );
+        let error = service
+            .create_draft_pull_request(&request)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
+        assert_eq!(error.details["branch"], "okf/init-workspace");
     }
 
     #[tokio::test]
