@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use crate::auth::service::AuthService;
 use crate::github::GithubService;
+use crate::repository::git2_adapter::Git2RepositoryAdapter;
+use crate::repository::service::GitRepositoryPort;
 use crate::settings::service::LocalSettingsService;
 use crate::workspace::service::PreviewRegistry;
 
@@ -9,8 +11,9 @@ pub struct AppServices {
     /// Populated by the desktop app. Settings-only tests deliberately leave it
     /// empty so they never initialize the developer's real credential store.
     pub auth: Option<Arc<AuthService>>,
-    pub github: Option<GithubService>,
-    pub initialization_previews: PreviewRegistry,
+    pub github: Option<Arc<GithubService>>,
+    pub repository_git: Arc<dyn GitRepositoryPort>,
+    pub initialization_previews: Arc<PreviewRegistry>,
     pub local_settings: LocalSettingsService,
 }
 
@@ -19,19 +22,23 @@ impl AppServices {
         Self {
             auth: None,
             github: None,
-            initialization_previews: PreviewRegistry::default(),
+            repository_git: Arc::new(Git2RepositoryAdapter),
+            initialization_previews: Arc::new(PreviewRegistry::default()),
             local_settings,
         }
     }
 
     pub fn with_auth(local_settings: LocalSettingsService, auth: AuthService) -> Self {
         let auth = Arc::new(auth);
-        let github = GithubService::production(auth.clone())
-            .expect("the static GitHub API base URL must be valid");
+        let github = Arc::new(
+            GithubService::production(auth.clone())
+                .expect("the static GitHub API base URL must be valid"),
+        );
         Self {
             auth: Some(auth),
             github: Some(github),
-            initialization_previews: PreviewRegistry::default(),
+            repository_git: Arc::new(Git2RepositoryAdapter),
+            initialization_previews: Arc::new(PreviewRegistry::default()),
             local_settings,
         }
     }
