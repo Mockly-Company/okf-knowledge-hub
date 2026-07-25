@@ -1,8 +1,16 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
 use crate::auth::service::AuthService;
+use crate::github::model::GithubRepositoryDetail;
 use crate::github::GithubService;
 use crate::repository::git2_adapter::Git2RepositoryAdapter;
+use crate::repository::model::RepositoryIdentity;
 use crate::repository::service::GitRepositoryPort;
 use crate::settings::service::LocalSettingsService;
 use crate::workspace::service::PreviewRegistry;
@@ -16,6 +24,69 @@ pub struct AppServices {
     pub(crate) repository_git: Arc<dyn GitRepositoryPort>,
     pub initialization_previews: Arc<PreviewRegistry>,
     pub local_settings: LocalSettingsService,
+    pub(crate) auth_jobs: JobRegistry,
+    pub(crate) clone_jobs: JobRegistry,
+    pub(crate) initialization_contexts: InitializationContextRegistry,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct JobRegistry {
+    jobs: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
+}
+
+impl JobRegistry {
+    pub(crate) async fn insert(&self, request_id: Uuid, cancellation: CancellationToken) {
+        self.jobs.lock().await.insert(request_id, cancellation);
+    }
+
+    pub(crate) async fn remove(&self, request_id: Uuid) -> Option<CancellationToken> {
+        self.jobs.lock().await.remove(&request_id)
+    }
+
+    pub(crate) async fn cancel(&self, request_id: Uuid) -> bool {
+        self.remove(request_id).await.is_some_and(|cancellation| {
+            cancellation.cancel();
+            true
+        })
+    }
+
+    pub(crate) async fn cancel_all(&self) {
+        let jobs = std::mem::take(&mut *self.jobs.lock().await);
+        for cancellation in jobs.into_values() {
+            cancellation.cancel();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn contains(&self, request_id: Uuid) -> bool {
+        self.jobs.lock().await.contains_key(&request_id)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct InitializationContext {
+    pub(crate) root: PathBuf,
+    pub(crate) repository: GithubRepositoryDetail,
+    pub(crate) identity: RepositoryIdentity,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct InitializationContextRegistry {
+    contexts: Arc<Mutex<HashMap<Uuid, InitializationContext>>>,
+}
+
+impl InitializationContextRegistry {
+    pub(crate) async fn insert(&self, preview_id: Uuid, context: InitializationContext) {
+        self.contexts.lock().await.insert(preview_id, context);
+    }
+
+    pub(crate) async fn get(&self, preview_id: Uuid) -> Option<InitializationContext> {
+        self.contexts.lock().await.get(&preview_id).cloned()
+    }
+
+    pub(crate) async fn remove(&self, preview_id: Uuid) -> Option<InitializationContext> {
+        self.contexts.lock().await.remove(&preview_id)
+    }
 }
 
 impl AppServices {
@@ -26,6 +97,9 @@ impl AppServices {
             repository_git: Arc::new(Git2RepositoryAdapter),
             initialization_previews: Arc::new(PreviewRegistry::default()),
             local_settings,
+            auth_jobs: JobRegistry::default(),
+            clone_jobs: JobRegistry::default(),
+            initialization_contexts: InitializationContextRegistry::default(),
         }
     }
 
@@ -41,7 +115,38 @@ impl AppServices {
             repository_git: Arc::new(Git2RepositoryAdapter),
             initialization_previews: Arc::new(PreviewRegistry::default()),
             local_settings,
+            auth_jobs: JobRegistry::default(),
+            clone_jobs: JobRegistry::default(),
+            initialization_contexts: InitializationContextRegistry::default(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_command_tests(auth: AuthService) -> Self {
+        Self::with_auth(LocalSettingsService::new(CommandTestSettings), auth)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_command_tests_without_auth() -> Self {
+        Self::new(LocalSettingsService::new(CommandTestSettings))
+    }
+}
+
+#[cfg(test)]
+struct CommandTestSettings;
+
+#[cfg(test)]
+impl crate::settings::service::LocalSettingsStore for CommandTestSettings {
+    fn read(&self, _key: &str) -> Result<Option<String>, crate::error::AppError> {
+        Ok(None)
+    }
+
+    fn write(&self, _key: &str, _value: &str) -> Result<(), crate::error::AppError> {
+        Ok(())
+    }
+
+    fn remove(&self, _key: &str) -> Result<(), crate::error::AppError> {
+        Ok(())
     }
 }
 

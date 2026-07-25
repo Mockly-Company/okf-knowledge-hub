@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
-    Cred, Direction, FetchOptions, IndexEntry, IndexTime, Oid, PushOptions, RemoteCallbacks,
-    Repository, Signature, StatusOptions,
+    CheckoutNotificationType, Cred, Direction, FetchOptions, IndexEntry, IndexTime, Oid,
+    PushOptions, RemoteCallbacks, Repository, Signature, StatusOptions,
 };
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -70,11 +70,13 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         access_token: AccessToken,
         progress: Arc<dyn CloneProgressSink>,
     ) -> Result<RepositorySnapshot, AppError> {
-        progress.emit(CloneProgress {
+        if !progress.emit(CloneProgress {
             stage: CloneProgressStage::ReceivingObjects,
             completed: 0,
             total: 0,
-        });
+        }) {
+            return Err(clone_error(target));
+        }
 
         let mut callbacks = RemoteCallbacks::new();
         let approved_remote_url = clean_remote_url.to_owned();
@@ -87,16 +89,25 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
                 stage: CloneProgressStage::ReceivingObjects,
                 completed: stats.received_objects(),
                 total: stats.total_objects(),
-            });
-            true
+            })
         });
         let mut fetch = FetchOptions::new();
         fetch.remote_callbacks(callbacks);
 
         let checkout_progress = progress.clone();
+        let checkout_cancellation = progress.clone();
         let mut checkout = CheckoutBuilder::new();
+        checkout.notify_on(CheckoutNotificationType::all()).notify(
+            move |_why, _path, _baseline, _target, _workdir| {
+                checkout_cancellation.emit(CloneProgress {
+                    stage: CloneProgressStage::CheckingOut,
+                    completed: 0,
+                    total: 0,
+                })
+            },
+        );
         checkout.progress(move |_path, completed, total| {
-            checkout_progress.emit(CloneProgress {
+            let _ = checkout_progress.emit(CloneProgress {
                 stage: CloneProgressStage::CheckingOut,
                 completed,
                 total,
@@ -109,16 +120,20 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             Ok(repository) => repository,
             Err(_) => return Err(clone_error(target)),
         };
-        progress.emit(CloneProgress {
+        if !progress.emit(CloneProgress {
             stage: CloneProgressStage::ResolvingDeltas,
             completed: 1,
             total: 1,
-        });
-        progress.emit(CloneProgress {
+        }) {
+            return Err(clone_error(target));
+        }
+        if !progress.emit(CloneProgress {
             stage: CloneProgressStage::CheckingOut,
             completed: 1,
             total: 1,
-        });
+        }) {
+            return Err(clone_error(target));
+        }
         repository
             .remote_set_url("origin", clean_remote_url)
             .map_err(|_| clone_error(target))?;
@@ -627,8 +642,9 @@ mod tests {
     struct RecordingProgress(Arc<Mutex<Vec<CloneProgress>>>);
 
     impl CloneProgressSink for RecordingProgress {
-        fn emit(&self, progress: CloneProgress) {
+        fn emit(&self, progress: CloneProgress) -> bool {
             self.0.lock().unwrap().push(progress);
+            true
         }
     }
 

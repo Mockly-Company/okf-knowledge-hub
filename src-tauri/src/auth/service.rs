@@ -394,6 +394,10 @@ impl AuthService {
         self.credentials.delete().await
     }
 
+    pub(crate) async fn has_stored_credentials(&self) -> Result<bool, AppError> {
+        self.credentials.load().await.map(|tokens| tokens.is_some())
+    }
+
     fn ensure_client_id(&self) -> Result<(), AppError> {
         if self.client_id.trim().is_empty() {
             return Err(AppError::new(

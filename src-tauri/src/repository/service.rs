@@ -23,7 +23,8 @@ use crate::workspace::service::{
 };
 
 pub trait CloneProgressSink: Send + Sync {
-    fn emit(&self, progress: CloneProgress);
+    /// Returns `false` when the caller has cancelled the clone.
+    fn emit(&self, progress: CloneProgress) -> bool;
 }
 
 pub(crate) trait GitRepositoryPort: Send + Sync {
@@ -919,7 +920,9 @@ mod tests {
     struct NoopProgress;
 
     impl CloneProgressSink for NoopProgress {
-        fn emit(&self, _progress: CloneProgress) {}
+        fn emit(&self, _progress: CloneProgress) -> bool {
+            true
+        }
     }
 
     #[test]

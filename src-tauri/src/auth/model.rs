@@ -182,7 +182,11 @@ pub struct GithubUserSummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum AuthStatusEvent {
     WaitingForUser {
         request_id: Uuid,

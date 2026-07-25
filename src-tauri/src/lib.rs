@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod commands;
 pub mod error;
 pub mod github;
 pub mod repository;
@@ -30,6 +31,8 @@ fn non_empty_trimmed(value: &str) -> Option<&str> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             use tauri::Manager;
 
@@ -50,12 +53,25 @@ pub fn run() {
                 credentials,
                 auth::ports::SystemClock,
                 auth::ports::TokioDelay,
-                auth::ports::NoopAuthEvents,
+                commands::auth::TauriAuthEventSink::new(app.handle().clone()),
             );
             app.manage(state::AppServices::with_auth(local_settings, auth));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::auth::get_auth_state,
+            commands::auth::begin_github_auth,
+            commands::auth::cancel_github_auth,
+            commands::auth::logout_github,
+            commands::workspace::list_github_repositories,
+            commands::workspace::inspect_existing_clone,
+            commands::workspace::clone_repository,
+            commands::workspace::cancel_repository_clone,
+            commands::workspace::inspect_workspace,
+            commands::workspace::connect_workspace,
+            commands::workspace::preview_workspace_initialization,
+            commands::workspace::initialize_workspace,
+            commands::workspace::get_current_workspace,
             settings::commands::get_display_density,
             settings::commands::set_display_density,
         ])

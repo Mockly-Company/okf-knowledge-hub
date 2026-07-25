@@ -39,7 +39,7 @@ impl KeyringCredentialStore {
 impl CredentialStore for KeyringCredentialStore {
     async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
         let entry = self.entry.clone();
-        let result = tokio::task::spawn_blocking(move || entry.get_password())
+        let result = tauri::async_runtime::spawn_blocking(move || entry.get_password())
             .await
             .map_err(|_| store_error())?;
         match result {
@@ -52,7 +52,7 @@ impl CredentialStore for KeyringCredentialStore {
     async fn save(&self, tokens: &StoredTokens) -> Result<(), AppError> {
         let record = encode_tokens(tokens)?;
         let entry = self.entry.clone();
-        tokio::task::spawn_blocking(move || entry.set_password(&record))
+        tauri::async_runtime::spawn_blocking(move || entry.set_password(&record))
             .await
             .map_err(|_| store_error())?
             .map_err(|_| store_error())
@@ -60,7 +60,7 @@ impl CredentialStore for KeyringCredentialStore {
 
     async fn delete(&self) -> Result<(), AppError> {
         let entry = self.entry.clone();
-        let result = tokio::task::spawn_blocking(move || entry.delete_credential())
+        let result = tauri::async_runtime::spawn_blocking(move || entry.delete_credential())
             .await
             .map_err(|_| store_error())?;
         match result {

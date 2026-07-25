@@ -39,6 +39,7 @@ impl CanonicalPathResolver for FileCanonicalPathResolver {
     }
 }
 
+#[derive(Clone)]
 pub struct LocalSettingsService {
     store: Arc<dyn LocalSettingsStore>,
     workspace_inspector: Arc<dyn WorkspaceInspector>,
