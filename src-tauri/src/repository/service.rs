@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::{fs, io::Write};
 
 use async_trait::async_trait;
+use same_file::Handle as SameFileHandle;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use url::Url;
@@ -318,19 +319,9 @@ impl RepositoryService {
         )?;
         let _snapshot = self
             .git
-            .clone_repository(&approved_url, &staging, token, progress)
-            .map_err(|error| error.with_detail("stagingPath", staging.to_string_lossy()))?;
-        publish_clone_no_replace(&staging, &target).map_err(|error| {
-            let mut app_error = if fs::symlink_metadata(&target).is_ok() {
-                path_conflict(&target)
-            } else {
-                clone_reservation_error(&target)
-            };
-            app_error = app_error
-                .with_detail("stagingPath", staging.to_string_lossy())
-                .with_detail("publishError", error.to_string());
-            app_error
-        })?;
+            .clone_repository(&approved_url, &staging.path, token, progress)
+            .map_err(|error| error.with_detail("stagingPath", staging.path.to_string_lossy()))?;
+        publish_owned_clone_with_hooks(&staging, &target, || {}, || {})?;
         self.git.inspect(&target)
     }
 
@@ -723,16 +714,99 @@ fn service_unavailable() -> AppError {
     .with_recovery(RecoveryAction::Retry)
 }
 
-fn create_clone_staging(parent: &Path, repository_name: &str) -> Result<PathBuf, AppError> {
+struct OwnedCloneStaging {
+    path: PathBuf,
+    identity: SameFileHandle,
+}
+
+impl OwnedCloneStaging {
+    fn capture(path: PathBuf) -> Result<Self, AppError> {
+        let identity = directory_identity(&path).map_err(|_| clone_reservation_error(&path))?;
+        Ok(Self { path, identity })
+    }
+
+    fn matches_path(&self, path: &Path) -> bool {
+        directory_identity(path).is_ok_and(|current| current == self.identity)
+    }
+}
+
+fn directory_identity(path: &Path) -> std::io::Result<SameFileHandle> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::other("clone staging is not a directory"));
+    }
+    SameFileHandle::from_path(path)
+}
+
+fn create_clone_staging(
+    parent: &Path,
+    repository_name: &str,
+) -> Result<OwnedCloneStaging, AppError> {
     for _ in 0..16 {
         let staging = parent.join(format!(".okhub-clone-{repository_name}-{}", Uuid::new_v4()));
         match fs::create_dir(&staging) {
-            Ok(()) => return Ok(staging),
+            Ok(()) => return OwnedCloneStaging::capture(staging),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(_) => return Err(clone_reservation_error(&staging)),
         }
     }
     Err(clone_reservation_error(parent))
+}
+
+fn publish_owned_clone_with_hooks(
+    staging: &OwnedCloneStaging,
+    target: &Path,
+    before_publish: impl FnOnce(),
+    after_publish: impl FnOnce(),
+) -> Result<(), AppError> {
+    before_publish();
+    if !staging.matches_path(&staging.path) {
+        return Err(clone_identity_error(
+            staging,
+            target,
+            "sourceIdentityMismatch",
+            &staging.path,
+        ));
+    }
+    publish_clone_no_replace(&staging.path, target).map_err(|error| {
+        let mut app_error = if fs::symlink_metadata(target).is_ok() {
+            path_conflict(target)
+        } else {
+            clone_reservation_error(target)
+        };
+        app_error = app_error
+            .with_detail("stagingPath", staging.path.to_string_lossy())
+            .with_detail("publishError", error.to_string());
+        app_error
+    })?;
+    after_publish();
+    if !staging.matches_path(target) {
+        return Err(clone_identity_error(
+            staging,
+            target,
+            "publishedIdentityMismatch",
+            target,
+        ));
+    }
+    Ok(())
+}
+
+fn clone_identity_error(
+    staging: &OwnedCloneStaging,
+    target: &Path,
+    state: &str,
+    identity_check_path: &Path,
+) -> AppError {
+    AppError::new(
+        ErrorCode::CloneFailed,
+        "clone staging identity를 안전하게 확인하지 못했습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+    .with_detail("stagingPath", staging.path.to_string_lossy())
+    .with_detail("targetPath", target.to_string_lossy())
+    .with_detail("publicationState", state)
+    .with_detail("identityCheckPath", identity_check_path.to_string_lossy())
+    .with_detail("ownedPathUnknown", "true")
 }
 
 #[cfg(target_os = "linux")]
@@ -1075,6 +1149,149 @@ mod tests {
         assert_eq!(
             fs::read_to_string(staging.join("owned.txt")).unwrap(),
             "clone content"
+        );
+    }
+
+    #[test]
+    fn clone_publication_rejects_a_replacement_directory_at_the_staging_path() {
+        let parent = tempfile::tempdir().unwrap();
+        let staging = parent.path().join("staging");
+        let retained = parent.path().join("retained-owned-clone");
+        let target = parent.path().join("knowledge");
+        fs::create_dir(&staging).unwrap();
+        fs::write(staging.join("owned.txt"), "owned clone").unwrap();
+        let owned = super::OwnedCloneStaging::capture(staging.clone()).unwrap();
+
+        let error = super::publish_owned_clone_with_hooks(
+            &owned,
+            &target,
+            || {
+                fs::rename(&staging, &retained).unwrap();
+                fs::create_dir(&staging).unwrap();
+                fs::write(staging.join("attacker.txt"), "replacement").unwrap();
+            },
+            || {},
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CloneFailed);
+        assert_eq!(
+            error.details.get("publicationState").map(String::as_str),
+            Some("sourceIdentityMismatch")
+        );
+        assert_eq!(
+            error.details.get("identityCheckPath").map(String::as_str),
+            staging.to_str()
+        );
+        assert_eq!(
+            error.details.get("ownedPathUnknown").map(String::as_str),
+            Some("true")
+        );
+        assert!(!error.details.contains_key("retainedRecoveryPath"));
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_to_string(retained.join("owned.txt")).unwrap(),
+            "owned clone"
+        );
+        assert_eq!(
+            fs::read_to_string(staging.join("attacker.txt")).unwrap(),
+            "replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clone_publication_rejects_a_replacement_symlink_at_the_staging_path() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let staging = parent.path().join("staging");
+        let retained = parent.path().join("retained-owned-clone");
+        let target = parent.path().join("knowledge");
+        fs::create_dir(&staging).unwrap();
+        fs::write(staging.join("owned.txt"), "owned clone").unwrap();
+        let owned = super::OwnedCloneStaging::capture(staging.clone()).unwrap();
+
+        let error = super::publish_owned_clone_with_hooks(
+            &owned,
+            &target,
+            || {
+                fs::rename(&staging, &retained).unwrap();
+                symlink(outside.path(), &staging).unwrap();
+            },
+            || {},
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CloneFailed);
+        assert_eq!(
+            error.details.get("publicationState").map(String::as_str),
+            Some("sourceIdentityMismatch")
+        );
+        assert_eq!(
+            error.details.get("identityCheckPath").map(String::as_str),
+            staging.to_str()
+        );
+        assert_eq!(
+            error.details.get("ownedPathUnknown").map(String::as_str),
+            Some("true")
+        );
+        assert!(!error.details.contains_key("retainedRecoveryPath"));
+        assert!(!target.exists());
+        assert_eq!(
+            fs::read_to_string(retained.join("owned.txt")).unwrap(),
+            "owned clone"
+        );
+        assert!(fs::symlink_metadata(&staging)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn clone_publication_reports_that_the_owned_path_is_unknown_after_target_identity_changes() {
+        let parent = tempfile::tempdir().unwrap();
+        let staging = parent.path().join("staging");
+        let retained = parent.path().join("retained-owned-clone");
+        let target = parent.path().join("knowledge");
+        fs::create_dir(&staging).unwrap();
+        fs::write(staging.join("owned.txt"), "owned clone").unwrap();
+        let owned = super::OwnedCloneStaging::capture(staging.clone()).unwrap();
+
+        let error = super::publish_owned_clone_with_hooks(
+            &owned,
+            &target,
+            || {},
+            || {
+                fs::rename(&target, &retained).unwrap();
+                fs::create_dir(&target).unwrap();
+                fs::write(target.join("attacker.txt"), "replacement").unwrap();
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CloneFailed);
+        assert_eq!(
+            error.details.get("publicationState").map(String::as_str),
+            Some("publishedIdentityMismatch")
+        );
+        assert_eq!(
+            error.details.get("identityCheckPath").map(String::as_str),
+            target.to_str()
+        );
+        assert_eq!(
+            error.details.get("ownedPathUnknown").map(String::as_str),
+            Some("true")
+        );
+        assert!(!error.details.contains_key("retainedRecoveryPath"));
+        assert_eq!(
+            fs::read_to_string(retained.join("owned.txt")).unwrap(),
+            "owned clone"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("attacker.txt")).unwrap(),
+            "replacement"
         );
     }
 

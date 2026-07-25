@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use git2::build::{CheckoutBuilder, RepoBuilder};
 use git2::{
-    CheckoutNotificationType, Cred, Direction, FetchOptions, IndexEntry, IndexTime, Oid,
-    PushOptions, RemoteCallbacks, Repository, Signature, StatusOptions,
+    Cred, Direction, FetchOptions, IndexEntry, IndexTime, Oid, PushOptions, RemoteCallbacks,
+    Repository, Signature, StatusOptions,
 };
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -293,7 +293,7 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         _preview: &InitializationPreview,
         outcome: &CommitOutcome,
     ) -> Result<(), AppError> {
-        checkout_initialization_fail_closed(root, outcome)
+        checkout_initialization_with_failure_hook(root, outcome, || {})
     }
 
     fn origin_url(&self, root: &Path) -> Result<String, AppError> {
@@ -333,59 +333,35 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
     }
 }
 
-fn checkout_initialization_fail_closed(
+fn checkout_initialization_with_failure_hook(
     root: &Path,
     outcome: &CommitOutcome,
+    after_failure: impl FnOnce(),
 ) -> Result<(), AppError> {
     let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
-    let original_head = repository
-        .find_reference("HEAD")
-        .ok()
-        .and_then(|head| head.symbolic_target().map(str::to_owned))
-        .ok_or_else(|| repository_git_error("기존 symbolic HEAD를 확인하지 못했습니다."))?;
-    let index_snapshot = FileSnapshot::capture(&repository.path().join("index"))
-        .map_err(|_| repository_git_error("기존 Git index를 읽지 못했습니다."))?;
-    let notified_paths = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
     let commit_oid = Oid::from_str(&outcome.commit_oid)
         .map_err(|_| repository_git_error("초기화 commit ID가 올바르지 않습니다."))?;
     let commit = repository
         .find_commit(commit_oid)
         .map_err(|_| repository_git_error("초기화 commit을 읽지 못했습니다."))?;
-    let notified_for_checkout = notified_paths.clone();
-    let mut checkout = CheckoutBuilder::new();
-    checkout
-        .safe()
-        .notify_on(CheckoutNotificationType::all())
-        .notify(move |_kind, path, _baseline, _target, _workdir| {
-            if let Some(path) = path {
-                notified_for_checkout
-                    .lock()
-                    .unwrap()
-                    .insert(path.to_path_buf());
-            }
-            true
-        });
-    let result = repository
+    let checkout_result = repository
         .checkout_tree(
             commit.as_object(),
             Some(CheckoutBuilder::new().safe().dry_run()),
         )
-        .and_then(|()| repository.checkout_tree(commit.as_object(), Some(&mut checkout)))
-        .and_then(|()| repository.set_head(&format!("refs/heads/{}", outcome.branch)));
-    if result.is_err() {
-        let head_restore = repository.set_head(&original_head).map_err(|_| ());
-        let index_restore = index_snapshot.restore().map_err(|_| ());
-        let worktree_restore = notified_paths
-            .lock()
-            .unwrap()
-            .is_empty()
-            .then_some(())
-            .ok_or(());
-        return Err(checkout_failure_with_rollback(
-            head_restore,
-            index_restore,
-            worktree_restore,
-        ));
+        .and_then(|()| {
+            repository.checkout_tree(commit.as_object(), Some(CheckoutBuilder::new().safe()))
+        });
+    if checkout_result.is_err() {
+        after_failure();
+        return Err(checkout_failure("checkoutTree"));
+    }
+    if repository
+        .set_head(&format!("refs/heads/{}", outcome.branch))
+        .is_err()
+    {
+        after_failure();
+        return Err(checkout_failure("setHead"));
     }
     Ok(())
 }
@@ -445,37 +421,6 @@ fn clone_credential_for_callback(
     access_token: &AccessToken,
 ) -> Result<Cred, git2::Error> {
     credential_for_approved_remote(callback_url, approved_remote_url, access_token)
-}
-
-struct FileSnapshot {
-    path: std::path::PathBuf,
-    bytes: Option<Vec<u8>>,
-}
-
-impl FileSnapshot {
-    fn capture(path: &Path) -> std::io::Result<Self> {
-        let bytes = match std::fs::symlink_metadata(path) {
-            Ok(metadata) if metadata.is_file() => Some(std::fs::read(path)?),
-            Ok(_) => return Err(std::io::Error::other("metadata path is not a file")),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error),
-        };
-        Ok(Self {
-            path: path.to_path_buf(),
-            bytes,
-        })
-    }
-
-    fn restore(self) -> std::io::Result<()> {
-        match self.bytes {
-            Some(bytes) => std::fs::write(self.path, bytes),
-            None => match std::fs::remove_file(self.path) {
-                Ok(()) => Ok(()),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error),
-            },
-        }
-    }
 }
 
 fn expected_initialization_tree(
@@ -635,29 +580,13 @@ fn repository_git_error(message: &str) -> AppError {
     AppError::new(ErrorCode::GithubUnavailable, message).with_recovery(RecoveryAction::Retry)
 }
 
-fn checkout_failure_with_rollback(
-    head: Result<(), ()>,
-    index: Result<(), ()>,
-    worktree: Result<(), ()>,
-) -> AppError {
-    let failures = [
-        head.is_err().then_some("head"),
-        index.is_err().then_some("index"),
-        worktree.is_err().then_some("worktree"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>();
-    if failures.is_empty() {
-        repository_git_error("branch를 checkout하지 못했습니다.")
-    } else {
-        AppError::new(
-            ErrorCode::RepositoryDirty,
-            "checkout 실패 후 저장소 상태를 완전히 복구하지 못했습니다.",
-        )
-        .with_recovery(RecoveryAction::CleanWorkingTree)
-        .with_detail("rollbackFailures", failures.join(","))
-    }
+fn checkout_failure(stage: &str) -> AppError {
+    AppError::new(
+        ErrorCode::RepositoryDirty,
+        "checkout을 완료하지 못해 저장소 상태를 수동으로 확인해야 합니다.",
+    )
+    .with_recovery(RecoveryAction::CleanWorkingTree)
+    .with_detail("failureStage", stage)
 }
 
 fn clone_error(path: &Path) -> AppError {
@@ -1214,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_empty_checkout_restores_head_index_and_worktree_then_allows_retry() {
+    fn failed_empty_checkout_fails_closed_then_allows_retry_after_manual_cleanup() {
         let directory = tempfile::tempdir().unwrap();
         let repository = Repository::init(directory.path()).unwrap();
         let preview = direct_initialization_preview();
@@ -1247,7 +1176,11 @@ mod tests {
         );
         assert_eq!(fs::read(&collision).unwrap(), b"concurrent user content");
         assert!(!directory.path().join("docs/.gitkeep").exists());
-        assert_eq!(error.code, crate::error::ErrorCode::GithubUnavailable);
+        assert_eq!(error.code, crate::error::ErrorCode::RepositoryDirty);
+        assert_eq!(
+            error.recovery,
+            Some(crate::error::RecoveryAction::CleanWorkingTree)
+        );
 
         fs::remove_file(&collision).unwrap();
         Git2RepositoryAdapter
@@ -1284,6 +1217,102 @@ mod tests {
     }
 
     #[test]
+    fn failed_checkout_never_overwrites_a_concurrent_head_update() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        commit_file(&repository, "README.md", "ready");
+        let commit = repository.head().unwrap().peel_to_commit().unwrap();
+        repository.branch("external", &commit, false).unwrap();
+        drop(commit);
+        drop(repository);
+        let preview = direct_initialization_preview();
+        let outcome = Git2RepositoryAdapter
+            .commit_initialization(directory.path(), &preview, &identity("hyeeun"))
+            .unwrap();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        fs::write(
+            directory.path().join(".okf/workspace.yml"),
+            b"concurrent collision",
+        )
+        .unwrap();
+        let root = directory.path().to_path_buf();
+
+        let error =
+            super::checkout_initialization_with_failure_hook(directory.path(), &outcome, || {
+                Repository::open(&root)
+                    .unwrap()
+                    .set_head("refs/heads/external")
+                    .unwrap();
+            })
+            .unwrap_err();
+
+        assert_eq!(error.code, crate::error::ErrorCode::RepositoryDirty);
+        assert_eq!(
+            Repository::open(directory.path())
+                .unwrap()
+                .find_reference("HEAD")
+                .unwrap()
+                .symbolic_target(),
+            Some("refs/heads/external")
+        );
+    }
+
+    #[test]
+    fn failed_checkout_never_overwrites_a_concurrent_index_update() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        commit_file(&repository, "README.md", "ready");
+        drop(repository);
+        let preview = direct_initialization_preview();
+        let outcome = Git2RepositoryAdapter
+            .commit_initialization(directory.path(), &preview, &identity("hyeeun"))
+            .unwrap();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        fs::write(
+            directory.path().join(".okf/workspace.yml"),
+            b"concurrent collision",
+        )
+        .unwrap();
+        let index = directory.path().join(".git/index");
+        let concurrent_bytes = b"concurrent index update";
+
+        super::checkout_initialization_with_failure_hook(directory.path(), &outcome, || {
+            fs::write(&index, concurrent_bytes).unwrap();
+        })
+        .unwrap_err();
+
+        assert_eq!(fs::read(index).unwrap(), concurrent_bytes);
+    }
+
+    #[test]
+    fn failed_checkout_never_removes_a_concurrently_created_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        commit_file(&repository, "README.md", "ready");
+        drop(repository);
+        let preview = direct_initialization_preview();
+        let outcome = Git2RepositoryAdapter
+            .commit_initialization(directory.path(), &preview, &identity("hyeeun"))
+            .unwrap();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        fs::write(
+            directory.path().join(".okf/workspace.yml"),
+            b"concurrent collision",
+        )
+        .unwrap();
+        let index = directory.path().join(".git/index");
+        fs::remove_file(&index).unwrap();
+        let concurrent_bytes = b"concurrently created index";
+
+        super::checkout_initialization_with_failure_hook(directory.path(), &outcome, || {
+            fs::write(&index, concurrent_bytes).unwrap();
+        })
+        .unwrap_err();
+
+        assert_eq!(fs::read(index).unwrap(), concurrent_bytes);
+    }
+
+    #[test]
     fn post_notification_concurrent_file_and_empty_directory_are_never_deleted() {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().to_path_buf();
@@ -1304,7 +1333,7 @@ mod tests {
         // create these entries before checkout reports its later failure.
         notification_sent.send(()).unwrap();
         concurrent_writer.join().unwrap();
-        let error = super::checkout_failure_with_rollback(Ok(()), Ok(()), Err(()));
+        let error = super::checkout_failure("checkoutTree");
 
         assert_eq!(error.code, crate::error::ErrorCode::RepositoryDirty);
         assert_eq!(
@@ -1319,21 +1348,17 @@ mod tests {
     }
 
     #[test]
-    fn checkout_rollback_failure_reports_each_unrestored_state_explicitly() {
-        for (head, index, worktree, expected) in [
-            (Err(()), Ok(()), Ok(()), "head"),
-            (Ok(()), Err(()), Ok(()), "index"),
-            (Ok(()), Ok(()), Err(()), "worktree"),
-        ] {
-            let error = super::checkout_failure_with_rollback(head, index, worktree);
+    fn checkout_failure_reports_the_ambiguous_stage_without_attempting_rollback() {
+        for stage in ["checkoutTree", "setHead"] {
+            let error = super::checkout_failure(stage);
             assert_eq!(error.code, crate::error::ErrorCode::RepositoryDirty);
             assert_eq!(
                 error.recovery,
                 Some(crate::error::RecoveryAction::CleanWorkingTree)
             );
             assert_eq!(
-                error.details.get("rollbackFailures").map(String::as_str),
-                Some(expected)
+                error.details.get("failureStage").map(String::as_str),
+                Some(stage)
             );
         }
     }
