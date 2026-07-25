@@ -1058,7 +1058,7 @@ fn inspect_reference_roots<'a>(
         scan_directory(
             repository_root,
             &canonical_root,
-            &known_keys,
+            known_keys,
             &mut scanned_files,
             diagnostics,
         )?;
@@ -1544,7 +1544,7 @@ mod tests {
             panic!("expected unsupported version");
         };
 
-        assert_eq!(u64::from(found_version), 4_294_967_296);
+        assert_eq!(found_version, 4_294_967_296);
     }
 
     #[test]
