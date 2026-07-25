@@ -146,47 +146,7 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             return Err(repository_git_error("기준 commit이 없습니다."));
         }
 
-        // `Index::new` has no repository ODB owner, so `add_frombuffer`
-        // cannot create blobs. This handle is ODB-backed but remains isolated
-        // because we replace its in-memory contents and never call `write`.
-        let mut index = repository
-            .index()
-            .map_err(|_| repository_git_error("격리된 Git index를 만들지 못했습니다."))?;
-        if let Some(oid) = parent_oid {
-            let tree = repository
-                .find_commit(oid)
-                .and_then(|commit| commit.tree())
-                .map_err(|_| repository_git_error("기준 tree를 읽지 못했습니다."))?;
-            index
-                .read_tree(&tree)
-                .map_err(|_| repository_git_error("기준 tree를 복제하지 못했습니다."))?;
-        } else {
-            index
-                .clear()
-                .map_err(|_| repository_git_error("격리된 Git index를 비우지 못했습니다."))?;
-        }
-        for file in &preview.files {
-            let entry = IndexEntry {
-                ctime: IndexTime::new(0, 0),
-                mtime: IndexTime::new(0, 0),
-                dev: 0,
-                ino: 0,
-                mode: 0o100644,
-                uid: 0,
-                gid: 0,
-                file_size: 0,
-                id: Oid::zero(),
-                flags: 0,
-                flags_extended: 0,
-                path: file.path.as_bytes().to_vec(),
-            };
-            index
-                .add_frombuffer(&entry, file.content.as_bytes())
-                .map_err(|_| repository_git_error("초기화 blob을 만들지 못했습니다."))?;
-        }
-        let tree_oid = index
-            .write_tree_to(&repository)
-            .map_err(|_| repository_git_error("초기화 tree를 만들지 못했습니다."))?;
+        let tree_oid = expected_initialization_tree(&repository, preview, parent_oid)?;
         let tree = repository
             .find_tree(tree_oid)
             .map_err(|_| repository_git_error("초기화 tree를 읽지 못했습니다."))?;
@@ -252,6 +212,57 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         })
     }
 
+    fn verify_initialization_commit(
+        &self,
+        root: &Path,
+        preview: &InitializationPreview,
+        outcome: &CommitOutcome,
+        identity: &RepositoryIdentity,
+    ) -> Result<(), AppError> {
+        let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
+        let parent_oid = match &preview.strategy {
+            InitializationStrategy::DraftPullRequest { base_branch } => Some(
+                repository
+                    .find_reference(&format!("refs/heads/{base_branch}"))
+                    .ok()
+                    .and_then(|reference| reference.target())
+                    .ok_or_else(|| repository_git_error("기준 branch를 확인하지 못했습니다."))?,
+            ),
+            InitializationStrategy::DirectPush => None,
+        };
+        let expected_tree = expected_initialization_tree(&repository, preview, parent_oid)?;
+        let expected_oid = Oid::from_str(&outcome.commit_oid)
+            .map_err(|_| repository_git_error("초기화 commit ID가 올바르지 않습니다."))?;
+        let reference = repository
+            .find_reference(&format!("refs/heads/{}", outcome.branch))
+            .map_err(|_| repository_git_error("초기화 branch를 확인하지 못했습니다."))?;
+        if reference.target() != Some(expected_oid) {
+            return Err(repository_git_error(
+                "초기화 branch와 commit ID가 일치하지 않습니다.",
+            ));
+        }
+        let commit = repository
+            .find_commit(expected_oid)
+            .map_err(|_| repository_git_error("초기화 commit을 확인하지 못했습니다."))?;
+        let email = format!(
+            "{}+{}@users.noreply.github.com",
+            identity.database_id, identity.login
+        );
+        if !commit_matches(
+            &commit,
+            expected_tree,
+            parent_oid,
+            &preview.commit_message,
+            &identity.login,
+            &email,
+        ) {
+            return Err(repository_git_error(
+                "초기화 commit 내용이 승인된 preview와 일치하지 않습니다.",
+            ));
+        }
+        Ok(())
+    }
+
     fn push_branch(
         &self,
         root: &Path,
@@ -272,9 +283,56 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             .map_err(|_| push_error(branch))
     }
 
-    fn checkout_branch(&self, root: &Path, branch: &str) -> Result<(), AppError> {
+    fn checkout_initialization(
+        &self,
+        root: &Path,
+        preview: &InitializationPreview,
+        outcome: &CommitOutcome,
+    ) -> Result<(), AppError> {
         let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
-        checkout(&repository, branch)
+        let original_head = repository
+            .find_reference("HEAD")
+            .ok()
+            .and_then(|head| head.symbolic_target().map(str::to_owned))
+            .ok_or_else(|| repository_git_error("기존 symbolic HEAD를 확인하지 못했습니다."))?;
+        let index_snapshot = FileSnapshot::capture(&repository.path().join("index"))
+            .map_err(|_| repository_git_error("기존 Git index를 읽지 못했습니다."))?;
+        let materialization = MaterializationSnapshot::capture(root, &preview.files)?;
+        let commit_oid = Oid::from_str(&outcome.commit_oid)
+            .map_err(|_| repository_git_error("초기화 commit ID가 올바르지 않습니다."))?;
+        let commit = repository
+            .find_commit(commit_oid)
+            .map_err(|_| repository_git_error("초기화 commit을 읽지 못했습니다."))?;
+        let result = repository
+            .checkout_tree(
+                commit.as_object(),
+                Some(CheckoutBuilder::new().safe().dry_run()),
+            )
+            .and_then(|()| {
+                repository.checkout_tree(commit.as_object(), Some(CheckoutBuilder::new().safe()))
+            })
+            .and_then(|()| repository.set_head(&format!("refs/heads/{}", outcome.branch)));
+        if result.is_err() {
+            let _ = repository.set_head(&original_head);
+            let _ = index_snapshot.restore();
+            let _ = materialization.rollback(root, &preview.files);
+            return Err(repository_git_error("branch를 checkout하지 못했습니다."));
+        }
+        Ok(())
+    }
+
+    fn origin_url(&self, root: &Path) -> Result<String, AppError> {
+        let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
+        repository
+            .find_remote("origin")
+            .ok()
+            .and_then(|remote| remote.url().map(str::to_owned))
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::RepositoryRemoteMismatch,
+                    "연결한 Git 저장소에 origin remote가 없습니다.",
+                )
+            })
     }
 
     fn attempt_directory(&self, root: &Path) -> Result<std::path::PathBuf, AppError> {
@@ -289,32 +347,234 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         access_token: AccessToken,
     ) -> Result<Option<String>, AppError> {
         let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
-        let mut remote = repository
-            .find_remote("origin")
+        let fetch_head = FileSnapshot::capture(&repository.path().join("FETCH_HEAD"))
             .map_err(|_| push_error(branch))?;
-        let mut callbacks = RemoteCallbacks::new();
-        callbacks.credentials(move |_url, _username, _allowed| {
-            Cred::userpass_plaintext("x-access-token", access_token.expose_secret())
-        });
-        let mut fetch = FetchOptions::new();
-        fetch.remote_callbacks(callbacks);
-        let local_reference = format!("refs/okhub/remote-check/{}", uuid::Uuid::new_v4());
-        let refspec = format!("+refs/heads/{branch}:{local_reference}");
-        match remote.fetch(&[&refspec], Some(&mut fetch), None) {
-            Ok(()) => {}
-            Err(error) if error.code() == GitErrorCode::NotFound => return Ok(None),
-            Err(_) => return Err(push_error(branch)),
-        }
-        let oid = repository
-            .find_reference(&local_reference)
-            .ok()
-            .and_then(|reference| reference.target())
-            .map(|oid| oid.to_string());
-        if let Ok(mut reference) = repository.find_reference(&local_reference) {
-            reference.delete().map_err(|_| push_error(branch))?;
-        }
-        Ok(oid)
+        let result = (|| {
+            let mut remote = repository
+                .find_remote("origin")
+                .map_err(|_| push_error(branch))?;
+            let mut callbacks = RemoteCallbacks::new();
+            callbacks.credentials(move |_url, _username, _allowed| {
+                Cred::userpass_plaintext("x-access-token", access_token.expose_secret())
+            });
+            let mut fetch = FetchOptions::new();
+            fetch.update_fetchhead(false);
+            fetch.remote_callbacks(callbacks);
+            let local_reference = format!("refs/okhub/remote-check/{}", uuid::Uuid::new_v4());
+            let temporary_reference =
+                TemporaryReferenceGuard::new(&repository, local_reference.clone());
+            let refspec = format!("+refs/heads/{branch}:{local_reference}");
+            match remote.fetch(&[&refspec], Some(&mut fetch), None) {
+                Ok(()) => {}
+                Err(error) if error.code() == GitErrorCode::NotFound => return Ok(None),
+                Err(_) => return Err(push_error(branch)),
+            }
+            let oid = repository
+                .find_reference(&local_reference)
+                .ok()
+                .and_then(|reference| reference.target())
+                .map(|oid| oid.to_string());
+            temporary_reference
+                .remove()
+                .map_err(|_| push_error(branch))?;
+            Ok(oid)
+        })();
+        fetch_head.restore().map_err(|_| push_error(branch))?;
+        result
     }
+}
+
+struct FileSnapshot {
+    path: std::path::PathBuf,
+    bytes: Option<Vec<u8>>,
+}
+
+struct MaterializationSnapshot {
+    absent_files: std::collections::HashSet<std::path::PathBuf>,
+    absent_directories: Vec<std::path::PathBuf>,
+}
+
+impl MaterializationSnapshot {
+    fn capture(
+        root: &Path,
+        files: &[crate::workspace::service::PreviewFile],
+    ) -> Result<Self, AppError> {
+        let mut absent_files = std::collections::HashSet::new();
+        let mut absent_directories = std::collections::HashSet::new();
+        for file in files {
+            let path = root.join(&file.path);
+            match std::fs::symlink_metadata(&path) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    absent_files.insert(path.clone());
+                }
+                Err(_) => return Err(repository_git_error("작업 트리 상태를 읽지 못했습니다.")),
+            }
+            let mut parent = path.parent();
+            while let Some(directory) = parent.filter(|directory| *directory != root) {
+                match std::fs::symlink_metadata(directory) {
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        absent_directories.insert(directory.to_path_buf());
+                    }
+                    Err(_) => {
+                        return Err(repository_git_error("작업 트리 상태를 읽지 못했습니다."))
+                    }
+                }
+                parent = directory.parent();
+            }
+        }
+        let mut absent_directories = absent_directories.into_iter().collect::<Vec<_>>();
+        absent_directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+        Ok(Self {
+            absent_files,
+            absent_directories,
+        })
+    }
+
+    fn rollback(
+        self,
+        root: &Path,
+        files: &[crate::workspace::service::PreviewFile],
+    ) -> std::io::Result<()> {
+        for file in files {
+            let path = root.join(&file.path);
+            if self.absent_files.contains(&path) {
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata)
+                        if metadata.is_file()
+                            && std::fs::read(&path).ok().as_deref()
+                                == Some(file.content.as_bytes()) =>
+                    {
+                        std::fs::remove_file(path)?;
+                    }
+                    Ok(_) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        for directory in self.absent_directories {
+            match std::fs::remove_dir(directory) {
+                Ok(()) => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
+                    ) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl FileSnapshot {
+    fn capture(path: &Path) -> std::io::Result<Self> {
+        let bytes = match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.is_file() => Some(std::fs::read(path)?),
+            Ok(_) => return Err(std::io::Error::other("metadata path is not a file")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        Ok(Self {
+            path: path.to_path_buf(),
+            bytes,
+        })
+    }
+
+    fn restore(self) -> std::io::Result<()> {
+        match self.bytes {
+            Some(bytes) => std::fs::write(self.path, bytes),
+            None => match std::fs::remove_file(self.path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            },
+        }
+    }
+}
+
+struct TemporaryReferenceGuard<'repository> {
+    repository: &'repository Repository,
+    name: String,
+    active: bool,
+}
+
+impl<'repository> TemporaryReferenceGuard<'repository> {
+    fn new(repository: &'repository Repository, name: String) -> Self {
+        Self {
+            repository,
+            name,
+            active: true,
+        }
+    }
+
+    fn remove(mut self) -> Result<(), git2::Error> {
+        if let Ok(mut reference) = self.repository.find_reference(&self.name) {
+            reference.delete()?;
+        }
+        self.active = false;
+        Ok(())
+    }
+}
+
+impl Drop for TemporaryReferenceGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            if let Ok(mut reference) = self.repository.find_reference(&self.name) {
+                let _ = reference.delete();
+            }
+        }
+    }
+}
+
+fn expected_initialization_tree(
+    repository: &Repository,
+    preview: &InitializationPreview,
+    parent_oid: Option<Oid>,
+) -> Result<Oid, AppError> {
+    // `Index::new` has no repository ODB owner, so `add_frombuffer`
+    // cannot create blobs. This handle is ODB-backed but remains isolated
+    // because we replace its in-memory contents and never call `write`.
+    let mut index = repository
+        .index()
+        .map_err(|_| repository_git_error("격리된 Git index를 만들지 못했습니다."))?;
+    if let Some(oid) = parent_oid {
+        let tree = repository
+            .find_commit(oid)
+            .and_then(|commit| commit.tree())
+            .map_err(|_| repository_git_error("기준 tree를 읽지 못했습니다."))?;
+        index
+            .read_tree(&tree)
+            .map_err(|_| repository_git_error("기준 tree를 복제하지 못했습니다."))?;
+    } else {
+        index
+            .clear()
+            .map_err(|_| repository_git_error("격리된 Git index를 비우지 못했습니다."))?;
+    }
+    for file in &preview.files {
+        let entry = IndexEntry {
+            ctime: IndexTime::new(0, 0),
+            mtime: IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: Oid::zero(),
+            flags: 0,
+            flags_extended: 0,
+            path: file.path.as_bytes().to_vec(),
+        };
+        index
+            .add_frombuffer(&entry, file.content.as_bytes())
+            .map_err(|_| repository_git_error("초기화 blob을 만들지 못했습니다."))?;
+    }
+    index
+        .write_tree_to(repository)
+        .map_err(|_| repository_git_error("초기화 tree를 만들지 못했습니다."))
 }
 
 fn commit_matches(
@@ -331,6 +591,8 @@ fn commit_matches(
         && commit.message() == Some(message)
         && commit.author().name() == Some(author_name)
         && commit.author().email() == Some(author_email)
+        && commit.committer().name() == Some(author_name)
+        && commit.committer().email() == Some(author_email)
 }
 
 fn public_remote_url(value: &str) -> Option<String> {
@@ -433,13 +695,6 @@ fn clone_error(path: &Path) -> AppError {
     .with_detail("path", path.to_string_lossy())
 }
 
-fn checkout(repository: &Repository, branch: &str) -> Result<(), AppError> {
-    repository
-        .set_head(&format!("refs/heads/{branch}"))
-        .and_then(|()| repository.checkout_head(Some(CheckoutBuilder::new().safe())))
-        .map_err(|_| repository_git_error("branch를 checkout하지 못했습니다."))
-}
-
 fn push_error(branch: &str) -> AppError {
     AppError::new(
         ErrorCode::PushFailed,
@@ -504,6 +759,30 @@ mod tests {
                 content: "schema_version: 1\n".into(),
                 overwrites_existing: false,
             }],
+        }
+    }
+
+    fn direct_initialization_preview() -> InitializationPreview {
+        InitializationPreview {
+            id: Uuid::new_v4(),
+            workspace_id: Uuid::new_v4(),
+            workspace_name: "Mockly".into(),
+            repository_fingerprint: "fixture".into(),
+            branch: "main".into(),
+            commit_message: "chore: initialize OkHub workspace".into(),
+            strategy: InitializationStrategy::DirectPush,
+            files: vec![
+                PreviewFile {
+                    path: ".okf/workspace.yml".into(),
+                    content: "approved workspace".into(),
+                    overwrites_existing: false,
+                },
+                PreviewFile {
+                    path: "docs/.gitkeep".into(),
+                    content: String::new(),
+                    overwrites_existing: false,
+                },
+            ],
         }
     }
 
@@ -729,6 +1008,101 @@ mod tests {
         assert!(!target.join("README.md").exists());
     }
 
+    fn assert_remote_probe_metadata_is_untouched(
+        repository: &Repository,
+        original_fetch_head: &[u8],
+    ) {
+        assert_eq!(
+            fs::read(repository.path().join("FETCH_HEAD")).unwrap(),
+            original_fetch_head
+        );
+        assert_eq!(
+            repository
+                .references_glob("refs/okhub/remote-check/*")
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn remote_oid_probe_preserves_fetch_head_and_temporary_refs_on_success() {
+        let source_directory = tempfile::tempdir().unwrap();
+        let source = Repository::init(source_directory.path()).unwrap();
+        commit_file(&source, "README.md", "remote content");
+        let bare_directory = tempfile::tempdir().unwrap();
+        Repository::init_bare(bare_directory.path()).unwrap();
+        source
+            .remote("origin", bare_directory.path().to_str().unwrap())
+            .unwrap();
+        source
+            .find_remote("origin")
+            .unwrap()
+            .push(&["refs/heads/master:refs/heads/main"], None)
+            .unwrap();
+        let original_fetch_head = b"user-owned fetch state\n";
+        fs::write(source.path().join("FETCH_HEAD"), original_fetch_head).unwrap();
+
+        let oid = Git2RepositoryAdapter
+            .remote_branch_oid(
+                source_directory.path(),
+                "main",
+                AccessToken::from_secret(SecretString::new("secret-not-for-output".into())),
+            )
+            .unwrap();
+
+        assert!(oid.is_some());
+        assert_remote_probe_metadata_is_untouched(&source, original_fetch_head);
+    }
+
+    #[test]
+    fn remote_oid_probe_preserves_fetch_head_and_temporary_refs_when_branch_is_missing() {
+        let source_directory = tempfile::tempdir().unwrap();
+        let source = Repository::init(source_directory.path()).unwrap();
+        commit_file(&source, "README.md", "remote content");
+        let bare_directory = tempfile::tempdir().unwrap();
+        Repository::init_bare(bare_directory.path()).unwrap();
+        source
+            .remote("origin", bare_directory.path().to_str().unwrap())
+            .unwrap();
+        let original_fetch_head = b"user-owned fetch state\n";
+        fs::write(source.path().join("FETCH_HEAD"), original_fetch_head).unwrap();
+
+        let oid = Git2RepositoryAdapter
+            .remote_branch_oid(
+                source_directory.path(),
+                "missing",
+                AccessToken::from_secret(SecretString::new("secret-not-for-output".into())),
+            )
+            .unwrap();
+
+        assert_eq!(oid, None);
+        assert_remote_probe_metadata_is_untouched(&source, original_fetch_head);
+    }
+
+    #[test]
+    fn remote_oid_probe_preserves_fetch_head_and_temporary_refs_on_failure() {
+        let source_directory = tempfile::tempdir().unwrap();
+        let source = Repository::init(source_directory.path()).unwrap();
+        commit_file(&source, "README.md", "remote content");
+        source
+            .remote("origin", "/definitely/missing/remote.git")
+            .unwrap();
+        let original_fetch_head = b"user-owned fetch state\n";
+        fs::write(source.path().join("FETCH_HEAD"), original_fetch_head).unwrap();
+
+        let error = Git2RepositoryAdapter
+            .remote_branch_oid(
+                source_directory.path(),
+                "main",
+                AccessToken::from_secret(SecretString::new("secret-not-for-output".into())),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, crate::error::ErrorCode::PushFailed);
+        assert_remote_probe_metadata_is_untouched(&source, original_fetch_head);
+    }
+
     #[test]
     fn object_tree_commit_leaves_the_user_worktree_index_and_head_untouched() {
         let directory = tempfile::tempdir().unwrap();
@@ -762,6 +1136,56 @@ mod tests {
                 .map(|oid| oid.to_string()),
             Some(outcome.commit_oid)
         );
+    }
+
+    #[test]
+    fn failed_empty_checkout_restores_head_index_and_worktree_then_allows_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        let preview = direct_initialization_preview();
+        let outcome = Git2RepositoryAdapter
+            .commit_initialization(directory.path(), &preview, &identity("hyeeun"))
+            .unwrap();
+        let original_head = repository
+            .find_reference("HEAD")
+            .unwrap()
+            .symbolic_target()
+            .unwrap()
+            .to_owned();
+        let original_index = fs::read(repository.path().join("index")).ok();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        let collision = directory.path().join(".okf/workspace.yml");
+        fs::write(&collision, b"concurrent user content").unwrap();
+
+        let error = Git2RepositoryAdapter
+            .checkout_initialization(directory.path(), &preview, &outcome)
+            .unwrap_err();
+
+        let repository = Repository::open(directory.path()).unwrap();
+        assert_eq!(
+            repository.find_reference("HEAD").unwrap().symbolic_target(),
+            Some(original_head.as_str())
+        );
+        assert_eq!(
+            fs::read(repository.path().join("index")).ok(),
+            original_index
+        );
+        assert_eq!(fs::read(&collision).unwrap(), b"concurrent user content");
+        assert!(!directory.path().join("docs/.gitkeep").exists());
+        assert_eq!(error.code, crate::error::ErrorCode::GithubUnavailable);
+
+        fs::remove_file(&collision).unwrap();
+        Git2RepositoryAdapter
+            .checkout_initialization(directory.path(), &preview, &outcome)
+            .unwrap();
+
+        let repository = Repository::open(directory.path()).unwrap();
+        assert_eq!(repository.head().unwrap().shorthand(), Some("main"));
+        assert_eq!(
+            fs::read_to_string(directory.path().join(".okf/workspace.yml")).unwrap(),
+            "approved workspace"
+        );
+        assert!(directory.path().join("docs/.gitkeep").exists());
     }
 
     #[test]

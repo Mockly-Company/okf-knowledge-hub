@@ -307,25 +307,7 @@ impl WorkspaceService {
             validate_preview_path(&repository_root, path)?;
         }
 
-        let config = WorkspaceConfigV1 {
-            schema_version: 1,
-            workspace: WorkspaceIdentity {
-                id: workspace_id,
-                name: workspace_name.to_owned(),
-                extra: Default::default(),
-            },
-            documents: DocumentsConfig {
-                roots: vec![DocumentRoot {
-                    path: "docs".into(),
-                    extra: Default::default(),
-                }],
-                extra: Default::default(),
-            },
-            repositories: Vec::new(),
-            github: None,
-            extra: Default::default(),
-        };
-        let workspace_content = WorkspaceDocument { config }.to_yaml()?;
+        let workspace_content = generated_workspace_content(workspace_id, workspace_name)?;
         let mut files = Vec::new();
 
         push_missing_file(
@@ -376,6 +358,71 @@ impl WorkspaceService {
         }
         Ok(())
     }
+
+    pub(crate) fn validate_generated_initialization_preview(
+        preview: &InitializationPreview,
+    ) -> Result<(), AppError> {
+        if preview.id.get_version_num() != 4
+            || preview.workspace_id.get_version_num() != 4
+            || preview.workspace_name.trim().is_empty()
+            || preview.commit_message != "chore: initialize OkHub workspace"
+            || preview.files.is_empty()
+        {
+            return Err(invalid_generated_preview());
+        }
+        let workspace_content =
+            generated_workspace_content(preview.workspace_id, &preview.workspace_name)?;
+        let mut seen = std::collections::HashSet::new();
+        for file in &preview.files {
+            let expected_content = match file.path.as_str() {
+                ".okf/workspace.yml" => workspace_content.as_str(),
+                ".okf/templates/.gitkeep" | "docs/.gitkeep" => "",
+                _ => return Err(invalid_generated_preview()),
+            };
+            if file.overwrites_existing
+                || file.content != expected_content
+                || !seen.insert(file.path.as_str())
+            {
+                return Err(invalid_generated_preview());
+            }
+        }
+        if !seen.contains(".okf/workspace.yml") {
+            return Err(invalid_generated_preview());
+        }
+        Ok(())
+    }
+}
+
+fn generated_workspace_content(
+    workspace_id: Uuid,
+    workspace_name: &str,
+) -> Result<String, AppError> {
+    let config = WorkspaceConfigV1 {
+        schema_version: 1,
+        workspace: WorkspaceIdentity {
+            id: workspace_id,
+            name: workspace_name.to_owned(),
+            extra: Default::default(),
+        },
+        documents: DocumentsConfig {
+            roots: vec![DocumentRoot {
+                path: "docs".into(),
+                extra: Default::default(),
+            }],
+            extra: Default::default(),
+        },
+        repositories: Vec::new(),
+        github: None,
+        extra: Default::default(),
+    };
+    WorkspaceDocument { config }.to_yaml()
+}
+
+fn invalid_generated_preview() -> AppError {
+    AppError::new(
+        ErrorCode::WorkspaceInvalid,
+        "초기화 복구 정보가 생성 가능한 seed 문서와 일치하지 않습니다.",
+    )
 }
 
 fn validate_preview_path(repository_root: &Path, relative_path: &str) -> Result<(), AppError> {
