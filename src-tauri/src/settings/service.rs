@@ -8,6 +8,7 @@ use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
 pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
+const INVALIDATED_PENDING_INITIALIZATION: &str = r#"{"state":"invalidated"}"#;
 
 pub trait LocalSettingsStore: Send + Sync {
     fn read(&self, key: &str) -> Result<Option<String>, AppError>;
@@ -144,6 +145,9 @@ impl LocalSettingsService {
         let Some(encoded) = self.store.read(PENDING_INITIALIZATION_KEY)? else {
             return Ok(None);
         };
+        if encoded == INVALIDATED_PENDING_INITIALIZATION {
+            return Ok(None);
+        }
         let context: PendingInitializationContext =
             serde_json::from_str(&encoded).map_err(|_| pending_initialization_error())?;
         validate_pending_initialization(&context)?;
@@ -161,6 +165,13 @@ impl LocalSettingsService {
 
     pub fn clear_pending_initialization(&self) -> Result<(), AppError> {
         self.store.remove(PENDING_INITIALIZATION_KEY)
+    }
+
+    pub fn invalidate_pending_initialization(&self) -> Result<(), AppError> {
+        self.store.write(
+            PENDING_INITIALIZATION_KEY,
+            INVALIDATED_PENDING_INITIALIZATION,
+        )
     }
 }
 

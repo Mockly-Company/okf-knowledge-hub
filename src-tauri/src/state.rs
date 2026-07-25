@@ -168,6 +168,21 @@ impl InitializationContextRegistry {
         })
     }
 
+    pub(crate) fn begin_clear(&self) -> Result<InitializationContextClear, crate::error::AppError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.active.is_some() || state.replacing {
+            return Err(initialization_in_progress_error());
+        }
+        state.replacing = true;
+        Ok(InitializationContextClear {
+            registry: self.clone(),
+            committed: false,
+        })
+    }
+
     pub(crate) fn insert(
         &self,
         context: PendingInitializationContext,
@@ -240,8 +255,38 @@ impl InitializationContextRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.context = None;
-        state.active = None;
         state.replacing = false;
+    }
+}
+
+pub(crate) struct InitializationContextClear {
+    registry: InitializationContextRegistry,
+    committed: bool,
+}
+
+impl InitializationContextClear {
+    pub(crate) fn commit(mut self) {
+        let mut state = self
+            .registry
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.context = None;
+        state.replacing = false;
+        self.committed = true;
+    }
+}
+
+impl Drop for InitializationContextClear {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        self.registry
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .replacing = false;
     }
 }
 

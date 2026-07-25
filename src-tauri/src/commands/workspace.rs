@@ -565,6 +565,24 @@ pub(crate) async fn clear_pending_initialization_locked(
     Ok(())
 }
 
+pub(crate) async fn invalidate_pending_initialization_for_auth_transition_locked(
+    services: &AppServices,
+) -> CommandResult<()> {
+    let clear = services.initialization_contexts.begin_clear()?;
+    let settings = services.local_settings.clone();
+    run_blocking(move || settings.invalidate_pending_initialization()).await?;
+    clear.commit();
+    services.initialization_previews.clear();
+    Ok(())
+}
+
+pub(crate) async fn remove_pending_initialization_tombstone_locked(
+    services: &AppServices,
+) -> CommandResult<()> {
+    let settings = services.local_settings.clone();
+    run_blocking(move || settings.clear_pending_initialization()).await
+}
+
 #[tauri::command]
 pub async fn initialize_workspace(
     state: State<'_, AppServices>,

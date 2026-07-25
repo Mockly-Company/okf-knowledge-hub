@@ -100,13 +100,13 @@ pub(crate) async fn begin_github_auth_inner(
 ) -> CommandResult<DeviceAuthorization> {
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
     let _mutation = services.initialization_contexts.lock_mutation().await;
+    crate::commands::workspace::invalidate_pending_initialization_for_auth_transition_locked(
+        services,
+    )
+    .await?;
     let authorization_result = auth.begin().await;
-    let clear_result =
-        crate::commands::workspace::clear_pending_initialization_locked(services).await;
-    if let Err(error) = clear_result {
-        let _ = auth.logout().await;
-        return Err(error);
-    }
+    let _ =
+        crate::commands::workspace::remove_pending_initialization_tombstone_locked(services).await;
     let authorization = authorization_result?;
     drop(_mutation);
     let request_id = authorization.request_id;
@@ -143,15 +143,18 @@ pub async fn cancel_github_auth(
 }
 
 pub(crate) async fn logout_github_inner(services: &AppServices) -> CommandResult<()> {
-    services.auth_jobs.cancel_all();
-    services.clone_jobs.cancel_all();
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
     let _mutation = services.initialization_contexts.lock_mutation().await;
+    crate::commands::workspace::invalidate_pending_initialization_for_auth_transition_locked(
+        services,
+    )
+    .await?;
+    services.auth_jobs.cancel_all();
+    services.clone_jobs.cancel_all();
     let auth_result = auth.logout().await;
-    let pending_result =
-        crate::commands::workspace::clear_pending_initialization_locked(services).await;
-    auth_result?;
-    pending_result
+    let _ =
+        crate::commands::workspace::remove_pending_initialization_tombstone_locked(services).await;
+    auth_result
 }
 
 #[tauri::command]
@@ -252,12 +255,15 @@ mod tests {
 
         async fn poll_access_token(
             &self,
-            client_id: &str,
-            device_code: &SecretString,
+            _client_id: &str,
+            _device_code: &SecretString,
         ) -> Result<DeviceTokenPoll, AppError> {
-            ApprovedDeviceFlow
-                .poll_access_token(client_id, device_code)
-                .await
+            Ok(DeviceTokenPoll::Authorized(TokenGrant::new(
+                "account-b-access",
+                "account-b-refresh",
+                3_600,
+                7_200,
+            )))
         }
 
         async fn refresh_access_token(
@@ -280,22 +286,46 @@ mod tests {
         }
     }
 
-    #[derive(Default)]
-    struct MemoryCredentials(Mutex<Option<StoredTokens>>);
+    #[derive(Clone, Default)]
+    struct MemoryCredentials {
+        tokens: Arc<Mutex<Option<StoredTokens>>>,
+        fail_next_delete: Arc<AtomicBool>,
+        delete_attempted: Arc<AtomicBool>,
+    }
+
+    impl MemoryCredentials {
+        fn with_tokens(tokens: StoredTokens) -> Self {
+            Self {
+                tokens: Arc::new(Mutex::new(Some(tokens))),
+                ..Self::default()
+            }
+        }
+
+        fn fail_next_delete(&self) {
+            self.fail_next_delete.store(true, Ordering::SeqCst);
+        }
+    }
 
     #[async_trait]
     impl CredentialStore for MemoryCredentials {
         async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
-            Ok(self.0.lock().unwrap().clone())
+            Ok(self.tokens.lock().unwrap().clone())
         }
 
         async fn save(&self, tokens: &StoredTokens) -> Result<(), AppError> {
-            *self.0.lock().unwrap() = Some(tokens.clone());
+            *self.tokens.lock().unwrap() = Some(tokens.clone());
             Ok(())
         }
 
         async fn delete(&self) -> Result<(), AppError> {
-            *self.0.lock().unwrap() = None;
+            self.delete_attempted.store(true, Ordering::SeqCst);
+            if self.fail_next_delete.swap(false, Ordering::SeqCst) {
+                return Err(AppError::new(
+                    ErrorCode::CredentialStoreUnavailable,
+                    "fixture delete failure",
+                ));
+            }
+            *self.tokens.lock().unwrap() = None;
             Ok(())
         }
     }
@@ -303,10 +333,15 @@ mod tests {
     #[derive(Clone, Default)]
     struct MemorySettings {
         values: Arc<Mutex<HashMap<String, String>>>,
+        fail_next_write: Arc<AtomicBool>,
         fail_next_remove: Arc<AtomicBool>,
     }
 
     impl MemorySettings {
+        fn fail_next_write(&self) {
+            self.fail_next_write.store(true, Ordering::SeqCst);
+        }
+
         fn fail_next_remove(&self) {
             self.fail_next_remove.store(true, Ordering::SeqCst);
         }
@@ -318,6 +353,12 @@ mod tests {
         }
 
         fn write(&self, key: &str, value: &str) -> Result<(), AppError> {
+            if self.fail_next_write.swap(false, Ordering::SeqCst) {
+                return Err(AppError::new(
+                    ErrorCode::LocalSettingsUnavailable,
+                    "fixture write failure",
+                ));
+            }
             self.values.lock().unwrap().insert(key.into(), value.into());
             Ok(())
         }
@@ -590,7 +631,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_clear_failure_retains_preview_and_invalidates_the_new_auth_lifecycle() {
+    async fn login_invalidation_write_failure_preserves_the_original_auth_and_preview() {
         let auth = AuthService::new(
             "Iv1.public-client-id",
             ApprovedDeviceFlow,
@@ -615,20 +656,14 @@ mod tests {
             .lifecycle_generation()
             .await
             .unwrap();
-        store.fail_next_remove();
+        store.fail_next_write();
 
         let error = begin_github_auth_inner(&state).await.unwrap_err();
 
         assert_eq!(error.code, ErrorCode::LocalSettingsUnavailable);
-        assert!(
-            state
-                .auth
-                .as_ref()
-                .unwrap()
-                .lifecycle_generation()
-                .await
-                .unwrap()
-                >= generation_before + 2
+        assert_eq!(
+            state.auth.as_ref().unwrap().lifecycle_generation().await,
+            Some(generation_before)
         );
         assert_eq!(
             settings.load_pending_initialization().unwrap(),
@@ -639,6 +674,208 @@ mod tests {
             .claim(context.preview_id)
             .unwrap();
         assert_eq!(claim.context(), &context);
+    }
+
+    #[tokio::test]
+    async fn logout_dual_failure_leaves_only_a_restart_safe_invalidation_tombstone() {
+        let credentials = MemoryCredentials::with_tokens(StoredTokens::new(
+            "account-a-access",
+            "account-a-refresh",
+            4_600,
+            8_200,
+        ));
+        credentials.fail_next_delete();
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            ApprovedDeviceFlow,
+            credentials.clone(),
+            FixedClock,
+            ImmediateDelay,
+            Events::default(),
+        );
+        let store = MemorySettings::default();
+        let settings = LocalSettingsService::new(store.clone());
+        let context = pending_context();
+        settings.set_pending_initialization(&context).unwrap();
+        let state = AppServices::with_auth(settings.clone(), auth);
+        state
+            .initialization_contexts
+            .insert(context.clone())
+            .unwrap();
+        store.fail_next_remove();
+
+        let error = logout_github_inner(&state).await.unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CredentialStoreUnavailable);
+        assert!(credentials.delete_attempted.load(Ordering::SeqCst));
+        assert!(!store.fail_next_remove.load(Ordering::SeqCst));
+        assert_eq!(settings.load_pending_initialization().unwrap(), None);
+        assert!(state
+            .initialization_contexts
+            .claim(context.preview_id)
+            .is_err());
+
+        let restarted = AppServices::new(LocalSettingsService::new(store));
+        let restart_error =
+            crate::commands::workspace::initialize_workspace_inner(&restarted, context.preview_id)
+                .await
+                .unwrap_err();
+        assert_eq!(restart_error.code, ErrorCode::WorkspaceChangedSincePreview);
+    }
+
+    #[test]
+    fn logout_is_rejected_after_initialization_claim_and_durable_attempt() {
+        let credentials = MemoryCredentials::with_tokens(StoredTokens::new(
+            "account-a-access",
+            "account-a-refresh",
+            4_600,
+            8_200,
+        ));
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            ApprovedDeviceFlow,
+            credentials.clone(),
+            FixedClock,
+            ImmediateDelay,
+            Events::default(),
+        );
+        let store = MemorySettings::default();
+        let settings = LocalSettingsService::new(store);
+        let context = pending_context();
+        settings.set_pending_initialization(&context).unwrap();
+        let state = Arc::new(AppServices::with_auth(settings.clone(), auth));
+        state
+            .initialization_contexts
+            .insert(context.clone())
+            .unwrap();
+        let durable_written = Arc::new(Barrier::new(2));
+        let release_remote_mutations = Arc::new(Barrier::new(2));
+        let worker_state = state.clone();
+        let worker_durable_written = durable_written.clone();
+        let worker_release = release_remote_mutations.clone();
+        let preview_id = context.preview_id;
+
+        let worker = thread::spawn(move || {
+            let claim = worker_state
+                .initialization_contexts
+                .claim(preview_id)
+                .unwrap();
+            worker_durable_written.wait();
+            worker_release.wait();
+            let push_token = tauri::async_runtime::block_on(
+                worker_state.auth.as_ref().unwrap().valid_access_token(),
+            )
+            .map(|token| token.expose_secret().to_owned());
+            let pr_token = tauri::async_runtime::block_on(
+                worker_state.auth.as_ref().unwrap().valid_access_token(),
+            )
+            .map(|token| token.expose_secret().to_owned());
+            claim.complete();
+            (push_token, pr_token)
+        });
+
+        durable_written.wait();
+        let generation_before =
+            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation())
+                .unwrap();
+        let transition = tauri::async_runtime::block_on(logout_github_inner(&state)).unwrap_err();
+        let duplicate = state.initialization_contexts.insert(context.clone());
+        release_remote_mutations.wait();
+        let (push_token, pr_token) = worker.join().unwrap();
+
+        assert_eq!(transition.code, ErrorCode::WorkspaceChangedSincePreview);
+        assert!(duplicate.is_err());
+        assert_eq!(push_token.unwrap(), "account-a-access");
+        assert_eq!(pr_token.unwrap(), "account-a-access");
+        assert!(!credentials.delete_attempted.load(Ordering::SeqCst));
+        assert_eq!(
+            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation()),
+            Some(generation_before)
+        );
+        assert_eq!(
+            settings.load_pending_initialization().unwrap(),
+            Some(context)
+        );
+    }
+
+    #[test]
+    fn account_switch_is_rejected_after_initialization_claim_and_durable_attempt() {
+        let credentials = MemoryCredentials::with_tokens(StoredTokens::new(
+            "account-a-access",
+            "account-a-refresh",
+            4_600,
+            8_200,
+        ));
+        let events = Events::default();
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            OtherAccountDeviceFlow,
+            credentials,
+            FixedClock,
+            ImmediateDelay,
+            events.clone(),
+        );
+        let store = MemorySettings::default();
+        let settings = LocalSettingsService::new(store);
+        let context = pending_context();
+        settings.set_pending_initialization(&context).unwrap();
+        let state = Arc::new(AppServices::with_auth(settings.clone(), auth));
+        state
+            .initialization_contexts
+            .insert(context.clone())
+            .unwrap();
+        let durable_written = Arc::new(Barrier::new(2));
+        let release_remote_mutations = Arc::new(Barrier::new(2));
+        let worker_state = state.clone();
+        let worker_durable_written = durable_written.clone();
+        let worker_release = release_remote_mutations.clone();
+        let preview_id = context.preview_id;
+
+        let worker = thread::spawn(move || {
+            let claim = worker_state
+                .initialization_contexts
+                .claim(preview_id)
+                .unwrap();
+            worker_durable_written.wait();
+            worker_release.wait();
+            let push_token = tauri::async_runtime::block_on(
+                worker_state.auth.as_ref().unwrap().valid_access_token(),
+            )
+            .map(|token| token.expose_secret().to_owned());
+            let pr_token = tauri::async_runtime::block_on(
+                worker_state.auth.as_ref().unwrap().valid_access_token(),
+            )
+            .map(|token| token.expose_secret().to_owned());
+            claim.complete();
+            (push_token, pr_token)
+        });
+
+        durable_written.wait();
+        let generation_before =
+            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation())
+                .unwrap();
+        let transition =
+            tauri::async_runtime::block_on(begin_github_auth_inner(&state)).unwrap_err();
+        let duplicate = state.initialization_contexts.insert(context.clone());
+        release_remote_mutations.wait();
+        let (push_token, pr_token) = worker.join().unwrap();
+
+        assert_eq!(transition.code, ErrorCode::WorkspaceChangedSincePreview);
+        assert!(duplicate.is_err());
+        assert_eq!(push_token.unwrap(), "account-a-access");
+        assert_eq!(pr_token.unwrap(), "account-a-access");
+        assert_eq!(
+            tauri::async_runtime::block_on(state.auth.as_ref().unwrap().lifecycle_generation()),
+            Some(generation_before)
+        );
+        assert_eq!(
+            settings.load_pending_initialization().unwrap(),
+            Some(context)
+        );
+        assert!(!events.0.lock().unwrap().iter().any(|event| matches!(
+            event,
+            AuthStatusEvent::Authenticated { user, .. } if user.id == 84
+        )));
     }
 
     #[test]
