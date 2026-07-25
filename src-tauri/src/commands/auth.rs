@@ -99,7 +99,16 @@ pub(crate) async fn begin_github_auth_inner(
     services: &AppServices,
 ) -> CommandResult<DeviceAuthorization> {
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
-    let authorization = auth.begin().await?;
+    let _mutation = services.initialization_contexts.lock_mutation().await;
+    let authorization_result = auth.begin().await;
+    let clear_result =
+        crate::commands::workspace::clear_pending_initialization_locked(services).await;
+    if let Err(error) = clear_result {
+        let _ = auth.logout().await;
+        return Err(error);
+    }
+    let authorization = authorization_result?;
+    drop(_mutation);
     let request_id = authorization.request_id;
     let cancellation = CancellationToken::new();
     services.auth_jobs.insert(request_id, cancellation.clone());
@@ -136,10 +145,12 @@ pub async fn cancel_github_auth(
 pub(crate) async fn logout_github_inner(services: &AppServices) -> CommandResult<()> {
     services.auth_jobs.cancel_all();
     services.clone_jobs.cancel_all();
-    let pending_result =
-        crate::commands::workspace::clear_pending_initialization_inner(services).await;
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
-    auth.logout().await?;
+    let _mutation = services.initialization_contexts.lock_mutation().await;
+    let auth_result = auth.logout().await;
+    let pending_result =
+        crate::commands::workspace::clear_pending_initialization_locked(services).await;
+    auth_result?;
     pending_result
 }
 
@@ -160,6 +171,7 @@ fn auth_unavailable() -> AppError {
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
 
@@ -227,6 +239,47 @@ mod tests {
         }
     }
 
+    struct OtherAccountDeviceFlow;
+
+    #[async_trait]
+    impl DeviceFlowApi for OtherAccountDeviceFlow {
+        async fn request_device_code(
+            &self,
+            client_id: &str,
+        ) -> Result<DeviceCodeResponse, AppError> {
+            ApprovedDeviceFlow.request_device_code(client_id).await
+        }
+
+        async fn poll_access_token(
+            &self,
+            client_id: &str,
+            device_code: &SecretString,
+        ) -> Result<DeviceTokenPoll, AppError> {
+            ApprovedDeviceFlow
+                .poll_access_token(client_id, device_code)
+                .await
+        }
+
+        async fn refresh_access_token(
+            &self,
+            _client_id: &str,
+            _refresh_token: &SecretString,
+        ) -> Result<TokenGrant, AppError> {
+            unreachable!()
+        }
+
+        async fn authenticated_user(
+            &self,
+            _access_token: &SecretString,
+        ) -> Result<GithubUserSummary, AppError> {
+            Ok(GithubUserSummary {
+                id: 84,
+                login: "other-developer".into(),
+                avatar_url: "https://avatars.example/other".into(),
+            })
+        }
+    }
+
     #[derive(Default)]
     struct MemoryCredentials(Mutex<Option<StoredTokens>>);
 
@@ -248,21 +301,50 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
-    struct MemorySettings(Arc<Mutex<HashMap<String, String>>>);
+    struct MemorySettings {
+        values: Arc<Mutex<HashMap<String, String>>>,
+        fail_next_remove: Arc<AtomicBool>,
+    }
+
+    impl MemorySettings {
+        fn fail_next_remove(&self) {
+            self.fail_next_remove.store(true, Ordering::SeqCst);
+        }
+    }
 
     impl LocalSettingsStore for MemorySettings {
         fn read(&self, key: &str) -> Result<Option<String>, AppError> {
-            Ok(self.0.lock().unwrap().get(key).cloned())
+            Ok(self.values.lock().unwrap().get(key).cloned())
         }
 
         fn write(&self, key: &str, value: &str) -> Result<(), AppError> {
-            self.0.lock().unwrap().insert(key.into(), value.into());
+            self.values.lock().unwrap().insert(key.into(), value.into());
             Ok(())
         }
 
         fn remove(&self, key: &str) -> Result<(), AppError> {
-            self.0.lock().unwrap().remove(key);
+            if self.fail_next_remove.swap(false, Ordering::SeqCst) {
+                return Err(AppError::new(
+                    ErrorCode::LocalSettingsUnavailable,
+                    "fixture remove failure",
+                ));
+            }
+            self.values.lock().unwrap().remove(key);
             Ok(())
+        }
+    }
+
+    fn pending_context() -> PendingInitializationContext {
+        PendingInitializationContext {
+            preview_id: Uuid::new_v4(),
+            root: PathBuf::from("/tmp/mockly-knowledge"),
+            repository_id: "R_kgDOMockly".into(),
+            repository_full_name: "Mockly-Company/mockly-knowledge".into(),
+            author_id: 7,
+            author_login: "hyeeun".into(),
+            created_at_unix: 1_000,
+            expires_at_unix: 1_900,
+            completed_result: None,
         }
     }
 
@@ -432,17 +514,7 @@ mod tests {
             Events::default(),
         );
         let settings = LocalSettingsService::new(MemorySettings::default());
-        let context = PendingInitializationContext {
-            preview_id: Uuid::new_v4(),
-            root: PathBuf::from("/tmp/mockly-knowledge"),
-            repository_id: "R_kgDOMockly".into(),
-            repository_full_name: "Mockly-Company/mockly-knowledge".into(),
-            author_id: 7,
-            author_login: "hyeeun".into(),
-            created_at_unix: 1_000,
-            expires_at_unix: 1_900,
-            completed_result: None,
-        };
+        let context = pending_context();
         settings.set_pending_initialization(&context).unwrap();
         let state = AppServices::with_auth(settings.clone(), auth);
         state
@@ -457,6 +529,116 @@ mod tests {
             .initialization_contexts
             .claim(context.preview_id)
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn starting_a_new_login_proactively_clears_an_existing_preview() {
+        let events = Events::default();
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            OtherAccountDeviceFlow,
+            MemoryCredentials::default(),
+            FixedClock,
+            ImmediateDelay,
+            events.clone(),
+        );
+        let store = MemorySettings::default();
+        let settings = LocalSettingsService::new(store);
+        let context = pending_context();
+        settings.set_pending_initialization(&context).unwrap();
+        let state = AppServices::with_auth(settings.clone(), auth);
+        state
+            .initialization_contexts
+            .insert(context.clone())
+            .unwrap();
+        let generation_before = state
+            .auth
+            .as_ref()
+            .unwrap()
+            .lifecycle_generation()
+            .await
+            .unwrap();
+
+        let authorization = begin_github_auth_inner(&state).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while state.auth_jobs.contains(authorization.request_id) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            state
+                .auth
+                .as_ref()
+                .unwrap()
+                .lifecycle_generation()
+                .await
+                .unwrap()
+                > generation_before
+        );
+        assert_eq!(settings.load_pending_initialization().unwrap(), None);
+        assert!(state
+            .initialization_contexts
+            .claim(context.preview_id)
+            .is_err());
+        assert!(events.0.lock().unwrap().iter().any(|event| matches!(
+            event,
+            AuthStatusEvent::Authenticated { user, .. } if user.id == 84
+        )));
+    }
+
+    #[tokio::test]
+    async fn login_clear_failure_retains_preview_and_invalidates_the_new_auth_lifecycle() {
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            ApprovedDeviceFlow,
+            MemoryCredentials::default(),
+            FixedClock,
+            ImmediateDelay,
+            Events::default(),
+        );
+        let store = MemorySettings::default();
+        let settings = LocalSettingsService::new(store.clone());
+        let context = pending_context();
+        settings.set_pending_initialization(&context).unwrap();
+        let state = AppServices::with_auth(settings.clone(), auth);
+        state
+            .initialization_contexts
+            .insert(context.clone())
+            .unwrap();
+        let generation_before = state
+            .auth
+            .as_ref()
+            .unwrap()
+            .lifecycle_generation()
+            .await
+            .unwrap();
+        store.fail_next_remove();
+
+        let error = begin_github_auth_inner(&state).await.unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::LocalSettingsUnavailable);
+        assert!(
+            state
+                .auth
+                .as_ref()
+                .unwrap()
+                .lifecycle_generation()
+                .await
+                .unwrap()
+                >= generation_before + 2
+        );
+        assert_eq!(
+            settings.load_pending_initialization().unwrap(),
+            Some(context.clone())
+        );
+        let claim = state
+            .initialization_contexts
+            .claim(context.preview_id)
+            .unwrap();
+        assert_eq!(claim.context(), &context);
     }
 
     #[test]

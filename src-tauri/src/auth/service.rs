@@ -399,6 +399,15 @@ impl AuthService {
         self.credentials.delete().await
     }
 
+    pub(crate) async fn lifecycle_generation(&self) -> Option<u64> {
+        let lifecycle = self.lifecycle.lock().await;
+        lifecycle
+            .active
+            .values()
+            .all(|job| job.kind != JobKind::Login)
+            .then_some(lifecycle.generation)
+    }
+
     pub(crate) async fn has_stored_credentials(&self) -> Result<bool, AppError> {
         self.credentials.load().await.map(|tokens| tokens.is_some())
     }

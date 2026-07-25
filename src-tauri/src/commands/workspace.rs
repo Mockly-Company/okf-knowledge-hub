@@ -328,6 +328,11 @@ pub(crate) async fn preview_workspace_initialization_inner(
     services: &AppServices,
     request: WorkspaceInitializationRequest,
 ) -> CommandResult<InitializationPreview> {
+    let auth = services.auth.clone().ok_or_else(service_unavailable)?;
+    let auth_generation = auth
+        .lifecycle_generation()
+        .await
+        .ok_or_else(stale_auth_preview_error)?;
     let github = services.github.clone().ok_or_else(service_unavailable)?;
     let repository = github
         .repository_detail(&request.repository_id, &request.repository_full_name)
@@ -369,7 +374,8 @@ pub(crate) async fn preview_workspace_initialization_inner(
         expires_at_unix: now.saturating_add(INITIALIZATION_PREVIEW_TTL_SECONDS),
         completed_result: None,
     };
-    persist_initialization_preview(services, preview.clone(), context).await?;
+    persist_initialization_preview(services, preview.clone(), context, auth, auth_generation)
+        .await?;
     Ok(preview)
 }
 
@@ -377,8 +383,13 @@ async fn persist_initialization_preview(
     services: &AppServices,
     preview: InitializationPreview,
     context: PendingInitializationContext,
+    auth: Arc<crate::auth::service::AuthService>,
+    captured_auth_generation: u64,
 ) -> CommandResult<()> {
     let _mutation = services.initialization_contexts.lock_mutation().await;
+    if auth.lifecycle_generation().await != Some(captured_auth_generation) {
+        return Err(stale_auth_preview_error());
+    }
     services.initialization_previews.insert(preview.clone())?;
     let replacement = match services
         .initialization_contexts
@@ -541,6 +552,12 @@ pub(crate) async fn clear_pending_initialization_inner(
     services: &AppServices,
 ) -> CommandResult<()> {
     let _mutation = services.initialization_contexts.lock_mutation().await;
+    clear_pending_initialization_locked(services).await
+}
+
+pub(crate) async fn clear_pending_initialization_locked(
+    services: &AppServices,
+) -> CommandResult<()> {
     let settings = services.local_settings.clone();
     run_blocking(move || settings.clear_pending_initialization()).await?;
     services.initialization_contexts.clear();
@@ -622,6 +639,14 @@ fn stale_account_preview_error() -> AppError {
     .with_recovery(RecoveryAction::Retry)
 }
 
+fn stale_auth_preview_error() -> AppError {
+    AppError::new(
+        ErrorCode::WorkspaceChangedSincePreview,
+        "GitHub 인증 상태가 변경되어 초기화 미리보기를 저장하지 않았습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+}
+
 fn now_unix() -> CommandResult<i64> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -656,10 +681,17 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread;
 
+    use async_trait::async_trait;
+    use secrecy::SecretString;
     use uuid::Uuid;
 
     use super::*;
-    use crate::auth::model::GithubUserSummary;
+    use crate::auth::model::{
+        AuthStatusEvent, DeviceCodeResponse, DeviceTokenPoll, GithubUserSummary, StoredTokens,
+        TokenGrant,
+    };
+    use crate::auth::ports::{AuthEventSink, Clock, CredentialStore, Delay, DeviceFlowApi};
+    use crate::auth::service::AuthService;
     use crate::error::ErrorCode;
     use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
 
@@ -706,6 +738,95 @@ mod tests {
             self.values.lock().unwrap().remove(key);
             Ok(())
         }
+    }
+
+    struct UnusedDeviceFlow;
+
+    #[async_trait]
+    impl DeviceFlowApi for UnusedDeviceFlow {
+        async fn request_device_code(
+            &self,
+            _client_id: &str,
+        ) -> Result<DeviceCodeResponse, AppError> {
+            unreachable!()
+        }
+
+        async fn poll_access_token(
+            &self,
+            _client_id: &str,
+            _device_code: &SecretString,
+        ) -> Result<DeviceTokenPoll, AppError> {
+            unreachable!()
+        }
+
+        async fn refresh_access_token(
+            &self,
+            _client_id: &str,
+            _refresh_token: &SecretString,
+        ) -> Result<TokenGrant, AppError> {
+            unreachable!()
+        }
+
+        async fn authenticated_user(
+            &self,
+            _access_token: &SecretString,
+        ) -> Result<GithubUserSummary, AppError> {
+            unreachable!()
+        }
+    }
+
+    struct EmptyCredentials;
+
+    #[async_trait]
+    impl CredentialStore for EmptyCredentials {
+        async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
+            Ok(None)
+        }
+
+        async fn save(&self, _tokens: &StoredTokens) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        async fn delete(&self) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    struct FixedClock;
+
+    impl Clock for FixedClock {
+        fn now_unix(&self) -> i64 {
+            1_000
+        }
+    }
+
+    struct NoDelay;
+
+    #[async_trait]
+    impl Delay for NoDelay {
+        async fn wait(&self, _seconds: u64) {}
+    }
+
+    struct NoEvents;
+
+    impl AuthEventSink for NoEvents {
+        fn emit(&self, _event: AuthStatusEvent) -> bool {
+            true
+        }
+    }
+
+    fn services_with_auth(settings: LocalSettingsService) -> AppServices {
+        AppServices::with_auth(
+            settings,
+            AuthService::new(
+                "Iv1.public-client-id",
+                UnusedDeviceFlow,
+                EmptyCredentials,
+                FixedClock,
+                NoDelay,
+                NoEvents,
+            ),
+        )
     }
 
     fn pending_context(author_id: u64) -> PendingInitializationContext {
@@ -811,7 +932,7 @@ mod tests {
         let expected = initialization_result();
         context.completed_result = Some(expected.clone());
         settings.set_pending_initialization(&context).unwrap();
-        let services = AppServices::new(settings.clone());
+        let services = services_with_auth(settings.clone());
         services
             .initialization_contexts
             .insert(context.clone())
@@ -863,7 +984,7 @@ mod tests {
     async fn failed_preview_persistence_retains_the_previous_disk_and_memory_context() {
         let store = MemorySettings::default();
         let settings = LocalSettingsService::new(store.clone());
-        let services = AppServices::new(settings.clone());
+        let services = services_with_auth(settings.clone());
         let previous = pending_context(42);
         let previous_preview = initialization_preview(previous.preview_id);
         settings.set_pending_initialization(&previous).unwrap();
@@ -879,9 +1000,12 @@ mod tests {
         let next_preview = initialization_preview(next.preview_id);
         store.fail_next_write();
 
-        let error = persist_initialization_preview(&services, next_preview, next.clone())
-            .await
-            .unwrap_err();
+        let auth = services.auth.clone().unwrap();
+        let generation = auth.lifecycle_generation().await.unwrap();
+        let error =
+            persist_initialization_preview(&services, next_preview, next.clone(), auth, generation)
+                .await
+                .unwrap_err();
 
         assert_eq!(error.code, ErrorCode::LocalSettingsUnavailable);
         assert_eq!(
@@ -905,6 +1029,48 @@ mod tests {
             .initialization_contexts
             .claim(next.preview_id)
             .is_err());
+    }
+
+    #[test]
+    fn logout_between_identity_capture_and_persistence_rejects_stale_preview() {
+        let store = MemorySettings::default();
+        let settings = LocalSettingsService::new(store);
+        let services = Arc::new(services_with_auth(settings.clone()));
+        let auth = services.auth.clone().unwrap();
+        let captured_generation =
+            tauri::async_runtime::block_on(auth.lifecycle_generation()).unwrap();
+        let context = pending_context(42);
+        let preview = initialization_preview(context.preview_id);
+        let preview_id = preview.id;
+        let captured = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let worker_services = services.clone();
+        let worker_auth = auth.clone();
+        let worker_captured = captured.clone();
+        let worker_release = release.clone();
+
+        let worker = thread::spawn(move || {
+            worker_captured.wait();
+            worker_release.wait();
+            tauri::async_runtime::block_on(persist_initialization_preview(
+                &worker_services,
+                preview,
+                context,
+                worker_auth,
+                captured_generation,
+            ))
+        });
+
+        captured.wait();
+        tauri::async_runtime::block_on(crate::commands::auth::logout_github_inner(&services))
+            .unwrap();
+        release.wait();
+        let error = worker.join().unwrap().unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::WorkspaceChangedSincePreview);
+        assert_eq!(settings.load_pending_initialization().unwrap(), None);
+        assert!(services.initialization_contexts.claim(preview_id).is_err());
+        assert!(services.initialization_previews.get(preview_id).is_none());
     }
 
     #[tokio::test]
