@@ -106,7 +106,10 @@ export class UnavailableWorkspaceConnectionGateway
     return unavailable();
   }
 
-  connectWorkspace(_path: string): Promise<ConnectedWorkspace> {
+  connectWorkspace(
+    _path: string,
+    _repository: Pick<GithubRepositorySummary, "id" | "fullName">,
+  ): Promise<ConnectedWorkspace> {
     return unavailable();
   }
 

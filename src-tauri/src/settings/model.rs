@@ -43,6 +43,15 @@ pub struct CurrentWorkspace {
     pub status: CurrentWorkspaceStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<WorkspaceSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository: Option<KnowledgeRepository>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeRepository {
+    pub id: String,
+    pub full_name: String,
 }
 
 impl CurrentWorkspace {
@@ -51,6 +60,20 @@ impl CurrentWorkspace {
             path,
             status: CurrentWorkspaceStatus::Connected,
             summary: Some(summary),
+            repository: None,
+        }
+    }
+
+    pub fn connected_to_repository(
+        path: PathBuf,
+        summary: WorkspaceSummary,
+        repository: KnowledgeRepository,
+    ) -> Self {
+        Self {
+            path,
+            status: CurrentWorkspaceStatus::Connected,
+            summary: Some(summary),
+            repository: Some(repository),
         }
     }
 
@@ -59,6 +82,7 @@ impl CurrentWorkspace {
             path,
             status: CurrentWorkspaceStatus::RecoveryRequired,
             summary: None,
+            repository: None,
         }
     }
 }

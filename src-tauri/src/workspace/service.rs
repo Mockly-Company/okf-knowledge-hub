@@ -42,6 +42,7 @@ pub enum WorkspaceInspection {
 pub struct WorkspaceSummary {
     pub id: Uuid,
     pub name: String,
+    pub schema_version: u32,
     pub document_roots: Vec<String>,
     pub repository_count: usize,
 }
@@ -596,6 +597,7 @@ impl From<&WorkspaceConfigV1> for WorkspaceSummary {
         Self {
             id: config.workspace.id,
             name: config.workspace.name.clone(),
+            schema_version: config.schema_version,
             document_roots: config
                 .documents
                 .roots
@@ -1383,6 +1385,7 @@ mod tests {
                     summary: WorkspaceSummary {
                         id: workspace_id,
                         name: "Mockly".into(),
+                        schema_version: 1,
                         document_roots: vec!["docs".into()],
                         repository_count: 2,
                     },
@@ -1392,6 +1395,7 @@ mod tests {
                     "summary": {
                         "id": workspace_id,
                         "name": "Mockly",
+                        "schemaVersion": 1,
                         "documentRoots": ["docs"],
                         "repositoryCount": 2
                     }

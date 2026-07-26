@@ -36,7 +36,10 @@ export interface WorkspaceConnectionGateway {
   cancelRepositoryClone(requestId: string): Promise<boolean>;
   onCloneProgress(listener: (event: CloneProgressEvent) => void): Promise<Unlisten>;
   inspectWorkspace(path: string): Promise<WorkspaceInspection>;
-  connectWorkspace(path: string): Promise<ConnectedWorkspace>;
+  connectWorkspace(
+    path: string,
+    repository: Pick<GithubRepositorySummary, "id" | "fullName">,
+  ): Promise<ConnectedWorkspace>;
   previewInitialization(input: PreviewInitializationInput): Promise<InitializationPreview>;
   initializeWorkspace(previewId: string): Promise<InitializationResult>;
 }

@@ -38,6 +38,7 @@ const defaultRepository: GithubRepositorySummary = {
 const defaultSummary: WorkspaceSummary = {
   id: "89bf04ef-df57-4a76-b10a-b33107d8a6c2",
   name: "Mockly",
+  schemaVersion: 1,
   documentRoots: ["docs"],
   repositoryCount: 0,
 };
@@ -80,6 +81,10 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     path: defaultSnapshot.root,
     status: "connected",
     summary: defaultSummary,
+    repository: {
+      id: defaultRepository.id,
+      fullName: defaultRepository.fullName,
+    },
   };
   initializationResult: InitializationResult = {
     root: defaultSnapshot.root,
@@ -94,6 +99,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   cloneSubscriptionError: Error | null = null;
   deferGithubAuth = false;
   deferClone = false;
+  deferWorkspaceInspection = false;
 
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   readonly openedUrls: string[] = [];
@@ -112,6 +118,10 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     resolve: (authorization: DeviceAuthorization) => void;
   } | null = null;
   private pendingClone: { resolve: (job: CloneJob) => void } | null = null;
+  private pendingWorkspaceInspection: {
+    resolve: (inspection: WorkspaceInspection) => void;
+    reject: (error: AppError) => void;
+  } | null = null;
 
   static disconnected(): FakeWorkspaceConnectionGateway {
     return new FakeWorkspaceConnectionGateway();
@@ -123,6 +133,10 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
       path,
       status: "connected",
       summary: defaultSummary,
+      repository: {
+        id: defaultRepository.id,
+        fullName: defaultRepository.fullName,
+      },
     };
     gateway.connectedWorkspace = gateway.currentWorkspace;
     gateway.authState = { status: "authenticated", user: defaultUser };
@@ -250,13 +264,35 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
 
   async inspectWorkspace(path: string): Promise<WorkspaceInspection> {
     this.record("inspectWorkspace", path);
+    if (this.deferWorkspaceInspection) {
+      return new Promise((resolve, reject) => {
+        this.pendingWorkspaceInspection = { resolve, reject };
+      });
+    }
     if (this.workspaceInspectionError) throw this.workspaceInspectionError;
     return this.workspaceInspection;
   }
 
-  async connectWorkspace(path: string): Promise<ConnectedWorkspace> {
-    this.record("connectWorkspace", path);
-    return { ...this.connectedWorkspace, path };
+  resolveWorkspaceInspection(inspection = this.workspaceInspection): void {
+    this.pendingWorkspaceInspection?.resolve(inspection);
+    this.pendingWorkspaceInspection = null;
+  }
+
+  rejectWorkspaceInspection(error: AppError): void {
+    this.pendingWorkspaceInspection?.reject(error);
+    this.pendingWorkspaceInspection = null;
+  }
+
+  async connectWorkspace(
+    path: string,
+    repository: Pick<GithubRepositorySummary, "id" | "fullName">,
+  ): Promise<ConnectedWorkspace> {
+    this.record("connectWorkspace", path, repository);
+    return {
+      ...this.connectedWorkspace,
+      path,
+      repository: { ...repository },
+    };
   }
 
   async previewInitialization(

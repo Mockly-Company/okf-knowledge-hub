@@ -22,11 +22,18 @@ import type {
   LocalInspectionRequest,
   WorkspaceConnectionRequest,
   WorkspaceInspectionRequest,
+  WorkspaceInspection,
 } from "./types";
 
 export interface WorkspaceConnectionContextValue {
   state: ConnectionState;
+  canCancelReplacement: boolean;
   isCurrentWorkspaceLoading: boolean;
+  isWorkspaceValidating: boolean;
+  workspaceValidation:
+    | { requestId: string | null; path: string; inspection: WorkspaceInspection; error: null }
+    | { requestId: string; path: string; inspection: null; error: AppError }
+    | null;
   cloneTargetPreview: CloneTargetPreview | null;
   startLogin(): Promise<void>;
   cancelLogin(): Promise<void>;
@@ -44,8 +51,9 @@ export interface WorkspaceConnectionContextValue {
   cancelInitializationPreview(): void;
   confirmInitialization(): Promise<void>;
   retryLastAction(): Promise<void>;
-  startReplacement(): void;
-  cancelReplacement(): void;
+  revalidateCurrentWorkspace(): Promise<void>;
+  startReplacement(): Promise<void>;
+  cancelReplacement(): Promise<void>;
 }
 
 export interface CloneTargetPreview {
@@ -79,6 +87,19 @@ function workspaceNameFromRepository(repositoryName: string): string {
   return stem.replace(/(^|[-_\s])(\p{L})/gu, (_, separator: string, letter: string) => `${separator}${letter.toUpperCase()}`);
 }
 
+function canCancelReplacement(state: ConnectionState): boolean {
+  if (state.mode !== "replacement") return false;
+  return !(
+    (state.step === "local" &&
+      (state.status === "clone_starting" ||
+        state.status === "cloning" ||
+        state.status === "clone_cancelling" ||
+        state.status === "workspace_connecting")) ||
+    (state.step === "initialize" &&
+      (state.status === "initializing" || state.status === "connecting"))
+  );
+}
+
 interface WorkspaceConnectionProviderProps extends PropsWithChildren {
   gateway: WorkspaceConnectionGateway;
 }
@@ -91,6 +112,11 @@ export function WorkspaceConnectionProvider({
   const stateRef = useRef(state);
   const [isCurrentWorkspaceLoading, setCurrentWorkspaceLoading] = useState(true);
   const [cloneTargetPreview, setCloneTargetPreview] = useState<CloneTargetPreview | null>(null);
+  const [isWorkspaceValidating, setWorkspaceValidating] = useState(false);
+  const [workspaceValidation, setWorkspaceValidation] = useState<
+    WorkspaceConnectionContextValue["workspaceValidation"]
+  >(null);
+  const activeWorkspaceValidationRef = useRef<{ requestId: string; path: string } | null>(null);
 
   const dispatchAccepted = useCallback((action: Parameters<typeof connectionReducer>[1]) => {
     const current = stateRef.current;
@@ -197,11 +223,17 @@ export function WorkspaceConnectionProvider({
 
   const cancelLogin = useCallback(async () => {
     const current = stateRef.current;
-    if (current.step !== "auth" || current.status !== "waiting_for_user") return;
+    if (
+      current.step !== "auth" ||
+      (current.status !== "login_beginning" && current.status !== "waiting_for_user")
+    ) return;
+    const requestId = current.status === "login_beginning"
+      ? current.activeLoginBeginRequest.id
+      : current.authorization.requestId;
     try {
-      await gateway.cancelGithubAuth(current.authorization.requestId);
+      await gateway.cancelGithubAuth(requestId);
     } finally {
-      dispatchAccepted({ type: "authEventReceived", event: { status: "cancelled", requestId: current.authorization.requestId } });
+      dispatchAccepted({ type: "authEventReceived", event: { status: "cancelled", requestId } });
     }
   }, [dispatchAccepted, gateway]);
 
@@ -331,8 +363,20 @@ export function WorkspaceConnectionProvider({
     async (request: WorkspaceConnectionRequest) => {
       if (!dispatchAccepted({ type: "workspaceConnectionStarted", request })) return;
       try {
-        const workspace = await gateway.connectWorkspace(request.repositoryRoot);
-        dispatchAccepted({ type: "workspaceConnected", request, workspace });
+        const workspace = await gateway.connectWorkspace(request.repositoryRoot, {
+          id: request.repositoryId,
+          fullName: request.repositoryFullName,
+        });
+        if (dispatchAccepted({ type: "workspaceConnected", request, workspace })) {
+          activeWorkspaceValidationRef.current = null;
+          setWorkspaceValidating(false);
+          setWorkspaceValidation({
+            requestId: null,
+            path: workspace.path,
+            inspection: { status: "ready", summary: workspace.summary },
+            error: null,
+          });
+        }
       } catch (error) {
         dispatchAccepted({ type: "workspaceConnectionFailed", request, error: asAppError(error) });
       }
@@ -400,8 +444,79 @@ export function WorkspaceConnectionProvider({
     }
   }, [clone, connectInitializedWorkspace, dispatchAccepted, gateway, inspectLocalClone, inspectWorkspace, loadRepositories, previewInitialization, startLogin]);
 
-  const startReplacement = useCallback(() => dispatchAccepted({ type: "replacementStarted" }), [dispatchAccepted]);
-  const cancelReplacement = useCallback(() => dispatchAccepted({ type: "replacementCancelled" }), [dispatchAccepted]);
+  const startReplacement = useCallback(async () => {
+    if (!dispatchAccepted({ type: "replacementStarted" })) return;
+    activeWorkspaceValidationRef.current = null;
+    setWorkspaceValidating(false);
+    setWorkspaceValidation(null);
+    await loadAuth();
+  }, [dispatchAccepted, loadAuth]);
+  const cancelReplacement = useCallback(async () => {
+    const current = stateRef.current;
+    if (current.mode !== "replacement") return;
+    if (
+      current.step === "auth" &&
+      (current.status === "login_beginning" ||
+        current.status === "waiting_for_user")
+    ) {
+      await cancelLogin();
+    }
+    if (dispatchAccepted({ type: "replacementCancelled" })) {
+      activeWorkspaceValidationRef.current = null;
+      setWorkspaceValidating(false);
+      setWorkspaceValidation({
+        requestId: null,
+        path: current.replacementWorkspace.path,
+        inspection: { status: "ready", summary: current.replacementWorkspace.summary },
+        error: null,
+      });
+    }
+  }, [cancelLogin, dispatchAccepted]);
+  const revalidateCurrentWorkspace = useCallback(async () => {
+    const current = stateRef.current;
+    if (current.step !== "initialize" || current.status !== "connected") {
+      throw new Error("연결된 워크스페이스가 없습니다.");
+    }
+    const validationRequest = {
+      requestId: operationId(),
+      path: current.connectedWorkspace.path,
+    };
+    activeWorkspaceValidationRef.current = validationRequest;
+    setWorkspaceValidating(true);
+    try {
+      const inspection = await gateway.inspectWorkspace(validationRequest.path);
+      const latest = activeWorkspaceValidationRef.current;
+      const latestState = stateRef.current;
+      if (
+        latest?.requestId === validationRequest.requestId &&
+        latestState.step === "initialize" &&
+        latestState.status === "connected" &&
+        latestState.connectedWorkspace.path === validationRequest.path
+      ) {
+        setWorkspaceValidation({ ...validationRequest, inspection, error: null });
+      }
+    } catch (error) {
+      const latest = activeWorkspaceValidationRef.current;
+      const latestState = stateRef.current;
+      if (
+        latest?.requestId === validationRequest.requestId &&
+        latestState.step === "initialize" &&
+        latestState.status === "connected" &&
+        latestState.connectedWorkspace.path === validationRequest.path
+      ) {
+        setWorkspaceValidation({
+          ...validationRequest,
+          inspection: null,
+          error: asAppError(error),
+        });
+      }
+    } finally {
+      if (activeWorkspaceValidationRef.current?.requestId === validationRequest.requestId) {
+        activeWorkspaceValidationRef.current = null;
+        setWorkspaceValidating(false);
+      }
+    }
+  }, [gateway]);
 
   useEffect(() => {
     let active = true;
@@ -440,6 +555,14 @@ export function WorkspaceConnectionProvider({
         const workspace = await gateway.getCurrentWorkspace();
         if (!active) return;
         const accepted = dispatchAccepted({ type: "currentWorkspaceLoaded", workspace });
+        if (accepted && workspace?.status === "connected") {
+          setWorkspaceValidation({
+            requestId: null,
+            path: workspace.path,
+            inspection: { status: "ready", summary: workspace.summary },
+            error: null,
+          });
+        }
         setCurrentWorkspaceLoading(false);
         if (accepted && workspace?.status !== "connected") void loadAuth();
       } catch {
@@ -486,6 +609,8 @@ export function WorkspaceConnectionProvider({
       void connectInitializedWorkspace({
         id: operationId(),
         repositoryRoot: state.localRepository.root,
+        repositoryId: state.selectedRepository.id,
+        repositoryFullName: state.selectedRepository.fullName,
         source: "existing",
         initializationRequestId: null,
       });
@@ -495,6 +620,8 @@ export function WorkspaceConnectionProvider({
       void connectInitializedWorkspace({
         id: operationId(),
         repositoryRoot: state.initializationResult.root,
+        repositoryId: state.selectedRepository.id,
+        repositoryFullName: state.selectedRepository.fullName,
         source: "initialization",
         initializationRequestId: state.completedInitializationRequest.id,
       });
@@ -504,7 +631,10 @@ export function WorkspaceConnectionProvider({
   const value = useMemo<WorkspaceConnectionContextValue>(
     () => ({
       state,
+      canCancelReplacement: canCancelReplacement(state),
       isCurrentWorkspaceLoading,
+      isWorkspaceValidating,
+      workspaceValidation,
       cloneTargetPreview,
       startLogin,
       cancelLogin,
@@ -522,10 +652,11 @@ export function WorkspaceConnectionProvider({
       cancelInitializationPreview,
       confirmInitialization,
       retryLastAction,
+      revalidateCurrentWorkspace,
       startReplacement,
       cancelReplacement,
     }),
-    [cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, loadNextRepositories, openLocalPath, openVerificationUrl, previewInitialization, refreshRepositories, retryLastAction, selectRepository, startLogin, startReplacement, state],
+    [cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, openLocalPath, openVerificationUrl, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
   );
 
   return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;

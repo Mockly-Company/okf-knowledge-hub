@@ -66,6 +66,19 @@ export function WorkspaceConnectionPage() {
   return (
     <main className="workspace-connection" aria-live="polite">
       <div className="workspace-connection__card">
+        {state.mode === "replacement" ? (
+          <div className="workspace-connection__actions">
+            <Button
+              variant="ghost"
+              disabled={!connection.canCancelReplacement}
+              onClick={() => void connection.cancelReplacement()}
+            >
+              {connection.canCancelReplacement
+                ? "연결 취소"
+                : "작업 완료 후 취소 가능"}
+            </Button>
+          </div>
+        ) : null}
         {state.step === "auth" ? <GitHubLoginStep state={state} onStart={() => void connection.startLogin()} onCancel={() => void connection.cancelLogin()} onOpen={(url) => void connection.openVerificationUrl(url)} onRecover={recover} /> : null}
         {state.step === "repository" ? <RepositorySelectionStep state={state} onSelect={connection.selectRepository} onRefresh={() => void connection.refreshRepositories()} onLoadNext={() => void connection.loadNextRepositories()} onRecover={recover} /> : null}
         {state.step === "local" ? <LocalConnectionStep state={state} cloneTargetPreview={connection.cloneTargetPreview} onConnectExisting={() => void connection.connectExistingClone()} onClone={() => void connection.cloneIntoSelectedParent()} onConfirmClone={() => void connection.confirmCloneTarget()} onCancelClone={connection.cancelCloneTarget} onPreviewInitialization={() => void connection.previewInitialization()} onRecover={recover} /> : null}

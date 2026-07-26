@@ -135,8 +135,15 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
     return this.invokeCommand("inspect_workspace", { repositoryPath: path });
   }
 
-  connectWorkspace(path: string): Promise<ConnectedWorkspace> {
-    return this.invokeCommand("connect_workspace", { repositoryPath: path });
+  connectWorkspace(
+    path: string,
+    repository: Pick<GithubRepositorySummary, "id" | "fullName">,
+  ): Promise<ConnectedWorkspace> {
+    return this.invokeCommand("connect_workspace", {
+      repositoryPath: path,
+      repositoryId: repository.id,
+      repositoryFullName: repository.fullName,
+    });
   }
 
   previewInitialization(

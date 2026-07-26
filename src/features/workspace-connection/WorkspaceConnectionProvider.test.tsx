@@ -12,12 +12,21 @@ function Probe() {
   return (
     <>
       <output>{`${connection.state.step}:${connection.state.status}`}</output>
+      <output aria-label="replacement cancellation">
+        {String(connection.canCancelReplacement)}
+      </output>
+      <output aria-label="workspace validation">
+        {JSON.stringify(connection.workspaceValidation)}
+      </output>
       <button onClick={() => void connection.startLogin()}>login</button>
       <button onClick={() => {
         void connection.startLogin();
         void connection.startLogin();
       }}>login twice</button>
       <button onClick={() => void connection.retryLastAction()}>retry</button>
+      <button onClick={() => void connection.startReplacement()}>replace</button>
+      <button onClick={() => void connection.cancelReplacement()}>cancel replacement</button>
+      <button onClick={() => void connection.revalidateCurrentWorkspace()}>revalidate</button>
     </>
   );
 }
@@ -216,5 +225,106 @@ describe("WorkspaceConnectionProvider", () => {
     expect(cloneCalls).toHaveLength(2);
     expect(cloneCalls[1]?.args[0]).not.toBe(cloneCalls[0]?.args[0]);
     expect(cloneCalls[1]?.args.slice(1)).toEqual(cloneCalls[0]?.args.slice(1));
+  });
+
+  it("disables replacement cancellation while clone publication owns the flow", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.deferClone = true;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <WorkspaceConnectionPage />
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "replace" }));
+    await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+
+    expect(screen.getByLabelText("replacement cancellation")).toHaveTextContent(
+      "false",
+    );
+    expect(screen.getByRole("button", { name: "작업 완료 후 취소 가능" })).toBeDisabled();
+  });
+
+  it("cancels an auth request whose command result is still pending before restoring the workspace", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.authState = { status: "signed_out" };
+    gateway.deferGithubAuth = true;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "replace" }));
+    await user.click(screen.getByRole("button", { name: "login" }));
+    const authCall = gateway.calls.find((call) => call.method === "beginGithubAuth");
+
+    await user.click(screen.getByRole("button", { name: "cancel replacement" }));
+
+    expect(gateway.calls.find((call) => call.method === "cancelGithubAuth")?.args).toEqual([
+      authCall?.args[0],
+    ]);
+    expect(screen.getByText("initialize:connected")).toBeInTheDocument();
+  });
+
+  it("rejects a late validation result after replacement takes ownership", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected("/work/old-knowledge");
+    gateway.deferWorkspaceInspection = true;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await screen.findByText("initialize:connected");
+    await user.click(screen.getByRole("button", { name: "revalidate" }));
+    await user.click(screen.getByRole("button", { name: "replace" }));
+    gateway.resolveWorkspaceInspection({
+      status: "invalid",
+      diagnostics: [{
+        code: "workspace_name_empty",
+        path: "workspace.name",
+        message: "이전 워크스페이스 오류",
+      }],
+    });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("workspace validation")).toHaveTextContent(/^null$/),
+    );
+  });
+
+  it("publishes validation for the newly connected replacement workspace", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected("/work/old-knowledge");
+    gateway.repositorySnapshot = {
+      ...gateway.repositorySnapshot,
+      root: "/work/new-knowledge",
+    };
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <WorkspaceConnectionPage />
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "replace" }));
+    await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+
+    await screen.findByText("initialize:connected");
+    expect(screen.getByLabelText("workspace validation")).toHaveTextContent(
+      '"path":"/work/new-knowledge"',
+    );
+    expect(screen.getByLabelText("workspace validation")).toHaveTextContent(
+      '"status":"ready"',
+    );
   });
 });

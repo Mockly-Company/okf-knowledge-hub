@@ -2,7 +2,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
-use crate::settings::model::{CurrentWorkspace, DisplayDensity, PendingInitializationContext};
+use crate::settings::model::{
+    CurrentWorkspace, DisplayDensity, KnowledgeRepository, PendingInitializationContext,
+};
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
 pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
@@ -71,10 +73,15 @@ impl LocalSettingsService {
     }
 
     pub fn load_current(&self) -> Result<Option<CurrentWorkspace>, AppError> {
-        let Some(raw_path) = self.store.read(CURRENT_WORKSPACE_PATH_KEY)? else {
+        let Some(raw_connection) = self.store.read(CURRENT_WORKSPACE_PATH_KEY)? else {
             return Ok(None);
         };
-        let saved_path = PathBuf::from(&raw_path);
+        let stored = StoredCurrentWorkspace::decode(&raw_connection);
+        let saved_path = stored.path;
+        let repository = stored.repository.filter(|repository| {
+            !repository.id.trim().is_empty()
+                && valid_repository_full_name(&repository.full_name)
+        });
         let canonical_path = match self.path_resolver.canonicalize(&saved_path) {
             Ok(path) => path,
             Err(_) => return Ok(Some(CurrentWorkspace::recovery_required(saved_path))),
@@ -85,9 +92,17 @@ impl LocalSettingsService {
         };
 
         match inspection {
-            WorkspaceInspection::Ready { summary } => {
-                Ok(Some(CurrentWorkspace::connected(canonical_path, summary)))
-            }
+            WorkspaceInspection::Ready { summary } => Ok(Some(
+                repository
+                    .map(|repository| {
+                        CurrentWorkspace::connected_to_repository(
+                            canonical_path.clone(),
+                            summary.clone(),
+                            repository,
+                        )
+                    })
+                    .unwrap_or_else(|| CurrentWorkspace::connected(canonical_path, summary)),
+            )),
             WorkspaceInspection::InitializationRequired
             | WorkspaceInspection::Invalid { .. }
             | WorkspaceInspection::UnsupportedVersion { .. } => {
@@ -124,6 +139,51 @@ impl LocalSettingsService {
         self.store.write(CURRENT_WORKSPACE_PATH_KEY, encoded_path)?;
 
         Ok(CurrentWorkspace::connected(canonical_path, summary))
+    }
+
+    pub fn set_current_for_repository(
+        &self,
+        repository_path: &Path,
+        repository: KnowledgeRepository,
+    ) -> Result<CurrentWorkspace, AppError> {
+        if repository.id.trim().is_empty()
+            || !valid_repository_full_name(&repository.full_name)
+        {
+            return Err(AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "현재 지식 저장소 정보를 로컬 설정에 저장할 수 없습니다.",
+            ));
+        }
+        let inspected_summary = ready_summary(self.workspace_inspector.as_ref(), repository_path)?;
+        let canonical_path = self.path_resolver.canonicalize(repository_path)?;
+        let summary = match self.workspace_inspector.inspect(&canonical_path)? {
+            WorkspaceInspection::Ready { summary } => summary,
+            inspection => return Err(workspace_not_ready_error(inspection)),
+        };
+        if summary.id != inspected_summary.id {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "검증 중 워크스페이스 경로가 변경되었습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry));
+        }
+        let encoded = serde_json::to_string(&StoredCurrentWorkspace {
+            path: canonical_path.clone(),
+            repository: Some(repository.clone()),
+        })
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "현재 워크스페이스 연결을 로컬 설정에 저장할 수 없습니다.",
+            )
+        })?;
+        self.store.write(CURRENT_WORKSPACE_PATH_KEY, &encoded)?;
+
+        Ok(CurrentWorkspace::connected_to_repository(
+            canonical_path,
+            summary,
+            repository,
+        ))
     }
 
     pub fn clear_current(&self) -> Result<(), AppError> {
@@ -172,6 +232,23 @@ impl LocalSettingsService {
             PENDING_INITIALIZATION_KEY,
             INVALIDATED_PENDING_INITIALIZATION,
         )
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredCurrentWorkspace {
+    path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    repository: Option<KnowledgeRepository>,
+}
+
+impl StoredCurrentWorkspace {
+    fn decode(raw: &str) -> Self {
+        serde_json::from_str(raw).unwrap_or_else(|_| Self {
+            path: PathBuf::from(raw),
+            repository: None,
+        })
     }
 }
 
@@ -424,6 +501,91 @@ mod tests {
     }
 
     #[test]
+    fn loading_a_workspace_restores_its_github_repository_identity() {
+        let workspace = ready_workspace("Mockly");
+        let canonical_path = workspace.path().canonicalize().unwrap();
+        let raw_path = canonical_path.display().to_string();
+        let connection = serde_json::json!({
+            "path": raw_path,
+            "repository": {
+                "id": "R_kgDOExample",
+                "fullName": "Mockly-Company/mockly-knowledge"
+            }
+        });
+        let store = MemoryLocalSettingsStore::with_values([(
+            CURRENT_WORKSPACE_PATH_KEY,
+            connection.to_string(),
+        )]);
+        let service = LocalSettingsService::new(store);
+
+        let current = service.load_current().unwrap().unwrap();
+        let serialized = serde_json::to_value(current).unwrap();
+
+        assert_eq!(
+            serialized["repository"],
+            serde_json::json!({
+                "id": "R_kgDOExample",
+                "fullName": "Mockly-Company/mockly-knowledge"
+            })
+        );
+    }
+
+    #[test]
+    fn malformed_saved_repository_identity_is_not_exposed() {
+        let workspace = ready_workspace("Mockly");
+        let connection = serde_json::json!({
+            "path": workspace.path().canonicalize().unwrap(),
+            "repository": {
+                "id": "",
+                "fullName": "not-a-full-name"
+            }
+        });
+        let store = MemoryLocalSettingsStore::with_values([(
+            CURRENT_WORKSPACE_PATH_KEY,
+            connection.to_string(),
+        )]);
+        let service = LocalSettingsService::new(store);
+
+        let current = service.load_current().unwrap().unwrap();
+
+        assert!(current.repository.is_none());
+    }
+
+    #[test]
+    fn setting_a_workspace_persists_repository_identity_with_its_canonical_path() {
+        let workspace = ready_workspace("Mockly");
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store.clone());
+
+        let current = service
+            .set_current_for_repository(
+                workspace.path(),
+                KnowledgeRepository {
+                    id: "R_kgDOExample".into(),
+                    full_name: "Mockly-Company/mockly-knowledge".into(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            current.repository.unwrap().full_name,
+            "Mockly-Company/mockly-knowledge"
+        );
+        let stored: serde_json::Value =
+            serde_json::from_str(&store.raw(CURRENT_WORKSPACE_PATH_KEY).unwrap()).unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!({
+                "path": workspace.path().canonicalize().unwrap(),
+                "repository": {
+                    "id": "R_kgDOExample",
+                    "fullName": "Mockly-Company/mockly-knowledge"
+                }
+            })
+        );
+    }
+
+    #[test]
     fn a_missing_saved_folder_requires_recovery_without_deleting_the_raw_value() {
         let missing = PathBuf::from("/definitely/missing/okhub-workspace");
         let raw = missing.display().to_string();
@@ -591,6 +753,7 @@ mod tests {
                 summary: WorkspaceSummary {
                     id: workspace_id,
                     name: "Workspace A".into(),
+                    schema_version: 1,
                     document_roots: vec!["docs".into()],
                     repository_count: 0,
                 },

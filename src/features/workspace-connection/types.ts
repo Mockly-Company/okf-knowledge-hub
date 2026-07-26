@@ -115,6 +115,7 @@ export type CloneProgressEvent =
 export interface WorkspaceSummary {
   id: string;
   name: string;
+  schemaVersion: number;
   documentRoots: string[];
   repositoryCount: number;
 }
@@ -211,6 +212,10 @@ export interface ConnectedWorkspace {
   path: string;
   status: "connected";
   summary: WorkspaceSummary;
+  repository?: {
+    id: string;
+    fullName: string;
+  };
 }
 
 export interface RecoveryRequiredWorkspace {
@@ -289,12 +294,16 @@ export type WorkspaceConnectionRequest =
   | {
       id: string;
       repositoryRoot: string;
+      repositoryId: string;
+      repositoryFullName: string;
       source: "existing";
       initializationRequestId: null;
     }
   | {
       id: string;
       repositoryRoot: string;
+      repositoryId: string;
+      repositoryFullName: string;
       source: "initialization";
       initializationRequestId: string;
     };

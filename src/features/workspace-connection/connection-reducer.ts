@@ -762,6 +762,8 @@ function sameWorkspaceConnectionRequest(
   return (
     left?.id === right.id &&
     left.repositoryRoot === right.repositoryRoot &&
+    left.repositoryId === right.repositoryId &&
+    left.repositoryFullName === right.repositoryFullName &&
     left.source === right.source &&
     left.initializationRequestId === right.initializationRequestId
   );

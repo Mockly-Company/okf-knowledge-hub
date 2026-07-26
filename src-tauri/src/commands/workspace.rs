@@ -15,7 +15,7 @@ use crate::repository::model::{
 use crate::repository::service::{
     CloneProgressSink, RepositoryCredentialPort, RepositoryRemotePort, RepositoryService,
 };
-use crate::settings::model::{CurrentWorkspace, PendingInitializationContext};
+use crate::settings::model::{CurrentWorkspace, KnowledgeRepository, PendingInitializationContext};
 use crate::state::{AppServices, JobRegistrationError};
 use crate::workspace::service::{
     InitializationPreview, RepositoryPopulation, WorkspaceInspection, WorkspaceService,
@@ -340,17 +340,46 @@ pub async fn inspect_workspace(repository_path: PathBuf) -> CommandResult<Worksp
 pub(crate) async fn connect_workspace_inner(
     services: &AppServices,
     repository_path: PathBuf,
+    repository_id: String,
+    repository_full_name: String,
 ) -> CommandResult<CurrentWorkspace> {
+    let github = services.github.clone().ok_or_else(service_unavailable)?;
+    let verified_repository = github
+        .repository_detail(&repository_id, &repository_full_name)
+        .await?;
+    inspect_existing_clone_inner(
+        services,
+        repository_path.clone(),
+        verified_repository.id.clone(),
+    )
+    .await?;
     let settings = services.local_settings.clone();
-    run_blocking(move || settings.set_current(&repository_path)).await
+    run_blocking(move || {
+        settings.set_current_for_repository(
+            &repository_path,
+            KnowledgeRepository {
+                id: verified_repository.id,
+                full_name: verified_repository.full_name,
+            },
+        )
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn connect_workspace(
     state: State<'_, AppServices>,
     repository_path: PathBuf,
+    repository_id: String,
+    repository_full_name: String,
 ) -> CommandResult<CurrentWorkspace> {
-    connect_workspace_inner(&state, repository_path).await
+    connect_workspace_inner(
+        &state,
+        repository_path,
+        repository_id,
+        repository_full_name,
+    )
+    .await
 }
 
 pub(crate) async fn preview_workspace_initialization_inner(
@@ -1200,6 +1229,34 @@ mod tests {
             remote_url: Some("https://github.com/Mockly-Company/mockly-knowledge.git".into()),
             fingerprint: "fixture".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn connecting_a_workspace_requires_authoritative_repository_verification() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        std::fs::create_dir_all(directory.path().join("docs")).unwrap();
+        std::fs::write(
+            directory.path().join(".okf/workspace.yml"),
+            format!(
+                "schema_version: 1\nworkspace:\n  id: {}\n  name: Mockly\ndocuments:\n  roots:\n    - path: docs\nrepositories: []\n",
+                Uuid::new_v4()
+            ),
+        )
+        .unwrap();
+        let services = AppServices::new(LocalSettingsService::new(MemorySettings::default()));
+
+        let error = connect_workspace_inner(
+            &services,
+            directory.path().to_path_buf(),
+            "R_kgDOMockly".into(),
+            "Mockly-Company/mockly-knowledge".into(),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+        assert!(services.local_settings.load_current().unwrap().is_none());
     }
 
     fn initialization_result() -> InitializationResult {

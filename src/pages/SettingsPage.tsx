@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { Check } from "lucide-react";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
+import { WorkspaceSettingsPanel } from "@/features/workspace-connection/components/WorkspaceSettingsPanel";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +33,7 @@ const options: Array<{
 
 export function SettingsPage() {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
+  const [activeCategory, setActiveCategory] = useState("화면");
 
   return (
     <section className="p-8" aria-labelledby="settings-title">
@@ -48,20 +51,25 @@ export function SettingsPage() {
           <ul className="m-0 grid list-none content-start gap-1 p-0">
             {settingsCategories.map((item) => (
               <li key={item}>
-                <span
-                  aria-current={item === "화면" ? "true" : undefined}
+                <button
+                  type="button"
+                  onClick={() => setActiveCategory(item)}
+                  aria-current={item === activeCategory ? "page" : undefined}
                   className={cn(
-                    "block rounded-[var(--radius-md)] px-3 py-2",
-                    item === "화면" &&
+                    "block w-full rounded-[var(--radius-md)] px-3 py-2 text-left",
+                    item === activeCategory &&
                       "bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary-text)]",
                   )}
                 >
                   {item}
-                </span>
+                </button>
               </li>
             ))}
           </ul>
         </aside>
+        {activeCategory === "워크스페이스" ? (
+          <WorkspaceSettingsPanel />
+        ) : activeCategory === "화면" ? (
         <div>
           <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">
             화면
@@ -115,6 +123,16 @@ export function SettingsPage() {
             </div>
           </fieldset>
         </div>
+        ) : (
+          <div>
+            <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">
+              {activeCategory}
+            </h2>
+            <p className="mt-1 text-[var(--color-text-muted)]">
+              이 설정은 이후 작업에서 연결합니다.
+            </p>
+          </div>
+        )}
       </div>
     </section>
   );

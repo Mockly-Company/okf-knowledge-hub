@@ -90,6 +90,7 @@ function connected(path = "/work/old-knowledge"): ConnectedWorkspace {
     summary: {
       id: "workspace-1",
       name: "Mockly",
+      schemaVersion: 1,
       documentRoots: ["docs"],
       repositoryCount: 0,
     },
@@ -175,6 +176,8 @@ function initializationConnectionRequest(
   return {
     id,
     repositoryRoot: root,
+    repositoryId: "R_kgDOExample",
+    repositoryFullName: "Mockly-Company/mockly-knowledge",
     source: "initialization",
     initializationRequestId,
   };
@@ -187,6 +190,8 @@ function existingConnectionRequest(
   return {
     id,
     repositoryRoot: root,
+    repositoryId: "R_kgDOExample",
+    repositoryFullName: "Mockly-Company/mockly-knowledge",
     source: "existing",
     initializationRequestId: null,
   };
@@ -2140,7 +2145,7 @@ describe("workspace connection gateway adapters", () => {
     ).toMatchObject({ requestId: "clone-operation-1" });
     await gateway.cancelRepositoryClone("clone-1");
     await gateway.inspectWorkspace("/work/repo");
-    await gateway.connectWorkspace("/work/repo");
+    await gateway.connectWorkspace("/work/repo", repository("repo-1"));
     await gateway.previewInitialization({
       repositoryPath: "/work/repo",
       workspaceName: "Mockly",
@@ -2239,7 +2244,9 @@ describe("workspace connection gateway adapters", () => {
     await expect(gateway.getCurrentWorkspace()).rejects.toEqual(expected);
     await expect(gateway.getAuthState()).rejects.toEqual(expected);
     await expect(gateway.listRepositories()).rejects.toEqual(expected);
-    await expect(gateway.connectWorkspace("/work/repo")).rejects.toEqual(expected);
+    await expect(
+      gateway.connectWorkspace("/work/repo", repository("repo-1")),
+    ).rejects.toEqual(expected);
     await expect(gateway.openPath("/work/repo/.okf/workspace.yml")).rejects.toEqual(expected);
   });
 });
