@@ -71,9 +71,8 @@ impl AuthService {
         }
     }
 
-    pub async fn begin(&self) -> Result<DeviceAuthorization, AppError> {
+    pub async fn begin(&self, request_id: Uuid) -> Result<DeviceAuthorization, AppError> {
         self.ensure_client_id()?;
-        let request_id = Uuid::new_v4();
         let (generation, cancellation) = {
             let mut lifecycle = self.lifecycle.lock().await;
             invalidate_lifecycle(&mut lifecycle);
@@ -707,6 +706,16 @@ mod tests {
         }
     }
 
+    fn operation_event_request_id(event: &AuthStatusEvent) -> Option<uuid::Uuid> {
+        match event {
+            AuthStatusEvent::WaitingForUser { request_id }
+            | AuthStatusEvent::Authenticated { request_id, .. }
+            | AuthStatusEvent::Failed { request_id, .. }
+            | AuthStatusEvent::Cancelled { request_id } => Some(*request_id),
+            AuthStatusEvent::ReauthenticationRequired { .. } => None,
+        }
+    }
+
     #[derive(Clone)]
     struct FakeDeviceFlowApi {
         polls: Arc<Mutex<VecDeque<DeviceTokenPoll>>>,
@@ -1210,6 +1219,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn begin_preserves_the_caller_supplied_request_id() {
+        let request_id = uuid::Uuid::parse_str("599a739c-bde8-4fed-b750-d085adf562eb").unwrap();
+        let service = service(
+            FakeDeviceFlowApi::with_polls([]),
+            MemoryCredentialStore::default(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        );
+
+        let authorization = service.begin(request_id).await.unwrap();
+
+        assert_eq!(authorization.request_id, request_id);
+    }
+
+    #[tokio::test]
     async fn device_flow_stores_tokens_and_emits_only_public_status() {
         let api = FakeDeviceFlowApi::approved_after_two_polls();
         let credentials = MemoryCredentialStore::default();
@@ -1223,7 +1248,8 @@ mod tests {
             events.clone(),
         );
 
-        let authorization = service.begin().await.unwrap();
+        let request_id = uuid::Uuid::new_v4();
+        let authorization = service.begin(request_id).await.unwrap();
         service
             .run(authorization.request_id, CancellationToken::new())
             .await
@@ -1234,6 +1260,17 @@ mod tests {
             Some("ghu_private")
         );
         assert_eq!(events.statuses(), vec!["waiting_for_user", "authenticated"]);
+        assert!(events.events().iter().all(|event| match event {
+            AuthStatusEvent::WaitingForUser { request_id: actual }
+            | AuthStatusEvent::Authenticated {
+                request_id: actual, ..
+            }
+            | AuthStatusEvent::Failed {
+                request_id: actual, ..
+            }
+            | AuthStatusEvent::Cancelled { request_id: actual } => *actual == request_id,
+            AuthStatusEvent::ReauthenticationRequired { .. } => false,
+        }));
         let public_json = serde_json::to_string(&events.events()).unwrap();
         assert!(!public_json.contains("ghu_private"));
         assert!(!public_json.contains("ghr_private"));
@@ -1272,6 +1309,7 @@ mod tests {
 
     #[tokio::test]
     async fn authorization_denial_emits_a_public_failure() {
+        let request_id = uuid::Uuid::parse_str("ad15b51d-1625-46bd-83ff-ce7ba8c2ae33").unwrap();
         let api = FakeDeviceFlowApi::with_polls([DeviceTokenPoll::Denied]);
         let credentials = MemoryCredentialStore::default();
         let events = RecordingAuthEvents::default();
@@ -1283,7 +1321,7 @@ mod tests {
             AdvancingDelay::new(clock),
             events.clone(),
         );
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(request_id).await.unwrap();
 
         let error = service
             .run(authorization.request_id, CancellationToken::new())
@@ -1292,6 +1330,10 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::AuthenticationDenied);
         assert_eq!(events.statuses(), vec!["waiting_for_user", "failed"]);
+        assert!(events
+            .events()
+            .iter()
+            .all(|event| operation_event_request_id(event) == Some(request_id)));
         assert_eq!(credentials.saved_access_token(), None);
     }
 
@@ -1306,7 +1348,7 @@ mod tests {
             AdvancingDelay::new(clock),
             RecordingAuthEvents::default(),
         );
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
 
         let error = service
             .run(authorization.request_id, CancellationToken::new())
@@ -1338,7 +1380,7 @@ mod tests {
             delay.clone(),
             RecordingAuthEvents::default(),
         );
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
 
         service
             .run(authorization.request_id, CancellationToken::new())
@@ -1350,6 +1392,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_stops_waiting_without_polling_or_storing_tokens() {
+        let request_id = uuid::Uuid::parse_str("f895aaed-b5f2-4f49-aac6-bd8a945246f6").unwrap();
         let api = FakeDeviceFlowApi::approved_after_two_polls();
         let credentials = MemoryCredentialStore::default();
         let events = RecordingAuthEvents::default();
@@ -1360,7 +1403,7 @@ mod tests {
             NeverDelay,
             events.clone(),
         );
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(request_id).await.unwrap();
         let cancellation = CancellationToken::new();
         cancellation.cancel();
 
@@ -1372,6 +1415,10 @@ mod tests {
         assert_eq!(api.poll_count(), 0);
         assert_eq!(credentials.saved_access_token(), None);
         assert_eq!(events.statuses(), vec!["waiting_for_user", "cancelled"]);
+        assert!(events
+            .events()
+            .iter()
+            .all(|event| operation_event_request_id(event) == Some(request_id)));
     }
 
     #[tokio::test]
@@ -1391,7 +1438,7 @@ mod tests {
             },
             events.clone(),
         ));
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
         let cancellation = CancellationToken::new();
         let run = tokio::spawn({
             let service = service.clone();
@@ -1423,7 +1470,7 @@ mod tests {
             AdvancingDelay::new(clock),
             events.clone(),
         ));
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
         let cancellation = CancellationToken::new();
         let run = tokio::spawn({
             let service = service.clone();
@@ -1502,7 +1549,7 @@ mod tests {
         ));
         let begin = tokio::spawn({
             let service = service.clone();
-            async move { service.begin().await }
+            async move { service.begin(uuid::Uuid::new_v4()).await }
         });
         started.notified().await;
 
@@ -1532,7 +1579,7 @@ mod tests {
             AdvancingDelay::new(clock),
             RecordingAuthEvents::default(),
         ));
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
         let run = tokio::spawn({
             let service = service.clone();
             async move {
@@ -1593,11 +1640,11 @@ mod tests {
         ));
         let older = tokio::spawn({
             let service = service.clone();
-            async move { service.begin().await }
+            async move { service.begin(uuid::Uuid::new_v4()).await }
         });
         first_started.notified().await;
 
-        let newer = service.begin().await.unwrap();
+        let newer = service.begin(uuid::Uuid::new_v4()).await.unwrap();
         release_first.notify_one();
         let older_result = older.await.unwrap();
 
@@ -1670,7 +1717,7 @@ mod tests {
             delay.clone(),
             RecordingAuthEvents::default(),
         );
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
 
         let error = service
             .run(authorization.request_id, CancellationToken::new())
@@ -1699,7 +1746,7 @@ mod tests {
             AdvancingDelay::new(clock),
             RecordingAuthEvents::default(),
         ));
-        let authorization = service.begin().await.unwrap();
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
 
         let result = tokio::time::timeout(
             Duration::from_secs(1),
@@ -1752,7 +1799,7 @@ mod tests {
             RecordingAuthEvents::default(),
         );
 
-        let error = service.begin().await.unwrap_err();
+        let error = service.begin(uuid::Uuid::new_v4()).await.unwrap_err();
 
         assert_eq!(error.code, ErrorCode::GithubUnavailable);
     }

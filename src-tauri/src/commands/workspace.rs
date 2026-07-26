@@ -16,7 +16,7 @@ use crate::repository::service::{
     CloneProgressSink, RepositoryCredentialPort, RepositoryRemotePort, RepositoryService,
 };
 use crate::settings::model::{CurrentWorkspace, PendingInitializationContext};
-use crate::state::AppServices;
+use crate::state::{AppServices, JobRegistrationError};
 use crate::workspace::service::{
     InitializationPreview, RepositoryPopulation, WorkspaceInspection, WorkspaceService,
 };
@@ -206,16 +206,29 @@ pub async fn inspect_existing_clone(
 
 async fn clone_repository_inner(
     services: &AppServices,
+    request_id: Uuid,
     request: CloneRepositoryCommandRequest,
     emitter: Arc<dyn RepositoryCloneEventEmitter>,
+) -> CommandResult<CloneJob> {
+    clone_repository_with_spawn_hook(services, request_id, request, emitter, || {}).await
+}
+
+async fn clone_repository_with_spawn_hook(
+    services: &AppServices,
+    request_id: Uuid,
+    request: CloneRepositoryCommandRequest,
+    emitter: Arc<dyn RepositoryCloneEventEmitter>,
+    before_run: impl FnOnce() + Send + 'static,
 ) -> CommandResult<CloneJob> {
     let auth = services.auth.clone().ok_or_else(service_unavailable)?;
     let github = services.github.clone().ok_or_else(service_unavailable)?;
     let repository_name = repository_name_from_full_name(&request.full_name)?;
     let target_path = RepositoryService::clone_target(&request.parent_directory, repository_name)?;
-    let request_id = Uuid::new_v4();
     let cancellation = CancellationToken::new();
-    services.clone_jobs.insert(request_id, cancellation.clone());
+    services
+        .clone_jobs
+        .try_insert(request_id, cancellation.clone())
+        .map_err(|error| clone_job_registration_error(error, request_id))?;
 
     let jobs = services.clone_jobs.clone();
     let git = services.repository_git.clone();
@@ -226,6 +239,7 @@ async fn clone_repository_inner(
         jobs.clone(),
     ));
     tauri::async_runtime::spawn_blocking(move || {
+        before_run();
         let service = RepositoryService::for_clone(git, github, auth);
         let request = CloneRequest {
             repository_id: request.repository_id,
@@ -274,10 +288,12 @@ fn emit_clone_terminal(
 pub async fn clone_repository(
     app: AppHandle,
     state: State<'_, AppServices>,
+    request_id: Uuid,
     request: CloneRepositoryCommandRequest,
 ) -> CommandResult<CloneJob> {
     clone_repository_inner(
         &state,
+        request_id,
         request,
         Arc::new(TauriRepositoryCloneEventEmitter { app }),
     )
@@ -673,6 +689,16 @@ fn blocking_task_error() -> AppError {
 fn clone_cancelled_error() -> AppError {
     AppError::new(ErrorCode::CloneFailed, "저장소 clone이 취소되었습니다.")
         .with_recovery(RecoveryAction::Retry)
+}
+
+fn clone_job_registration_error(error: JobRegistrationError, request_id: Uuid) -> AppError {
+    let message = match error {
+        JobRegistrationError::RequestIdNotV4 => "Clone 작업 ID는 UUID v4여야 합니다.",
+        JobRegistrationError::AlreadyActive => "같은 clone 작업 ID가 이미 진행 중입니다.",
+    };
+    AppError::new(ErrorCode::CloneFailed, message)
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("requestId", request_id.to_string())
 }
 
 fn repository_name_from_full_name(full_name: &str) -> CommandResult<&str> {
@@ -1310,14 +1336,15 @@ mod tests {
         fixture
             .services
             .auth_jobs
-            .insert(unrelated_job, unrelated_cancellation.clone());
+            .try_insert(unrelated_job, unrelated_cancellation.clone())
+            .unwrap();
         let transition_error = match transition {
             AuthTransition::Logout => tauri::async_runtime::block_on(
                 crate::commands::auth::logout_github_inner(&fixture.services),
             )
             .unwrap_err(),
             AuthTransition::AccountSwitch => tauri::async_runtime::block_on(
-                crate::commands::auth::begin_github_auth_inner(&fixture.services),
+                crate::commands::auth::begin_github_auth_inner(&fixture.services, Uuid::new_v4()),
             )
             .unwrap_err(),
         };
@@ -1651,24 +1678,148 @@ mod tests {
         assert_eq!(pull_requests.load(Ordering::SeqCst), 1);
     }
 
-    #[test]
-    fn clone_events_keep_request_ids_and_never_serialize_credentials() {
-        let request_id = Uuid::new_v4();
-        let event = RepositoryCloneEvent::Progress {
-            request_id,
-            progress: crate::repository::model::CloneProgress {
-                stage: crate::repository::model::CloneProgressStage::ReceivingObjects,
-                completed: 2,
-                total: 10,
-            },
+    #[tokio::test]
+    async fn clone_job_and_failure_event_preserve_the_caller_supplied_request_id() {
+        let request_id = Uuid::parse_str("42e8ae6c-b0f7-4f66-9334-bdb990c825c4").unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let services = services_with_auth(LocalSettingsService::new(MemorySettings::default()));
+        let events = Arc::new(CloneEvents::default());
+        let request = CloneRepositoryCommandRequest {
+            repository_id: "R_kgDOMockly".into(),
+            full_name: "Mockly-Company/mockly-knowledge".into(),
+            https_url: "https://github.com/Mockly-Company/mockly-knowledge.git".into(),
+            parent_directory: parent.path().to_path_buf(),
         };
 
-        let json = serde_json::to_string(&event).unwrap();
+        let job = clone_repository_inner(&services, request_id, request, events.clone())
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while events.0.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
 
-        assert!(json.contains(&request_id.to_string()));
-        assert!(json.contains("receiving_objects"));
-        assert!(!json.contains("token"));
-        assert!(!json.contains("password"));
+        assert_eq!(job.request_id, request_id);
+        assert_eq!(
+            serde_json::to_value(job).unwrap()["requestId"],
+            request_id.to_string()
+        );
+        assert!(matches!(
+            events.0.lock().unwrap().as_slice(),
+            [RepositoryCloneEvent::Failed {
+                request_id: actual,
+                ..
+            }] if *actual == request_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn duplicate_active_clone_id_is_rejected_before_a_second_worker_starts() {
+        let request_id = Uuid::parse_str("d2063f80-887c-4bf5-8879-5f59a40f4959").unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let services = services_with_auth(LocalSettingsService::new(MemorySettings::default()));
+        services
+            .clone_jobs
+            .try_insert(request_id, CancellationToken::new())
+            .unwrap();
+        let events = Arc::new(CloneEvents::default());
+        let worker_starts = Arc::new(AtomicUsize::new(0));
+        let counted_starts = worker_starts.clone();
+        let request = CloneRepositoryCommandRequest {
+            repository_id: "R_kgDOMockly".into(),
+            full_name: "Mockly-Company/mockly-knowledge".into(),
+            https_url: "https://github.com/Mockly-Company/mockly-knowledge.git".into(),
+            parent_directory: parent.path().to_path_buf(),
+        };
+
+        let error = clone_repository_with_spawn_hook(
+            &services,
+            request_id,
+            request,
+            events.clone(),
+            move || {
+                counted_starts.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CloneFailed);
+        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
+        assert_eq!(
+            error.details.get("requestId"),
+            Some(&request_id.to_string())
+        );
+        assert_eq!(worker_starts.load(Ordering::SeqCst), 0);
+        assert!(events.0.lock().unwrap().is_empty());
+        assert!(services.clone_jobs.contains(request_id));
+    }
+
+    #[test]
+    fn clone_events_keep_the_exact_public_request_id_and_never_serialize_credentials() {
+        let request_id = Uuid::parse_str("31c4ba61-b0db-47a8-9708-c012567c2dc4").unwrap();
+        let events = [
+            RepositoryCloneEvent::Progress {
+                request_id,
+                progress: crate::repository::model::CloneProgress {
+                    stage: crate::repository::model::CloneProgressStage::ReceivingObjects,
+                    completed: 2,
+                    total: 10,
+                },
+            },
+            RepositoryCloneEvent::Completed {
+                request_id,
+                repository: cloned_snapshot(),
+            },
+            RepositoryCloneEvent::Failed {
+                request_id,
+                error: AppError::new(ErrorCode::CloneFailed, "clone failed"),
+            },
+            RepositoryCloneEvent::Cancelled { request_id },
+        ];
+
+        for event in events {
+            let json = serde_json::to_value(event).unwrap();
+            assert_eq!(json["requestId"], request_id.to_string());
+            assert!(json.get("request_id").is_none());
+            assert!(!json.to_string().contains("token"));
+            assert!(!json.to_string().contains("password"));
+        }
+    }
+
+    #[test]
+    fn clone_progress_sink_emits_the_caller_supplied_request_id() {
+        let request_id = Uuid::parse_str("f61f5dff-bfb8-45ae-a3f8-f07820712056").unwrap();
+        let cancellation = CancellationToken::new();
+        let jobs = crate::state::JobRegistry::default();
+        jobs.try_insert(request_id, cancellation.clone()).unwrap();
+        let events = Arc::new(CloneEvents::default());
+        let sink =
+            CloneCommandProgressSink::new(request_id, cancellation, events.clone(), jobs.clone());
+
+        assert!(CloneProgressSink::emit(
+            &sink,
+            crate::repository::model::CloneProgress {
+                stage: crate::repository::model::CloneProgressStage::ReceivingObjects,
+                completed: 1,
+                total: 10,
+            },
+        ));
+
+        assert!(matches!(
+            events.0.lock().unwrap().as_slice(),
+            [RepositoryCloneEvent::Progress {
+                request_id: actual,
+                ..
+            }] if *actual == request_id
+        ));
+        assert_eq!(
+            jobs.finish(request_id),
+            crate::state::JobTerminal::Completed
+        );
     }
 
     #[test]
@@ -1696,8 +1847,14 @@ mod tests {
         let second = Uuid::new_v4();
         let first_token = tokio_util::sync::CancellationToken::new();
         let second_token = tokio_util::sync::CancellationToken::new();
-        state.clone_jobs.insert(first, first_token.clone());
-        state.clone_jobs.insert(second, second_token.clone());
+        state
+            .clone_jobs
+            .try_insert(first, first_token.clone())
+            .unwrap();
+        state
+            .clone_jobs
+            .try_insert(second, second_token.clone())
+            .unwrap();
 
         assert!(cancel_repository_clone_inner(&state, first).await.unwrap());
 
@@ -1747,7 +1904,7 @@ mod tests {
         let jobs = crate::state::JobRegistry::default();
         let request_id = Uuid::new_v4();
         let cancellation = CancellationToken::new();
-        jobs.insert(request_id, cancellation.clone());
+        jobs.try_insert(request_id, cancellation.clone()).unwrap();
         let sink = CloneCommandProgressSink::without_emitter_and_jobs(
             request_id,
             cancellation,
@@ -1769,7 +1926,8 @@ mod tests {
 
         let cancelled_id = Uuid::new_v4();
         let cancelled_token = CancellationToken::new();
-        jobs.insert(cancelled_id, cancelled_token.clone());
+        jobs.try_insert(cancelled_id, cancelled_token.clone())
+            .unwrap();
         let cancelled_sink = CloneCommandProgressSink::without_emitter_and_jobs(
             cancelled_id,
             cancelled_token,
@@ -1798,7 +1956,8 @@ mod tests {
 
         let completed_id = Uuid::new_v4();
         let completed_token = CancellationToken::new();
-        jobs.insert(completed_id, completed_token.clone());
+        jobs.try_insert(completed_id, completed_token.clone())
+            .unwrap();
         let completed_sink = CloneCommandProgressSink::without_emitter_and_jobs(
             completed_id,
             completed_token,

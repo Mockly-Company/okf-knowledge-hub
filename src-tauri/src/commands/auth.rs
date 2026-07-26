@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::auth::model::{AuthStatusEvent, DeviceAuthorization, GithubUserSummary};
 use crate::auth::ports::AuthEventSink;
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
-use crate::state::{AppServices, JobRegistry, JobTerminal};
+use crate::state::{AppServices, JobRegistrationError, JobRegistry, JobTerminal};
 
 pub const GITHUB_AUTH_STATUS_EVENT: &str = "github-auth-status";
 
@@ -38,6 +38,34 @@ impl AuthEventSink for TauriAuthEventSink {
 pub struct LifecycleAuthEventSink<E> {
     inner: E,
     jobs: JobRegistry,
+}
+
+struct PendingJobRegistration {
+    jobs: JobRegistry,
+    request_id: Uuid,
+    committed: bool,
+}
+
+impl PendingJobRegistration {
+    fn new(jobs: JobRegistry, request_id: Uuid) -> Self {
+        Self {
+            jobs,
+            request_id,
+            committed: false,
+        }
+    }
+
+    fn commit(mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for PendingJobRegistration {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.jobs.finish(self.request_id);
+        }
+    }
 }
 
 impl<E> LifecycleAuthEventSink<E> {
@@ -97,35 +125,41 @@ pub async fn get_auth_state(state: State<'_, AppServices>) -> CommandResult<Auth
 
 pub(crate) async fn begin_github_auth_inner(
     services: &AppServices,
+    request_id: Uuid,
 ) -> CommandResult<DeviceAuthorization> {
-    begin_github_auth_with_publication_hook(services, || {}, || {}).await
+    begin_github_auth_with_publication_hook(services, request_id, || {}, || {}).await
 }
 
 async fn begin_github_auth_with_publication_hook(
     services: &AppServices,
+    request_id: Uuid,
     before_publication: impl FnOnce(),
     before_run: impl FnOnce() + Send + 'static,
 ) -> CommandResult<DeviceAuthorization> {
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
+    let cancellation = CancellationToken::new();
+    services
+        .auth_jobs
+        .try_insert(request_id, cancellation.clone())
+        .map_err(|error| auth_job_registration_error(error, request_id))?;
+    let registration = PendingJobRegistration::new(services.auth_jobs.clone(), request_id);
     let _mutation = services.initialization_contexts.lock_mutation().await;
     crate::commands::workspace::invalidate_pending_initialization_for_auth_transition_locked(
         services,
     )
     .await?;
-    let authorization_result = auth.begin().await;
+    let authorization_result = auth.begin(request_id).await;
     let _ =
         crate::commands::workspace::remove_pending_initialization_tombstone_locked(services).await;
     let authorization = authorization_result?;
     before_publication();
-    let request_id = authorization.request_id;
-    let cancellation = CancellationToken::new();
-    services.auth_jobs.insert(request_id, cancellation.clone());
     let jobs = services.auth_jobs.clone();
     tauri::async_runtime::spawn(async move {
         before_run();
         let _ = auth.run(request_id, cancellation).await;
         jobs.finish(request_id);
     });
+    registration.commit();
     drop(_mutation);
     Ok(authorization)
 }
@@ -133,8 +167,9 @@ async fn begin_github_auth_with_publication_hook(
 #[tauri::command]
 pub async fn begin_github_auth(
     state: State<'_, AppServices>,
+    request_id: Uuid,
 ) -> CommandResult<DeviceAuthorization> {
-    begin_github_auth_inner(&state).await
+    begin_github_auth_inner(&state, request_id).await
 }
 
 pub(crate) async fn cancel_github_auth_inner(
@@ -180,11 +215,21 @@ fn auth_unavailable() -> AppError {
     .with_recovery(RecoveryAction::Retry)
 }
 
+fn auth_job_registration_error(error: JobRegistrationError, request_id: Uuid) -> AppError {
+    let message = match error {
+        JobRegistrationError::RequestIdNotV4 => "GitHub 로그인 작업 ID는 UUID v4여야 합니다.",
+        JobRegistrationError::AlreadyActive => "같은 GitHub 로그인 작업 ID가 이미 진행 중입니다.",
+    };
+    AppError::new(ErrorCode::GithubUnavailable, message)
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("requestId", request_id.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
 
@@ -482,6 +527,7 @@ mod tests {
 
     #[tokio::test]
     async fn begin_auth_returns_public_device_fields_only() {
+        let request_id = Uuid::parse_str("e415c1ec-8907-4c48-9c3a-b91cadcae326").unwrap();
         let auth = AuthService::new(
             "Iv1.public-client-id",
             ApprovedDeviceFlow,
@@ -492,9 +538,14 @@ mod tests {
         );
         let state = AppServices::for_command_tests(auth);
 
-        let result = begin_github_auth_inner(&state).await.unwrap();
+        let result = begin_github_auth_inner(&state, request_id).await.unwrap();
         let json = serde_json::to_string(&result).unwrap();
 
+        assert_eq!(result.request_id, request_id);
+        assert_eq!(
+            serde_json::to_value(&result).unwrap()["requestId"],
+            request_id.to_string()
+        );
         assert!(json.contains("userCode"));
         assert!(json.contains("verificationUri"));
         assert!(json.contains("requestId"));
@@ -504,6 +555,45 @@ mod tests {
         assert!(!json.contains("device_code"));
         assert!(!json.contains("access_token"));
         assert!(!json.contains("refresh_token"));
+    }
+
+    #[tokio::test]
+    async fn duplicate_active_auth_id_is_rejected_before_a_second_worker_starts() {
+        let request_id = Uuid::parse_str("54cd8253-0bb3-4d51-af39-e307357e2e44").unwrap();
+        let state = AppServices::for_command_tests(AuthService::new(
+            "Iv1.public-client-id",
+            ApprovedDeviceFlow,
+            MemoryCredentials::default(),
+            FixedClock,
+            PendingDelay,
+            Events::default(),
+        ));
+        state
+            .auth_jobs
+            .try_insert(request_id, CancellationToken::new())
+            .unwrap();
+        let worker_starts = Arc::new(AtomicUsize::new(0));
+        let counted_starts = worker_starts.clone();
+
+        let error = begin_github_auth_with_publication_hook(
+            &state,
+            request_id,
+            || {},
+            move || {
+                counted_starts.fetch_add(1, Ordering::SeqCst);
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
+        assert_eq!(
+            error.details.get("requestId"),
+            Some(&request_id.to_string())
+        );
+        assert_eq!(worker_starts.load(Ordering::SeqCst), 0);
+        assert!(state.auth_jobs.contains(request_id));
     }
 
     #[tokio::test]
@@ -518,7 +608,9 @@ mod tests {
         );
         let state = AppServices::for_command_tests(auth);
 
-        let authorization = begin_github_auth_inner(&state).await.unwrap();
+        let authorization = begin_github_auth_inner(&state, Uuid::new_v4())
+            .await
+            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while state.auth_jobs.contains(authorization.request_id) {
                 tokio::task::yield_now().await;
@@ -557,6 +649,7 @@ mod tests {
         let begin = thread::spawn(move || {
             tauri::async_runtime::block_on(begin_github_auth_with_publication_hook(
                 &begin_state,
+                Uuid::new_v4(),
                 move || {
                     begin_ready.wait();
                     begin_publish.wait();
@@ -624,8 +717,14 @@ mod tests {
         let second = uuid::Uuid::new_v4();
         let first_token = tokio_util::sync::CancellationToken::new();
         let second_token = tokio_util::sync::CancellationToken::new();
-        state.auth_jobs.insert(first, first_token.clone());
-        state.auth_jobs.insert(second, second_token.clone());
+        state
+            .auth_jobs
+            .try_insert(first, first_token.clone())
+            .unwrap();
+        state
+            .auth_jobs
+            .try_insert(second, second_token.clone())
+            .unwrap();
 
         assert!(cancel_github_auth_inner(&state, first).await.unwrap());
 
@@ -660,11 +759,29 @@ mod tests {
 
     #[test]
     fn auth_status_events_use_the_public_camel_case_request_id() {
-        let request_id = uuid::Uuid::new_v4();
-        let json = serde_json::to_string(&AuthStatusEvent::WaitingForUser { request_id }).unwrap();
+        let request_id = Uuid::parse_str("693b9da3-c2cb-4e95-89ab-15daf4d7646e").unwrap();
+        let events = [
+            AuthStatusEvent::WaitingForUser { request_id },
+            AuthStatusEvent::Authenticated {
+                request_id,
+                user: GithubUserSummary {
+                    id: 7,
+                    login: "hyeeun".into(),
+                    avatar_url: "https://avatars.example/hyeeun".into(),
+                },
+            },
+            AuthStatusEvent::Failed {
+                request_id,
+                error: AppError::new(ErrorCode::AuthenticationDenied, "denied"),
+            },
+            AuthStatusEvent::Cancelled { request_id },
+        ];
 
-        assert!(json.contains("requestId"));
-        assert!(!json.contains("request_id"));
+        for event in events {
+            let json = serde_json::to_value(event).unwrap();
+            assert_eq!(json["requestId"], request_id.to_string());
+            assert!(json.get("request_id").is_none());
+        }
     }
 
     #[tokio::test]
@@ -741,7 +858,9 @@ mod tests {
             .await
             .unwrap();
 
-        let authorization = begin_github_auth_inner(&state).await.unwrap();
+        let authorization = begin_github_auth_inner(&state, Uuid::new_v4())
+            .await
+            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(1), async {
             while state.auth_jobs.contains(authorization.request_id) {
                 tokio::task::yield_now().await;
@@ -799,7 +918,9 @@ mod tests {
             .unwrap();
         store.fail_next_write();
 
-        let error = begin_github_auth_inner(&state).await.unwrap_err();
+        let error = begin_github_auth_inner(&state, Uuid::new_v4())
+            .await
+            .unwrap_err();
 
         assert_eq!(error.code, ErrorCode::LocalSettingsUnavailable);
         assert_eq!(
@@ -870,7 +991,8 @@ mod tests {
         let events = Events::default();
 
         let cancelled_id = uuid::Uuid::new_v4();
-        jobs.insert(cancelled_id, CancellationToken::new());
+        jobs.try_insert(cancelled_id, CancellationToken::new())
+            .unwrap();
         let worker_ready = Arc::new(Barrier::new(2));
         let worker_release = Arc::new(Barrier::new(2));
         let worker_jobs = jobs.clone();
@@ -897,7 +1019,8 @@ mod tests {
         assert!(!cancelled_worker.join().unwrap());
 
         let completed_id = uuid::Uuid::new_v4();
-        jobs.insert(completed_id, CancellationToken::new());
+        jobs.try_insert(completed_id, CancellationToken::new())
+            .unwrap();
         let terminal_claimed = Arc::new(Barrier::new(2));
         let terminal_release = Arc::new(Barrier::new(2));
         let completed_sink = LifecycleAuthEventSink::new(

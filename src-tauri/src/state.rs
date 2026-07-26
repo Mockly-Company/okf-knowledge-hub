@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
+use uuid::{Uuid, Variant, Version};
 
 use crate::auth::service::AuthService;
 use crate::github::GithubService;
@@ -62,18 +62,38 @@ pub(crate) enum JobTerminal {
     AlreadyTerminal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobRegistrationError {
+    RequestIdNotV4,
+    AlreadyActive,
+}
+
 impl JobRegistry {
-    pub(crate) fn insert(&self, request_id: Uuid, cancellation: CancellationToken) {
-        self.jobs
+    pub(crate) fn try_insert(
+        &self,
+        request_id: Uuid,
+        cancellation: CancellationToken,
+    ) -> Result<(), JobRegistrationError> {
+        if request_id.get_version() != Some(Version::Random)
+            || request_id.get_variant() != Variant::RFC4122
+        {
+            return Err(JobRegistrationError::RequestIdNotV4);
+        }
+        let mut jobs = self
+            .jobs
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                request_id,
-                JobEntry {
-                    cancellation,
-                    phase: JobPhase::Running,
-                },
-            );
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if jobs.contains_key(&request_id) {
+            return Err(JobRegistrationError::AlreadyActive);
+        }
+        jobs.insert(
+            request_id,
+            JobEntry {
+                cancellation,
+                phase: JobPhase::Running,
+            },
+        );
+        Ok(())
     }
 
     pub(crate) fn begin_completion(&self, request_id: Uuid) -> bool {
@@ -523,10 +543,94 @@ mod tests {
     use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
 
     #[test]
+    fn concurrent_duplicate_job_registration_keeps_exactly_one_active_worker() {
+        let jobs = JobRegistry::default();
+        let request_id = Uuid::parse_str("4ed4d4d3-c773-49d4-9c66-ae29c8d01c11").unwrap();
+        let ready = Arc::new(Barrier::new(3));
+        let mut workers = Vec::new();
+
+        for _ in 0..2 {
+            let jobs = jobs.clone();
+            let ready = ready.clone();
+            workers.push(thread::spawn(move || {
+                let cancellation = CancellationToken::new();
+                ready.wait();
+                let accepted = jobs.try_insert(request_id, cancellation.clone()).is_ok();
+                (accepted, cancellation)
+            }));
+        }
+
+        ready.wait();
+        let registrations = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            registrations
+                .iter()
+                .filter(|(accepted, _)| *accepted)
+                .count(),
+            1
+        );
+        assert!(jobs.cancel(request_id));
+        assert!(registrations
+            .iter()
+            .find(|(accepted, _)| *accepted)
+            .unwrap()
+            .1
+            .is_cancelled());
+        assert!(!registrations
+            .iter()
+            .find(|(accepted, _)| !*accepted)
+            .unwrap()
+            .1
+            .is_cancelled());
+    }
+
+    #[test]
+    fn completed_job_id_can_be_registered_again_without_replacing_an_active_job() {
+        let jobs = JobRegistry::default();
+        let request_id = Uuid::parse_str("18e27e3b-e035-4dc9-81b0-5407b13bc6e2").unwrap();
+        let other_id = Uuid::parse_str("c5b124b7-2566-44ca-bd2b-35026e63f62d").unwrap();
+        let first = CancellationToken::new();
+        let second = CancellationToken::new();
+        let other = CancellationToken::new();
+
+        assert!(jobs.try_insert(request_id, first.clone()).is_ok());
+        assert!(jobs.try_insert(other_id, other.clone()).is_ok());
+        assert!(jobs.try_insert(request_id, second.clone()).is_err());
+        assert_eq!(jobs.finish(request_id), JobTerminal::Completed);
+        assert!(jobs.try_insert(request_id, second.clone()).is_ok());
+
+        assert!(jobs.cancel(request_id));
+        assert!(!first.is_cancelled());
+        assert!(second.is_cancelled());
+        assert!(!other.is_cancelled());
+        assert!(jobs.contains(other_id));
+    }
+
+    #[test]
+    fn job_registration_rejects_non_v4_request_ids() {
+        let jobs = JobRegistry::default();
+        let non_rfc_v4 = Uuid::parse_str("e415c1ec-8907-4c48-1c3a-b91cadcae326").unwrap();
+
+        assert!(jobs
+            .try_insert(Uuid::nil(), CancellationToken::new())
+            .is_err());
+        assert!(jobs
+            .try_insert(non_rfc_v4, CancellationToken::new())
+            .is_err());
+        assert!(!jobs.contains(Uuid::nil()));
+        assert!(!jobs.contains(non_rfc_v4));
+    }
+
+    #[test]
     fn completion_claim_wins_before_cancel_and_produces_one_completed_terminal() {
         let jobs = JobRegistry::default();
         let request_id = Uuid::new_v4();
-        jobs.insert(request_id, CancellationToken::new());
+        jobs.try_insert(request_id, CancellationToken::new())
+            .unwrap();
         let claimed = Arc::new(Barrier::new(2));
         let release = Arc::new(Barrier::new(2));
         let worker_jobs = jobs.clone();
@@ -552,7 +656,7 @@ mod tests {
         let jobs = JobRegistry::default();
         let request_id = Uuid::new_v4();
         let cancellation = CancellationToken::new();
-        jobs.insert(request_id, cancellation.clone());
+        jobs.try_insert(request_id, cancellation.clone()).unwrap();
         let cancelled = Arc::new(Barrier::new(2));
         let worker_jobs = jobs.clone();
         let worker_cancelled = cancelled.clone();
@@ -574,8 +678,9 @@ mod tests {
         let jobs = JobRegistry::default();
         let running = Uuid::new_v4();
         let completing = Uuid::new_v4();
-        jobs.insert(running, CancellationToken::new());
-        jobs.insert(completing, CancellationToken::new());
+        jobs.try_insert(running, CancellationToken::new()).unwrap();
+        jobs.try_insert(completing, CancellationToken::new())
+            .unwrap();
         assert!(jobs.begin_completion(completing));
 
         let won = jobs.cancel_all();
