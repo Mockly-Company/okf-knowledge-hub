@@ -31,6 +31,7 @@ export interface WorkspaceConnectionContextValue {
   startLogin(): Promise<void>;
   cancelLogin(): Promise<void>;
   openVerificationUrl(url: string): Promise<void>;
+  openLocalPath(path: string): Promise<void>;
   refreshRepositories(): Promise<void>;
   loadNextRepositories(): Promise<void>;
   selectRepository(repository: GithubRepositorySummary): void;
@@ -206,6 +207,10 @@ export function WorkspaceConnectionProvider({
 
   const openVerificationUrl = useCallback(async (url: string) => {
     await gateway.openExternal(url);
+  }, [gateway]);
+
+  const openLocalPath = useCallback(async (path: string) => {
+    await gateway.openPath(path);
   }, [gateway]);
 
   const refreshRepositories = useCallback(async () => {
@@ -504,6 +509,7 @@ export function WorkspaceConnectionProvider({
       startLogin,
       cancelLogin,
       openVerificationUrl,
+      openLocalPath,
       refreshRepositories,
       loadNextRepositories,
       selectRepository,
@@ -519,7 +525,7 @@ export function WorkspaceConnectionProvider({
       startReplacement,
       cancelReplacement,
     }),
-    [cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, loadNextRepositories, openVerificationUrl, previewInitialization, refreshRepositories, retryLastAction, selectRepository, startLogin, startReplacement, state],
+    [cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, loadNextRepositories, openLocalPath, openVerificationUrl, previewInitialization, refreshRepositories, retryLastAction, selectRepository, startLogin, startReplacement, state],
   );
 
   return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;

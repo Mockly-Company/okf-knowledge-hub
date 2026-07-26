@@ -2202,6 +2202,7 @@ describe("workspace connection gateway adapters", () => {
     const choose = vi.fn(async () => "/selected");
     const subscriptions: string[] = [];
     const teardowns: string[] = [];
+    const openedPaths: string[] = [];
     let authHandler: ((event: Event<AuthStatusEvent>) => void) | undefined;
     const listen = async <T,>(event: string, listener: (event: Event<T>) => void) => {
       subscriptions.push(event);
@@ -2213,6 +2214,9 @@ describe("workspace connection gateway adapters", () => {
       listen,
       choose,
       async () => undefined,
+      async (path) => {
+        openedPaths.push(path);
+      },
     );
     const listener = vi.fn();
     const unlisten = await gateway.onAuthStatus(listener);
@@ -2221,10 +2225,12 @@ describe("workspace connection gateway adapters", () => {
     unlisten();
 
     await expect(gateway.pickDirectory()).resolves.toBe("/selected");
+    await gateway.openPath("/work/mockly-knowledge/.okf/workspace.yml");
     expect(choose).toHaveBeenCalledWith({ directory: true, multiple: false });
     expect(subscriptions).toEqual(["github-auth-status"]);
     expect(listener).toHaveBeenCalledWith(event);
     expect(teardowns).toEqual(["github-auth-status"]);
+    expect(openedPaths).toEqual(["/work/mockly-knowledge/.okf/workspace.yml"]);
   });
 
   it("fails closed in a browser", async () => {
@@ -2234,5 +2240,6 @@ describe("workspace connection gateway adapters", () => {
     await expect(gateway.getAuthState()).rejects.toEqual(expected);
     await expect(gateway.listRepositories()).rejects.toEqual(expected);
     await expect(gateway.connectWorkspace("/work/repo")).rejects.toEqual(expected);
+    await expect(gateway.openPath("/work/repo/.okf/workspace.yml")).rejects.toEqual(expected);
   });
 });

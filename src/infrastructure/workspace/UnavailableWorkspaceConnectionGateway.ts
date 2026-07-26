@@ -73,6 +73,10 @@ export class UnavailableWorkspaceConnectionGateway
     return unavailable();
   }
 
+  openPath(_path: string): Promise<void> {
+    return unavailable();
+  }
+
   inspectExistingClone(
     _path: string,
     _repositoryId: string,

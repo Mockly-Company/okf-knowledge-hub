@@ -74,6 +74,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     status: "ready",
     summary: defaultSummary,
   };
+  workspaceInspectionError: AppError | null = null;
   initializationPreview: InitializationPreview = defaultPreview;
   connectedWorkspace: ConnectedWorkspace = {
     path: defaultSnapshot.root,
@@ -96,6 +97,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
 
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   readonly openedUrls: string[] = [];
+  readonly openedPaths: string[] = [];
   readonly cancelledAuthRequests: string[] = [];
   readonly cancelledCloneRequests: string[] = [];
   authSubscriptionAttempts = 0;
@@ -200,6 +202,11 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     this.openedUrls.push(url);
   }
 
+  async openPath(path: string): Promise<void> {
+    this.record("openPath", path);
+    this.openedPaths.push(path);
+  }
+
   async inspectExistingClone(
     path: string,
     repositoryId: string,
@@ -243,6 +250,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
 
   async inspectWorkspace(path: string): Promise<WorkspaceInspection> {
     this.record("inspectWorkspace", path);
+    if (this.workspaceInspectionError) throw this.workspaceInspectionError;
     return this.workspaceInspection;
   }
 

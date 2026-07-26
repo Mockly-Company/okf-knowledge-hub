@@ -4,12 +4,12 @@ import type { AppError, RecoveryAction } from "../types";
 
 const recoveryLabels: Record<RecoveryAction, string> = {
   restart_login: "로그인 다시 시작",
-  reinstall_github_app: "GitHub 앱 다시 설치",
+  reinstall_github_app: "GitHub 앱 설치 관리",
   choose_another_directory: "다른 위치 선택",
   connect_existing_clone: "기존 clone 연결",
-  clean_working_tree: "작업 트리 정리 후 다시 시도",
+  clean_working_tree: "정리 방법 보기",
   open_workspace_file: "워크스페이스 파일 열기",
-  update_okhub: "OkHub 업데이트",
+  update_okhub: "OkHub 업데이트 확인",
   retry: "다시 시도",
 };
 

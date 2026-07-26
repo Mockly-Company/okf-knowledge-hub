@@ -13,6 +13,20 @@
       "allow": [
         {
           "url": "https://github.com/login/device"
+        },
+        {
+          "url": "https://github.com/settings/installations"
+        },
+        {
+          "url": "https://github.com/Mockly-Company/okf-knowledge-hub/releases"
+        }
+      ]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "**/.okf/workspace.yml"
         }
       ]
     }

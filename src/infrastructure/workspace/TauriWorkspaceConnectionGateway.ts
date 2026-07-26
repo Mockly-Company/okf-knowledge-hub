@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import type {
   AuthState,
@@ -34,11 +34,13 @@ type PickDirectory = (options: {
   multiple: false;
 }) => Promise<string | null>;
 type OpenExternal = (url: string) => Promise<void>;
+type OpenLocalPath = (path: string) => Promise<void>;
 
 const invokeDesktop: InvokeDesktop = (command, args) => invoke(command, args);
 const listenDesktop: ListenDesktop = (event, listener) => listen(event, listener);
 const pickDirectory: PickDirectory = (options) => open(options);
 const openExternal: OpenExternal = (url) => openUrl(url);
+const openLocalPath: OpenLocalPath = (path) => openPath(path);
 
 export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGateway {
   constructor(
@@ -46,6 +48,7 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
     private readonly listenEvent: ListenDesktop = listenDesktop,
     private readonly chooseDirectory: PickDirectory = pickDirectory,
     private readonly launchExternal: OpenExternal = openExternal,
+    private readonly launchPath: OpenLocalPath = openLocalPath,
   ) {}
 
   getCurrentWorkspace(): Promise<CurrentWorkspaceState> {
@@ -84,6 +87,10 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
 
   openExternal(url: string): Promise<void> {
     return this.launchExternal(url);
+  }
+
+  openPath(path: string): Promise<void> {
+    return this.launchPath(path);
   }
 
   inspectExistingClone(

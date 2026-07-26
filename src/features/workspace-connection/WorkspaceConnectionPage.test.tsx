@@ -154,6 +154,80 @@ describe("WorkspaceConnectionPage", () => {
     expect(result.violations).toEqual([]);
   });
 
+  it("opens GitHub App installation management for permission recovery", async () => {
+    const { gateway, user } = renderPage();
+    gateway.cloneError = {
+      code: "github_permission_denied",
+      message: "선택한 저장소에 접근할 수 없습니다.",
+      recovery: "reinstall_github_app",
+      details: {},
+    };
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+
+    await user.click(await screen.findByRole("button", { name: "GitHub 앱 설치 관리" }));
+
+    expect(gateway.openedUrls).toEqual(["https://github.com/settings/installations"]);
+  });
+
+  it("shows non-destructive cleanup guidance before rechecking the working tree", async () => {
+    const { gateway, user } = renderPage();
+    gateway.cloneError = {
+      code: "repository_dirty",
+      message: "working tree에 커밋하지 않은 변경이 있습니다.",
+      recovery: "clean_working_tree",
+      details: {},
+    };
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+
+    await user.click(await screen.findByRole("button", { name: "정리 방법 보기" }));
+
+    expect(screen.getByRole("heading", { name: "working tree를 직접 정리해 주세요" })).toBeInTheDocument();
+    expect(screen.getByText(/OkHub는 변경 파일을 자동으로 삭제하거나 stash하지 않습니다/)).toBeInTheDocument();
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
+
+    gateway.cloneError = null;
+    await user.click(screen.getByRole("button", { name: "정리 상태 다시 확인" }));
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(2);
+  });
+
+  it("opens the workspace YAML with the operating system file handler", async () => {
+    const { gateway, user } = renderPage();
+    gateway.workspaceInspectionError = {
+      code: "workspace_invalid",
+      message: "워크스페이스 설정이 유효하지 않습니다.",
+      recovery: "open_workspace_file",
+      details: { path: ".okf/workspace.yml" },
+    };
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+
+    await user.click(await screen.findByRole("button", { name: "워크스페이스 파일 열기" }));
+
+    expect(gateway.openedPaths).toEqual(["/work/mockly-knowledge/.okf/workspace.yml"]);
+  });
+
+  it("opens the OkHub releases page for an unsupported workspace version", async () => {
+    const { gateway, user } = renderPage();
+    gateway.workspaceInspectionError = {
+      code: "workspace_version_unsupported",
+      message: "현재 버전의 OkHub에서 이 워크스페이스를 열 수 없습니다.",
+      recovery: "update_okhub",
+      details: { foundVersion: "2" },
+    };
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+
+    await user.click(await screen.findByRole("button", { name: "OkHub 업데이트 확인" }));
+
+    expect(gateway.openedUrls).toEqual([
+      "https://github.com/Mockly-Company/okf-knowledge-hub/releases",
+    ]);
+  });
+
   it("moves focus to clone status and progress updates do not steal it", async () => {
     const { gateway, user } = renderPage();
     gateway.deferClone = true;

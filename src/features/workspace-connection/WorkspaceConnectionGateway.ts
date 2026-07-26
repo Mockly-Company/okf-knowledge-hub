@@ -26,6 +26,7 @@ export interface WorkspaceConnectionGateway {
   listRepositories(cursor?: string): Promise<Page<GithubRepositorySummary>>;
   pickDirectory(): Promise<string | null>;
   openExternal(url: string): Promise<void>;
+  openPath(path: string): Promise<void>;
   inspectExistingClone(path: string, repositoryId: string): Promise<RepositorySnapshot>;
   cloneRepository(
     requestId: string,

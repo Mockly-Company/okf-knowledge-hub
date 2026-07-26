@@ -242,6 +242,20 @@ select {
   margin-top: 20px;
 }
 
+.workspace-connection__cleanup-guidance {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+  padding: 16px;
+}
+
+.workspace-connection__cleanup-guidance > * {
+  margin: 0;
+}
+
 .workspace-connection__clone-confirmation {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
