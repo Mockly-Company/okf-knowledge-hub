@@ -1,4 +1,5 @@
 import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
+import { cloneTargetPath } from "@/features/workspace-connection/types";
 import type {
   AuthState,
   AppError,
@@ -88,6 +89,8 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     draftPullRequestUrl: "https://github.com/Mockly-Company/mockly-knowledge/pull/1",
   };
   cloneError: AppError | null = null;
+  authSubscriptionError: Error | null = null;
+  cloneSubscriptionError: Error | null = null;
   deferGithubAuth = false;
   deferClone = false;
 
@@ -95,6 +98,8 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   readonly openedUrls: string[] = [];
   readonly cancelledAuthRequests: string[] = [];
   readonly cancelledCloneRequests: string[] = [];
+  authSubscriptionAttempts = 0;
+  cloneSubscriptionAttempts = 0;
 
   private readonly authListeners = new Set<(event: AuthStatusEvent) => void>();
   private readonly cloneListeners = new Set<(event: CloneProgressEvent) => void>();
@@ -174,6 +179,8 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   }
 
   async onAuthStatus(listener: (event: AuthStatusEvent) => void): Promise<Unlisten> {
+    this.authSubscriptionAttempts += 1;
+    if (this.authSubscriptionError) throw this.authSubscriptionError;
     this.authListeners.add(listener);
     return () => this.authListeners.delete(listener);
   }
@@ -211,7 +218,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     this.activeCloneRequestId = requestId;
     const job = {
       requestId,
-      targetPath: `${parentDirectory}/${repository.name}`,
+      targetPath: cloneTargetPath(parentDirectory, repository.name),
     };
     if (!this.deferClone) return job;
     return new Promise((resolve) => {
@@ -228,6 +235,8 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   async onCloneProgress(
     listener: (event: CloneProgressEvent) => void,
   ): Promise<Unlisten> {
+    this.cloneSubscriptionAttempts += 1;
+    if (this.cloneSubscriptionError) throw this.cloneSubscriptionError;
     this.cloneListeners.add(listener);
     return () => this.cloneListeners.delete(listener);
   }

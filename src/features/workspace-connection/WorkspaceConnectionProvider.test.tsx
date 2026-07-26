@@ -13,6 +13,10 @@ function Probe() {
     <>
       <output>{`${connection.state.step}:${connection.state.status}`}</output>
       <button onClick={() => void connection.startLogin()}>login</button>
+      <button onClick={() => {
+        void connection.startLogin();
+        void connection.startLogin();
+      }}>login twice</button>
       <button onClick={() => void connection.retryLastAction()}>retry</button>
     </>
   );
@@ -35,6 +39,28 @@ describe("WorkspaceConnectionProvider", () => {
     expect(gateway.listenerCount()).toEqual({ auth: 0, clone: 0 });
   });
 
+  it.each([
+    ["auth", "clone"],
+    ["clone", "auth"],
+  ] as const)("cleans up the installed listener when %s setup rejects after %s", async (rejecting, _installed) => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    if (rejecting === "auth") gateway.authSubscriptionError = new Error("auth listener failed");
+    else gateway.cloneSubscriptionError = new Error("clone listener failed");
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await waitFor(() => {
+      expect(gateway.authSubscriptionAttempts).toBe(1);
+      expect(gateway.cloneSubscriptionAttempts).toBe(1);
+    });
+    await waitFor(() => expect(gateway.listenerCount()).toEqual({ auth: 0, clone: 0 }));
+    expect(gateway.calls.filter((call) => call.method === "getCurrentWorkspace")).toHaveLength(0);
+    expect(gateway.calls.filter((call) => call.method === "getAuthState")).toHaveLength(0);
+  });
+
   it("owns the auth id before invocation and keeps an early terminal event terminal", async () => {
     const gateway = FakeWorkspaceConnectionGateway.disconnected();
     gateway.deferGithubAuth = true;
@@ -53,7 +79,23 @@ describe("WorkspaceConnectionProvider", () => {
     gateway.approveAuthentication();
     expect(await screen.findByText("repository:idle")).toBeInTheDocument();
     gateway.resolveGithubAuth();
-    expect(screen.getByText("repository:idle")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("repository:idle")).toBeInTheDocument());
+    expect(gateway.calls.filter((call) => call.method === "listRepositories")).toHaveLength(1);
+  });
+
+  it("keeps reducer acceptance monotonic across batched reentrant starts", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    gateway.deferGithubAuth = true;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+    await waitFor(() => expect(gateway.listenerCount()).toEqual({ auth: 1, clone: 1 }));
+
+    await user.click(screen.getByRole("button", { name: "login twice" }));
+    expect(gateway.calls.filter((call) => call.method === "beginGithubAuth")).toHaveLength(1);
   });
 
   it("routes only an owned early clone completion into downstream inspection", async () => {
@@ -74,6 +116,8 @@ describe("WorkspaceConnectionProvider", () => {
     const cloneCall = gateway.calls.find((call) => call.method === "cloneRepository");
     const requestId = cloneCall?.args[0];
     expect(requestId).toEqual(expect.any(String));
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
 
     gateway.emitClone({
       status: "completed",
@@ -91,7 +135,9 @@ describe("WorkspaceConnectionProvider", () => {
       expect(gateway.calls.filter((call) => call.method === "inspectWorkspace")).toHaveLength(1),
     );
     gateway.resolveClone();
-    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
+    await waitFor(() =>
+      expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1),
+    );
   });
 
   it("loads an empty first repository page only once after accepted authentication", async () => {

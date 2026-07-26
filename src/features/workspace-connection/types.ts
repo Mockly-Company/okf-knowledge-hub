@@ -251,6 +251,16 @@ export interface CloneStartRequest {
   id: string;
   repositoryId: string;
   parentDirectory: string;
+  targetPath: string;
+}
+
+export function cloneTargetPath(parentDirectory: string, repositoryName: string): string {
+  const separator = parentDirectory.includes("\\") && !parentDirectory.includes("/")
+    ? "\\"
+    : "/";
+  return parentDirectory.endsWith("/") || parentDirectory.endsWith("\\")
+    ? `${parentDirectory}${repositoryName}`
+    : `${parentDirectory}${separator}${repositoryName}`;
 }
 
 export interface WorkspaceInspectionRequest {

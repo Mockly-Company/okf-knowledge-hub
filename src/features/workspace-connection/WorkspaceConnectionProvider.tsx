@@ -11,6 +11,7 @@ import {
 } from "react";
 import type { WorkspaceConnectionGateway } from "./WorkspaceConnectionGateway";
 import { connectionReducer, createInitialConnectionState } from "./connection-reducer";
+import { cloneTargetPath } from "./types";
 import type {
   AppError,
   CloneStartRequest,
@@ -78,10 +79,6 @@ export function WorkspaceConnectionProvider({
   const [state, dispatch] = useReducer(connectionReducer, undefined, createInitialConnectionState);
   const stateRef = useRef(state);
   const [isCurrentWorkspaceLoading, setCurrentWorkspaceLoading] = useState(true);
-
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
 
   const dispatchAccepted = useCallback((action: Parameters<typeof connectionReducer>[1]) => {
     const current = stateRef.current;
@@ -229,7 +226,12 @@ export function WorkspaceConnectionProvider({
     if (current.step !== "local" || !current.selectedRepository) return;
     const parentDirectory = await gateway.pickDirectory();
     if (!parentDirectory) return;
-    await clone({ id: operationId(), repositoryId: current.selectedRepository.id, parentDirectory });
+    await clone({
+      id: operationId(),
+      repositoryId: current.selectedRepository.id,
+      parentDirectory,
+      targetPath: cloneTargetPath(parentDirectory, current.selectedRepository.name),
+    });
   }, [clone, gateway]);
 
   const chooseAnotherCloneDirectory = useCallback(async () => {
@@ -251,6 +253,7 @@ export function WorkspaceConnectionProvider({
         id: operationId(),
         repositoryId: current.failedCloneStartRequest.repositoryId,
         parentDirectory,
+        targetPath: cloneTargetPath(parentDirectory, current.selectedRepository.name),
       },
       "alternate_directory",
     );
@@ -368,7 +371,7 @@ export function WorkspaceConnectionProvider({
     let unlistenClone: (() => void) | undefined;
 
     const setup = async () => {
-      const subscriptions = await Promise.all([
+      const subscriptions = await Promise.allSettled([
         gateway.onAuthStatus((event) => {
           dispatchAccepted({ type: "authEventReceived", event });
         }),
@@ -376,10 +379,23 @@ export function WorkspaceConnectionProvider({
           dispatchAccepted({ type: "cloneEventReceived", event });
         }),
       ]);
-      [unlistenAuth, unlistenClone] = subscriptions;
+      const [authSubscription, cloneSubscription] = subscriptions;
+      unlistenAuth = authSubscription.status === "fulfilled"
+        ? authSubscription.value
+        : undefined;
+      unlistenClone = cloneSubscription.status === "fulfilled"
+        ? cloneSubscription.value
+        : undefined;
+      if (authSubscription.status === "rejected" || cloneSubscription.status === "rejected") {
+        unlistenAuth?.();
+        unlistenClone?.();
+        unlistenAuth = undefined;
+        unlistenClone = undefined;
+        return;
+      }
       if (!active) {
-        unlistenAuth();
-        unlistenClone();
+        unlistenAuth?.();
+        unlistenClone?.();
         return;
       }
       try {

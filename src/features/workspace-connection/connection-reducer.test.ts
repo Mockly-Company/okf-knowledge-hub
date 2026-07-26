@@ -109,7 +109,12 @@ function localRequest(id: string, path: string): LocalInspectionRequest {
 }
 
 function cloneRequest(id: string, parentDirectory: string): CloneStartRequest {
-  return { id, repositoryId: "old", parentDirectory };
+  return {
+    id,
+    repositoryId: "old",
+    parentDirectory,
+    targetPath: `${parentDirectory}/old-knowledge`,
+  };
 }
 
 function workspaceRequest(id: string, root: string): WorkspaceInspectionRequest {
@@ -1227,6 +1232,47 @@ describe("connectionReducer", () => {
       localRepository: { root: "/work/old-knowledge" },
       cloneJob: null,
     });
+  });
+
+  it("rejects same-id clone results and completions with a different owned target", () => {
+    const request = cloneRequest("owned-target", "/work");
+    const starting = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
+    expect(
+      connectionReducer(starting, {
+        type: "cloneStarted",
+        request,
+        job: { requestId: request.id, targetPath: "/other/old-knowledge" },
+      }),
+    ).toBe(starting);
+    expect(
+      connectionReducer(starting, {
+        type: "cloneEventReceived",
+        event: {
+          status: "completed",
+          requestId: request.id,
+          repository: localRepository("/other/old-knowledge"),
+        },
+      }),
+    ).toBe(starting);
+
+    const running = connectionReducer(starting, {
+      type: "cloneStarted",
+      request,
+      job: { requestId: request.id, targetPath: "/work/old-knowledge" },
+    });
+    expect(
+      connectionReducer(running, {
+        type: "cloneEventReceived",
+        event: {
+          status: "completed",
+          requestId: request.id,
+          repository: localRepository("/other/old-knowledge"),
+        },
+      }),
+    ).toBe(running);
   });
 
   it("keeps early clone failure and cancellation terminal when job metadata arrives late", () => {

@@ -721,7 +721,8 @@ function sameCloneRequest(
   return (
     left?.id === right.id &&
     left.repositoryId === right.repositoryId &&
-    left.parentDirectory === right.parentDirectory
+    left.parentDirectory === right.parentDirectory &&
+    left.targetPath === right.targetPath
   );
 }
 
@@ -1112,7 +1113,11 @@ export function connectionReducer(
     }
     case "cloneStarted": {
       const context = localContext(state);
-      if (!context || action.job.requestId !== action.request.id) return state;
+      if (
+        !context ||
+        action.job.requestId !== action.request.id ||
+        action.job.targetPath !== action.request.targetPath
+      ) return state;
       if (
         state.step === "local" &&
         state.status === "clone_starting" &&
@@ -1189,7 +1194,11 @@ export function connectionReducer(
             action.event.progress,
           );
         }
-        if (action.event.status === "completed") return localIdle(context, action.event.repository);
+        if (action.event.status === "completed") {
+          return action.event.repository.root === state.activeCloneStartRequest.targetPath
+            ? localIdle(context, action.event.repository)
+            : state;
+        }
         if (action.event.status === "failed") {
           return localError(context, action.event.error, {
             errorContext: "pre_repository",
@@ -1218,7 +1227,9 @@ export function connectionReducer(
         );
       }
       if (action.event.status === "completed") {
-        return localIdle(context, action.event.repository);
+        return action.event.repository.root === state.cloneRequest.targetPath
+          ? localIdle(context, action.event.repository)
+          : state;
       }
       if (action.event.status === "failed") {
         return localError(context, action.event.error, {
