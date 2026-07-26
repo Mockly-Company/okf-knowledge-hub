@@ -3,10 +3,7 @@ import type {
   AuthLoadRequest,
   AuthConnectionState,
   AuthState,
-  AuthStatusEvent,
-  BufferedCloneEventGroup,
   CloneProgress,
-  CloneProgressEvent,
   CloneStartRequest,
   ConnectedConnectionState,
   ConnectedWorkspace,
@@ -46,6 +43,7 @@ type AuthenticatedContext = FlowFields & {
   auth: AuthenticatedState;
   repositories: GithubRepositorySummary[];
   nextRepositoryCursor: string | null;
+  repositoriesLoaded: boolean;
 };
 
 type LocalContext = AuthenticatedContext & {
@@ -75,6 +73,7 @@ function emptyRepositoryAndLocalData() {
   return {
     repositories,
     nextRepositoryCursor: null,
+    repositoriesLoaded: false,
     activeRepositoryRequest: null,
     selectedRepository: null,
     activeLocalRequest: null,
@@ -162,7 +161,6 @@ function loginBeginning(
     authorization: null,
     activeAuthLoadRequest: null,
     activeLoginBeginRequest: request,
-    bufferedAuthEvents: [],
     error: null,
   };
 }
@@ -230,6 +228,7 @@ function authenticatedContext(state: ConnectionState): AuthenticatedContext | nu
     auth: state.auth,
     repositories: state.repositories,
     nextRepositoryCursor: state.nextRepositoryCursor,
+    repositoriesLoaded: state.repositoriesLoaded,
   };
 }
 
@@ -237,6 +236,7 @@ function repositoryIdle(
   context: AuthenticatedContext,
   repositories = context.repositories,
   nextRepositoryCursor = context.nextRepositoryCursor,
+  repositoriesLoaded = context.repositoriesLoaded,
 ): RepositoryConnectionState {
   return {
     ...context,
@@ -246,6 +246,7 @@ function repositoryIdle(
     authorization: null,
     repositories,
     nextRepositoryCursor,
+    repositoriesLoaded,
     activeRepositoryRequest: null,
     error: null,
   };
@@ -265,6 +266,7 @@ function repositoryLoading(
     authorization: null,
     repositories,
     nextRepositoryCursor,
+    repositoriesLoaded: context.repositoriesLoaded,
     activeRepositoryRequest: request,
     error: null,
   };
@@ -361,7 +363,6 @@ function cloneStarting(
     step: "local",
     status: "clone_starting",
     activeCloneStartRequest: request,
-    bufferedCloneEvents: [],
   };
 }
 
@@ -369,7 +370,7 @@ function cloneRunning(
   context: LocalContext,
   status: "cloning" | "clone_cancelling",
   request: CloneStartRequest,
-  job: NonNullable<LocalConnectionState["cloneJob"]>,
+  job: LocalConnectionState["cloneJob"],
   progress: CloneProgress | null,
 ): LocalConnectionState {
   return {
@@ -533,6 +534,7 @@ function initializationContext(state: InitializationWorkflowState): LocalContext
     auth: state.auth,
     repositories: state.repositories,
     nextRepositoryCursor: state.nextRepositoryCursor,
+    repositoriesLoaded: state.repositoriesLoaded,
     selectedRepository: state.selectedRepository,
   };
 }
@@ -816,90 +818,6 @@ function canStartInitializationPreview(state: ConnectionState): boolean {
   );
 }
 
-const MAX_BUFFERED_AUTH_EVENTS = 8;
-const MAX_BUFFERED_CLONE_REQUESTS = 4;
-
-function appendBoundedAuthEvent(
-  events: AuthStatusEvent[],
-  event: AuthStatusEvent,
-): AuthStatusEvent[] {
-  return [...events, event].slice(-MAX_BUFFERED_AUTH_EVENTS);
-}
-
-function replayBufferedAuthEvents(
-  state: AuthConnectionState,
-  requestId: string,
-  events: AuthStatusEvent[],
-): ConnectionState {
-  let next: ConnectionState = state;
-  for (const event of events) {
-    if (event.requestId !== requestId) continue;
-    next = connectionReducer(next, { type: "authEventReceived", event });
-    if (next.step !== "auth" || next.status !== "waiting_for_user") break;
-  }
-  return next;
-}
-
-function bufferCloneEvent(
-  groups: BufferedCloneEventGroup[],
-  event: CloneProgressEvent,
-): BufferedCloneEventGroup[] {
-  const existingIndex = groups.findIndex(
-    (group) => group.requestId === event.requestId,
-  );
-  if (existingIndex === -1) {
-    const group: BufferedCloneEventGroup = {
-      requestId: event.requestId,
-      latestProgress: event.status === "progress" ? event : null,
-      terminal: event.status === "progress" ? null : event,
-    };
-    return [...groups, group].slice(-MAX_BUFFERED_CLONE_REQUESTS);
-  }
-
-  const existing = groups[existingIndex];
-  if (!existing || existing.terminal) return groups;
-  const updated: BufferedCloneEventGroup =
-    event.status === "progress"
-      ? { ...existing, latestProgress: event }
-      : { ...existing, terminal: event };
-  return groups.map((group, index) =>
-    index === existingIndex ? updated : group,
-  );
-}
-
-function replayBufferedCloneEvents(
-  context: LocalContext,
-  request: CloneStartRequest,
-  job: NonNullable<LocalConnectionState["cloneJob"]>,
-  groups: BufferedCloneEventGroup[],
-): LocalConnectionState {
-  const group = groups.find((candidate) => candidate.requestId === job.requestId);
-  if (!group) return cloneRunning(context, "cloning", request, job, null);
-  if (group.terminal?.status === "completed") {
-    return localIdle(context, group.terminal.repository);
-  }
-  if (group.terminal?.status === "failed") {
-    return localError(context, group.terminal.error, {
-      errorContext: "pre_repository",
-      failedOperation: "clone",
-      localRepository: null,
-      workspaceInspection: null,
-      failedLocalInspectionRequest: null,
-      failedCloneStartRequest: request,
-      failedInitializationPreviewRequest: null,
-      failedWorkspaceConnectionRequest: null,
-    });
-  }
-  if (group.terminal?.status === "cancelled") return localIdle(context);
-  return cloneRunning(
-    context,
-    "cloning",
-    request,
-    job,
-    group.latestProgress?.progress ?? null,
-  );
-}
-
 function mergeRepositoryPage(
   current: GithubRepositorySummary[],
   incoming: GithubRepositorySummary[],
@@ -960,6 +878,7 @@ export function connectionReducer(
           auth: action.auth,
           repositories: [],
           nextRepositoryCursor: null,
+          repositoriesLoaded: false,
         });
       }
       if (action.auth.status === "reauthentication_required") {
@@ -973,7 +892,9 @@ export function connectionReducer(
         ? authError(state, action.error)
         : state;
     case "loginBeginStarted":
-      return hasNonCancellableMutationOwnership(state)
+      return hasNonCancellableMutationOwnership(state) ||
+        (state.step === "auth" &&
+          (state.status === "login_beginning" || state.status === "waiting_for_user"))
         ? state
         : loginBeginning(state, action.request);
     case "loginStarted":
@@ -982,11 +903,9 @@ export function connectionReducer(
         state.status === "login_beginning" &&
         state.activeLoginBeginRequest.id === action.request.id
       ) {
-        return replayBufferedAuthEvents(
-          authWaiting(state, action.authorization),
-          action.authorization.requestId,
-          state.bufferedAuthEvents,
-        );
+        return action.authorization.requestId === action.request.id
+          ? authWaiting(state, action.authorization)
+          : state;
       }
       return state;
     case "loginBeginFailed":
@@ -999,20 +918,13 @@ export function connectionReducer(
       if (action.event.status === "reauthentication_required") {
         return authReauthenticationRequired(state);
       }
-      if (state.step === "auth" && state.status === "login_beginning") {
-        return {
-          ...state,
-          bufferedAuthEvents: appendBoundedAuthEvent(
-            state.bufferedAuthEvents,
-            action.event,
-          ),
-        };
-      }
-      if (
-        state.step !== "auth" ||
-        state.status !== "waiting_for_user" ||
-        action.event.requestId !== state.authorization.requestId
-      ) {
+      const activeAuthRequestId =
+        state.step === "auth" && state.status === "login_beginning"
+          ? state.activeLoginBeginRequest.id
+          : state.step === "auth" && state.status === "waiting_for_user"
+            ? state.authorization.requestId
+            : null;
+      if (activeAuthRequestId === null || action.event.requestId !== activeAuthRequestId) {
         return state;
       }
       if (action.event.status === "authenticated") {
@@ -1022,6 +934,7 @@ export function connectionReducer(
           auth: { status: "authenticated", user: action.event.user },
           repositories: [],
           nextRepositoryCursor: null,
+          repositoriesLoaded: false,
         });
       }
       if (action.event.status === "failed") return authError(state, action.event.error);
@@ -1062,7 +975,7 @@ export function connectionReducer(
       const repositories = action.request.append
         ? mergeRepositoryPage(state.repositories, action.page.items)
         : mergeRepositoryPage([], action.page.items);
-      return repositoryIdle(context, repositories, action.page.nextCursor);
+      return repositoryIdle(context, repositories, action.page.nextCursor, true);
     }
     case "repositoryLoadFailed": {
       if (
@@ -1199,20 +1112,29 @@ export function connectionReducer(
     }
     case "cloneStarted": {
       const context = localContext(state);
+      if (!context || action.job.requestId !== action.request.id) return state;
       if (
-        !context ||
-        state.step !== "local" ||
-        state.status !== "clone_starting" ||
-        !sameCloneRequest(state.activeCloneStartRequest, action.request)
+        state.step === "local" &&
+        state.status === "clone_starting" &&
+        sameCloneRequest(state.activeCloneStartRequest, action.request)
       ) {
-        return state;
+        return cloneRunning(context, "cloning", action.request, action.job, null);
       }
-      return replayBufferedCloneEvents(
-        context,
-        state.activeCloneStartRequest,
-        action.job,
-        state.bufferedCloneEvents,
-      );
+      if (
+        state.step === "local" &&
+        (state.status === "cloning" || state.status === "clone_cancelling") &&
+        sameCloneRequest(state.cloneRequest, action.request) &&
+        state.cloneJob === null
+      ) {
+        return cloneRunning(
+          context,
+          state.status,
+          state.cloneRequest,
+          action.job,
+          state.cloneProgress,
+        );
+      }
+      return state;
     }
     case "cloneStartFailed": {
       const context = localContext(state);
@@ -1241,7 +1163,7 @@ export function connectionReducer(
         !context ||
         state.step !== "local" ||
         state.status !== "cloning" ||
-        state.cloneJob.requestId !== action.requestId
+        state.cloneRequest.id !== action.requestId
       ) {
         return state;
       }
@@ -1254,24 +1176,38 @@ export function connectionReducer(
       );
     }
     case "cloneEventReceived": {
-      if (state.step === "local" && state.status === "clone_starting") {
-        return {
-          ...state,
-          bufferedCloneEvents: bufferCloneEvent(
-            state.bufferedCloneEvents,
-            action.event,
-          ),
-        };
-      }
       const context = localContext(state);
-      if (
-        !context ||
-        state.step !== "local" ||
-        (state.status !== "cloning" && state.status !== "clone_cancelling") ||
-        state.cloneJob.requestId !== action.event.requestId
-      ) {
-        return state;
+      if (!context || state.step !== "local") return state;
+      if (state.status === "clone_starting") {
+        if (state.activeCloneStartRequest.id !== action.event.requestId) return state;
+        if (action.event.status === "progress") {
+          return cloneRunning(
+            context,
+            "cloning",
+            state.activeCloneStartRequest,
+            null,
+            action.event.progress,
+          );
+        }
+        if (action.event.status === "completed") return localIdle(context, action.event.repository);
+        if (action.event.status === "failed") {
+          return localError(context, action.event.error, {
+            errorContext: "pre_repository",
+            failedOperation: "clone",
+            localRepository: null,
+            workspaceInspection: null,
+            failedLocalInspectionRequest: null,
+            failedCloneStartRequest: state.activeCloneStartRequest,
+            failedInitializationPreviewRequest: null,
+            failedWorkspaceConnectionRequest: null,
+          });
+        }
+        return localIdle(context);
       }
+      if (
+        (state.status !== "cloning" && state.status !== "clone_cancelling") ||
+        state.cloneRequest.id !== action.event.requestId
+      ) return state;
       if (action.event.status === "progress") {
         return cloneRunning(
           context,

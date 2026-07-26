@@ -107,15 +107,6 @@ export type CloneProgressEvent =
   | { status: "failed"; requestId: string; error: AppError }
   | { status: "cancelled"; requestId: string };
 
-type CloneProgressOnlyEvent = Extract<CloneProgressEvent, { status: "progress" }>;
-type CloneTerminalEvent = Exclude<CloneProgressEvent, CloneProgressOnlyEvent>;
-
-export interface BufferedCloneEventGroup {
-  requestId: string;
-  latestProgress: CloneProgressOnlyEvent | null;
-  terminal: CloneTerminalEvent | null;
-}
-
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -325,11 +316,13 @@ type RecoveryContext = {
 type EmptyRepositoryData = {
   repositories: GithubRepositorySummary[];
   nextRepositoryCursor: null;
+  repositoriesLoaded: boolean;
   activeRepositoryRequest: null;
 };
 type RepositoryData = {
   repositories: GithubRepositorySummary[];
   nextRepositoryCursor: string | null;
+  repositoriesLoaded: boolean;
   activeRepositoryRequest: RepositoryLoadRequest | null;
 };
 type EmptyLocalData = {
@@ -375,7 +368,6 @@ export type AuthConnectionState =
       authorization: null;
       activeAuthLoadRequest: null;
       activeLoginBeginRequest: LoginBeginRequest;
-      bufferedAuthEvents: AuthStatusEvent[];
       error: null;
     })
   | (AuthBase & {
@@ -493,7 +485,6 @@ type CloneStartingState = LocalBase & {
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
   activeWorkspaceConnectionRequest: null;
-  bufferedCloneEvents: BufferedCloneEventGroup[];
   error: null;
 };
 
@@ -502,7 +493,7 @@ type CloneRunningState = LocalBase & {
   activeLocalRequest: null;
   activeCloneStartRequest: null;
   localRepository: null;
-  cloneJob: CloneJob;
+  cloneJob: CloneJob | null;
   cloneRequest: CloneStartRequest;
   cloneProgress: CloneProgress | null;
   activeWorkspaceInspectionRequest: null;

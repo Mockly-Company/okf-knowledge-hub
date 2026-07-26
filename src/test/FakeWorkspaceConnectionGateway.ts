@@ -88,6 +88,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     draftPullRequestUrl: "https://github.com/Mockly-Company/mockly-knowledge/pull/1",
   };
   cloneError: AppError | null = null;
+  deferGithubAuth = false;
   deferClone = false;
 
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
@@ -98,7 +99,12 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   private readonly authListeners = new Set<(event: AuthStatusEvent) => void>();
   private readonly cloneListeners = new Set<(event: CloneProgressEvent) => void>();
   private activeAuthorization: DeviceAuthorization | null = null;
+  private activeCloneRequestId: string | null = null;
   private currentWorkspacePromise: Promise<CurrentWorkspaceState> | null = null;
+  private pendingAuthorization: {
+    resolve: (authorization: DeviceAuthorization) => void;
+  } | null = null;
+  private pendingClone: { resolve: (job: CloneJob) => void } | null = null;
 
   static disconnected(): FakeWorkspaceConnectionGateway {
     return new FakeWorkspaceConnectionGateway();
@@ -141,16 +147,19 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     return this.authState;
   }
 
-  async beginGithubAuth(): Promise<DeviceAuthorization> {
-    this.record("beginGithubAuth");
+  async beginGithubAuth(requestId: string): Promise<DeviceAuthorization> {
+    this.record("beginGithubAuth", requestId);
     this.activeAuthorization = {
-      requestId: "auth-1",
+      requestId,
       userCode: "ABCD-EFGH",
       verificationUri: "https://github.com/login/device",
       expiresAtUnix: 2_000,
       intervalSeconds: 5,
     };
-    return this.activeAuthorization;
+    if (!this.deferGithubAuth) return this.activeAuthorization;
+    return new Promise((resolve) => {
+      this.pendingAuthorization = { resolve };
+    });
   }
 
   async cancelGithubAuth(requestId: string): Promise<boolean> {
@@ -193,21 +202,27 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   }
 
   async cloneRepository(
+    requestId: string,
     repository: GithubRepositorySummary,
     parentDirectory: string,
   ): Promise<CloneJob> {
-    this.record("cloneRepository", repository, parentDirectory);
+    this.record("cloneRepository", requestId, repository, parentDirectory);
     if (this.cloneError) throw this.cloneError;
-    return {
-      requestId: "clone-1",
+    this.activeCloneRequestId = requestId;
+    const job = {
+      requestId,
       targetPath: `${parentDirectory}/${repository.name}`,
     };
+    if (!this.deferClone) return job;
+    return new Promise((resolve) => {
+      this.pendingClone = { resolve };
+    });
   }
 
   async cancelRepositoryClone(requestId: string): Promise<boolean> {
     this.record("cancelRepositoryClone", requestId);
     this.cancelledCloneRequests.push(requestId);
-    return requestId === "clone-1";
+    return requestId === this.activeCloneRequestId;
   }
 
   async onCloneProgress(
@@ -249,6 +264,25 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     });
   }
 
+  resolveGithubAuth(): void {
+    if (!this.activeAuthorization || !this.pendingAuthorization) {
+      throw new Error("A deferred GitHub authorization must be pending");
+    }
+    this.pendingAuthorization.resolve(this.activeAuthorization);
+    this.pendingAuthorization = null;
+  }
+
+  resolveClone(repository = this.repositorySnapshot): void {
+    if (!this.activeCloneRequestId || !this.pendingClone) {
+      throw new Error("A deferred clone must be pending");
+    }
+    this.pendingClone.resolve({
+      requestId: this.activeCloneRequestId,
+      targetPath: repository.root,
+    });
+    this.pendingClone = null;
+  }
+
   expireAuthentication(): void {
     if (!this.activeAuthorization) throw new Error("beginGithubAuth must run first");
     this.emitAuth({
@@ -264,9 +298,12 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   }
 
   emitCloneProgress(): void {
+    if (!this.activeCloneRequestId) {
+      throw new Error("cloneRepository must run first");
+    }
     this.emitClone({
       status: "progress",
-      requestId: "clone-1",
+      requestId: this.activeCloneRequestId,
       progress: { stage: "receiving_objects", completed: 4, total: 10 },
     });
   }

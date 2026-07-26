@@ -56,8 +56,8 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
     return this.invokeCommand("get_auth_state");
   }
 
-  beginGithubAuth(): Promise<DeviceAuthorization> {
-    return this.invokeCommand("begin_github_auth");
+  beginGithubAuth(requestId: string): Promise<DeviceAuthorization> {
+    return this.invokeCommand("begin_github_auth", { requestId });
   }
 
   cancelGithubAuth(requestId: string): Promise<boolean> {
@@ -94,10 +94,12 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
   }
 
   cloneRepository(
+    requestId: string,
     repository: GithubRepositorySummary,
     parentDirectory: string,
   ): Promise<CloneJob> {
     return this.invokeCommand("clone_repository", {
+      requestId,
       request: {
         repositoryId: repository.id,
         fullName: repository.fullName,

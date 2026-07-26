@@ -35,6 +35,83 @@ describe("WorkspaceConnectionProvider", () => {
     expect(gateway.listenerCount()).toEqual({ auth: 0, clone: 0 });
   });
 
+  it("owns the auth id before invocation and keeps an early terminal event terminal", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    gateway.deferGithubAuth = true;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+    await waitFor(() => expect(gateway.listenerCount()).toEqual({ auth: 1, clone: 1 }));
+
+    await user.click(screen.getByRole("button", { name: "login" }));
+    const authCall = gateway.calls.find((call) => call.method === "beginGithubAuth");
+    expect(authCall?.args[0]).toEqual(expect.any(String));
+
+    gateway.approveAuthentication();
+    expect(await screen.findByText("repository:idle")).toBeInTheDocument();
+    gateway.resolveGithubAuth();
+    expect(screen.getByText("repository:idle")).toBeInTheDocument();
+  });
+
+  it("routes only an owned early clone completion into downstream inspection", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    gateway.deferClone = true;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <WorkspaceConnectionPage />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "GitHub 로그인" }));
+    gateway.approveAuthentication();
+    await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    const cloneCall = gateway.calls.find((call) => call.method === "cloneRepository");
+    const requestId = cloneCall?.args[0];
+    expect(requestId).toEqual(expect.any(String));
+
+    gateway.emitClone({
+      status: "completed",
+      requestId: "stale-clone-id",
+      repository: gateway.repositorySnapshot,
+    });
+    expect(gateway.calls.filter((call) => call.method === "inspectWorkspace")).toHaveLength(0);
+
+    gateway.emitClone({
+      status: "completed",
+      requestId: requestId as string,
+      repository: gateway.repositorySnapshot,
+    });
+    await waitFor(() =>
+      expect(gateway.calls.filter((call) => call.method === "inspectWorkspace")).toHaveLength(1),
+    );
+    gateway.resolveClone();
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
+  });
+
+  it("loads an empty first repository page only once after accepted authentication", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    gateway.repositories = [];
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+    await waitFor(() => expect(gateway.listenerCount()).toEqual({ auth: 1, clone: 1 }));
+
+    await user.click(screen.getByRole("button", { name: "login" }));
+    gateway.approveAuthentication();
+    await waitFor(() =>
+      expect(gateway.calls.filter((call) => call.method === "listRepositories")).toHaveLength(1),
+    );
+  });
+
   it("retries a failed clone with a fresh operation id and reducer-held semantic input", async () => {
     const gateway = FakeWorkspaceConnectionGateway.disconnected();
     gateway.cloneError = {
@@ -58,6 +135,7 @@ describe("WorkspaceConnectionProvider", () => {
 
     const cloneCalls = gateway.calls.filter((call) => call.method === "cloneRepository");
     expect(cloneCalls).toHaveLength(2);
-    expect(cloneCalls[1]?.args).toEqual(cloneCalls[0]?.args);
+    expect(cloneCalls[1]?.args[0]).not.toBe(cloneCalls[0]?.args[0]);
+    expect(cloneCalls[1]?.args.slice(1)).toEqual(cloneCalls[0]?.args.slice(1));
   });
 });

@@ -45,7 +45,7 @@
 - [ ] Run focused Rust tests, the full Rust suite, format, Clippy, and `git diff --check`.
 - [ ] Commit with `fix: accept frontend operation ids`.
 
-### Task 2: Align TypeScript gateway, adapters, fake, and reducer
+### Task 2: Align the TypeScript contract and reducer-driven Provider
 
 **Files:**
 - Modify: `src/features/workspace-connection/WorkspaceConnectionGateway.ts`
@@ -55,9 +55,12 @@
 - Modify: `src/infrastructure/workspace/TauriWorkspaceConnectionGateway.ts`
 - Modify: `src/infrastructure/workspace/UnavailableWorkspaceConnectionGateway.ts`
 - Modify: `src/test/FakeWorkspaceConnectionGateway.ts`
+- Modify: `src/features/workspace-connection/WorkspaceConnectionProvider.tsx`
+- Modify: `src/features/workspace-connection/WorkspaceConnectionProvider.test.tsx`
+- Modify: `src/features/workspace-connection/WorkspaceConnectionPage.test.tsx`
 
 **Interfaces:**
-- Produces: `beginGithubAuth(requestId)` and `cloneRepository(requestId, repository, parentDirectory)` using the exact Tauri argument envelope.
+- Produces: `beginGithubAuth(requestId)` and `cloneRepository(requestId, repository, parentDirectory)` using the exact Tauri argument envelope, plus listener-first Provider orchestration driven only by reducer-accepted states.
 - Consumes: Task 1's camelCase wire contract.
 
 - [ ] Write adapter/fake tests that expect the frontend UUID in both invoke envelopes and returned DTOs.
@@ -65,35 +68,21 @@
 - [ ] Run focused frontend tests and confirm old signatures/buffer state fail.
 - [ ] Remove auth/clone pre-publication buffer types and transitions. Register exact ownership at the start action and treat later command results as matching metadata only.
 - [ ] Keep stale repository/path validation and all typed retry inputs.
-- [ ] Run reducer/adapter tests, full frontend tests, build, and `git diff --check`.
-- [ ] Commit with `fix: align workspace operation ownership`.
-
-### Task 3: Drive downstream commands only from reducer-accepted state
-
-**Files:**
-- Modify: `src/features/workspace-connection/WorkspaceConnectionProvider.tsx`
-- Modify: `src/features/workspace-connection/WorkspaceConnectionProvider.test.tsx`
-- Modify: `src/features/workspace-connection/WorkspaceConnectionPage.test.tsx`
-
-**Interfaces:**
-- Produces: listener-first orchestration where event callbacks only dispatch and effects consume reducer-approved states.
-- Consumes: Task 2 reducer/gateway contract.
-
 - [ ] Before implementation, remove the existing uncommitted partial Provider fix so the new regression tests demonstrate the bug against committed Task 10 code.
 - [ ] Add deterministic RED tests for auth success before `beginGithubAuth` resolves, clone completion before `cloneRepository` resolves, stale auth/clone IDs, stale clone repository/path, exact cancellation/failure/completion ownership, duplicate starts, and mismatched initialization roots.
 - [ ] Confirm rejected raw events currently launch or strand downstream gateway operations.
 - [ ] Generate the UUID, dispatch ownership first, then call the gateway with the same UUID only after listener setup.
 - [ ] Make listeners dispatch-only. Start repository load, workspace inspection, and connection only from reducer-accepted owned state; do not add last-action or temporary ownership refs.
 - [ ] Preserve listener cleanup and initialization's separately owned `connectWorkspace(result.root)` step.
-- [ ] Run focused provider/reducer tests, full frontend and Rust tests, frontend build, Tauri debug build, and `git diff --check`.
-- [ ] Commit with `fix: sequence workspace operations by owned state`.
+- [ ] Run focused provider/reducer/adapter tests, full frontend and Rust tests, frontend build, Tauri debug build, and `git diff --check`.
+- [ ] Commit with `fix: align workspace operation ownership`.
 
-### Task 4: Independent protocol review
+### Task 3: Independent protocol review
 
 **Files:**
-- Review all Task 1-3 commits and tests.
+- Review all Task 1-2 commits and tests.
 
-- [ ] Generate one review package from the pre-change base through Task 3.
+- [ ] Generate one review package from the pre-change base through Task 2.
 - [ ] Independently verify the exact UUID across Rust commands, Tauri adapter, reducer, Provider, and fakes.
 - [ ] Verify no unbounded/pre-publication buffer or provider ownership mirror remains.
 - [ ] Verify stale ID/repository/path events cause no inspection or connection side effects.

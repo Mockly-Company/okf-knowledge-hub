@@ -19,7 +19,7 @@ import type {
 export interface WorkspaceConnectionGateway {
   getCurrentWorkspace(): Promise<CurrentWorkspaceState>;
   getAuthState(): Promise<AuthState>;
-  beginGithubAuth(): Promise<DeviceAuthorization>;
+  beginGithubAuth(requestId: string): Promise<DeviceAuthorization>;
   cancelGithubAuth(requestId: string): Promise<boolean>;
   logoutGithub(): Promise<void>;
   onAuthStatus(listener: (event: AuthStatusEvent) => void): Promise<Unlisten>;
@@ -28,6 +28,7 @@ export interface WorkspaceConnectionGateway {
   openExternal(url: string): Promise<void>;
   inspectExistingClone(path: string, repositoryId: string): Promise<RepositorySnapshot>;
   cloneRepository(
+    requestId: string,
     repository: GithubRepositorySummary,
     parentDirectory: string,
   ): Promise<CloneJob>;

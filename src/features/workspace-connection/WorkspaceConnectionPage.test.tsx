@@ -106,7 +106,7 @@ describe("WorkspaceConnectionPage", () => {
     await user.click(screen.getByRole("button", { name: "다른 위치 선택" }));
     const cloneCalls = gateway.calls.filter((call) => call.method === "cloneRepository");
     expect(cloneCalls).toHaveLength(2);
-    expect(cloneCalls[1]?.args[1]).toBe("/new-work");
+    expect(cloneCalls[1]?.args[2]).toBe("/new-work");
   });
 
   it("announces clone progress without replacing the current focus", async () => {

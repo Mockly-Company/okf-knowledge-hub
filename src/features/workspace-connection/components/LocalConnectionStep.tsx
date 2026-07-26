@@ -37,7 +37,7 @@ export function LocalConnectionStep({ state, onConnectExisting, onClone, onPrevi
         </div>
       ) : null}
       {state.status === "cloning" || state.status === "clone_cancelling" ? <p role="status" aria-live="polite">clone 중{state.cloneProgress ? ` ${state.cloneProgress.completed}/${state.cloneProgress.total}` : ""}</p> : null}
-      {state.status === "cloning" || state.status === "clone_cancelling" ? <p>클론 위치: <code>{state.cloneJob.targetPath}</code></p> : null}
+      {(state.status === "cloning" || state.status === "clone_cancelling") && state.cloneJob ? <p>클론 위치: <code>{state.cloneJob.targetPath}</code></p> : null}
     </section>
   );
 }

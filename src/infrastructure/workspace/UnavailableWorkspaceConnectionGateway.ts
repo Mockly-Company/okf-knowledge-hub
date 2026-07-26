@@ -45,7 +45,7 @@ export class UnavailableWorkspaceConnectionGateway
     return unavailable();
   }
 
-  beginGithubAuth(): Promise<DeviceAuthorization> {
+  beginGithubAuth(_requestId: string): Promise<DeviceAuthorization> {
     return unavailable();
   }
 
@@ -81,6 +81,7 @@ export class UnavailableWorkspaceConnectionGateway
   }
 
   cloneRepository(
+    _requestId: string,
     _repository: GithubRepositorySummary,
     _parentDirectory: string,
   ): Promise<CloneJob> {

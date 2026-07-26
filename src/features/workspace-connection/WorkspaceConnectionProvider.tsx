@@ -83,78 +83,68 @@ export function WorkspaceConnectionProvider({
     stateRef.current = state;
   }, [state]);
 
+  const dispatchAccepted = useCallback((action: Parameters<typeof connectionReducer>[1]) => {
+    const current = stateRef.current;
+    const next = connectionReducer(current, action);
+    if (next === current) return false;
+    stateRef.current = next;
+    dispatch(action);
+    return true;
+  }, []);
+
   const loadRepositories = useCallback(
     async (cursor: string | null, append: boolean, authenticatedUserId?: number) => {
       const current = stateRef.current;
       const userId = authenticatedUserId ?? (current.auth?.status === "authenticated" ? current.auth.user.id : null);
       if (userId === null) return;
       const request = { id: operationId(), userId, cursor, append };
-      dispatch({ type: "repositoryLoading", request });
+      if (!dispatchAccepted({ type: "repositoryLoading", request })) return;
       try {
         const page = await gateway.listRepositories(cursor ?? undefined);
-        dispatch({ type: "repositoryPageLoaded", request, page });
+        dispatchAccepted({ type: "repositoryPageLoaded", request, page });
       } catch (error) {
-        dispatch({ type: "repositoryLoadFailed", request, error: asAppError(error) });
+        dispatchAccepted({ type: "repositoryLoadFailed", request, error: asAppError(error) });
       }
     },
-    [gateway],
+    [dispatchAccepted, gateway],
   );
 
   const loadAuth = useCallback(async () => {
     const request = { id: operationId() };
-    dispatch({ type: "authLoadStarted", request });
+    if (!dispatchAccepted({ type: "authLoadStarted", request })) return;
     try {
       const auth = await gateway.getAuthState();
-      dispatch({ type: "authLoaded", request, auth });
-      if (auth.status === "authenticated") {
-        await loadRepositories(null, false, auth.user.id);
-      }
+      dispatchAccepted({ type: "authLoaded", request, auth });
     } catch (error) {
-      dispatch({ type: "authLoadFailed", request, error: asAppError(error) });
+      dispatchAccepted({ type: "authLoadFailed", request, error: asAppError(error) });
     }
-  }, [gateway, loadRepositories]);
+  }, [dispatchAccepted, gateway]);
 
   const inspectWorkspace = useCallback(
     async (repositoryRoot: string) => {
       const request: WorkspaceInspectionRequest = { id: operationId(), repositoryRoot };
-      dispatch({ type: "workspaceInspectionStarted", request });
+      if (!dispatchAccepted({ type: "workspaceInspectionStarted", request })) return;
       try {
         const inspection = await gateway.inspectWorkspace(repositoryRoot);
-        dispatch({ type: "workspaceInspected", request, inspection });
-        if (inspection.status === "ready") {
-          const connection: WorkspaceConnectionRequest = {
-            id: operationId(),
-            repositoryRoot,
-            source: "existing",
-            initializationRequestId: null,
-          };
-          dispatch({ type: "workspaceConnectionStarted", request: connection });
-          try {
-            const workspace = await gateway.connectWorkspace(repositoryRoot);
-            dispatch({ type: "workspaceConnected", request: connection, workspace });
-          } catch (error) {
-            dispatch({ type: "workspaceConnectionFailed", request: connection, error: asAppError(error) });
-          }
-        }
+        dispatchAccepted({ type: "workspaceInspected", request, inspection });
       } catch (error) {
-        dispatch({ type: "workspaceInspectionFailed", request, error: asAppError(error) });
+        dispatchAccepted({ type: "workspaceInspectionFailed", request, error: asAppError(error) });
       }
     },
-    [gateway],
+    [dispatchAccepted, gateway],
   );
 
   const inspectLocalClone = useCallback(
     async (request: LocalInspectionRequest, retry = false) => {
-      dispatch({ type: retry ? "localInspectionRetryStarted" : "localInspectionStarted", request });
+      if (!dispatchAccepted({ type: retry ? "localInspectionRetryStarted" : "localInspectionStarted", request })) return;
       try {
         const repository = await gateway.inspectExistingClone(request.path, request.repositoryId);
-        dispatch({ type: "localRepositoryChanged", request, repository });
-        await inspectWorkspace(repository.root);
+        dispatchAccepted({ type: "localRepositoryChanged", request, repository });
       } catch (error) {
-        dispatch({ type: "localInspectionFailed", request, error: asAppError(error) });
+        dispatchAccepted({ type: "localInspectionFailed", request, error: asAppError(error) });
       }
     },
-    [gateway, inspectWorkspace],
+    [dispatchAccepted, gateway],
   );
 
   const clone = useCallback(
@@ -162,7 +152,7 @@ export function WorkspaceConnectionProvider({
       const current = stateRef.current;
       const repository = current.selectedRepository;
       if (!repository || repository.id !== request.repositoryId) return;
-      dispatch({
+      if (!dispatchAccepted({
         type:
           mode === "retry"
             ? "cloneRetryStarted"
@@ -170,27 +160,31 @@ export function WorkspaceConnectionProvider({
               ? "cloneAlternateDirectoryStarted"
               : "cloneStarting",
         request,
-      });
+      })) return;
       try {
-        const job = await gateway.cloneRepository(repository, request.parentDirectory);
-        dispatch({ type: "cloneStarted", request, job });
+        const job = await gateway.cloneRepository(
+          request.id,
+          repository,
+          request.parentDirectory,
+        );
+        dispatchAccepted({ type: "cloneStarted", request, job });
       } catch (error) {
-        dispatch({ type: "cloneStartFailed", request, error: asAppError(error) });
+        dispatchAccepted({ type: "cloneStartFailed", request, error: asAppError(error) });
       }
     },
-    [gateway],
+    [dispatchAccepted, gateway],
   );
 
   const startLogin = useCallback(async () => {
     const request = { id: operationId() };
-    dispatch({ type: "loginBeginStarted", request });
+    if (!dispatchAccepted({ type: "loginBeginStarted", request })) return;
     try {
-      const authorization = await gateway.beginGithubAuth();
-      dispatch({ type: "loginStarted", request, authorization });
+      const authorization = await gateway.beginGithubAuth(request.id);
+      dispatchAccepted({ type: "loginStarted", request, authorization });
     } catch (error) {
-      dispatch({ type: "loginBeginFailed", request, error: asAppError(error) });
+      dispatchAccepted({ type: "loginBeginFailed", request, error: asAppError(error) });
     }
-  }, [gateway]);
+  }, [dispatchAccepted, gateway]);
 
   const cancelLogin = useCallback(async () => {
     const current = stateRef.current;
@@ -198,9 +192,9 @@ export function WorkspaceConnectionProvider({
     try {
       await gateway.cancelGithubAuth(current.authorization.requestId);
     } finally {
-      dispatch({ type: "authEventReceived", event: { status: "cancelled", requestId: current.authorization.requestId } });
+      dispatchAccepted({ type: "authEventReceived", event: { status: "cancelled", requestId: current.authorization.requestId } });
     }
-  }, [gateway]);
+  }, [dispatchAccepted, gateway]);
 
   const openVerificationUrl = useCallback(async (url: string) => {
     await gateway.openExternal(url);
@@ -219,8 +213,8 @@ export function WorkspaceConnectionProvider({
   }, [loadRepositories]);
 
   const selectRepository = useCallback((repository: GithubRepositorySummary) => {
-    dispatch({ type: "repositorySelected", repository });
-  }, []);
+    dispatchAccepted({ type: "repositorySelected", repository });
+  }, [dispatchAccepted]);
 
   const connectExistingClone = useCallback(async () => {
     const current = stateRef.current;
@@ -274,7 +268,7 @@ export function WorkspaceConnectionProvider({
       repositoryRoot: current.localRepository.root,
       workspaceName: workspaceNameFromRepository(current.selectedRepository.name),
     };
-    dispatch({ type: "initializationPreviewStarted", request });
+    if (!dispatchAccepted({ type: "initializationPreviewStarted", request })) return;
     try {
       const preview = await gateway.previewInitialization({
         repositoryPath: request.repositoryRoot,
@@ -282,27 +276,27 @@ export function WorkspaceConnectionProvider({
         repositoryId: current.selectedRepository.id,
         repositoryFullName: current.selectedRepository.fullName,
       });
-      dispatch({ type: "initializationPreviewLoaded", request, preview });
+      dispatchAccepted({ type: "initializationPreviewLoaded", request, preview });
     } catch (error) {
-      dispatch({ type: "initializationPreviewFailed", request, error: asAppError(error) });
+      dispatchAccepted({ type: "initializationPreviewFailed", request, error: asAppError(error) });
     }
-  }, [gateway]);
+  }, [dispatchAccepted, gateway]);
 
   const cancelInitializationPreview = useCallback(() => {
-    dispatch({ type: "initializationPreviewCancelled" });
-  }, []);
+    dispatchAccepted({ type: "initializationPreviewCancelled" });
+  }, [dispatchAccepted]);
 
   const connectInitializedWorkspace = useCallback(
     async (request: WorkspaceConnectionRequest) => {
-      dispatch({ type: "workspaceConnectionStarted", request });
+      if (!dispatchAccepted({ type: "workspaceConnectionStarted", request })) return;
       try {
         const workspace = await gateway.connectWorkspace(request.repositoryRoot);
-        dispatch({ type: "workspaceConnected", request, workspace });
+        dispatchAccepted({ type: "workspaceConnected", request, workspace });
       } catch (error) {
-        dispatch({ type: "workspaceConnectionFailed", request, error: asAppError(error) });
+        dispatchAccepted({ type: "workspaceConnectionFailed", request, error: asAppError(error) });
       }
     },
-    [gateway],
+    [dispatchAccepted, gateway],
   );
 
   const confirmInitialization = useCallback(async () => {
@@ -313,20 +307,14 @@ export function WorkspaceConnectionProvider({
       previewId: current.initializationPreview.id,
       repositoryRoot: current.localRepository.root,
     };
-    dispatch({ type: "initializationStarted", request });
+    if (!dispatchAccepted({ type: "initializationStarted", request })) return;
     try {
       const result = await gateway.initializeWorkspace(request.previewId);
-      dispatch({ type: "initializationSucceeded", request, result });
-      await connectInitializedWorkspace({
-        id: operationId(),
-        repositoryRoot: result.root,
-        source: "initialization",
-        initializationRequestId: request.id,
-      });
+      dispatchAccepted({ type: "initializationSucceeded", request, result });
     } catch (error) {
-      dispatch({ type: "initializationFailed", request, error: asAppError(error) });
+      dispatchAccepted({ type: "initializationFailed", request, error: asAppError(error) });
     }
-  }, [connectInitializedWorkspace, gateway]);
+  }, [dispatchAccepted, gateway]);
 
   const retryLastAction = useCallback(async () => {
     const current = stateRef.current;
@@ -358,27 +346,21 @@ export function WorkspaceConnectionProvider({
     if (current.step === "initialize" && current.status === "error") {
       if (current.failedOperation === "initialization") {
         const request = { ...current.failedInitializationRequest, id: operationId() };
-        dispatch({ type: "initializationStarted", request });
+        if (!dispatchAccepted({ type: "initializationStarted", request })) return;
         try {
           const result = await gateway.initializeWorkspace(request.previewId);
-          dispatch({ type: "initializationSucceeded", request, result });
-          await connectInitializedWorkspace({
-            id: operationId(),
-            repositoryRoot: result.root,
-            source: "initialization",
-            initializationRequestId: request.id,
-          });
+          dispatchAccepted({ type: "initializationSucceeded", request, result });
         } catch (error) {
-          dispatch({ type: "initializationFailed", request, error: asAppError(error) });
+          dispatchAccepted({ type: "initializationFailed", request, error: asAppError(error) });
         }
       } else {
         await connectInitializedWorkspace({ ...current.failedWorkspaceConnectionRequest, id: operationId() });
       }
     }
-  }, [clone, connectInitializedWorkspace, gateway, inspectLocalClone, inspectWorkspace, loadRepositories, previewInitialization, startLogin]);
+  }, [clone, connectInitializedWorkspace, dispatchAccepted, gateway, inspectLocalClone, inspectWorkspace, loadRepositories, previewInitialization, startLogin]);
 
-  const startReplacement = useCallback(() => dispatch({ type: "replacementStarted" }), []);
-  const cancelReplacement = useCallback(() => dispatch({ type: "replacementCancelled" }), []);
+  const startReplacement = useCallback(() => dispatchAccepted({ type: "replacementStarted" }), [dispatchAccepted]);
+  const cancelReplacement = useCallback(() => dispatchAccepted({ type: "replacementCancelled" }), [dispatchAccepted]);
 
   useEffect(() => {
     let active = true;
@@ -388,12 +370,10 @@ export function WorkspaceConnectionProvider({
     const setup = async () => {
       const subscriptions = await Promise.all([
         gateway.onAuthStatus((event) => {
-          dispatch({ type: "authEventReceived", event });
-          if (event.status === "authenticated") void loadRepositories(null, false, event.user.id);
+          dispatchAccepted({ type: "authEventReceived", event });
         }),
         gateway.onCloneProgress((event) => {
-          dispatch({ type: "cloneEventReceived", event });
-          if (event.status === "completed") void inspectWorkspace(event.repository.root);
+          dispatchAccepted({ type: "cloneEventReceived", event });
         }),
       ]);
       [unlistenAuth, unlistenClone] = subscriptions;
@@ -405,12 +385,12 @@ export function WorkspaceConnectionProvider({
       try {
         const workspace = await gateway.getCurrentWorkspace();
         if (!active) return;
-        dispatch({ type: "currentWorkspaceLoaded", workspace });
+        const accepted = dispatchAccepted({ type: "currentWorkspaceLoaded", workspace });
         setCurrentWorkspaceLoading(false);
-        if (workspace?.status !== "connected") void loadAuth();
+        if (accepted && workspace?.status !== "connected") void loadAuth();
       } catch {
         if (!active) return;
-        dispatch({ type: "currentWorkspaceLoaded", workspace: null });
+        dispatchAccepted({ type: "currentWorkspaceLoaded", workspace: null });
         setCurrentWorkspaceLoading(false);
         void loadAuth();
       }
@@ -421,7 +401,51 @@ export function WorkspaceConnectionProvider({
       unlistenAuth?.();
       unlistenClone?.();
     };
-  }, [gateway, inspectWorkspace, loadAuth, loadRepositories]);
+  }, [dispatchAccepted, gateway, loadAuth]);
+
+  useEffect(() => {
+    if (
+      state.step === "repository" &&
+      state.status === "idle" &&
+      !state.repositoriesLoaded
+    ) {
+      void loadRepositories(null, false, state.auth.user.id);
+    }
+  }, [loadRepositories, state]);
+
+  useEffect(() => {
+    if (
+      state.step === "local" &&
+      state.status === "idle" &&
+      state.localRepository &&
+      state.workspaceInspection === null
+    ) {
+      void inspectWorkspace(state.localRepository.root);
+      return;
+    }
+    if (
+      state.step === "local" &&
+      state.status === "idle" &&
+      state.localRepository &&
+      state.workspaceInspection?.status === "ready"
+    ) {
+      void connectInitializedWorkspace({
+        id: operationId(),
+        repositoryRoot: state.localRepository.root,
+        source: "existing",
+        initializationRequestId: null,
+      });
+      return;
+    }
+    if (state.step === "initialize" && state.status === "ready_to_connect") {
+      void connectInitializedWorkspace({
+        id: operationId(),
+        repositoryRoot: state.initializationResult.root,
+        source: "initialization",
+        initializationRequestId: state.completedInitializationRequest.id,
+      });
+    }
+  }, [connectInitializedWorkspace, inspectWorkspace, state]);
 
   const value = useMemo<WorkspaceConnectionContextValue>(
     () => ({
