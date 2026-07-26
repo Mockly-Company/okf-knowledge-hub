@@ -124,6 +124,7 @@ describe("WorkspaceConnectionProvider", () => {
     gateway.emitClone({
       status: "completed",
       requestId: "stale-clone-id",
+      ownershipTargetPath: "/work/mockly-knowledge",
       repository: gateway.repositorySnapshot,
     });
     expect(gateway.calls.filter((call) => call.method === "inspectWorkspace")).toHaveLength(0);
@@ -131,6 +132,7 @@ describe("WorkspaceConnectionProvider", () => {
     gateway.emitClone({
       status: "completed",
       requestId: requestId as string,
+      ownershipTargetPath: "/work/mockly-knowledge",
       repository: gateway.repositorySnapshot,
     });
     await waitFor(() =>

@@ -103,7 +103,12 @@ export interface CloneJob {
 
 export type CloneProgressEvent =
   | { status: "progress"; requestId: string; progress: CloneProgress }
-  | { status: "completed"; requestId: string; repository: RepositorySnapshot }
+  | {
+      status: "completed";
+      requestId: string;
+      ownershipTargetPath: string;
+      repository: RepositorySnapshot;
+    }
   | { status: "failed"; requestId: string; error: AppError }
   | { status: "cancelled"; requestId: string };
 

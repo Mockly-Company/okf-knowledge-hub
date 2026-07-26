@@ -39,6 +39,44 @@ struct Lifecycle {
     active: HashMap<Uuid, ActiveJob>,
 }
 
+struct BeginReservation {
+    reservations: Arc<std::sync::Mutex<HashMap<Uuid, u64>>>,
+    request_id: Uuid,
+    generation: u64,
+}
+
+impl BeginReservation {
+    fn new(
+        reservations: Arc<std::sync::Mutex<HashMap<Uuid, u64>>>,
+        request_id: Uuid,
+        generation: u64,
+    ) -> Self {
+        let mut entries = reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries.retain(|_, reserved_generation| *reserved_generation == generation);
+        entries.insert(request_id, generation);
+        drop(entries);
+        Self {
+            reservations,
+            request_id,
+            generation,
+        }
+    }
+}
+
+impl Drop for BeginReservation {
+    fn drop(&mut self) {
+        let mut entries = self
+            .reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if entries.get(&self.request_id) == Some(&self.generation) {
+            entries.remove(&self.request_id);
+        }
+    }
+}
+
 pub struct AuthService {
     client_id: String,
     api: Arc<dyn DeviceFlowApi>,
@@ -47,6 +85,7 @@ pub struct AuthService {
     delay: Arc<dyn Delay>,
     events: Arc<dyn AuthEventSink>,
     lifecycle: Mutex<Lifecycle>,
+    begin_reservations: Arc<std::sync::Mutex<HashMap<Uuid, u64>>>,
     refresh: Mutex<()>,
 }
 
@@ -67,50 +106,28 @@ impl AuthService {
             delay: Arc::new(delay),
             events: Arc::new(events),
             lifecycle: Mutex::new(Lifecycle::default()),
+            begin_reservations: Arc::new(std::sync::Mutex::new(HashMap::new())),
             refresh: Mutex::new(()),
         }
     }
 
     pub async fn begin(&self, request_id: Uuid) -> Result<DeviceAuthorization, AppError> {
         self.ensure_client_id()?;
-        let (generation, cancellation) = {
+        let (generation, reservation) = {
             let mut lifecycle = self.lifecycle.lock().await;
             invalidate_lifecycle(&mut lifecycle);
             let generation = lifecycle.generation;
-            let cancellation = CancellationToken::new();
-            lifecycle.active.insert(
-                request_id,
-                ActiveJob {
-                    generation,
-                    kind: JobKind::Login,
-                    cancellation: cancellation.clone(),
-                },
-            );
-            (generation, cancellation)
+            let reservation =
+                BeginReservation::new(self.begin_reservations.clone(), request_id, generation);
+            (generation, reservation)
         };
 
-        let response = tokio::select! {
-            _ = cancellation.cancelled() => {
-                self.finish_job(request_id).await;
-                return Err(authentication_expired_error());
-            }
-            result = self.api.request_device_code(&self.client_id) => result,
-        };
-        let response = match response {
-            Ok(response) => response,
-            Err(error) => {
-                self.finish_job(request_id).await;
-                return Err(error);
-            }
-        };
+        let response = self.api.request_device_code(&self.client_id).await?;
         let (device_code, user_code, verification_uri, expires_in, interval_seconds) =
             response.into_parts();
         let expires_in = match i64::try_from(expires_in) {
             Ok(expires_in) => expires_in,
-            Err(_) => {
-                self.finish_job(request_id).await;
-                return Err(invalid_duration_error());
-            }
+            Err(_) => return Err(invalid_duration_error()),
         };
         let expires_at_unix = self.clock.now_unix().saturating_add(expires_in);
         let authorization = DeviceAuthorization {
@@ -120,11 +137,19 @@ impl AuthService {
             expires_at_unix,
             interval_seconds,
         };
+        let cancellation = CancellationToken::new();
         let mut lifecycle = self.lifecycle.lock().await;
-        if !job_is_current(&lifecycle, request_id, generation) || cancellation.is_cancelled() {
-            lifecycle.active.remove(&request_id);
+        if lifecycle.generation != generation {
             return Err(authentication_expired_error());
         }
+        lifecycle.active.insert(
+            request_id,
+            ActiveJob {
+                generation,
+                kind: JobKind::Login,
+                cancellation: cancellation.clone(),
+            },
+        );
         lifecycle.pending.insert(
             request_id,
             PendingAuthorization {
@@ -135,6 +160,7 @@ impl AuthService {
                 cancellation,
             },
         );
+        drop(reservation);
         Ok(authorization)
     }
 
@@ -305,6 +331,7 @@ impl AuthService {
                 .active
                 .values()
                 .any(|job| job.kind == JobKind::Login)
+                || self.has_begin_reservation(lifecycle.generation)
             {
                 return Err(self.reauthentication_required());
             }
@@ -398,7 +425,23 @@ impl AuthService {
     pub async fn logout(&self) -> Result<(), AppError> {
         let mut lifecycle = self.lifecycle.lock().await;
         invalidate_lifecycle(&mut lifecycle);
+        self.clear_begin_reservations();
         self.credentials.delete().await
+    }
+
+    fn has_begin_reservation(&self, generation: u64) -> bool {
+        self.begin_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .values()
+            .any(|reserved_generation| *reserved_generation == generation)
+    }
+
+    fn clear_begin_reservations(&self) {
+        self.begin_reservations
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     pub(crate) async fn lifecycle_generation(&self) -> Option<u64> {
@@ -855,6 +898,13 @@ mod tests {
         release: Arc<Notify>,
     }
 
+    #[derive(Clone, Default)]
+    struct BeginWithRefreshApi {
+        begin_started: Arc<Notify>,
+        release_begin: Arc<Notify>,
+        refresh_calls: Arc<AtomicUsize>,
+    }
+
     #[async_trait]
     impl DeviceFlowApi for BeginBarrierApi {
         async fn request_device_code(
@@ -880,6 +930,47 @@ mod tests {
             _refresh_token: &SecretString,
         ) -> Result<TokenGrant, AppError> {
             panic!("refresh is not used by this test")
+        }
+
+        async fn authenticated_user(
+            &self,
+            _access_token: &SecretString,
+        ) -> Result<GithubUserSummary, AppError> {
+            panic!("user lookup is not used by this test")
+        }
+    }
+
+    #[async_trait]
+    impl DeviceFlowApi for BeginWithRefreshApi {
+        async fn request_device_code(
+            &self,
+            _client_id: &str,
+        ) -> Result<DeviceCodeResponse, AppError> {
+            self.begin_started.notify_one();
+            self.release_begin.notified().await;
+            Ok(device_code_response("reserved-begin-device-code", 900, 5))
+        }
+
+        async fn poll_access_token(
+            &self,
+            _client_id: &str,
+            _device_code: &SecretString,
+        ) -> Result<DeviceTokenPoll, AppError> {
+            panic!("poll is not used by this test")
+        }
+
+        async fn refresh_access_token(
+            &self,
+            _client_id: &str,
+            _refresh_token: &SecretString,
+        ) -> Result<TokenGrant, AppError> {
+            self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(TokenGrant::new(
+                "ghu_stale_refresh",
+                "ghr_stale_refresh",
+                28_800,
+                15_897_600,
+            ))
         }
 
         async fn authenticated_user(
@@ -1562,6 +1653,64 @@ mod tests {
             "a logged-out begin must not become pending"
         );
         assert_eq!(credentials.saved_access_token(), None);
+    }
+
+    #[tokio::test]
+    async fn aborting_device_code_request_does_not_leave_login_active() {
+        let api = BeginBarrierApi::default();
+        let started = api.started.clone();
+        let service = Arc::new(AuthService::new(
+            CLIENT_ID,
+            api,
+            MemoryCredentialStore::default(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        ));
+        let begin = tokio::spawn({
+            let service = service.clone();
+            async move { service.begin(uuid::Uuid::new_v4()).await }
+        });
+        started.notified().await;
+
+        begin.abort();
+        assert!(begin.await.unwrap_err().is_cancelled());
+
+        assert!(
+            service.lifecycle_generation().await.is_some(),
+            "a dropped device-code request must not retain an active login"
+        );
+    }
+
+    #[tokio::test]
+    async fn device_code_request_reserves_login_intent_against_refresh() {
+        let api = BeginWithRefreshApi::default();
+        let begin_started = api.begin_started.clone();
+        let refresh_calls = api.refresh_calls.clone();
+        let service = Arc::new(AuthService::new(
+            CLIENT_ID,
+            api,
+            MemoryCredentialStore::with_tokens(authorization_tokens()),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        ));
+        let begin = tokio::spawn({
+            let service = service.clone();
+            async move { service.begin(uuid::Uuid::new_v4()).await }
+        });
+        begin_started.notified().await;
+
+        let error = match service.valid_access_token().await {
+            Ok(_) => panic!("refresh must not run while device login is reserved"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, ErrorCode::ReauthenticationRequired);
+        assert_eq!(refresh_calls.load(Ordering::SeqCst), 0);
+        begin.abort();
+        assert!(begin.await.unwrap_err().is_cancelled());
+        assert!(service.lifecycle_generation().await.is_some());
     }
 
     #[tokio::test]

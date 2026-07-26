@@ -148,16 +148,13 @@ async fn begin_github_auth_with_publication_hook(
         services,
     )
     .await?;
-    let authorization_result = auth.begin(request_id).await;
     let _ =
         crate::commands::workspace::remove_pending_initialization_tombstone_locked(services).await;
-    let authorization = authorization_result?;
+    let authorization = auth.begin(request_id).await?;
     before_publication();
-    let jobs = services.auth_jobs.clone();
     tauri::async_runtime::spawn(async move {
         before_run();
         let _ = auth.run(request_id, cancellation).await;
-        jobs.finish(request_id);
     });
     registration.commit();
     drop(_mutation);
@@ -465,6 +462,28 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct BlockingTombstoneSettings {
+        remove_started: Arc<Barrier>,
+        release_remove: Arc<Barrier>,
+    }
+
+    impl LocalSettingsStore for BlockingTombstoneSettings {
+        fn read(&self, _key: &str) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+
+        fn write(&self, _key: &str, _value: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        fn remove(&self, _key: &str) -> Result<(), AppError> {
+            self.remove_started.wait();
+            self.release_remove.wait();
+            Ok(())
+        }
+    }
+
     fn pending_context() -> PendingInitializationContext {
         PendingInitializationContext {
             preview_id: Uuid::new_v4(),
@@ -521,6 +540,29 @@ mod tests {
             self.events.0.lock().unwrap().push(event);
             self.terminal_claimed.wait();
             self.release.wait();
+            true
+        }
+    }
+
+    struct TerminalBlockingEvents {
+        events: Events,
+        terminal_claimed: Arc<Barrier>,
+        release: Arc<Barrier>,
+    }
+
+    impl AuthEventSink for TerminalBlockingEvents {
+        fn emit(&self, event: AuthStatusEvent) -> bool {
+            let is_terminal = matches!(
+                event,
+                AuthStatusEvent::Authenticated { .. }
+                    | AuthStatusEvent::Failed { .. }
+                    | AuthStatusEvent::Cancelled { .. }
+            );
+            self.events.0.lock().unwrap().push(event);
+            if is_terminal {
+                self.terminal_claimed.wait();
+                self.release.wait();
+            }
             true
         }
     }
@@ -598,15 +640,20 @@ mod tests {
 
     #[tokio::test]
     async fn completed_auth_job_is_removed_from_command_state() {
+        let auth_jobs = crate::state::JobRegistry::default();
         let auth = AuthService::new(
             "Iv1.public-client-id",
             ApprovedDeviceFlow,
             MemoryCredentials::default(),
             FixedClock,
             ImmediateDelay,
-            Events::default(),
+            LifecycleAuthEventSink::new(Events::default(), auth_jobs.clone()),
         );
-        let state = AppServices::for_command_tests(auth);
+        let state = AppServices::with_auth_jobs(
+            LocalSettingsService::new(MemorySettings::default()),
+            auth,
+            auth_jobs,
+        );
 
         let authorization = begin_github_auth_inner(&state, Uuid::new_v4())
             .await
@@ -622,20 +669,56 @@ mod tests {
         assert!(!state.auth_jobs.contains(authorization.request_id));
     }
 
-    #[test]
-    fn logout_after_device_authorization_observes_the_published_login_job() {
-        let events = Events::default();
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn aborting_after_begin_does_not_leave_auth_service_pending() {
+        let remove_started = Arc::new(Barrier::new(2));
+        let release_remove = Arc::new(Barrier::new(2));
         let auth = AuthService::new(
             "Iv1.public-client-id",
             PendingDeviceFlow,
             MemoryCredentials::default(),
             FixedClock,
             PendingDelay,
-            events.clone(),
+            Events::default(),
         );
         let state = Arc::new(AppServices::with_auth(
+            LocalSettingsService::new(BlockingTombstoneSettings {
+                remove_started: remove_started.clone(),
+                release_remove: release_remove.clone(),
+            }),
+            auth,
+        ));
+        let auth_service = state.auth.as_ref().unwrap().clone();
+        let request_id = Uuid::new_v4();
+        let task_state = state.clone();
+        let task =
+            tokio::spawn(async move { begin_github_auth_inner(&task_state, request_id).await });
+
+        remove_started.wait();
+        task.abort();
+        release_remove.wait();
+        assert!(task.await.unwrap_err().is_cancelled());
+
+        assert!(!state.auth_jobs.contains(request_id));
+        assert!(auth_service.lifecycle_generation().await.is_some());
+    }
+
+    #[test]
+    fn logout_after_device_authorization_observes_the_published_login_job() {
+        let events = Events::default();
+        let auth_jobs = crate::state::JobRegistry::default();
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            PendingDeviceFlow,
+            MemoryCredentials::default(),
+            FixedClock,
+            PendingDelay,
+            LifecycleAuthEventSink::new(events.clone(), auth_jobs.clone()),
+        );
+        let state = Arc::new(AppServices::with_auth_jobs(
             LocalSettingsService::new(MemorySettings::default()),
             auth,
+            auth_jobs,
         ));
         let authorization_ready = Arc::new(Barrier::new(2));
         let publish = Arc::new(Barrier::new(2));
@@ -833,19 +916,20 @@ mod tests {
     #[tokio::test]
     async fn starting_a_new_login_proactively_clears_an_existing_preview() {
         let events = Events::default();
+        let auth_jobs = crate::state::JobRegistry::default();
         let auth = AuthService::new(
             "Iv1.public-client-id",
             OtherAccountDeviceFlow,
             MemoryCredentials::default(),
             FixedClock,
             ImmediateDelay,
-            events.clone(),
+            LifecycleAuthEventSink::new(events.clone(), auth_jobs.clone()),
         );
         let store = MemorySettings::default();
         let settings = LocalSettingsService::new(store);
         let context = pending_context();
         settings.set_pending_initialization(&context).unwrap();
-        let state = AppServices::with_auth(settings.clone(), auth);
+        let state = AppServices::with_auth_jobs(settings.clone(), auth, auth_jobs);
         state
             .initialization_contexts
             .insert(context.clone())
@@ -1056,5 +1140,43 @@ mod tests {
             AuthStatusEvent::Authenticated { request_id, .. } if request_id == completed_id
         ));
         assert_eq!(recorded.len(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn completed_auth_worker_cannot_finish_a_reused_request_id() {
+        let jobs = crate::state::JobRegistry::default();
+        let events = Events::default();
+        let terminal_claimed = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let auth = AuthService::new(
+            "Iv1.public-client-id",
+            ApprovedDeviceFlow,
+            MemoryCredentials::default(),
+            FixedClock,
+            ImmediateDelay,
+            LifecycleAuthEventSink::new(
+                TerminalBlockingEvents {
+                    events,
+                    terminal_claimed: terminal_claimed.clone(),
+                    release: release.clone(),
+                },
+                jobs.clone(),
+            ),
+        );
+        let state = AppServices::with_auth_jobs(
+            LocalSettingsService::new(MemorySettings::default()),
+            auth,
+            jobs.clone(),
+        );
+        let request_id = Uuid::new_v4();
+
+        begin_github_auth_inner(&state, request_id).await.unwrap();
+        terminal_claimed.wait();
+        jobs.try_insert(request_id, CancellationToken::new())
+            .unwrap();
+        release.wait();
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+
+        assert!(jobs.contains(request_id));
     }
 }

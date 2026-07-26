@@ -123,6 +123,8 @@ pub enum RepositoryCloneEvent {
     Completed {
         #[serde(rename = "requestId")]
         request_id: Uuid,
+        #[serde(rename = "ownershipTargetPath")]
+        ownership_target_path: PathBuf,
         repository: RepositorySnapshot,
     },
     Failed {
@@ -238,6 +240,7 @@ async fn clone_repository_with_spawn_hook(
         emitter.clone(),
         jobs.clone(),
     ));
+    let ownership_target_path = target_path.clone();
     tauri::async_runtime::spawn_blocking(move || {
         before_run();
         let service = RepositoryService::for_clone(git, github, auth);
@@ -254,7 +257,13 @@ async fn clone_repository_with_spawn_hook(
             }
         });
         let terminal = jobs.finish(request_id);
-        emit_clone_terminal(emitter.as_ref(), request_id, terminal, result);
+        emit_clone_terminal(
+            emitter.as_ref(),
+            request_id,
+            ownership_target_path,
+            terminal,
+            result,
+        );
     });
 
     Ok(CloneJob {
@@ -266,6 +275,7 @@ async fn clone_repository_with_spawn_hook(
 fn emit_clone_terminal(
     emitter: &dyn RepositoryCloneEventEmitter,
     request_id: Uuid,
+    ownership_target_path: PathBuf,
     terminal: crate::state::JobTerminal,
     result: CommandResult<RepositorySnapshot>,
 ) {
@@ -276,6 +286,7 @@ fn emit_clone_terminal(
         crate::state::JobTerminal::Completed => match result {
             Ok(repository) => emitter.emit(RepositoryCloneEvent::Completed {
                 request_id,
+                ownership_target_path,
                 repository,
             }),
             Err(error) => emitter.emit(RepositoryCloneEvent::Failed { request_id, error }),
@@ -1772,6 +1783,7 @@ mod tests {
             },
             RepositoryCloneEvent::Completed {
                 request_id,
+                ownership_target_path: PathBuf::from("/requested/mockly-knowledge"),
                 repository: cloned_snapshot(),
             },
             RepositoryCloneEvent::Failed {
@@ -1788,6 +1800,38 @@ mod tests {
             assert!(!json.to_string().contains("token"));
             assert!(!json.to_string().contains("password"));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clone_completed_event_keeps_the_symlink_selected_target_separate_from_canonical_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let real_parent = parent.path().join("real-workspace");
+        std::fs::create_dir(&real_parent).unwrap();
+        let symlink_parent = parent.path().join("workspace-link");
+        std::os::unix::fs::symlink(&real_parent, &symlink_parent).unwrap();
+        let ownership_target_path =
+            RepositoryService::clone_target(&symlink_parent, "mockly-knowledge").unwrap();
+        let canonical_root = real_parent.join("mockly-knowledge");
+        let request_id = Uuid::new_v4();
+        let repository = RepositorySnapshot {
+            root: canonical_root.clone(),
+            ..cloned_snapshot()
+        };
+
+        let json = serde_json::to_value(RepositoryCloneEvent::Completed {
+            request_id,
+            ownership_target_path: ownership_target_path.clone(),
+            repository,
+        })
+        .unwrap();
+
+        assert_eq!(
+            json["ownershipTargetPath"].as_str(),
+            ownership_target_path.to_str()
+        );
+        assert_eq!(json["repository"]["root"].as_str(), canonical_root.to_str());
+        assert_ne!(json["ownershipTargetPath"], json["repository"]["root"]);
     }
 
     #[test]
@@ -1950,6 +1994,7 @@ mod tests {
         emit_clone_terminal(
             &events,
             cancelled_id,
+            PathBuf::from("/requested/cancelled"),
             cancelled_terminal,
             Ok(cloned_snapshot()),
         );
@@ -1981,6 +2026,7 @@ mod tests {
         emit_clone_terminal(
             &events,
             completed_id,
+            PathBuf::from("/requested/completed"),
             completed_terminal,
             Ok(cloned_snapshot()),
         );

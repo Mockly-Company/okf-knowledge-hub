@@ -1024,6 +1024,16 @@ describe("connectionReducer", () => {
         request: cloneRequest("changed-clone-retry", "/work/different"),
       }),
     ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "cloneRetryStarted",
+        request: {
+          ...failedRequest,
+          id: "changed-clone-target",
+          targetPath: "/work/retry-clone/not-the-owned-target",
+        },
+      }),
+    ).toBe(state);
 
     const retry = cloneRequest("retry-clone-start", "/work/retry-clone");
     const retried = connectionReducer(state, {
@@ -1223,6 +1233,7 @@ describe("connectionReducer", () => {
       event: {
         status: "completed",
         requestId: request.id,
+        ownershipTargetPath: request.targetPath,
         repository: localRepository("/work/old-knowledge"),
       },
     });
@@ -1239,6 +1250,57 @@ describe("connectionReducer", () => {
         job: { requestId: request.id, targetPath: request.targetPath },
       }),
     ).toBe(state);
+  });
+
+  it("accepts a backend ownership target through a symlink even when inspection canonicalizes root", () => {
+    const request = cloneRequest("symlink-clone", "/workspace-link");
+    const starting = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
+
+    const completed = connectionReducer(starting, {
+      type: "cloneEventReceived",
+      event: {
+        status: "completed",
+        requestId: request.id,
+        ownershipTargetPath: "/workspace-link/old-knowledge",
+        repository: localRepository("/real-workspace/old-knowledge"),
+      },
+    });
+
+    expect(completed).toMatchObject({
+      step: "local",
+      status: "idle",
+      localRepository: { root: "/real-workspace/old-knowledge" },
+    });
+  });
+
+  it("keeps Windows request ownership separate from a canonical repository root", () => {
+    const request: CloneStartRequest = {
+      ...cloneRequest("windows-clone", "C:\\workspace-link"),
+      targetPath: "C:\\workspace-link\\old-knowledge",
+    };
+    const starting = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
+
+    const completed = connectionReducer(starting, {
+      type: "cloneEventReceived",
+      event: {
+        status: "completed",
+        requestId: request.id,
+        ownershipTargetPath: "C:\\workspace-link\\old-knowledge",
+        repository: localRepository("\\\\?\\C:\\real-workspace\\old-knowledge"),
+      },
+    });
+
+    expect(completed).toMatchObject({
+      step: "local",
+      status: "idle",
+      localRepository: { root: "\\\\?\\C:\\real-workspace\\old-knowledge" },
+    });
   });
 
   it("rejects a duplicate active clone start without replacing its owned request", () => {
@@ -1274,6 +1336,7 @@ describe("connectionReducer", () => {
         event: {
           status: "completed",
           requestId: request.id,
+          ownershipTargetPath: "/other/old-knowledge",
           repository: localRepository("/other/old-knowledge"),
         },
       }),
@@ -1290,6 +1353,7 @@ describe("connectionReducer", () => {
         event: {
           status: "completed",
           requestId: request.id,
+          ownershipTargetPath: "/other/old-knowledge",
           repository: localRepository("/other/old-knowledge"),
         },
       }),
@@ -1359,6 +1423,7 @@ describe("connectionReducer", () => {
       event: {
         status: "completed",
         requestId: request.id,
+        ownershipTargetPath: request.targetPath,
         repository: localRepository(),
       },
     });

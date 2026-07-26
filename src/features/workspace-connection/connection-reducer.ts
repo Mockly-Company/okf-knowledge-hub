@@ -1087,6 +1087,7 @@ export function connectionReducer(
         action.request.repositoryId !== state.failedCloneStartRequest.repositoryId ||
         action.request.parentDirectory !==
           state.failedCloneStartRequest.parentDirectory ||
+        action.request.targetPath !== state.failedCloneStartRequest.targetPath ||
         action.request.repositoryId !== context.selectedRepository.id
       ) {
         return state;
@@ -1195,7 +1196,7 @@ export function connectionReducer(
           );
         }
         if (action.event.status === "completed") {
-          return action.event.repository.root === state.activeCloneStartRequest.targetPath
+          return action.event.ownershipTargetPath === state.activeCloneStartRequest.targetPath
             ? localIdle(context, action.event.repository)
             : state;
         }
@@ -1227,7 +1228,7 @@ export function connectionReducer(
         );
       }
       if (action.event.status === "completed") {
-        return action.event.repository.root === state.cloneRequest.targetPath
+        return action.event.ownershipTargetPath === state.cloneRequest.targetPath
           ? localIdle(context, action.event.repository)
           : state;
       }
