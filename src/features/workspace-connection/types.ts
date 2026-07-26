@@ -107,6 +107,15 @@ export type CloneProgressEvent =
   | { status: "failed"; requestId: string; error: AppError }
   | { status: "cancelled"; requestId: string };
 
+type CloneProgressOnlyEvent = Extract<CloneProgressEvent, { status: "progress" }>;
+type CloneTerminalEvent = Exclude<CloneProgressEvent, CloneProgressOnlyEvent>;
+
+export interface BufferedCloneEventGroup {
+  requestId: string;
+  latestProgress: CloneProgressOnlyEvent | null;
+  terminal: CloneTerminalEvent | null;
+}
+
 export interface WorkspaceSummary {
   id: string;
   name: string;
@@ -366,6 +375,7 @@ export type AuthConnectionState =
       authorization: null;
       activeAuthLoadRequest: null;
       activeLoginBeginRequest: LoginBeginRequest;
+      bufferedAuthEvents: AuthStatusEvent[];
       error: null;
     })
   | (AuthBase & {
@@ -483,6 +493,7 @@ type CloneStartingState = LocalBase & {
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
   activeWorkspaceConnectionRequest: null;
+  bufferedCloneEvents: BufferedCloneEventGroup[];
   error: null;
 };
 
@@ -492,6 +503,7 @@ type CloneRunningState = LocalBase & {
   activeCloneStartRequest: null;
   localRepository: null;
   cloneJob: CloneJob;
+  cloneRequest: CloneStartRequest;
   cloneProgress: CloneProgress | null;
   activeWorkspaceInspectionRequest: null;
   workspaceInspection: null;
@@ -577,13 +589,31 @@ type LocalErrorCommon = LocalBase & {
   error: AppError;
 };
 
-type LocalPreRepositoryErrorState = LocalErrorCommon & {
+type LocalInspectionErrorState = LocalErrorCommon & {
   errorContext: "pre_repository";
+  failedOperation: "local_inspection";
   localRepository: null;
   workspaceInspection: null;
+  failedLocalInspectionRequest: LocalInspectionRequest;
+  failedCloneStartRequest: null;
   failedInitializationPreviewRequest: null;
   failedWorkspaceConnectionRequest: null;
 };
+
+type LocalCloneErrorState = LocalErrorCommon & {
+  errorContext: "pre_repository";
+  failedOperation: "clone";
+  localRepository: null;
+  workspaceInspection: null;
+  failedLocalInspectionRequest: null;
+  failedCloneStartRequest: CloneStartRequest;
+  failedInitializationPreviewRequest: null;
+  failedWorkspaceConnectionRequest: null;
+};
+
+type LocalPreRepositoryErrorState =
+  | LocalInspectionErrorState
+  | LocalCloneErrorState;
 
 type LocalRepositoryErrorState = LocalErrorCommon & {
   errorContext: "repository";
@@ -772,6 +802,7 @@ export type ConnectionAction =
     }
   | { type: "repositorySelected"; repository: GithubRepositorySummary }
   | { type: "localInspectionStarted"; request: LocalInspectionRequest }
+  | { type: "localInspectionRetryStarted"; request: LocalInspectionRequest }
   | {
       type: "localRepositoryChanged";
       request: LocalInspectionRequest;
@@ -783,6 +814,7 @@ export type ConnectionAction =
       error: AppError;
     }
   | { type: "cloneStarting"; request: CloneStartRequest }
+  | { type: "cloneRetryStarted"; request: CloneStartRequest }
   | { type: "cloneStarted"; request: CloneStartRequest; job: CloneJob }
   | { type: "cloneStartFailed"; request: CloneStartRequest; error: AppError }
   | { type: "cloneCancellationRequested"; requestId: string }

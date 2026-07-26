@@ -131,6 +131,16 @@ function loginBeginRequest(id = "login-begin-1"): LoginBeginRequest {
   return { id };
 }
 
+function authorization(requestId: string) {
+  return {
+    requestId,
+    userCode: "ABCD-EFGH",
+    verificationUri: "https://github.com/login/device",
+    expiresAtUnix: 2_000,
+    intervalSeconds: 5,
+  };
+}
+
 function initializationRequest(
   id = "initialization-1",
   root = "/work/old-knowledge",
@@ -512,6 +522,123 @@ describe("connectionReducer", () => {
     ).toBe(state);
   });
 
+  it("replays authenticated when the auth event precedes the command response", () => {
+    const request = loginBeginRequest("early-authenticated-login");
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "loginBeginStarted",
+      request,
+    });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: { status: "authenticated", requestId: "backend-early-auth", user },
+    });
+    state = connectionReducer(state, {
+      type: "loginStarted",
+      request,
+      authorization: authorization("backend-early-auth"),
+    });
+
+    expect(state).toMatchObject({
+      step: "repository",
+      status: "idle",
+      auth: { status: "authenticated", user },
+    });
+  });
+
+  it("replays early auth failure and cancellation without leaving login pending", () => {
+    const failureRequest = loginBeginRequest("early-failed-login");
+    let failed = connectionReducer(createInitialConnectionState(), {
+      type: "loginBeginStarted",
+      request: failureRequest,
+    });
+    failed = connectionReducer(failed, {
+      type: "authEventReceived",
+      event: {
+        status: "failed",
+        requestId: "backend-early-failed",
+        error: unavailableError,
+      },
+    });
+    failed = connectionReducer(failed, {
+      type: "loginStarted",
+      request: failureRequest,
+      authorization: authorization("backend-early-failed"),
+    });
+    expect(failed).toMatchObject({ step: "auth", status: "error" });
+
+    const cancelRequest = loginBeginRequest("early-cancelled-login");
+    let cancelled = connectionReducer(createInitialConnectionState(), {
+      type: "loginBeginStarted",
+      request: cancelRequest,
+    });
+    cancelled = connectionReducer(cancelled, {
+      type: "authEventReceived",
+      event: { status: "cancelled", requestId: "backend-early-cancelled" },
+    });
+    cancelled = connectionReducer(cancelled, {
+      type: "loginStarted",
+      request: cancelRequest,
+      authorization: authorization("backend-early-cancelled"),
+    });
+    expect(cancelled).toMatchObject({ step: "auth", status: "idle" });
+  });
+
+  it("buffers waiting and stops replay after the first matching auth terminal", () => {
+    const request = loginBeginRequest("early-auth-order");
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "loginBeginStarted",
+      request,
+    });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: { status: "cancelled", requestId: "unrelated-auth-order" },
+    });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: { status: "waiting_for_user", requestId: "backend-auth-order" },
+    });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: { status: "authenticated", requestId: "backend-auth-order", user },
+    });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: {
+        status: "failed",
+        requestId: "backend-auth-order",
+        error: unavailableError,
+      },
+    });
+    state = connectionReducer(state, {
+      type: "loginStarted",
+      request,
+      authorization: authorization("backend-auth-order"),
+    });
+
+    expect(state).toMatchObject({ step: "repository", status: "idle" });
+  });
+
+  it("bounds auth events that arrive before the command response", () => {
+    const request = loginBeginRequest("bounded-auth-events");
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "loginBeginStarted",
+      request,
+    });
+    for (let index = 0; index < 12; index += 1) {
+      state = connectionReducer(state, {
+        type: "authEventReceived",
+        event: { status: "waiting_for_user", requestId: `auth-${index}` },
+      });
+    }
+
+    expect(state).toMatchObject({ step: "auth", status: "login_beginning" });
+    if (state.step !== "auth" || state.status !== "login_beginning") {
+      throw new Error("Expected a pending login begin state");
+    }
+    expect(state.bufferedAuthEvents).toHaveLength(8);
+    expect(state.bufferedAuthEvents[0]?.requestId).toBe("auth-4");
+  });
+
   it("ignores auth terminal events without the active login request", () => {
     const initial = createInitialConnectionState();
     expect(
@@ -849,6 +976,154 @@ describe("connectionReducer", () => {
     ).toBe(clone);
   });
 
+  it("retains local inspection input and retries it only with a new owner", () => {
+    const failedRequest = localRequest("failed-local-inspection", "/work/retry-local");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "localInspectionStarted",
+      request: failedRequest,
+    });
+    state = connectionReducer(state, {
+      type: "localInspectionFailed",
+      request: failedRequest,
+      error: unavailableError,
+    });
+    expect(state).toMatchObject({
+      step: "local",
+      status: "error",
+      errorContext: "pre_repository",
+      failedOperation: "local_inspection",
+      failedLocalInspectionRequest: failedRequest,
+    });
+
+    expect(
+      connectionReducer(state, {
+        type: "localInspectionRetryStarted",
+        request: failedRequest,
+      }),
+    ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "localInspectionRetryStarted",
+        request: localRequest("changed-local-retry", "/work/different"),
+      }),
+    ).toBe(state);
+
+    const retry = localRequest("retry-local-inspection", "/work/retry-local");
+    const retried = connectionReducer(state, {
+      type: "localInspectionRetryStarted",
+      request: retry,
+    });
+    expect(retried).toMatchObject({
+      status: "inspecting",
+      activeLocalRequest: retry,
+      error: null,
+    });
+  });
+
+  it("retains clone start input and retries it only with a new owner", () => {
+    const failedRequest = cloneRequest("failed-clone-start", "/work/retry-clone");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: failedRequest,
+    });
+    state = connectionReducer(state, {
+      type: "cloneStartFailed",
+      request: failedRequest,
+      error: unavailableError,
+    });
+    expect(state).toMatchObject({
+      step: "local",
+      status: "error",
+      failedOperation: "clone",
+      failedCloneStartRequest: failedRequest,
+    });
+
+    expect(
+      connectionReducer(state, {
+        type: "cloneRetryStarted",
+        request: failedRequest,
+      }),
+    ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "cloneRetryStarted",
+        request: cloneRequest("changed-clone-retry", "/work/different"),
+      }),
+    ).toBe(state);
+
+    const retry = cloneRequest("retry-clone-start", "/work/retry-clone");
+    const retried = connectionReducer(state, {
+      type: "cloneRetryStarted",
+      request: retry,
+    });
+    expect(retried).toMatchObject({
+      status: "clone_starting",
+      activeCloneStartRequest: retry,
+      error: null,
+    });
+  });
+
+  it("retains the original clone input after a terminal clone failure", () => {
+    const original = cloneRequest("terminal-clone-source", "/work/terminal-clone");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: original,
+    });
+    state = connectionReducer(state, {
+      type: "cloneStarted",
+      request: original,
+      job: { requestId: "terminal-clone-job", targetPath: "/work/old-knowledge" },
+    });
+    state = connectionReducer(state, {
+      type: "cloneEventReceived",
+      event: {
+        status: "failed",
+        requestId: "terminal-clone-job",
+        error: unavailableError,
+      },
+    });
+
+    expect(state).toMatchObject({
+      status: "error",
+      failedOperation: "clone",
+      failedCloneStartRequest: original,
+    });
+    const retry = cloneRequest("terminal-clone-retry", "/work/terminal-clone");
+    expect(
+      connectionReducer(state, { type: "cloneRetryStarted", request: retry }),
+    ).toMatchObject({ status: "clone_starting", activeCloneStartRequest: retry });
+  });
+
+  it("clears local retry context on repository change and reauthentication", () => {
+    const failedRequest = localRequest("clear-local-context", "/work/clear-local");
+    let failed = connectionReducer(selectedRepositoryState(), {
+      type: "localInspectionStarted",
+      request: failedRequest,
+    });
+    failed = connectionReducer(failed, {
+      type: "localInspectionFailed",
+      request: failedRequest,
+      error: unavailableError,
+    });
+
+    const changed = connectionReducer(failed, {
+      type: "repositorySelected",
+      repository: repository("new"),
+    });
+    expect(changed).toMatchObject({ status: "idle", selectedRepository: { id: "new" } });
+    expect("failedOperation" in changed).toBe(false);
+
+    const reauthenticated = connectionReducer(failed, {
+      type: "authEventReceived",
+      event: { status: "reauthentication_required", requestId: "global" },
+    });
+    expect(reauthenticated).toMatchObject({
+      step: "auth",
+      status: "reauthentication_required",
+    });
+    expect("failedOperation" in reauthenticated).toBe(false);
+  });
+
   it("rejects an older clone start result for the same repository", () => {
     const oldRequest = cloneRequest("clone-start-old", "/work/old-parent");
     const newRequest = cloneRequest("clone-start-new", "/work/new-parent");
@@ -906,6 +1181,168 @@ describe("connectionReducer", () => {
       event: { status: "cancelled", requestId: "clone-1" },
     });
     expect(state).toMatchObject({ status: "idle", cloneJob: null, cloneProgress: null });
+  });
+
+  it("replays early clone progress and completion after the job id is published", () => {
+    const request = cloneRequest("early-clone-complete", "/work");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
+    state = connectionReducer(state, {
+      type: "cloneEventReceived",
+      event: {
+        status: "progress",
+        requestId: "backend-early-clone",
+        progress: { stage: "receiving_objects", completed: 4, total: 10 },
+      },
+    });
+    state = connectionReducer(state, {
+      type: "cloneEventReceived",
+      event: {
+        status: "completed",
+        requestId: "backend-early-clone",
+        repository: localRepository("/work/old-knowledge"),
+      },
+    });
+    state = connectionReducer(state, {
+      type: "cloneStarted",
+      request,
+      job: { requestId: "backend-early-clone", targetPath: "/work/old-knowledge" },
+    });
+
+    expect(state).toMatchObject({
+      step: "local",
+      status: "idle",
+      localRepository: { root: "/work/old-knowledge" },
+      cloneJob: null,
+    });
+  });
+
+  it("replays early clone failure and cancellation without leaving clone pending", () => {
+    const failedRequest = cloneRequest("early-clone-failed", "/work");
+    let failed = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: failedRequest,
+    });
+    failed = connectionReducer(failed, {
+      type: "cloneEventReceived",
+      event: {
+        status: "failed",
+        requestId: "backend-early-failed-clone",
+        error: unavailableError,
+      },
+    });
+    failed = connectionReducer(failed, {
+      type: "cloneStarted",
+      request: failedRequest,
+      job: {
+        requestId: "backend-early-failed-clone",
+        targetPath: "/work/old-knowledge",
+      },
+    });
+    expect(failed).toMatchObject({ step: "local", status: "error" });
+
+    const cancelledRequest = cloneRequest("early-clone-cancelled", "/work");
+    let cancelled = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: cancelledRequest,
+    });
+    cancelled = connectionReducer(cancelled, {
+      type: "cloneEventReceived",
+      event: { status: "cancelled", requestId: "backend-early-cancelled-clone" },
+    });
+    cancelled = connectionReducer(cancelled, {
+      type: "cloneStarted",
+      request: cancelledRequest,
+      job: {
+        requestId: "backend-early-cancelled-clone",
+        targetPath: "/work/old-knowledge",
+      },
+    });
+    expect(cancelled).toMatchObject({ step: "local", status: "idle" });
+  });
+
+  it("lets an early clone terminal dominate later progress and drops unrelated ids", () => {
+    const request = cloneRequest("early-clone-order", "/work");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
+    state = connectionReducer(state, {
+      type: "cloneEventReceived",
+      event: {
+        status: "progress",
+        requestId: "unrelated-clone",
+        progress: { stage: "receiving_objects", completed: 9, total: 10 },
+      },
+    });
+    state = connectionReducer(state, {
+      type: "cloneEventReceived",
+      event: {
+        status: "completed",
+        requestId: "backend-clone-order",
+        repository: localRepository(),
+      },
+    });
+    state = connectionReducer(state, {
+      type: "cloneEventReceived",
+      event: {
+        status: "progress",
+        requestId: "backend-clone-order",
+        progress: { stage: "checking_out", completed: 10, total: 10 },
+      },
+    });
+    state = connectionReducer(state, {
+      type: "cloneStarted",
+      request,
+      job: { requestId: "backend-clone-order", targetPath: "/work/old-knowledge" },
+    });
+
+    expect(state).toMatchObject({ status: "idle", localRepository: { fingerprint: "fingerprint" } });
+  });
+
+  it("bounds early clone events by request id and keeps only latest progress", () => {
+    const request = cloneRequest("bounded-clone-events", "/work");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
+    for (let index = 0; index < 6; index += 1) {
+      state = connectionReducer(state, {
+        type: "cloneEventReceived",
+        event: {
+          status: "progress",
+          requestId: `clone-${index}`,
+          progress: { stage: "receiving_objects", completed: index, total: 10 },
+        },
+      });
+    }
+    state = connectionReducer(state, {
+      type: "cloneEventReceived",
+      event: {
+        status: "progress",
+        requestId: "clone-5",
+        progress: { stage: "checking_out", completed: 10, total: 10 },
+      },
+    });
+
+    expect(state).toMatchObject({ step: "local", status: "clone_starting" });
+    if (state.step !== "local" || state.status !== "clone_starting") {
+      throw new Error("Expected a pending clone start state");
+    }
+    expect(state.bufferedCloneEvents).toHaveLength(4);
+    expect(state.bufferedCloneEvents.map((group) => group.requestId)).toEqual([
+      "clone-2",
+      "clone-3",
+      "clone-4",
+      "clone-5",
+    ]);
+    expect(state.bufferedCloneEvents[3]?.latestProgress?.progress).toEqual({
+      stage: "checking_out",
+      completed: 10,
+      total: 10,
+    });
   });
 
   it("rejects an older workspace inspection for the same root", () => {
@@ -1468,6 +1905,37 @@ describe("connectionReducer", () => {
       activeCloneStartRequest: clone,
       replacementWorkspace: previous,
     });
+  });
+
+  it("clears local retry context when replacement is cancelled", () => {
+    const previous = connected();
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "currentWorkspaceLoaded",
+      workspace: previous,
+    });
+    state = connectionReducer(state, { type: "replacementStarted" });
+    const authRequest = authLoadRequest("replacement-retry-context-auth");
+    state = connectionReducer(state, { type: "authLoadStarted", request: authRequest });
+    state = connectionReducer(state, {
+      type: "authLoaded",
+      request: authRequest,
+      auth: { status: "authenticated", user },
+    });
+    state = connectionReducer(state, {
+      type: "repositorySelected",
+      repository: repository("old"),
+    });
+    const failedRequest = cloneRequest("replacement-failed-clone", "/work/replacement");
+    state = connectionReducer(state, { type: "cloneStarting", request: failedRequest });
+    state = connectionReducer(state, {
+      type: "cloneStartFailed",
+      request: failedRequest,
+      error: unavailableError,
+    });
+
+    const restored = connectionReducer(state, { type: "replacementCancelled" });
+    expect(restored).toMatchObject({ status: "connected", connectedWorkspace: previous });
+    expect("failedOperation" in restored).toBe(false);
   });
 
   it("preserves recovery-required startup path for Task 10 diagnostics", () => {
