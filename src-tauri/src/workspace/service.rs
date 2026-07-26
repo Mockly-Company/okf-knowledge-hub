@@ -19,7 +19,11 @@ use crate::workspace::validation::{
 pub struct WorkspaceService;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(
+    tag = "status",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum WorkspaceInspection {
     Ready {
         summary: WorkspaceSummary,
@@ -1368,6 +1372,65 @@ mod tests {
         let mut files = BTreeMap::new();
         visit(root, root, &mut files);
         files
+    }
+
+    #[test]
+    fn workspace_inspection_variants_use_the_exact_public_wire_contract() {
+        let workspace_id = Uuid::parse_str("89bf04ef-df57-4a76-b10a-b33107d8a6c2").unwrap();
+        let cases = [
+            (
+                WorkspaceInspection::Ready {
+                    summary: WorkspaceSummary {
+                        id: workspace_id,
+                        name: "Mockly".into(),
+                        document_roots: vec!["docs".into()],
+                        repository_count: 2,
+                    },
+                },
+                serde_json::json!({
+                    "status": "ready",
+                    "summary": {
+                        "id": workspace_id,
+                        "name": "Mockly",
+                        "documentRoots": ["docs"],
+                        "repositoryCount": 2
+                    }
+                }),
+            ),
+            (
+                WorkspaceInspection::InitializationRequired,
+                serde_json::json!({ "status": "initialization_required" }),
+            ),
+            (
+                WorkspaceInspection::Invalid {
+                    diagnostics: vec![WorkspaceDiagnostic {
+                        code: WorkspaceDiagnosticCode::WorkspaceYamlInvalid,
+                        path: ".okf/workspace.yml".into(),
+                        message: "YAML을 읽을 수 없습니다.".into(),
+                        value: None,
+                    }],
+                },
+                serde_json::json!({
+                    "status": "invalid",
+                    "diagnostics": [{
+                        "code": "workspace_yaml_invalid",
+                        "path": ".okf/workspace.yml",
+                        "message": "YAML을 읽을 수 없습니다."
+                    }]
+                }),
+            ),
+            (
+                WorkspaceInspection::UnsupportedVersion { found_version: 2 },
+                serde_json::json!({
+                    "status": "unsupported_version",
+                    "foundVersion": 2
+                }),
+            ),
+        ];
+
+        for (inspection, expected) in cases {
+            assert_eq!(serde_json::to_value(inspection).unwrap(), expected);
+        }
     }
 
     #[test]
