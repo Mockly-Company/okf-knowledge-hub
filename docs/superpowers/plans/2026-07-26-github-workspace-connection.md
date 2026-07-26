@@ -1022,7 +1022,7 @@ Expected: compilation fails because the commands are absent.
 
 Put orchestration in testable inner functions such as `begin_github_auth_inner(&AppServices)` and `initialize_workspace_inner(&AppServices, Uuid)`. Each `#[tauri::command]` function only unwraps `State<'_, AppServices>` and delegates to its inner function.
 
-`begin_github_auth_inner` creates a `CancellationToken`, stores it by request ID, spawns `AuthService::run`, and emits each public status with `app.emit("github-auth-status", event)`. `cancel_github_auth` cancels only the matching job. Clone uses the same pattern with a separate job ID and `repository-clone-progress` payload.
+`begin_github_auth_inner` accepts the frontend-issued request ID, validates and atomically stores it with a `CancellationToken`, spawns `AuthService::run`, and emits each public status with the same ID through `app.emit("github-auth-status", event)`. `cancel_github_auth` cancels only the matching job. Clone accepts and registers the same kind of caller-issued ID before work, then uses it for the command result and every `repository-clone-progress` payload. Duplicate active IDs fail before a second worker starts. Command/event arrival order is not assumed.
 
 Run blocking keyring and git2 operations through `tauri::async_runtime::spawn_blocking`. Remove completed job handles from state. Every command returns `CommandResult<T>` and never stringifies internal `Debug` errors directly.
 
@@ -1125,7 +1125,7 @@ Expected: module resolution fails because the reducer is absent.
 export interface WorkspaceConnectionGateway {
   getCurrentWorkspace(): Promise<CurrentWorkspaceState>;
   getAuthState(): Promise<AuthState>;
-  beginGithubAuth(): Promise<DeviceAuthorization>;
+  beginGithubAuth(requestId: string): Promise<DeviceAuthorization>;
   cancelGithubAuth(requestId: string): Promise<void>;
   logoutGithub(): Promise<void>;
   onAuthStatus(listener: (event: AuthStatusEvent) => void): Promise<Unlisten>;
@@ -1133,7 +1133,7 @@ export interface WorkspaceConnectionGateway {
   pickDirectory(): Promise<string | null>;
   openExternal(url: string): Promise<void>;
   inspectExistingClone(path: string, repositoryId: string): Promise<LocalRepository>;
-  cloneRepository(repositoryId: string, parentDirectory: string): Promise<CloneJob>;
+  cloneRepository(requestId: string, repositoryId: string, parentDirectory: string): Promise<CloneJob>;
   onCloneProgress(listener: (event: CloneProgressEvent) => void): Promise<Unlisten>;
   inspectWorkspace(path: string): Promise<WorkspaceInspection>;
   connectWorkspace(path: string): Promise<ConnectedWorkspace>;
@@ -1240,6 +1240,8 @@ export interface WorkspaceConnectionContextValue {
   cancelReplacement(): void;
 }
 ```
+
+For Device Flow and clone, the Provider creates the UUID, dispatches the start action so the reducer owns it, and then passes the same UUID to the gateway. Listener callbacks only dispatch events. Repository loading, inspection, and connection are launched only from reducer-accepted state transitions, never directly from a raw event or stale command result. Auth/clone pre-publication buffers and provider-side ownership mirrors are forbidden.
 
 At startup, `WorkspaceGate` waits for `getCurrentWorkspace`. Render an accessible busy state while loading, the connection page for `disconnected` or `recovery_required`, and `<Outlet />` only for `connected`.
 
