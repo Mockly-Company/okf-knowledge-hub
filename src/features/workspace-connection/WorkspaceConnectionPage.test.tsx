@@ -1,3 +1,4 @@
+import axe from "axe-core";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
@@ -100,25 +101,71 @@ describe("WorkspaceConnectionPage", () => {
     gateway.cloneError = folderCollision;
     await signInAndChooseRepository(gateway, user);
     await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
 
     expect(await screen.findByText("/work/mockly-knowledge")).toBeInTheDocument();
     gateway.selectedDirectory = "/new-work";
     await user.click(screen.getByRole("button", { name: "다른 위치 선택" }));
+    expect(screen.getByText("/new-work/mockly-knowledge")).toBeInTheDocument();
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
     const cloneCalls = gateway.calls.filter((call) => call.method === "cloneRepository");
     expect(cloneCalls).toHaveLength(2);
     expect(cloneCalls[1]?.args[2]).toBe("/new-work");
   });
 
-  it("announces clone progress without replacing the current focus", async () => {
+  it("previews the exact clone target and requires confirmation before writing", async () => {
+    const { gateway, user } = renderPage();
+    await signInAndChooseRepository(gateway, user);
+
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+
+    expect(screen.getByText("/work/mockly-knowledge")).toBeInTheDocument();
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
+  });
+
+  it("cancels a clone target preview without writing", async () => {
+    const { gateway, user } = renderPage();
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+
+    await user.click(screen.getByRole("button", { name: "취소" }));
+
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "새 위치에 clone" })).toBeInTheDocument();
+  });
+
+  it("has no automatically detectable accessibility violations in clone confirmation", async () => {
+    const { container, gateway, user } = renderPage();
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+
+    const result = await axe.run(container, {
+      rules: {
+        "color-contrast": { enabled: false },
+      },
+    });
+
+    expect(result.violations).toEqual([]);
+  });
+
+  it("moves focus to clone status and progress updates do not steal it", async () => {
     const { gateway, user } = renderPage();
     gateway.deferClone = true;
     await signInAndChooseRepository(gateway, user);
     const cloneButton = screen.getByRole("button", { name: "새 위치에 clone" });
     await user.click(cloneButton);
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
     gateway.emitCloneProgress();
 
-    expect(await screen.findByRole("status")).toHaveTextContent("clone 중");
-    expect(document.activeElement).toBe(cloneButton);
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("clone 중");
+    expect(status).toHaveFocus();
   });
 
   it("shows invalid workspace YAML diagnostics in the local step", async () => {

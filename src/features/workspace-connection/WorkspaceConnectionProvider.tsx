@@ -27,6 +27,7 @@ import type {
 export interface WorkspaceConnectionContextValue {
   state: ConnectionState;
   isCurrentWorkspaceLoading: boolean;
+  cloneTargetPreview: CloneTargetPreview | null;
   startLogin(): Promise<void>;
   cancelLogin(): Promise<void>;
   openVerificationUrl(url: string): Promise<void>;
@@ -35,6 +36,8 @@ export interface WorkspaceConnectionContextValue {
   selectRepository(repository: GithubRepositorySummary): void;
   connectExistingClone(): Promise<void>;
   cloneIntoSelectedParent(): Promise<void>;
+  confirmCloneTarget(): Promise<void>;
+  cancelCloneTarget(): void;
   chooseAnotherCloneDirectory(): Promise<void>;
   previewInitialization(): Promise<void>;
   cancelInitializationPreview(): void;
@@ -42,6 +45,13 @@ export interface WorkspaceConnectionContextValue {
   retryLastAction(): Promise<void>;
   startReplacement(): void;
   cancelReplacement(): void;
+}
+
+export interface CloneTargetPreview {
+  repositoryId: string;
+  parentDirectory: string;
+  targetPath: string;
+  mode: "start" | "alternate_directory";
 }
 
 const WorkspaceConnectionContext =
@@ -79,6 +89,7 @@ export function WorkspaceConnectionProvider({
   const [state, dispatch] = useReducer(connectionReducer, undefined, createInitialConnectionState);
   const stateRef = useRef(state);
   const [isCurrentWorkspaceLoading, setCurrentWorkspaceLoading] = useState(true);
+  const [cloneTargetPreview, setCloneTargetPreview] = useState<CloneTargetPreview | null>(null);
 
   const dispatchAccepted = useCallback((action: Parameters<typeof connectionReducer>[1]) => {
     const current = stateRef.current;
@@ -221,18 +232,53 @@ export function WorkspaceConnectionProvider({
     await inspectLocalClone({ id: operationId(), repositoryId: current.selectedRepository.id, path });
   }, [gateway, inspectLocalClone]);
 
-  const cloneIntoSelectedParent = useCallback(async () => {
+  const selectCloneTarget = useCallback(async (
+    mode: CloneTargetPreview["mode"],
+  ) => {
     const current = stateRef.current;
     if (current.step !== "local" || !current.selectedRepository) return;
     const parentDirectory = await gateway.pickDirectory();
     if (!parentDirectory) return;
-    await clone({
-      id: operationId(),
-      repositoryId: current.selectedRepository.id,
+    const latest = stateRef.current;
+    if (
+      latest.step !== "local" ||
+      latest.selectedRepository.id !== current.selectedRepository.id
+    ) return;
+    setCloneTargetPreview({
+      repositoryId: latest.selectedRepository.id,
       parentDirectory,
-      targetPath: cloneTargetPath(parentDirectory, current.selectedRepository.name),
+      targetPath: cloneTargetPath(parentDirectory, latest.selectedRepository.name),
+      mode,
     });
-  }, [clone, gateway]);
+  }, [gateway]);
+
+  const cloneIntoSelectedParent = useCallback(async () => {
+    await selectCloneTarget("start");
+  }, [selectCloneTarget]);
+
+  const confirmCloneTarget = useCallback(async () => {
+    const preview = cloneTargetPreview;
+    const current = stateRef.current;
+    if (
+      !preview ||
+      current.step !== "local" ||
+      current.selectedRepository.id !== preview.repositoryId
+    ) return;
+    setCloneTargetPreview(null);
+    await clone(
+      {
+        id: operationId(),
+        repositoryId: preview.repositoryId,
+        parentDirectory: preview.parentDirectory,
+        targetPath: preview.targetPath,
+      },
+      preview.mode,
+    );
+  }, [clone, cloneTargetPreview]);
+
+  const cancelCloneTarget = useCallback(() => {
+    setCloneTargetPreview(null);
+  }, []);
 
   const chooseAnotherCloneDirectory = useCallback(async () => {
     const current = stateRef.current;
@@ -243,21 +289,8 @@ export function WorkspaceConnectionProvider({
       current.failedOperation !== "clone" ||
       current.error.recovery !== "choose_another_directory"
     ) return;
-    const parentDirectory = await gateway.pickDirectory();
-    if (
-      !parentDirectory ||
-      parentDirectory === current.failedCloneStartRequest.parentDirectory
-    ) return;
-    await clone(
-      {
-        id: operationId(),
-        repositoryId: current.failedCloneStartRequest.repositoryId,
-        parentDirectory,
-        targetPath: cloneTargetPath(parentDirectory, current.selectedRepository.name),
-      },
-      "alternate_directory",
-    );
-  }, [clone, gateway]);
+    await selectCloneTarget("alternate_directory");
+  }, [selectCloneTarget]);
 
   const previewInitialization = useCallback(async () => {
     const current = stateRef.current;
@@ -467,6 +500,7 @@ export function WorkspaceConnectionProvider({
     () => ({
       state,
       isCurrentWorkspaceLoading,
+      cloneTargetPreview,
       startLogin,
       cancelLogin,
       openVerificationUrl,
@@ -475,6 +509,8 @@ export function WorkspaceConnectionProvider({
       selectRepository,
       connectExistingClone,
       cloneIntoSelectedParent,
+      confirmCloneTarget,
+      cancelCloneTarget,
       chooseAnotherCloneDirectory,
       previewInitialization,
       cancelInitializationPreview,
@@ -483,7 +519,7 @@ export function WorkspaceConnectionProvider({
       startReplacement,
       cancelReplacement,
     }),
-    [cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, cloneIntoSelectedParent, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, loadNextRepositories, openVerificationUrl, previewInitialization, refreshRepositories, retryLastAction, selectRepository, startLogin, startReplacement, state],
+    [cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, loadNextRepositories, openVerificationUrl, previewInitialization, refreshRepositories, retryLastAction, selectRepository, startLogin, startReplacement, state],
   );
 
   return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;

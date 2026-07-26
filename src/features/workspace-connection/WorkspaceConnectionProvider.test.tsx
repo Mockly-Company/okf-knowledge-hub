@@ -115,6 +115,7 @@ describe("WorkspaceConnectionProvider", () => {
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
     await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
     const cloneCall = gateway.calls.find((call) => call.method === "cloneRepository");
     const requestId = cloneCall?.args[0];
     expect(requestId).toEqual(expect.any(String));
@@ -208,6 +209,7 @@ describe("WorkspaceConnectionProvider", () => {
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
     await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
     await user.click(await screen.findByRole("button", { name: "다시 시도" }));
 
     const cloneCalls = gateway.calls.filter((call) => call.method === "cloneRepository");

@@ -235,10 +235,22 @@ select {
 
 .workspace-connection__device-flow,
 .workspace-connection__repository-list,
-.workspace-connection__preview-files {
+.workspace-connection__preview-files,
+.workspace-connection__clone-confirmation {
   display: grid;
   gap: 12px;
   margin-top: 20px;
+}
+
+.workspace-connection__clone-confirmation {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+  padding: 16px;
+}
+
+.workspace-connection__clone-confirmation > * {
+  margin: 0;
 }
 
 .workspace-connection__repository-option {
