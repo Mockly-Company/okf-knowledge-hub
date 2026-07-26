@@ -1063,6 +1063,53 @@ describe("connectionReducer", () => {
     });
   });
 
+  it("allows a new clone parent only for a failed clone that requests directory recovery", () => {
+    const failedRequest = cloneRequest("collision-clone", "/work/taken");
+    const collisionError: AppError = {
+      code: "repository_path_conflict",
+      message: "이미 폴더가 있습니다.",
+      recovery: "choose_another_directory",
+      details: { path: "/work/taken/old-knowledge" },
+    };
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: failedRequest,
+    });
+    state = connectionReducer(state, {
+      type: "cloneStartFailed",
+      request: failedRequest,
+      error: collisionError,
+    });
+
+    const newDirectory = cloneRequest("collision-new-parent", "/work/available");
+    expect(
+      connectionReducer(state, {
+        type: "cloneAlternateDirectoryStarted",
+        request: newDirectory,
+      }),
+    ).toMatchObject({
+      status: "clone_starting",
+      activeCloneStartRequest: newDirectory,
+      error: null,
+    });
+
+    const retryOnlyError = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: failedRequest,
+    });
+    const retryOnlyFailure = connectionReducer(retryOnlyError, {
+      type: "cloneStartFailed",
+      request: failedRequest,
+      error: unavailableError,
+    });
+    expect(
+      connectionReducer(retryOnlyFailure, {
+        type: "cloneAlternateDirectoryStarted",
+        request: newDirectory,
+      }),
+    ).toBe(retryOnlyFailure);
+  });
+
   it("retains the original clone input after a terminal clone failure", () => {
     const original = cloneRequest("terminal-clone-source", "/work/terminal-clone");
     let state = connectionReducer(selectedRepositoryState(), {

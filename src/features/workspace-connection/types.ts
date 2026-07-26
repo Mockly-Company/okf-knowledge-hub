@@ -815,6 +815,7 @@ export type ConnectionAction =
     }
   | { type: "cloneStarting"; request: CloneStartRequest }
   | { type: "cloneRetryStarted"; request: CloneStartRequest }
+  | { type: "cloneAlternateDirectoryStarted"; request: CloneStartRequest }
   | { type: "cloneStarted"; request: CloneStartRequest; job: CloneJob }
   | { type: "cloneStartFailed"; request: CloneStartRequest; error: AppError }
   | { type: "cloneCancellationRequested"; requestId: string }

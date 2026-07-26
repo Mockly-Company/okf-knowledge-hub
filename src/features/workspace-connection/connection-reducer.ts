@@ -1179,6 +1179,24 @@ export function connectionReducer(
       }
       return cloneStarting(context, action.request);
     }
+    case "cloneAlternateDirectoryStarted": {
+      const context = localContext(state);
+      if (
+        !context ||
+        state.step !== "local" ||
+        state.status !== "error" ||
+        state.errorContext !== "pre_repository" ||
+        state.failedOperation !== "clone" ||
+        state.error.recovery !== "choose_another_directory" ||
+        action.request.id === state.failedCloneStartRequest.id ||
+        action.request.repositoryId !== state.failedCloneStartRequest.repositoryId ||
+        action.request.repositoryId !== context.selectedRepository.id ||
+        action.request.parentDirectory === state.failedCloneStartRequest.parentDirectory
+      ) {
+        return state;
+      }
+      return cloneStarting(context, action.request);
+    }
     case "cloneStarted": {
       const context = localContext(state);
       if (

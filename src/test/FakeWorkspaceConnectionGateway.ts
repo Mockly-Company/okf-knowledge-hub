@@ -1,6 +1,7 @@
 import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import type {
   AuthState,
+  AppError,
   AuthStatusEvent,
   CloneJob,
   CloneProgressEvent,
@@ -86,6 +87,8 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     pushed: true,
     draftPullRequestUrl: "https://github.com/Mockly-Company/mockly-knowledge/pull/1",
   };
+  cloneError: AppError | null = null;
+  deferClone = false;
 
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   readonly openedUrls: string[] = [];
@@ -95,6 +98,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   private readonly authListeners = new Set<(event: AuthStatusEvent) => void>();
   private readonly cloneListeners = new Set<(event: CloneProgressEvent) => void>();
   private activeAuthorization: DeviceAuthorization | null = null;
+  private currentWorkspacePromise: Promise<CurrentWorkspaceState> | null = null;
 
   static disconnected(): FakeWorkspaceConnectionGateway {
     return new FakeWorkspaceConnectionGateway();
@@ -118,8 +122,17 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     return gateway;
   }
 
+  deferCurrentWorkspace(): void {
+    this.currentWorkspacePromise = new Promise(() => undefined);
+  }
+
+  listenerCount(): { auth: number; clone: number } {
+    return { auth: this.authListeners.size, clone: this.cloneListeners.size };
+  }
+
   async getCurrentWorkspace(): Promise<CurrentWorkspaceState> {
     this.record("getCurrentWorkspace");
+    if (this.currentWorkspacePromise) return this.currentWorkspacePromise;
     return this.currentWorkspace;
   }
 
@@ -176,7 +189,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     repositoryId: string,
   ): Promise<RepositorySnapshot> {
     this.record("inspectExistingClone", path, repositoryId);
-    return { ...this.repositorySnapshot, root: path };
+    return this.repositorySnapshot;
   }
 
   async cloneRepository(
@@ -184,6 +197,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     parentDirectory: string,
   ): Promise<CloneJob> {
     this.record("cloneRepository", repository, parentDirectory);
+    if (this.cloneError) throw this.cloneError;
     return {
       requestId: "clone-1",
       targetPath: `${parentDirectory}/${repository.name}`,
@@ -232,6 +246,28 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
       status: "authenticated",
       requestId: this.activeAuthorization.requestId,
       user: defaultUser,
+    });
+  }
+
+  expireAuthentication(): void {
+    if (!this.activeAuthorization) throw new Error("beginGithubAuth must run first");
+    this.emitAuth({
+      status: "failed",
+      requestId: this.activeAuthorization.requestId,
+      error: {
+        code: "authentication_expired",
+        message: "GitHub 인증 시간이 만료되었습니다.",
+        recovery: "restart_login",
+        details: {},
+      },
+    });
+  }
+
+  emitCloneProgress(): void {
+    this.emitClone({
+      status: "progress",
+      requestId: "clone-1",
+      progress: { stage: "receiving_objects", completed: 4, total: 10 },
     });
   }
 
