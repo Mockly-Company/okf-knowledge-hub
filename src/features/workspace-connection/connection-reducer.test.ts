@@ -1,5 +1,5 @@
 import type { Event } from "@tauri-apps/api/event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createWorkspaceConnectionGateway } from "@/infrastructure/workspace/createWorkspaceConnectionGateway";
 import { TauriWorkspaceConnectionGateway } from "@/infrastructure/workspace/TauriWorkspaceConnectionGateway";
 import {
@@ -12,6 +12,7 @@ import {
 } from "./connection-reducer";
 import type {
   AppError,
+  AuthLoadRequest,
   AuthStatusEvent,
   CloneProgressEvent,
   CloneStartRequest,
@@ -19,10 +20,16 @@ import type {
   GithubRepositorySummary,
   InitializationPreview,
   InitializationPreviewRequest,
+  InitializationRequest,
+  InitializationResult,
+  LoginBeginRequest,
+  LocalConnectionState,
   LocalInspectionRequest,
   RepositoryLoadRequest,
   RepositorySnapshot,
   WorkspaceInspectionRequest,
+  WorkspaceInspection,
+  WorkspaceConnectionRequest,
 } from "./types";
 
 const user = { id: 7, login: "hyeeun", avatarUrl: "https://example.test/me" };
@@ -116,9 +123,68 @@ function previewRequest(
   return { id, repositoryRoot: root, workspaceName };
 }
 
+function authLoadRequest(id = "auth-load-1"): AuthLoadRequest {
+  return { id };
+}
+
+function loginBeginRequest(id = "login-begin-1"): LoginBeginRequest {
+  return { id };
+}
+
+function initializationRequest(
+  id = "initialization-1",
+  root = "/work/old-knowledge",
+): InitializationRequest {
+  return { id, previewId: "preview-1", repositoryRoot: root };
+}
+
+function initializationResult(
+  root = "/work/old-knowledge",
+): InitializationResult {
+  return {
+    root,
+    branch: "okf/init-workspace",
+    commitOid: "commit-1",
+    commitMessage: "chore: initialize OkHub workspace",
+    pushed: true,
+    draftPullRequestUrl: null,
+  };
+}
+
+function initializationConnectionRequest(
+  id: string,
+  initializationRequestId: string,
+  root = "/work/old-knowledge",
+): Extract<WorkspaceConnectionRequest, { source: "initialization" }> {
+  return {
+    id,
+    repositoryRoot: root,
+    source: "initialization",
+    initializationRequestId,
+  };
+}
+
+function existingConnectionRequest(
+  id: string,
+  root = "/work/old-knowledge",
+): Extract<WorkspaceConnectionRequest, { source: "existing" }> {
+  return {
+    id,
+    repositoryRoot: root,
+    source: "existing",
+    initializationRequestId: null,
+  };
+}
+
 function repositoryState() {
-  return connectionReducer(createInitialConnectionState(), {
+  const request = authLoadRequest();
+  const loading = connectionReducer(createInitialConnectionState(), {
+    type: "authLoadStarted",
+    request,
+  });
+  return connectionReducer(loading, {
     type: "authLoaded",
+    request,
     auth: { status: "authenticated", user },
   });
 }
@@ -156,6 +222,19 @@ function initializationRequiredState(root = "/work/old-knowledge") {
   });
 }
 
+function readyWorkspaceState(root = "/work/old-knowledge") {
+  const request = workspaceRequest(`ready-workspace-${root}`, root);
+  let state = connectionReducer(localState(root), {
+    type: "workspaceInspectionStarted",
+    request,
+  });
+  return connectionReducer(state, {
+    type: "workspaceInspected",
+    request,
+    inspection: { status: "ready", summary: connected(root).summary },
+  });
+}
+
 function previewState() {
   const request = previewRequest("preview-request-1", "/work/old-knowledge");
   let state = connectionReducer(initializationRequiredState(), {
@@ -169,10 +248,42 @@ function previewState() {
   });
 }
 
+function readyToConnectState(request = initializationRequest()) {
+  let state = connectionReducer(previewState(), {
+    type: "initializationStarted",
+    request,
+  });
+  return connectionReducer(state, {
+    type: "initializationSucceeded",
+    request,
+    result: initializationResult(request.repositoryRoot),
+  });
+}
+
+function connectingState(
+  initialization = initializationRequest(),
+  connection = initializationConnectionRequest(
+    "workspace-connection-1",
+    initialization.id,
+    initialization.repositoryRoot,
+  ),
+) {
+  return connectionReducer(readyToConnectState(initialization), {
+    type: "workspaceConnectionStarted",
+    request: connection,
+  });
+}
+
 describe("connectionReducer", () => {
   it("clears all auth-dependent state when login restarts", () => {
-    const next = connectionReducer(previewState(), {
+    const request = loginBeginRequest("login-2");
+    const beginning = connectionReducer(previewState(), {
+      type: "loginBeginStarted",
+      request,
+    });
+    const next = connectionReducer(beginning, {
       type: "loginStarted",
+      request,
       authorization: {
         requestId: "login-2",
         userCode: "ABCD-EFGH",
@@ -199,12 +310,17 @@ describe("connectionReducer", () => {
     "fully invalidates auth-dependent state on global reauthentication (%s)",
     (source) => {
       const current = previewState();
+      const request = authLoadRequest("reauth-load");
       const next =
         source === "loaded"
-          ? connectionReducer(current, {
-              type: "authLoaded",
-              auth: { status: "reauthentication_required" },
-            })
+          ? connectionReducer(
+              connectionReducer(current, { type: "authLoadStarted", request }),
+              {
+                type: "authLoaded",
+                request,
+                auth: { status: "reauthentication_required" },
+              },
+            )
           : connectionReducer(current, {
               type: "authEventReceived",
               event: { status: "reauthentication_required", requestId: "global" },
@@ -238,8 +354,11 @@ describe("connectionReducer", () => {
       }),
       { type: "replacementStarted" },
     );
+    const request = authLoadRequest("replacement-reauth");
+    state = connectionReducer(state, { type: "authLoadStarted", request });
     state = connectionReducer(state, {
       type: "authLoaded",
+      request,
       auth: { status: "reauthentication_required" },
     });
 
@@ -253,6 +372,144 @@ describe("connectionReducer", () => {
       localRepository: null,
       initializationPreview: null,
     });
+  });
+
+  it("does not let a stale auth load reverse global reauthentication", () => {
+    const request = { id: "auth-load-old" };
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "authLoadStarted",
+      request,
+    });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: { status: "reauthentication_required", requestId: "global" },
+    });
+
+    const stale = connectionReducer(state, {
+      type: "authLoaded",
+      request,
+      auth: { status: "authenticated", user },
+    });
+
+    expect(stale).toBe(state);
+    expect(stale).toMatchObject({ step: "auth", status: "reauthentication_required" });
+  });
+
+  it("ignores stale auth failure after global reauthentication in replacement mode", () => {
+    const previous = connected();
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "currentWorkspaceLoaded",
+      workspace: previous,
+    });
+    state = connectionReducer(state, { type: "replacementStarted" });
+    const request = authLoadRequest("replacement-stale-load");
+    state = connectionReducer(state, { type: "authLoadStarted", request });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: { status: "reauthentication_required", requestId: "global" },
+    });
+
+    const stale = connectionReducer(state, {
+      type: "authLoadFailed",
+      request,
+      error: unavailableError,
+    });
+
+    expect(stale).toBe(state);
+    expect(stale).toMatchObject({
+      status: "reauthentication_required",
+      mode: "replacement",
+      replacementWorkspace: previous,
+    });
+  });
+
+  it("ignores stale auth load success and failure after a newer load", () => {
+    const oldRequest = authLoadRequest("auth-load-old-overlap");
+    const newRequest = authLoadRequest("auth-load-new-overlap");
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "authLoadStarted",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, { type: "authLoadStarted", request: newRequest });
+
+    expect(
+      connectionReducer(state, {
+        type: "authLoaded",
+        request: oldRequest,
+        auth: { status: "authenticated", user },
+      }),
+    ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "authLoadFailed",
+        request: oldRequest,
+        error: unavailableError,
+      }),
+    ).toBe(state);
+  });
+
+  it("ignores stale login begin success and failure after a newer attempt", () => {
+    const oldRequest = { id: "login-old" };
+    const newRequest = { id: "login-new" };
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "loginBeginStarted",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, { type: "loginBeginStarted", request: newRequest });
+
+    expect(
+      connectionReducer(state, {
+        type: "loginBeginFailed",
+        request: oldRequest,
+        error: unavailableError,
+      }),
+    ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "loginStarted",
+        request: oldRequest,
+        authorization: {
+          requestId: "backend-old",
+          userCode: "OLD",
+          verificationUri: "https://github.com/login/device",
+          expiresAtUnix: 2_000,
+          intervalSeconds: 5,
+        },
+      }),
+    ).toBe(state);
+  });
+
+  it("keeps global reauthentication after a pending login begin resolves late", () => {
+    const request = loginBeginRequest("login-before-global-reauth");
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "loginBeginStarted",
+      request,
+    });
+    state = connectionReducer(state, {
+      type: "authEventReceived",
+      event: { status: "reauthentication_required", requestId: "global" },
+    });
+
+    expect(
+      connectionReducer(state, {
+        type: "loginBeginFailed",
+        request,
+        error: unavailableError,
+      }),
+    ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "loginStarted",
+        request,
+        authorization: {
+          requestId: "backend-late-login",
+          userCode: "LATE",
+          verificationUri: "https://github.com/login/device",
+          expiresAtUnix: 2_000,
+          intervalSeconds: 5,
+        },
+      }),
+    ).toBe(state);
   });
 
   it("ignores auth terminal events without the active login request", () => {
@@ -459,7 +716,10 @@ describe("connectionReducer", () => {
   });
 
   it("does not change repositories while initialization mutates the workspace", () => {
-    const state = connectionReducer(previewState(), { type: "initializationStarted" });
+    const state = connectionReducer(previewState(), {
+      type: "initializationStarted",
+      request: initializationRequest("repository-selection-init"),
+    });
 
     const blocked = connectionReducer(state, {
       type: "repositorySelected",
@@ -473,6 +733,65 @@ describe("connectionReducer", () => {
       selectedRepository: { id: "old" },
       initializationPreview: { id: "preview-1" },
     });
+  });
+
+  it("does not let read starts displace clone or initialization ownership", () => {
+    const clone = cloneRequest("clone-owner-guard", "/work");
+    let cloning = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: clone,
+    });
+    cloning = connectionReducer(cloning, {
+      type: "cloneStarted",
+      request: clone,
+      job: { requestId: "backend-owner-guard", targetPath: "/work/old-knowledge" },
+    });
+
+    expect(
+      connectionReducer(cloning, {
+        type: "localInspectionStarted",
+        request: localRequest("displacing-local", "/work/other"),
+      }),
+    ).toBe(cloning);
+    expect(
+      connectionReducer(cloning, {
+        type: "workspaceInspectionStarted",
+        request: workspaceRequest("displacing-workspace", "/work/old-knowledge"),
+      }),
+    ).toBe(cloning);
+    expect(
+      connectionReducer(cloning, {
+        type: "initializationPreviewStarted",
+        request: previewRequest("displacing-preview", "/work/old-knowledge"),
+      }),
+    ).toBe(cloning);
+    expect(
+      connectionReducer(cloning, {
+        type: "authLoadStarted",
+        request: authLoadRequest("displacing-auth-load"),
+      }),
+    ).toBe(cloning);
+    expect(
+      connectionReducer(cloning, {
+        type: "loginBeginStarted",
+        request: loginBeginRequest("displacing-login"),
+      }),
+    ).toBe(cloning);
+
+    const initializing = connectionReducer(previewState(), {
+      type: "initializationStarted",
+      request: {
+        id: "initialization-owner",
+        previewId: "preview-1",
+        repositoryRoot: "/work/old-knowledge",
+      },
+    });
+    expect(
+      connectionReducer(initializing, {
+        type: "cloneStarting",
+        request: cloneRequest("displacing-clone", "/work"),
+      }),
+    ).toBe(initializing);
   });
 
   it("rejects an older folder inspection for the same repository", () => {
@@ -517,11 +836,10 @@ describe("connectionReducer", () => {
 
     const oldClone = cloneRequest("old-clone-failure", "/work/old");
     const newClone = cloneRequest("new-clone-failure", "/work/new");
-    let clone = connectionReducer(selectedRepositoryState(), {
+    const clone = connectionReducer(selectedRepositoryState(), {
       type: "cloneStarting",
-      request: oldClone,
+      request: newClone,
     });
-    clone = connectionReducer(clone, { type: "cloneStarting", request: newClone });
     expect(
       connectionReducer(clone, {
         type: "cloneStartFailed",
@@ -534,11 +852,10 @@ describe("connectionReducer", () => {
   it("rejects an older clone start result for the same repository", () => {
     const oldRequest = cloneRequest("clone-start-old", "/work/old-parent");
     const newRequest = cloneRequest("clone-start-new", "/work/new-parent");
-    let state = connectionReducer(selectedRepositoryState(), {
+    const state = connectionReducer(selectedRepositoryState(), {
       type: "cloneStarting",
-      request: oldRequest,
+      request: newRequest,
     });
-    state = connectionReducer(state, { type: "cloneStarting", request: newRequest });
     const stale = connectionReducer(state, {
       type: "cloneStarted",
       request: oldRequest,
@@ -714,14 +1031,311 @@ describe("connectionReducer", () => {
     expect(stale.activeInitializationPreviewRequest).toEqual(newRequest);
   });
 
+  it("cancels preview loading and ignores its late result", () => {
+    const request = previewRequest("cancelled-preview", "/work/old-knowledge");
+    const loading = connectionReducer(initializationRequiredState(), {
+      type: "initializationPreviewStarted",
+      request,
+    });
+    const cancelled = connectionReducer(loading, {
+      type: "initializationPreviewCancelled",
+    });
+
+    expect(cancelled).toMatchObject({
+      step: "local",
+      status: "idle",
+      workspaceInspection: { status: "initialization_required" },
+      activeInitializationPreviewRequest: null,
+      initializationPreview: null,
+    });
+    expect(
+      connectionReducer(cancelled, {
+        type: "initializationPreviewLoaded",
+        request,
+        preview: preview("late-cancelled-preview"),
+      }),
+    ).toBe(cancelled);
+  });
+
+  it("returns from rendered preview without losing the inspected repository", () => {
+    const cancelled = connectionReducer(previewState(), {
+      type: "initializationPreviewCancelled",
+    });
+
+    expect(cancelled).toMatchObject({
+      step: "local",
+      status: "idle",
+      localRepository: { root: "/work/old-knowledge" },
+      workspaceInspection: { status: "initialization_required" },
+      initializationPreview: null,
+    });
+  });
+
+  it("retries preview failure directly with a new owner", () => {
+    const oldRequest = previewRequest("failed-preview", "/work/old-knowledge");
+    let state = connectionReducer(initializationRequiredState(), {
+      type: "initializationPreviewStarted",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, {
+      type: "initializationPreviewFailed",
+      request: oldRequest,
+      error: unavailableError,
+    });
+    expect(state).toMatchObject({
+      step: "local",
+      status: "error",
+      errorContext: "initialization_preview",
+      localRepository: { root: "/work/old-knowledge" },
+      workspaceInspection: { status: "initialization_required" },
+      failedInitializationPreviewRequest: oldRequest,
+    });
+    expect(
+      connectionReducer(state, {
+        type: "initializationPreviewStarted",
+        request: oldRequest,
+      }),
+    ).toBe(state);
+
+    const retry = previewRequest("retry-preview", "/work/old-knowledge");
+    const retried = connectionReducer(state, {
+      type: "initializationPreviewStarted",
+      request: retry,
+    });
+
+    expect(retried).toMatchObject({
+      step: "local",
+      status: "preview_loading",
+      activeInitializationPreviewRequest: retry,
+      error: null,
+    });
+  });
+
+  it("couples every exported local error context to its valid data", () => {
+    type PreRepositoryError = Extract<
+      LocalConnectionState,
+      { status: "error"; errorContext: "pre_repository" }
+    >;
+    type PreviewError = Extract<
+      LocalConnectionState,
+      { status: "error"; errorContext: "initialization_preview" }
+    >;
+    type ConnectionError = Extract<
+      LocalConnectionState,
+      { status: "error"; errorContext: "workspace_connection" }
+    >;
+
+    expectTypeOf<PreRepositoryError["localRepository"]>().toEqualTypeOf<null>();
+    expectTypeOf<PreRepositoryError["workspaceInspection"]>().toEqualTypeOf<null>();
+    expectTypeOf<PreviewError["localRepository"]>().toEqualTypeOf<RepositorySnapshot>();
+    expectTypeOf<PreviewError["workspaceInspection"]>().toEqualTypeOf<
+      Extract<WorkspaceInspection, { status: "initialization_required" }>
+    >();
+    expectTypeOf<ConnectionError["workspaceInspection"]>().toEqualTypeOf<
+      Extract<WorkspaceInspection, { status: "ready" }>
+    >();
+  });
+
   it("does not mark initialization complete until backend connection succeeds", () => {
-    const pending = connectionReducer(previewState(), { type: "initializationStarted" });
+    const pending = connectionReducer(previewState(), {
+      type: "initializationStarted",
+      request: initializationRequest(),
+    });
     expect(pending).toMatchObject({
       step: "initialize",
       status: "initializing",
       connectedWorkspace: null,
       initializationPreview: { id: "preview-1" },
     });
+  });
+
+  it("ignores stale initialization success and failure for the same root", () => {
+    const oldRequest = initializationRequest("initialization-old");
+    const newRequest = initializationRequest("initialization-new");
+    const state = connectionReducer(previewState(), {
+      type: "initializationStarted",
+      request: newRequest,
+    });
+
+    expect(
+      connectionReducer(state, {
+        type: "initializationSucceeded",
+        request: oldRequest,
+        result: initializationResult(),
+      }),
+    ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "initializationFailed",
+        request: oldRequest,
+        error: unavailableError,
+      }),
+    ).toBe(state);
+  });
+
+  it("retries initialization with the immutable preview and a new owner", () => {
+    const oldRequest = initializationRequest("failed-initialization");
+    let state = connectionReducer(previewState(), {
+      type: "initializationStarted",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, {
+      type: "initializationFailed",
+      request: oldRequest,
+      error: unavailableError,
+    });
+    expect(state).toMatchObject({
+      step: "initialize",
+      status: "error",
+      failedOperation: "initialization",
+      initializationPreview: { id: "preview-1" },
+      activeInitializationRequest: null,
+      failedInitializationRequest: oldRequest,
+    });
+    expect(
+      connectionReducer(state, {
+        type: "initializationStarted",
+        request: oldRequest,
+      }),
+    ).toBe(state);
+
+    const retry = initializationRequest("retry-initialization");
+    const retried = connectionReducer(state, {
+      type: "initializationStarted",
+      request: retry,
+    });
+
+    expect(retried).toMatchObject({
+      status: "initializing",
+      initializationPreview: { id: "preview-1" },
+      activeInitializationRequest: retry,
+      error: null,
+    });
+    expect(
+      connectionReducer(retried, {
+        type: "initializationFailed",
+        request: oldRequest,
+        error: unavailableError,
+      }),
+    ).toBe(retried);
+  });
+
+  it("ignores stale same-root connect success and failure", () => {
+    const initialize = initializationRequest("connect-owner-init");
+    const current = initializationConnectionRequest(
+      "connect-current",
+      initialize.id,
+    );
+    const stale = initializationConnectionRequest("connect-stale", initialize.id);
+    const state = connectingState(initialize, current);
+
+    expect(
+      connectionReducer(state, {
+        type: "workspaceConnected",
+        request: stale,
+        workspace: connected(),
+      }),
+    ).toBe(state);
+    expect(
+      connectionReducer(state, {
+        type: "workspaceConnectionFailed",
+        request: stale,
+        error: unavailableError,
+      }),
+    ).toBe(state);
+  });
+
+  it("retries only workspace connection after durable initialization succeeds", () => {
+    const initialize = initializationRequest("durable-initialization");
+    const first = initializationConnectionRequest("connect-failed", initialize.id);
+    let state = connectingState(initialize, first);
+    state = connectionReducer(state, {
+      type: "workspaceConnectionFailed",
+      request: first,
+      error: unavailableError,
+    });
+    expect(state).toMatchObject({
+      step: "initialize",
+      status: "error",
+      failedOperation: "connection",
+      completedInitializationRequest: initialize,
+      initializationResult: { root: "/work/old-knowledge", pushed: true },
+      initializationPreview: { id: "preview-1" },
+      failedWorkspaceConnectionRequest: first,
+    });
+    expect(
+      connectionReducer(state, {
+        type: "workspaceConnectionStarted",
+        request: first,
+      }),
+    ).toBe(state);
+
+    const retry = initializationConnectionRequest("connect-retry", initialize.id);
+    state = connectionReducer(state, {
+      type: "workspaceConnectionStarted",
+      request: retry,
+    });
+    expect(state).toMatchObject({
+      status: "connecting",
+      activeWorkspaceConnectionRequest: retry,
+      completedInitializationRequest: initialize,
+      error: null,
+    });
+
+    const workspace = connected();
+    state = connectionReducer(state, {
+      type: "workspaceConnected",
+      request: retry,
+      workspace,
+    });
+    expect(state).toMatchObject({ status: "connected", connectedWorkspace: workspace });
+  });
+
+  it("owns and retries connection to an existing workspace", () => {
+    const first = existingConnectionRequest("existing-connect-failed");
+    let state = connectionReducer(readyWorkspaceState(), {
+      type: "workspaceConnectionStarted",
+      request: first,
+    });
+    state = connectionReducer(state, {
+      type: "workspaceConnectionFailed",
+      request: first,
+      error: unavailableError,
+    });
+    expect(state).toMatchObject({
+      step: "local",
+      status: "error",
+      errorContext: "workspace_connection",
+      localRepository: { root: "/work/old-knowledge" },
+      workspaceInspection: { status: "ready" },
+      failedWorkspaceConnectionRequest: first,
+    });
+    expect(
+      connectionReducer(state, {
+        type: "workspaceConnectionStarted",
+        request: first,
+      }),
+    ).toBe(state);
+
+    const retry = existingConnectionRequest("existing-connect-retry");
+    state = connectionReducer(state, {
+      type: "workspaceConnectionStarted",
+      request: retry,
+    });
+    const stale = connectionReducer(state, {
+      type: "workspaceConnected",
+      request: first,
+      workspace: connected(),
+    });
+    expect(stale).toBe(state);
+
+    const workspace = connected();
+    state = connectionReducer(state, {
+      type: "workspaceConnected",
+      request: retry,
+      workspace,
+    });
+    expect(state).toMatchObject({ status: "connected", connectedWorkspace: workspace });
   });
 
   it("invalidates a stale initialization preview", () => {
@@ -731,9 +1345,10 @@ describe("connectionReducer", () => {
       recovery: "retry",
       details: {},
     };
+    const request = initializationRequest("stale-preview-init");
     const next = connectionReducer(
-      connectionReducer(previewState(), { type: "initializationStarted" }),
-      { type: "initializationFailed", error },
+      connectionReducer(previewState(), { type: "initializationStarted", request }),
+      { type: "initializationFailed", request, error },
     );
     expect(next).toMatchObject({
       step: "local",
@@ -744,12 +1359,28 @@ describe("connectionReducer", () => {
     });
   });
 
-  it("marks connected only with a backend workspace while initialization is pending", () => {
+  it("marks connected only after the owned initialize and connect sequence", () => {
     const workspace = connected("/work/old-knowledge");
-    const next = connectionReducer(
-      connectionReducer(previewState(), { type: "initializationStarted" }),
-      { type: "workspaceConnected", workspace },
-    );
+    const initialize = initializationRequest("owned-initialize");
+    let next = connectionReducer(previewState(), {
+      type: "initializationStarted",
+      request: initialize,
+    });
+    next = connectionReducer(next, {
+      type: "initializationSucceeded",
+      request: initialize,
+      result: initializationResult(),
+    });
+    const connect = initializationConnectionRequest("owned-connect", initialize.id);
+    next = connectionReducer(next, {
+      type: "workspaceConnectionStarted",
+      request: connect,
+    });
+    next = connectionReducer(next, {
+      type: "workspaceConnected",
+      request: connect,
+      workspace,
+    });
     expect(next).toMatchObject({
       step: "initialize",
       status: "connected",
@@ -764,8 +1395,14 @@ describe("connectionReducer", () => {
       workspace: previous,
     });
     state = connectionReducer(state, { type: "replacementStarted" });
+    const authRequest = authLoadRequest("replacement-auth");
+    state = connectionReducer(state, {
+      type: "authLoadStarted",
+      request: authRequest,
+    });
     state = connectionReducer(state, {
       type: "authLoaded",
+      request: authRequest,
       auth: { status: "authenticated", user },
     });
     const request = repositoryRequest("replacement-repos");
@@ -795,11 +1432,41 @@ describe("connectionReducer", () => {
     });
 
     const restored = connectionReducer(state, { type: "replacementCancelled" });
-    expect(restored).toEqual({
-      ...createInitialConnectionState(),
-      step: "initialize",
-      status: "connected",
-      connectedWorkspace: previous,
+    expect(restored).toEqual(
+      connectionReducer(createInitialConnectionState(), {
+        type: "currentWorkspaceLoaded",
+        workspace: previous,
+      }),
+    );
+  });
+
+  it("does not cancel replacement while a non-cancellable mutation owns the flow", () => {
+    const previous = connected();
+    let state = connectionReducer(createInitialConnectionState(), {
+      type: "currentWorkspaceLoaded",
+      workspace: previous,
+    });
+    state = connectionReducer(state, { type: "replacementStarted" });
+    const authRequest = authLoadRequest("replacement-mutation-auth");
+    state = connectionReducer(state, { type: "authLoadStarted", request: authRequest });
+    state = connectionReducer(state, {
+      type: "authLoaded",
+      request: authRequest,
+      auth: { status: "authenticated", user },
+    });
+    state = connectionReducer(state, {
+      type: "repositorySelected",
+      repository: repository("old"),
+    });
+    const clone = cloneRequest("replacement-owned-clone", "/work");
+    state = connectionReducer(state, { type: "cloneStarting", request: clone });
+
+    expect(connectionReducer(state, { type: "replacementCancelled" })).toBe(state);
+    expect(state).toMatchObject({
+      mode: "replacement",
+      status: "clone_starting",
+      activeCloneStartRequest: clone,
+      replacementWorkspace: previous,
     });
   });
 

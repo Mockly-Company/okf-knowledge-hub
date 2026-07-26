@@ -226,6 +226,14 @@ export interface PreviewInitializationInput {
 
 export type Unlisten = () => void;
 
+export interface AuthLoadRequest {
+  id: string;
+}
+
+export interface LoginBeginRequest {
+  id: string;
+}
+
 export interface RepositoryLoadRequest {
   id: string;
   userId: number;
@@ -255,6 +263,26 @@ export interface InitializationPreviewRequest {
   repositoryRoot: string;
   workspaceName: string;
 }
+
+export interface InitializationRequest {
+  id: string;
+  previewId: string;
+  repositoryRoot: string;
+}
+
+export type WorkspaceConnectionRequest =
+  | {
+      id: string;
+      repositoryRoot: string;
+      source: "existing";
+      initializationRequestId: null;
+    }
+  | {
+      id: string;
+      repositoryRoot: string;
+      source: "initialization";
+      initializationRequestId: string;
+    };
 
 type AuthenticatedState = Extract<AuthState, { status: "authenticated" }>;
 type SignedOutState = Extract<AuthState, { status: "signed_out" }>;
@@ -320,30 +348,48 @@ export type AuthConnectionState =
       status: "idle";
       auth: SignedOutState | null;
       authorization: null;
+      activeAuthLoadRequest: null;
+      activeLoginBeginRequest: null;
       error: null;
     })
   | (AuthBase & {
       status: "loading";
       auth: AuthState | null;
       authorization: null;
+      activeAuthLoadRequest: AuthLoadRequest;
+      activeLoginBeginRequest: null;
+      error: null;
+    })
+  | (AuthBase & {
+      status: "login_beginning";
+      auth: SignedOutState | ReauthenticationState | null;
+      authorization: null;
+      activeAuthLoadRequest: null;
+      activeLoginBeginRequest: LoginBeginRequest;
       error: null;
     })
   | (AuthBase & {
       status: "waiting_for_user";
       auth: SignedOutState;
       authorization: DeviceAuthorization;
+      activeAuthLoadRequest: null;
+      activeLoginBeginRequest: null;
       error: null;
     })
   | (AuthBase & {
       status: "reauthentication_required";
       auth: ReauthenticationState;
       authorization: null;
+      activeAuthLoadRequest: null;
+      activeLoginBeginRequest: null;
       error: null;
     })
   | (AuthBase & {
       status: "error";
       auth: SignedOutState | ReauthenticationState | null;
       authorization: null;
+      activeAuthLoadRequest: null;
+      activeLoginBeginRequest: null;
       error: AppError;
     });
 
@@ -394,6 +440,7 @@ type LocalIdleCommon = LocalBase & {
   activeWorkspaceInspectionRequest: null;
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: null;
 };
 
@@ -420,6 +467,7 @@ type LocalInspectingState = LocalBase & {
   workspaceInspection: null;
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: null;
 };
 
@@ -434,6 +482,7 @@ type CloneStartingState = LocalBase & {
   workspaceInspection: null;
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: null;
 };
 
@@ -448,6 +497,7 @@ type CloneRunningState = LocalBase & {
   workspaceInspection: null;
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: null;
 };
 
@@ -462,6 +512,7 @@ type WorkspaceInspectingState = LocalBase & {
   workspaceInspection: null;
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: null;
 };
 
@@ -476,6 +527,7 @@ type PreviewLoadingState = LocalBase & {
   workspaceInspection: InitializationRequiredInspection;
   activeInitializationPreviewRequest: InitializationPreviewRequest;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: null;
 };
 
@@ -490,22 +542,81 @@ type ValidationFailedState = LocalBase & {
   workspaceInspection: InvalidWorkspaceInspection;
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: null;
 };
 
-type LocalErrorState = LocalBase & {
-  status: "error";
+type LocalWorkspaceConnectingState = LocalBase & {
+  status: "workspace_connecting";
   activeLocalRequest: null;
   activeCloneStartRequest: null;
-  localRepository: RepositorySnapshot | null;
+  localRepository: RepositorySnapshot;
   cloneJob: null;
   cloneProgress: null;
   activeWorkspaceInspectionRequest: null;
-  workspaceInspection: WorkspaceInspection | null;
+  workspaceInspection: Extract<WorkspaceInspection, { status: "ready" }>;
   activeInitializationPreviewRequest: null;
   initializationPreview: null;
+  activeWorkspaceConnectionRequest: Extract<
+    WorkspaceConnectionRequest,
+    { source: "existing" }
+  >;
+  error: null;
+};
+
+type LocalErrorCommon = LocalBase & {
+  status: "error";
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  activeWorkspaceConnectionRequest: null;
   error: AppError;
 };
+
+type LocalPreRepositoryErrorState = LocalErrorCommon & {
+  errorContext: "pre_repository";
+  localRepository: null;
+  workspaceInspection: null;
+  failedInitializationPreviewRequest: null;
+  failedWorkspaceConnectionRequest: null;
+};
+
+type LocalRepositoryErrorState = LocalErrorCommon & {
+  errorContext: "repository";
+  localRepository: RepositorySnapshot;
+  workspaceInspection: null;
+  failedInitializationPreviewRequest: null;
+  failedWorkspaceConnectionRequest: null;
+};
+
+type LocalInitializationPreviewErrorState = LocalErrorCommon & {
+  errorContext: "initialization_preview";
+  localRepository: RepositorySnapshot;
+  workspaceInspection: InitializationRequiredInspection;
+  failedInitializationPreviewRequest: InitializationPreviewRequest | null;
+  failedWorkspaceConnectionRequest: null;
+};
+
+type LocalWorkspaceConnectionErrorState = LocalErrorCommon & {
+  errorContext: "workspace_connection";
+  localRepository: RepositorySnapshot;
+  workspaceInspection: Extract<WorkspaceInspection, { status: "ready" }>;
+  failedInitializationPreviewRequest: null;
+  failedWorkspaceConnectionRequest: Extract<
+    WorkspaceConnectionRequest,
+    { source: "existing" }
+  >;
+};
+
+type LocalErrorState =
+  | LocalPreRepositoryErrorState
+  | LocalRepositoryErrorState
+  | LocalInitializationPreviewErrorState
+  | LocalWorkspaceConnectionErrorState;
 
 export type LocalConnectionState =
   | LocalIdleState
@@ -515,6 +626,7 @@ export type LocalConnectionState =
   | WorkspaceInspectingState
   | PreviewLoadingState
   | ValidationFailedState
+  | LocalWorkspaceConnectingState
   | LocalErrorState;
 
 type InitializationBase = FlowMode &
@@ -539,14 +651,70 @@ type InitializationBase = FlowMode &
 
 type InitializationPreviewState = InitializationBase & {
   status: "preview";
+  activeInitializationRequest: null;
+  completedInitializationRequest: null;
+  initializationResult: null;
+  activeWorkspaceConnectionRequest: null;
+  failedInitializationRequest: null;
+  failedWorkspaceConnectionRequest: null;
   error: null;
 };
 type InitializingState = InitializationBase & {
   status: "initializing";
+  activeInitializationRequest: InitializationRequest;
+  completedInitializationRequest: null;
+  initializationResult: null;
+  activeWorkspaceConnectionRequest: null;
+  failedInitializationRequest: null;
+  failedWorkspaceConnectionRequest: null;
   error: null;
 };
-type InitializationErrorState = InitializationBase & {
+type InitializationReadyToConnectState = InitializationBase & {
+  status: "ready_to_connect";
+  activeInitializationRequest: null;
+  completedInitializationRequest: InitializationRequest;
+  initializationResult: InitializationResult;
+  activeWorkspaceConnectionRequest: null;
+  failedInitializationRequest: null;
+  failedWorkspaceConnectionRequest: null;
+  error: null;
+};
+type InitializationConnectingState = InitializationBase & {
+  status: "connecting";
+  activeInitializationRequest: null;
+  completedInitializationRequest: InitializationRequest;
+  initializationResult: InitializationResult;
+  activeWorkspaceConnectionRequest: Extract<
+    WorkspaceConnectionRequest,
+    { source: "initialization" }
+  >;
+  failedInitializationRequest: null;
+  failedWorkspaceConnectionRequest: null;
+  error: null;
+};
+type InitializationCommandErrorState = InitializationBase & {
   status: "error";
+  failedOperation: "initialization";
+  activeInitializationRequest: null;
+  completedInitializationRequest: null;
+  initializationResult: null;
+  activeWorkspaceConnectionRequest: null;
+  failedInitializationRequest: InitializationRequest;
+  failedWorkspaceConnectionRequest: null;
+  error: AppError;
+};
+type InitializationConnectionErrorState = InitializationBase & {
+  status: "error";
+  failedOperation: "connection";
+  activeInitializationRequest: null;
+  completedInitializationRequest: InitializationRequest;
+  initializationResult: InitializationResult;
+  activeWorkspaceConnectionRequest: null;
+  failedInitializationRequest: null;
+  failedWorkspaceConnectionRequest: Extract<
+    WorkspaceConnectionRequest,
+    { source: "initialization" }
+  >;
   error: AppError;
 };
 
@@ -566,7 +734,10 @@ export type ConnectedConnectionState = InitialMode &
 export type InitializeConnectionState =
   | InitializationPreviewState
   | InitializingState
-  | InitializationErrorState
+  | InitializationReadyToConnectState
+  | InitializationConnectingState
+  | InitializationCommandErrorState
+  | InitializationConnectionErrorState
   | ConnectedConnectionState;
 
 export type ConnectionState =
@@ -577,9 +748,16 @@ export type ConnectionState =
 
 export type ConnectionAction =
   | { type: "currentWorkspaceLoaded"; workspace: CurrentWorkspaceState }
-  | { type: "authLoading" }
-  | { type: "authLoaded"; auth: AuthState }
-  | { type: "loginStarted"; authorization: DeviceAuthorization }
+  | { type: "authLoadStarted"; request: AuthLoadRequest }
+  | { type: "authLoaded"; request: AuthLoadRequest; auth: AuthState }
+  | { type: "authLoadFailed"; request: AuthLoadRequest; error: AppError }
+  | { type: "loginBeginStarted"; request: LoginBeginRequest }
+  | {
+      type: "loginStarted";
+      request: LoginBeginRequest;
+      authorization: DeviceAuthorization;
+    }
+  | { type: "loginBeginFailed"; request: LoginBeginRequest; error: AppError }
   | { type: "authEventReceived"; event: AuthStatusEvent }
   | { type: "repositoryLoading"; request: RepositoryLoadRequest }
   | {
@@ -637,9 +815,24 @@ export type ConnectionAction =
       request: InitializationPreviewRequest;
       error: AppError;
     }
-  | { type: "initializationStarted" }
-  | { type: "initializationFailed"; error: AppError }
-  | { type: "workspaceConnected"; workspace: ConnectedWorkspace }
-  | { type: "authOperationFailed"; error: AppError }
+  | { type: "initializationPreviewCancelled" }
+  | { type: "initializationStarted"; request: InitializationRequest }
+  | {
+      type: "initializationSucceeded";
+      request: InitializationRequest;
+      result: InitializationResult;
+    }
+  | { type: "initializationFailed"; request: InitializationRequest; error: AppError }
+  | { type: "workspaceConnectionStarted"; request: WorkspaceConnectionRequest }
+  | {
+      type: "workspaceConnected";
+      request: WorkspaceConnectionRequest;
+      workspace: ConnectedWorkspace;
+    }
+  | {
+      type: "workspaceConnectionFailed";
+      request: WorkspaceConnectionRequest;
+      error: AppError;
+    }
   | { type: "replacementStarted" }
   | { type: "replacementCancelled" };

@@ -1,5 +1,6 @@
 import type {
   AppError,
+  AuthLoadRequest,
   AuthConnectionState,
   AuthState,
   CloneProgress,
@@ -12,6 +13,10 @@ import type {
   GithubRepositorySummary,
   InitializationPreview,
   InitializationPreviewRequest,
+  InitializationRequest,
+  InitializationResult,
+  InitializeConnectionState,
+  LoginBeginRequest,
   LocalConnectionState,
   LocalInspectionRequest,
   RecoveryRequiredWorkspace,
@@ -20,6 +25,7 @@ import type {
   RepositorySnapshot,
   WorkspaceInspection,
   WorkspaceInspectionRequest,
+  WorkspaceConnectionRequest,
 } from "./types";
 
 type AuthenticatedState = Extract<AuthState, { status: "authenticated" }>;
@@ -42,6 +48,10 @@ type AuthenticatedContext = FlowFields & {
 type LocalContext = AuthenticatedContext & {
   selectedRepository: GithubRepositorySummary;
 };
+type InitializationWorkflowState = Exclude<
+  InitializeConnectionState,
+  ConnectedConnectionState
+>;
 
 function flowFields(state: ConnectionState): FlowFields {
   if (state.mode === "replacement") {
@@ -106,11 +116,16 @@ function authIdle(
     recoveryWorkspace,
     auth,
     authorization: null,
+    activeAuthLoadRequest: null,
+    activeLoginBeginRequest: null,
     error: null,
   };
 }
 
-function authLoading(state: ConnectionState): AuthConnectionState {
+function authLoading(
+  state: ConnectionState,
+  request: AuthLoadRequest,
+): AuthConnectionState {
   return {
     ...flowFields(state),
     ...emptyRepositoryAndLocalData(),
@@ -119,6 +134,31 @@ function authLoading(state: ConnectionState): AuthConnectionState {
     recoveryWorkspace: state.recoveryWorkspace,
     auth: state.auth,
     authorization: null,
+    activeAuthLoadRequest: request,
+    activeLoginBeginRequest: null,
+    error: null,
+  };
+}
+
+function loginBeginning(
+  state: ConnectionState,
+  request: LoginBeginRequest,
+): AuthConnectionState {
+  const auth =
+    state.auth?.status === "signed_out" ||
+    state.auth?.status === "reauthentication_required"
+      ? state.auth
+      : null;
+  return {
+    ...flowFields(state),
+    ...emptyRepositoryAndLocalData(),
+    step: "auth",
+    status: "login_beginning",
+    recoveryWorkspace: state.recoveryWorkspace,
+    auth,
+    authorization: null,
+    activeAuthLoadRequest: null,
+    activeLoginBeginRequest: request,
     error: null,
   };
 }
@@ -135,6 +175,8 @@ function authWaiting(
     recoveryWorkspace: state.recoveryWorkspace,
     auth: { status: "signed_out" },
     authorization,
+    activeAuthLoadRequest: null,
+    activeLoginBeginRequest: null,
     error: null,
   };
 }
@@ -149,6 +191,8 @@ function authReauthenticationRequired(state: ConnectionState): AuthConnectionSta
     recoveryWorkspace: state.recoveryWorkspace,
     auth,
     authorization: null,
+    activeAuthLoadRequest: null,
+    activeLoginBeginRequest: null,
     error: null,
   };
 }
@@ -167,6 +211,8 @@ function authError(state: ConnectionState, error: AppError): AuthConnectionState
     recoveryWorkspace: state.recoveryWorkspace,
     auth,
     authorization: null,
+    activeAuthLoadRequest: null,
+    activeLoginBeginRequest: null,
     error,
   };
 }
@@ -255,6 +301,7 @@ function localDefaults(context: LocalContext) {
     workspaceInspection: null,
     activeInitializationPreviewRequest: null,
     initializationPreview: null,
+    activeWorkspaceConnectionRequest: null,
     connectedWorkspace: null,
     error: null,
   };
@@ -374,50 +421,238 @@ function validationFailed(
   };
 }
 
-function localError(
+function localWorkspaceConnecting(
   context: LocalContext,
-  error: AppError,
-  localRepository: RepositorySnapshot | null,
-  workspaceInspection: WorkspaceInspection | null,
+  localRepository: RepositorySnapshot,
+  workspaceInspection: Extract<WorkspaceInspection, { status: "ready" }>,
+  request: Extract<WorkspaceConnectionRequest, { source: "existing" }>,
 ): LocalConnectionState {
   return {
     ...localDefaults(context),
     step: "local",
-    status: "error",
+    status: "workspace_connecting",
     localRepository,
     workspaceInspection,
-    error,
+    activeWorkspaceConnectionRequest: request,
   };
 }
 
-function initializationState(
+function localError(
+  context: LocalContext,
+  error: AppError,
+  failure:
+    | {
+        errorContext: "pre_repository";
+        localRepository: null;
+        workspaceInspection: null;
+        failedInitializationPreviewRequest: null;
+        failedWorkspaceConnectionRequest: null;
+      }
+    | {
+        errorContext: "repository";
+        localRepository: RepositorySnapshot;
+        workspaceInspection: null;
+        failedInitializationPreviewRequest: null;
+        failedWorkspaceConnectionRequest: null;
+      }
+    | {
+        errorContext: "initialization_preview";
+        localRepository: RepositorySnapshot;
+        workspaceInspection: Extract<
+          WorkspaceInspection,
+          { status: "initialization_required" }
+        >;
+        failedInitializationPreviewRequest: InitializationPreviewRequest | null;
+        failedWorkspaceConnectionRequest: null;
+      }
+    | {
+        errorContext: "workspace_connection";
+        localRepository: RepositorySnapshot;
+        workspaceInspection: Extract<WorkspaceInspection, { status: "ready" }>;
+        failedInitializationPreviewRequest: null;
+        failedWorkspaceConnectionRequest: Extract<
+          WorkspaceConnectionRequest,
+          { source: "existing" }
+        >;
+      },
+): LocalConnectionState {
+  const values = { ...localDefaults(context), error };
+  switch (failure.errorContext) {
+    case "pre_repository":
+      return { ...values, step: "local", status: "error", ...failure };
+    case "repository":
+      return { ...values, step: "local", status: "error", ...failure };
+    case "initialization_preview":
+      return { ...values, step: "local", status: "error", ...failure };
+    case "workspace_connection":
+      return { ...values, step: "local", status: "error", ...failure };
+  }
+}
+
+function initializationValues(
   context: LocalContext,
   localRepository: RepositorySnapshot,
   preview: InitializationPreview,
-  status: "preview" | "initializing",
-): ConnectionState {
+) {
   const workspaceInspection: Extract<
     WorkspaceInspection,
     { status: "initialization_required" }
   > = { status: "initialization_required" };
-  const values = {
+  return {
     ...localDefaults(context),
     localRepository,
     workspaceInspection,
     initializationPreview: preview,
   };
-  if (status === "preview") {
-    return { ...values, step: "initialize", status: "preview" };
-  }
-  return { ...values, step: "initialize", status: "initializing" };
 }
 
-function initializationError(
-  state: Extract<ConnectionState, { step: "initialize" }>,
+function initializationContext(state: InitializationWorkflowState): LocalContext {
+  return {
+    ...flowFields(state),
+    recoveryWorkspace: state.recoveryWorkspace,
+    auth: state.auth,
+    repositories: state.repositories,
+    nextRepositoryCursor: state.nextRepositoryCursor,
+    selectedRepository: state.selectedRepository,
+  };
+}
+
+function initializationPreviewState(
+  context: LocalContext,
+  localRepository: RepositorySnapshot,
+  preview: InitializationPreview,
+): InitializeConnectionState {
+  return {
+    ...initializationValues(context, localRepository, preview),
+    step: "initialize",
+    status: "preview",
+    activeInitializationRequest: null,
+    completedInitializationRequest: null,
+    initializationResult: null,
+    activeWorkspaceConnectionRequest: null,
+    failedInitializationRequest: null,
+    failedWorkspaceConnectionRequest: null,
+    error: null,
+  };
+}
+
+function initializingState(
+  state: Extract<
+    InitializeConnectionState,
+    { status: "preview" } | { status: "error"; failedOperation: "initialization" }
+  >,
+  request: InitializationRequest,
+): InitializeConnectionState {
+  return {
+    ...initializationValues(
+      initializationContext(state),
+      state.localRepository,
+      state.initializationPreview,
+    ),
+    step: "initialize",
+    status: "initializing",
+    activeInitializationRequest: request,
+    completedInitializationRequest: null,
+    initializationResult: null,
+    activeWorkspaceConnectionRequest: null,
+    failedInitializationRequest: null,
+    failedWorkspaceConnectionRequest: null,
+    error: null,
+  };
+}
+
+function initializationReadyToConnect(
+  state: Extract<InitializeConnectionState, { status: "initializing" }>,
+  result: InitializationResult,
+): InitializeConnectionState {
+  return {
+    ...initializationValues(
+      initializationContext(state),
+      state.localRepository,
+      state.initializationPreview,
+    ),
+    step: "initialize",
+    status: "ready_to_connect",
+    activeInitializationRequest: null,
+    completedInitializationRequest: state.activeInitializationRequest,
+    initializationResult: result,
+    activeWorkspaceConnectionRequest: null,
+    failedInitializationRequest: null,
+    failedWorkspaceConnectionRequest: null,
+    error: null,
+  };
+}
+
+function initializationConnecting(
+  state: Extract<
+    InitializeConnectionState,
+    | { status: "ready_to_connect" }
+    | { status: "error"; failedOperation: "connection" }
+  >,
+  request: Extract<WorkspaceConnectionRequest, { source: "initialization" }>,
+): InitializeConnectionState {
+  return {
+    ...initializationValues(
+      initializationContext(state),
+      state.localRepository,
+      state.initializationPreview,
+    ),
+    step: "initialize",
+    status: "connecting",
+    activeInitializationRequest: null,
+    completedInitializationRequest: state.completedInitializationRequest,
+    initializationResult: state.initializationResult,
+    activeWorkspaceConnectionRequest: request,
+    failedInitializationRequest: null,
+    failedWorkspaceConnectionRequest: null,
+    error: null,
+  };
+}
+
+function initializationCommandError(
+  state: Extract<InitializeConnectionState, { status: "initializing" }>,
   error: AppError,
-): ConnectionState {
-  if (state.status === "connected") return state;
-  return { ...state, status: "error", error };
+): InitializeConnectionState {
+  return {
+    ...initializationValues(
+      initializationContext(state),
+      state.localRepository,
+      state.initializationPreview,
+    ),
+    step: "initialize",
+    status: "error",
+    failedOperation: "initialization",
+    activeInitializationRequest: null,
+    completedInitializationRequest: null,
+    initializationResult: null,
+    activeWorkspaceConnectionRequest: null,
+    failedInitializationRequest: state.activeInitializationRequest,
+    failedWorkspaceConnectionRequest: null,
+    error,
+  };
+}
+
+function initializationConnectionError(
+  state: Extract<InitializeConnectionState, { status: "connecting" }>,
+  error: AppError,
+): InitializeConnectionState {
+  return {
+    ...initializationValues(
+      initializationContext(state),
+      state.localRepository,
+      state.initializationPreview,
+    ),
+    step: "initialize",
+    status: "error",
+    failedOperation: "connection",
+    activeInitializationRequest: null,
+    completedInitializationRequest: state.completedInitializationRequest,
+    initializationResult: state.initializationResult,
+    activeWorkspaceConnectionRequest: null,
+    failedInitializationRequest: null,
+    failedWorkspaceConnectionRequest: state.activeWorkspaceConnectionRequest,
+    error,
+  };
 }
 
 function connectedState(workspace: ConnectedWorkspace): ConnectedConnectionState {
@@ -486,6 +721,81 @@ function samePreviewRequest(
   );
 }
 
+function sameInitializationRequest(
+  left: InitializationRequest | null,
+  right: InitializationRequest,
+): boolean {
+  return (
+    left?.id === right.id &&
+    left.previewId === right.previewId &&
+    left.repositoryRoot === right.repositoryRoot
+  );
+}
+
+function sameWorkspaceConnectionRequest(
+  left: WorkspaceConnectionRequest | null,
+  right: WorkspaceConnectionRequest,
+): boolean {
+  return (
+    left?.id === right.id &&
+    left.repositoryRoot === right.repositoryRoot &&
+    left.source === right.source &&
+    left.initializationRequestId === right.initializationRequestId
+  );
+}
+
+function hasNonCancellableMutationOwnership(state: ConnectionState): boolean {
+  return (
+    (state.step === "local" &&
+      (state.status === "clone_starting" ||
+        state.status === "cloning" ||
+        state.status === "clone_cancelling" ||
+        state.status === "workspace_connecting")) ||
+    (state.step === "initialize" &&
+      (state.status === "initializing" || state.status === "connecting"))
+  );
+}
+
+function canStartLocalInspection(state: ConnectionState): boolean {
+  return (
+    state.step === "local" &&
+    (state.status === "idle" ||
+      state.status === "inspecting" ||
+      state.status === "workspace_inspecting" ||
+      state.status === "preview_loading" ||
+      state.status === "validation_failed" ||
+      state.status === "error")
+  );
+}
+
+function canStartClone(state: ConnectionState): boolean {
+  return canStartLocalInspection(state);
+}
+
+function canStartWorkspaceInspection(state: ConnectionState): boolean {
+  return (
+    state.step === "local" &&
+    state.localRepository !== null &&
+    (state.status === "idle" ||
+      state.status === "workspace_inspecting" ||
+      state.status === "preview_loading" ||
+      state.status === "validation_failed" ||
+      state.status === "error")
+  );
+}
+
+function canStartInitializationPreview(state: ConnectionState): boolean {
+  return (
+    state.step === "local" &&
+    (state.status === "idle" ||
+      state.status === "preview_loading" ||
+      (state.status === "error" &&
+        state.errorContext === "initialization_preview")) &&
+    state.localRepository !== null &&
+    state.workspaceInspection?.status === "initialization_required"
+  );
+}
+
 function mergeRepositoryPage(
   current: GithubRepositorySummary[],
   incoming: GithubRepositorySummary[],
@@ -521,9 +831,24 @@ export function connectionReducer(
         initialFlow(),
         action.workspace?.status === "recovery_required" ? action.workspace : null,
       );
-    case "authLoading":
-      return authLoading(state);
+    case "authLoadStarted":
+      if (
+        hasNonCancellableMutationOwnership(state) ||
+        (state.step === "auth" &&
+          (state.status === "waiting_for_user" ||
+            state.status === "login_beginning"))
+      ) {
+        return state;
+      }
+      return authLoading(state, action.request);
     case "authLoaded":
+      if (
+        state.step !== "auth" ||
+        state.status !== "loading" ||
+        state.activeAuthLoadRequest.id !== action.request.id
+      ) {
+        return state;
+      }
       if (action.auth.status === "authenticated") {
         return repositoryIdle({
           ...flowFields(state),
@@ -537,8 +862,28 @@ export function connectionReducer(
         return authReauthenticationRequired(state);
       }
       return authIdle(flowFields(state), state.recoveryWorkspace, action.auth);
+    case "authLoadFailed":
+      return state.step === "auth" &&
+        state.status === "loading" &&
+        state.activeAuthLoadRequest.id === action.request.id
+        ? authError(state, action.error)
+        : state;
+    case "loginBeginStarted":
+      return hasNonCancellableMutationOwnership(state)
+        ? state
+        : loginBeginning(state, action.request);
     case "loginStarted":
-      return authWaiting(state, action.authorization);
+      return state.step === "auth" &&
+        state.status === "login_beginning" &&
+        state.activeLoginBeginRequest.id === action.request.id
+        ? authWaiting(state, action.authorization)
+        : state;
+    case "loginBeginFailed":
+      return state.step === "auth" &&
+        state.status === "login_beginning" &&
+        state.activeLoginBeginRequest.id === action.request.id
+        ? authError(state, action.error)
+        : state;
     case "authEventReceived": {
       if (action.event.status === "reauthentication_required") {
         return authReauthenticationRequired(state);
@@ -615,25 +960,23 @@ export function connectionReducer(
       if (
         !context ||
         state.step === "auth" ||
-        (state.step === "initialize" && state.status === "connected")
+        (state.step === "initialize" && state.status !== "preview")
       ) {
         return state;
       }
       if (state.selectedRepository?.id === action.repository.id) return state;
-      if (
-        (state.step === "local" &&
-          (state.status === "clone_starting" ||
-            state.status === "cloning" ||
-            state.status === "clone_cancelling")) ||
-        (state.step === "initialize" && state.status === "initializing")
-      ) {
-        return state;
-      }
+      if (hasNonCancellableMutationOwnership(state)) return state;
       return localIdle({ ...context, selectedRepository: action.repository });
     }
     case "localInspectionStarted": {
       const context = localContext(state);
-      if (!context || context.selectedRepository.id !== action.request.repositoryId) return state;
+      if (
+        !canStartLocalInspection(state) ||
+        !context ||
+        context.selectedRepository.id !== action.request.repositoryId
+      ) {
+        return state;
+      }
       return localInspecting(context, action.request);
     }
     case "localRepositoryChanged": {
@@ -658,11 +1001,23 @@ export function connectionReducer(
       ) {
         return state;
       }
-      return localError(context, action.error, null, null);
+      return localError(context, action.error, {
+        errorContext: "pre_repository",
+        localRepository: null,
+        workspaceInspection: null,
+        failedInitializationPreviewRequest: null,
+        failedWorkspaceConnectionRequest: null,
+      });
     }
     case "cloneStarting": {
       const context = localContext(state);
-      if (!context || context.selectedRepository.id !== action.request.repositoryId) return state;
+      if (
+        !canStartClone(state) ||
+        !context ||
+        context.selectedRepository.id !== action.request.repositoryId
+      ) {
+        return state;
+      }
       return cloneStarting(context, action.request);
     }
     case "cloneStarted": {
@@ -687,7 +1042,13 @@ export function connectionReducer(
       ) {
         return state;
       }
-      return localError(context, action.error, null, null);
+      return localError(context, action.error, {
+        errorContext: "pre_repository",
+        localRepository: null,
+        workspaceInspection: null,
+        failedInitializationPreviewRequest: null,
+        failedWorkspaceConnectionRequest: null,
+      });
     }
     case "cloneCancellationRequested": {
       const context = localContext(state);
@@ -718,15 +1079,21 @@ export function connectionReducer(
         return localIdle(context, action.event.repository);
       }
       if (action.event.status === "failed") {
-        return localError(context, action.event.error, null, null);
+        return localError(context, action.event.error, {
+          errorContext: "pre_repository",
+          localRepository: null,
+          workspaceInspection: null,
+          failedInitializationPreviewRequest: null,
+          failedWorkspaceConnectionRequest: null,
+        });
       }
       return localIdle(context);
     }
     case "workspaceInspectionStarted": {
       const context = localContext(state);
       if (
+        !canStartWorkspaceInspection(state) ||
         !context ||
-        state.step !== "local" ||
         !state.localRepository ||
         state.localRepository.root !== action.request.repositoryRoot
       ) {
@@ -762,17 +1129,25 @@ export function connectionReducer(
       ) {
         return state;
       }
-      return localError(context, action.error, state.localRepository, null);
+      return localError(context, action.error, {
+        errorContext: "repository",
+        localRepository: state.localRepository,
+        workspaceInspection: null,
+        failedInitializationPreviewRequest: null,
+        failedWorkspaceConnectionRequest: null,
+      });
     }
     case "initializationPreviewStarted": {
       const context = localContext(state);
       if (
+        !canStartInitializationPreview(state) ||
         !context ||
-        state.step !== "local" ||
-        (state.status !== "idle" && state.status !== "preview_loading") ||
         !state.localRepository ||
-        state.localRepository.root !== action.request.repositoryRoot ||
-        state.workspaceInspection?.status !== "initialization_required"
+        state.workspaceInspection?.status !== "initialization_required" ||
+        (state.step === "local" &&
+          state.status === "error" &&
+          state.failedInitializationPreviewRequest?.id === action.request.id) ||
+        state.localRepository.root !== action.request.repositoryRoot
       ) {
         return state;
       }
@@ -790,7 +1165,7 @@ export function connectionReducer(
       ) {
         return state;
       }
-      return initializationState(context, state.localRepository, action.preview, "preview");
+      return initializationPreviewState(context, state.localRepository, action.preview);
     }
     case "initializationPreviewFailed": {
       const context = localContext(state);
@@ -805,46 +1180,178 @@ export function connectionReducer(
       return localError(
         context,
         action.error,
-        state.localRepository,
-        state.workspaceInspection,
+        {
+          errorContext: "initialization_preview",
+          localRepository: state.localRepository,
+          workspaceInspection: state.workspaceInspection,
+          failedInitializationPreviewRequest: action.request,
+          failedWorkspaceConnectionRequest: null,
+        },
       );
     }
-    case "initializationStarted": {
-      if (state.step !== "initialize" || state.status !== "preview") return state;
+    case "initializationPreviewCancelled": {
       const context = localContext(state);
-      return context
-        ? initializationState(context, state.localRepository, state.initializationPreview, "initializing")
-        : state;
+      if (!context) return state;
+      if (
+        state.step === "local" &&
+        (state.status === "preview_loading" ||
+          (state.status === "error" &&
+            state.errorContext === "initialization_preview"))
+      ) {
+        return localIdle(context, state.localRepository, state.workspaceInspection);
+      }
+      if (state.step === "initialize" && state.status === "preview") {
+        return localIdle(context, state.localRepository, state.workspaceInspection);
+      }
+      return state;
+    }
+    case "initializationStarted": {
+      if (
+        state.step !== "initialize" ||
+        (state.status !== "preview" &&
+          !(state.status === "error" &&
+            state.failedOperation === "initialization")) ||
+        (state.status === "error" &&
+          state.failedInitializationRequest.id === action.request.id) ||
+        action.request.previewId !== state.initializationPreview.id ||
+        action.request.repositoryRoot !== state.localRepository.root
+      ) {
+        return state;
+      }
+      return initializingState(state, action.request);
+    }
+    case "initializationSucceeded": {
+      if (
+        state.step !== "initialize" ||
+        state.status !== "initializing" ||
+        !sameInitializationRequest(state.activeInitializationRequest, action.request) ||
+        action.result.root !== action.request.repositoryRoot
+      ) {
+        return state;
+      }
+      return initializationReadyToConnect(state, action.result);
     }
     case "initializationFailed": {
-      if (state.step !== "initialize" || state.status !== "initializing") return state;
+      if (
+        state.step !== "initialize" ||
+        state.status !== "initializing" ||
+        !sameInitializationRequest(state.activeInitializationRequest, action.request)
+      ) {
+        return state;
+      }
       if (action.error.code === "workspace_changed_since_preview") {
         const context = localContext(state);
         return context
-          ? localError(context, action.error, state.localRepository, state.workspaceInspection)
+          ? localError(context, action.error, {
+              errorContext: "initialization_preview",
+              localRepository: state.localRepository,
+              workspaceInspection: state.workspaceInspection,
+              failedInitializationPreviewRequest: null,
+              failedWorkspaceConnectionRequest: null,
+            })
           : state;
       }
-      return initializationError(state, action.error);
+      return initializationCommandError(state, action.error);
+    }
+    case "workspaceConnectionStarted": {
+      const context = localContext(state);
+      if (
+        context &&
+        action.request.source === "existing" &&
+        state.step === "local" &&
+        ((state.status === "idle" &&
+          state.workspaceInspection?.status === "ready") ||
+          (state.status === "error" &&
+            state.errorContext === "workspace_connection")) &&
+        state.localRepository !== null &&
+        state.workspaceInspection?.status === "ready" &&
+        (state.status !== "error" ||
+          state.failedWorkspaceConnectionRequest.id !== action.request.id) &&
+        state.localRepository.root === action.request.repositoryRoot
+      ) {
+        return localWorkspaceConnecting(
+          context,
+          state.localRepository,
+          state.workspaceInspection,
+          action.request,
+        );
+      }
+      if (
+        state.step === "local" &&
+        hasNonCancellableMutationOwnership(state)
+      ) {
+        return state;
+      }
+      if (
+        action.request.source === "initialization" &&
+        state.step === "initialize" &&
+        (state.status === "ready_to_connect" ||
+          (state.status === "error" && state.failedOperation === "connection")) &&
+        (state.status !== "error" ||
+          state.failedWorkspaceConnectionRequest.id !== action.request.id) &&
+        state.completedInitializationRequest.id ===
+          action.request.initializationRequestId &&
+        state.localRepository.root === action.request.repositoryRoot
+      ) {
+        return initializationConnecting(state, action.request);
+      }
+      return state;
     }
     case "workspaceConnected":
       if (
-        state.step === "initialize" &&
-        state.status === "initializing" &&
-        state.localRepository.root === action.workspace.path
+        state.step === "local" &&
+        state.status === "workspace_connecting" &&
+        sameWorkspaceConnectionRequest(
+          state.activeWorkspaceConnectionRequest,
+          action.request,
+        ) &&
+        action.workspace.path === action.request.repositoryRoot
       ) {
         return connectedState(action.workspace);
       }
       if (
-        state.step === "local" &&
-        state.status === "idle" &&
-        state.workspaceInspection?.status === "ready" &&
-        state.localRepository?.root === action.workspace.path
+        state.step === "initialize" &&
+        state.status === "connecting" &&
+        sameWorkspaceConnectionRequest(
+          state.activeWorkspaceConnectionRequest,
+          action.request,
+        ) &&
+        action.workspace.path === action.request.repositoryRoot
       ) {
         return connectedState(action.workspace);
       }
       return state;
-    case "authOperationFailed":
-      return state.step === "auth" ? authError(state, action.error) : state;
+    case "workspaceConnectionFailed": {
+      const context = localContext(state);
+      if (
+        context &&
+        state.step === "local" &&
+        state.status === "workspace_connecting" &&
+        sameWorkspaceConnectionRequest(
+          state.activeWorkspaceConnectionRequest,
+          action.request,
+        )
+      ) {
+        return localError(context, action.error, {
+          errorContext: "workspace_connection",
+          localRepository: state.localRepository,
+          workspaceInspection: state.workspaceInspection,
+          failedInitializationPreviewRequest: null,
+          failedWorkspaceConnectionRequest: state.activeWorkspaceConnectionRequest,
+        });
+      }
+      if (
+        state.step === "initialize" &&
+        state.status === "connecting" &&
+        sameWorkspaceConnectionRequest(
+          state.activeWorkspaceConnectionRequest,
+          action.request,
+        )
+      ) {
+        return initializationConnectionError(state, action.error);
+      }
+      return state;
+    }
     case "replacementStarted":
       return state.step === "initialize" && state.status === "connected"
         ? authIdle(
@@ -853,7 +1360,8 @@ export function connectionReducer(
           )
         : state;
     case "replacementCancelled":
-      return state.mode === "replacement"
+      return state.mode === "replacement" &&
+        !hasNonCancellableMutationOwnership(state)
         ? connectedState(state.replacementWorkspace)
         : state;
   }
