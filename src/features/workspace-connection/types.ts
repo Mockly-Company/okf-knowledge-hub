@@ -226,56 +226,348 @@ export interface PreviewInitializationInput {
 
 export type Unlisten = () => void;
 
-interface ConnectionStateValues {
-  mode: "initial" | "replacement";
-  auth: AuthState | null;
-  authorization: DeviceAuthorization | null;
+export interface RepositoryLoadRequest {
+  id: string;
+  userId: number;
+  cursor: string | null;
+  append: boolean;
+}
+
+export interface LocalInspectionRequest {
+  id: string;
+  repositoryId: string;
+  path: string;
+}
+
+export interface CloneStartRequest {
+  id: string;
+  repositoryId: string;
+  parentDirectory: string;
+}
+
+export interface WorkspaceInspectionRequest {
+  id: string;
+  repositoryRoot: string;
+}
+
+export interface InitializationPreviewRequest {
+  id: string;
+  repositoryRoot: string;
+  workspaceName: string;
+}
+
+type AuthenticatedState = Extract<AuthState, { status: "authenticated" }>;
+type SignedOutState = Extract<AuthState, { status: "signed_out" }>;
+type ReauthenticationState = Extract<
+  AuthState,
+  { status: "reauthentication_required" }
+>;
+type InvalidWorkspaceInspection = Extract<
+  WorkspaceInspection,
+  { status: "invalid" | "unsupported_version" }
+>;
+type ReadyWorkspaceInspection = Extract<
+  WorkspaceInspection,
+  { status: "ready" | "initialization_required" }
+>;
+type InitializationRequiredInspection = Extract<
+  WorkspaceInspection,
+  { status: "initialization_required" }
+>;
+
+type InitialMode = { mode: "initial"; replacementWorkspace: null };
+type ReplacementMode = {
+  mode: "replacement";
+  replacementWorkspace: ConnectedWorkspace;
+};
+type FlowMode = InitialMode | ReplacementMode;
+type RecoveryContext = {
+  recoveryWorkspace: RecoveryRequiredWorkspace | null;
+};
+
+type EmptyRepositoryData = {
+  repositories: GithubRepositorySummary[];
+  nextRepositoryCursor: null;
+  activeRepositoryRequest: null;
+};
+type RepositoryData = {
   repositories: GithubRepositorySummary[];
   nextRepositoryCursor: string | null;
-  selectedRepository: GithubRepositorySummary | null;
-  localRepository: RepositorySnapshot | null;
-  cloneJob: CloneJob | null;
+  activeRepositoryRequest: RepositoryLoadRequest | null;
+};
+type EmptyLocalData = {
+  selectedRepository: null;
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  localRepository: null;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
+  workspaceInspection: null;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+};
+type EmptyConnectionData = { connectedWorkspace: null };
+
+type AuthBase = FlowMode &
+  RecoveryContext &
+  EmptyRepositoryData &
+  EmptyLocalData &
+  EmptyConnectionData & { step: "auth" };
+
+export type AuthConnectionState =
+  | (AuthBase & {
+      status: "idle";
+      auth: SignedOutState | null;
+      authorization: null;
+      error: null;
+    })
+  | (AuthBase & {
+      status: "loading";
+      auth: AuthState | null;
+      authorization: null;
+      error: null;
+    })
+  | (AuthBase & {
+      status: "waiting_for_user";
+      auth: SignedOutState;
+      authorization: DeviceAuthorization;
+      error: null;
+    })
+  | (AuthBase & {
+      status: "reauthentication_required";
+      auth: ReauthenticationState;
+      authorization: null;
+      error: null;
+    })
+  | (AuthBase & {
+      status: "error";
+      auth: SignedOutState | ReauthenticationState | null;
+      authorization: null;
+      error: AppError;
+    });
+
+type RepositoryBase = FlowMode &
+  RecoveryContext &
+  RepositoryData &
+  EmptyLocalData &
+  EmptyConnectionData & {
+    step: "repository";
+    auth: AuthenticatedState;
+    authorization: null;
+  };
+
+export type RepositoryConnectionState =
+  | (RepositoryBase & {
+      status: "idle";
+      activeRepositoryRequest: null;
+      error: null;
+    })
+  | (RepositoryBase & {
+      status: "loading";
+      activeRepositoryRequest: RepositoryLoadRequest;
+      error: null;
+    })
+  | (RepositoryBase & {
+      status: "error";
+      activeRepositoryRequest: null;
+      error: AppError;
+    });
+
+type LocalBase = FlowMode &
+  RecoveryContext &
+  RepositoryData &
+  EmptyConnectionData & {
+    step: "local";
+    auth: AuthenticatedState;
+    authorization: null;
+    activeRepositoryRequest: null;
+    selectedRepository: GithubRepositorySummary;
+  };
+
+type LocalIdleCommon = LocalBase & {
+  status: "idle";
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  error: null;
+};
+
+type LocalChoiceIdleState = LocalIdleCommon & {
+  localRepository: null;
+  workspaceInspection: null;
+};
+
+type LocalRepositoryIdleState = LocalIdleCommon & {
+  localRepository: RepositorySnapshot;
+  workspaceInspection: ReadyWorkspaceInspection | null;
+};
+
+type LocalIdleState = LocalChoiceIdleState | LocalRepositoryIdleState;
+
+type LocalInspectingState = LocalBase & {
+  status: "inspecting";
+  activeLocalRequest: LocalInspectionRequest;
+  activeCloneStartRequest: null;
+  localRepository: null;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
+  workspaceInspection: null;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  error: null;
+};
+
+type CloneStartingState = LocalBase & {
+  status: "clone_starting";
+  activeLocalRequest: null;
+  activeCloneStartRequest: CloneStartRequest;
+  localRepository: null;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
+  workspaceInspection: null;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  error: null;
+};
+
+type CloneRunningState = LocalBase & {
+  status: "cloning" | "clone_cancelling";
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  localRepository: null;
+  cloneJob: CloneJob;
   cloneProgress: CloneProgress | null;
+  activeWorkspaceInspectionRequest: null;
+  workspaceInspection: null;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  error: null;
+};
+
+type WorkspaceInspectingState = LocalBase & {
+  status: "workspace_inspecting";
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  localRepository: RepositorySnapshot;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: WorkspaceInspectionRequest;
+  workspaceInspection: null;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  error: null;
+};
+
+type PreviewLoadingState = LocalBase & {
+  status: "preview_loading";
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  localRepository: RepositorySnapshot;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
+  workspaceInspection: InitializationRequiredInspection;
+  activeInitializationPreviewRequest: InitializationPreviewRequest;
+  initializationPreview: null;
+  error: null;
+};
+
+type ValidationFailedState = LocalBase & {
+  status: "validation_failed";
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  localRepository: RepositorySnapshot;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
+  workspaceInspection: InvalidWorkspaceInspection;
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  error: null;
+};
+
+type LocalErrorState = LocalBase & {
+  status: "error";
+  activeLocalRequest: null;
+  activeCloneStartRequest: null;
+  localRepository: RepositorySnapshot | null;
+  cloneJob: null;
+  cloneProgress: null;
+  activeWorkspaceInspectionRequest: null;
   workspaceInspection: WorkspaceInspection | null;
-  initializationPreview: InitializationPreview | null;
-  connectedWorkspace: ConnectedWorkspace | null;
-  replacementWorkspace: ConnectedWorkspace | null;
-  error: AppError | null;
-}
+  activeInitializationPreviewRequest: null;
+  initializationPreview: null;
+  error: AppError;
+};
 
-export interface AuthConnectionState extends ConnectionStateValues {
-  step: "auth";
-  status:
-    | "idle"
-    | "loading"
-    | "waiting_for_user"
-    | "reauthentication_required"
-    | "error";
-}
+export type LocalConnectionState =
+  | LocalIdleState
+  | LocalInspectingState
+  | CloneStartingState
+  | CloneRunningState
+  | WorkspaceInspectingState
+  | PreviewLoadingState
+  | ValidationFailedState
+  | LocalErrorState;
 
-export interface RepositoryConnectionState extends ConnectionStateValues {
-  step: "repository";
-  status: "idle" | "loading" | "error";
-  auth: Extract<AuthState, { status: "authenticated" }>;
-}
+type InitializationBase = FlowMode &
+  RecoveryContext &
+  RepositoryData &
+  EmptyConnectionData & {
+    step: "initialize";
+    auth: AuthenticatedState;
+    authorization: null;
+    activeRepositoryRequest: null;
+    selectedRepository: GithubRepositorySummary;
+    activeLocalRequest: null;
+    activeCloneStartRequest: null;
+    localRepository: RepositorySnapshot;
+    cloneJob: null;
+    cloneProgress: null;
+    activeWorkspaceInspectionRequest: null;
+    workspaceInspection: InitializationRequiredInspection;
+    activeInitializationPreviewRequest: null;
+    initializationPreview: InitializationPreview;
+  };
 
-export interface LocalConnectionState extends ConnectionStateValues {
-  step: "local";
-  status:
-    | "idle"
-    | "inspecting"
-    | "cloning"
-    | "clone_cancelling"
-    | "validation_failed"
-    | "error";
-  auth: Extract<AuthState, { status: "authenticated" }>;
-  selectedRepository: GithubRepositorySummary;
-}
+type InitializationPreviewState = InitializationBase & {
+  status: "preview";
+  error: null;
+};
+type InitializingState = InitializationBase & {
+  status: "initializing";
+  error: null;
+};
+type InitializationErrorState = InitializationBase & {
+  status: "error";
+  error: AppError;
+};
 
-export interface InitializeConnectionState extends ConnectionStateValues {
-  step: "initialize";
-  status: "preview" | "initializing" | "connected" | "error";
-}
+export type ConnectedConnectionState = InitialMode &
+  RecoveryContext &
+  EmptyRepositoryData &
+  EmptyLocalData & {
+    step: "initialize";
+    status: "connected";
+    auth: null;
+    authorization: null;
+    connectedWorkspace: ConnectedWorkspace;
+    recoveryWorkspace: null;
+    error: null;
+  };
+
+export type InitializeConnectionState =
+  | InitializationPreviewState
+  | InitializingState
+  | InitializationErrorState
+  | ConnectedConnectionState;
 
 export type ConnectionState =
   | AuthConnectionState
@@ -289,36 +581,65 @@ export type ConnectionAction =
   | { type: "authLoaded"; auth: AuthState }
   | { type: "loginStarted"; authorization: DeviceAuthorization }
   | { type: "authEventReceived"; event: AuthStatusEvent }
-  | { type: "repositoryLoading"; append: boolean }
+  | { type: "repositoryLoading"; request: RepositoryLoadRequest }
   | {
       type: "repositoryPageLoaded";
-      userId: number;
+      request: RepositoryLoadRequest;
       page: Page<GithubRepositorySummary>;
-      append: boolean;
+    }
+  | {
+      type: "repositoryLoadFailed";
+      request: RepositoryLoadRequest;
+      error: AppError;
     }
   | { type: "repositorySelected"; repository: GithubRepositorySummary }
-  | { type: "localInspectionStarted" }
+  | { type: "localInspectionStarted"; request: LocalInspectionRequest }
   | {
       type: "localRepositoryChanged";
-      repositoryId: string;
+      request: LocalInspectionRequest;
       repository: RepositorySnapshot;
     }
-  | { type: "cloneStarted"; repositoryId: string; job: CloneJob }
+  | {
+      type: "localInspectionFailed";
+      request: LocalInspectionRequest;
+      error: AppError;
+    }
+  | { type: "cloneStarting"; request: CloneStartRequest }
+  | { type: "cloneStarted"; request: CloneStartRequest; job: CloneJob }
+  | { type: "cloneStartFailed"; request: CloneStartRequest; error: AppError }
   | { type: "cloneCancellationRequested"; requestId: string }
   | { type: "cloneEventReceived"; event: CloneProgressEvent }
   | {
+      type: "workspaceInspectionStarted";
+      request: WorkspaceInspectionRequest;
+    }
+  | {
       type: "workspaceInspected";
-      repositoryRoot: string;
+      request: WorkspaceInspectionRequest;
       inspection: WorkspaceInspection;
     }
   | {
+      type: "workspaceInspectionFailed";
+      request: WorkspaceInspectionRequest;
+      error: AppError;
+    }
+  | {
+      type: "initializationPreviewStarted";
+      request: InitializationPreviewRequest;
+    }
+  | {
       type: "initializationPreviewLoaded";
-      repositoryRoot: string;
+      request: InitializationPreviewRequest;
       preview: InitializationPreview;
+    }
+  | {
+      type: "initializationPreviewFailed";
+      request: InitializationPreviewRequest;
+      error: AppError;
     }
   | { type: "initializationStarted" }
   | { type: "initializationFailed"; error: AppError }
   | { type: "workspaceConnected"; workspace: ConnectedWorkspace }
-  | { type: "operationFailed"; error: AppError }
+  | { type: "authOperationFailed"; error: AppError }
   | { type: "replacementStarted" }
   | { type: "replacementCancelled" };

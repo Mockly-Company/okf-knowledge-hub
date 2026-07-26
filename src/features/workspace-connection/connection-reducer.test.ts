@@ -1,26 +1,37 @@
-import { describe, expect, it, vi } from "vitest";
 import type { Event } from "@tauri-apps/api/event";
+import { describe, expect, it, vi } from "vitest";
+import { createWorkspaceConnectionGateway } from "@/infrastructure/workspace/createWorkspaceConnectionGateway";
 import { TauriWorkspaceConnectionGateway } from "@/infrastructure/workspace/TauriWorkspaceConnectionGateway";
 import {
   desktopOnlyError,
   UnavailableWorkspaceConnectionGateway,
 } from "@/infrastructure/workspace/UnavailableWorkspaceConnectionGateway";
-import { createWorkspaceConnectionGateway } from "@/infrastructure/workspace/createWorkspaceConnectionGateway";
 import {
   connectionReducer,
   createInitialConnectionState,
 } from "./connection-reducer";
 import type {
   AppError,
+  AuthStatusEvent,
+  CloneProgressEvent,
+  CloneStartRequest,
   ConnectedWorkspace,
   GithubRepositorySummary,
   InitializationPreview,
-  CloneProgressEvent,
-  AuthStatusEvent,
+  InitializationPreviewRequest,
+  LocalInspectionRequest,
+  RepositoryLoadRequest,
   RepositorySnapshot,
+  WorkspaceInspectionRequest,
 } from "./types";
 
 const user = { id: 7, login: "hyeeun", avatarUrl: "https://example.test/me" };
+const unavailableError: AppError = {
+  code: "github_unavailable",
+  message: "GitHub에 연결할 수 없습니다.",
+  recovery: "retry",
+  details: {},
+};
 
 function repository(id: string): GithubRepositorySummary {
   return {
@@ -77,37 +88,90 @@ function connected(path = "/work/old-knowledge"): ConnectedWorkspace {
   };
 }
 
-function readyToInitializeState() {
-  let state = createInitialConnectionState();
-  state = connectionReducer(state, {
+function repositoryRequest(
+  id = "repositories-1",
+  cursor: string | null = null,
+  append = false,
+): RepositoryLoadRequest {
+  return { id, userId: user.id, cursor, append };
+}
+
+function localRequest(id: string, path: string): LocalInspectionRequest {
+  return { id, repositoryId: "old", path };
+}
+
+function cloneRequest(id: string, parentDirectory: string): CloneStartRequest {
+  return { id, repositoryId: "old", parentDirectory };
+}
+
+function workspaceRequest(id: string, root: string): WorkspaceInspectionRequest {
+  return { id, repositoryRoot: root };
+}
+
+function previewRequest(
+  id: string,
+  root: string,
+  workspaceName = "Mockly",
+): InitializationPreviewRequest {
+  return { id, repositoryRoot: root, workspaceName };
+}
+
+function repositoryState() {
+  return connectionReducer(createInitialConnectionState(), {
     type: "authLoaded",
     auth: { status: "authenticated", user },
   });
-  state = connectionReducer(state, {
+}
+
+function selectedRepositoryState() {
+  return connectionReducer(repositoryState(), {
     type: "repositorySelected",
     repository: repository("old"),
   });
-  state = connectionReducer(state, {
-    type: "localRepositoryChanged",
-    repositoryId: "old",
-    repository: localRepository(),
+}
+
+function localState(root = "/work/old-knowledge") {
+  const request = localRequest(`local-${root}`, root);
+  let state = connectionReducer(selectedRepositoryState(), {
+    type: "localInspectionStarted",
+    request,
   });
-  state = connectionReducer(state, {
+  return connectionReducer(state, {
+    type: "localRepositoryChanged",
+    request,
+    repository: localRepository(root),
+  });
+}
+
+function initializationRequiredState(root = "/work/old-knowledge") {
+  const request = workspaceRequest(`workspace-${root}`, root);
+  let state = connectionReducer(localState(root), {
+    type: "workspaceInspectionStarted",
+    request,
+  });
+  return connectionReducer(state, {
     type: "workspaceInspected",
-    repositoryRoot: "/work/old-knowledge",
+    request,
     inspection: { status: "initialization_required" },
+  });
+}
+
+function previewState() {
+  const request = previewRequest("preview-request-1", "/work/old-knowledge");
+  let state = connectionReducer(initializationRequiredState(), {
+    type: "initializationPreviewStarted",
+    request,
   });
   return connectionReducer(state, {
     type: "initializationPreviewLoaded",
-    repositoryRoot: "/work/old-knowledge",
+    request,
     preview: preview(),
   });
 }
 
 describe("connectionReducer", () => {
-  it("invalidates repository, local, and preview state when login restarts", () => {
-    const state = readyToInitializeState();
-    const next = connectionReducer(state, {
+  it("clears all auth-dependent state when login restarts", () => {
+    const next = connectionReducer(previewState(), {
       type: "loginStarted",
       authorization: {
         requestId: "login-2",
@@ -121,6 +185,8 @@ describe("connectionReducer", () => {
     expect(next).toMatchObject({
       step: "auth",
       status: "waiting_for_user",
+      repositories: [],
+      activeRepositoryRequest: null,
       selectedRepository: null,
       localRepository: null,
       workspaceInspection: null,
@@ -129,65 +195,92 @@ describe("connectionReducer", () => {
     });
   });
 
-  it("invalidates private downstream state when authentication becomes signed out", () => {
-    const state = readyToInitializeState();
-    const next = connectionReducer(state, {
+  it.each(["loaded", "event"] as const)(
+    "fully invalidates auth-dependent state on global reauthentication (%s)",
+    (source) => {
+      const current = previewState();
+      const next =
+        source === "loaded"
+          ? connectionReducer(current, {
+              type: "authLoaded",
+              auth: { status: "reauthentication_required" },
+            })
+          : connectionReducer(current, {
+              type: "authEventReceived",
+              event: { status: "reauthentication_required", requestId: "global" },
+            });
+
+      expect(next).toMatchObject({
+        step: "auth",
+        status: "reauthentication_required",
+        repositories: [],
+        activeRepositoryRequest: null,
+        selectedRepository: null,
+        activeLocalRequest: null,
+        localRepository: null,
+        activeCloneStartRequest: null,
+        cloneJob: null,
+        activeWorkspaceInspectionRequest: null,
+        workspaceInspection: null,
+        activeInitializationPreviewRequest: null,
+        initializationPreview: null,
+        connectedWorkspace: null,
+      });
+    },
+  );
+
+  it("keeps only the explicit replacement fallback during reauthentication", () => {
+    const previous = connected();
+    let state = connectionReducer(
+      connectionReducer(createInitialConnectionState(), {
+        type: "currentWorkspaceLoaded",
+        workspace: previous,
+      }),
+      { type: "replacementStarted" },
+    );
+    state = connectionReducer(state, {
       type: "authLoaded",
-      auth: { status: "signed_out" },
+      auth: { status: "reauthentication_required" },
     });
 
-    expect(next).toMatchObject({
+    expect(state).toMatchObject({
       step: "auth",
-      status: "idle",
+      status: "reauthentication_required",
+      mode: "replacement",
+      replacementWorkspace: previous,
       repositories: [],
       selectedRepository: null,
       localRepository: null,
-      workspaceInspection: null,
       initializationPreview: null,
-      connectedWorkspace: null,
     });
   });
 
-  it("ignores terminal auth events that do not match the active login request", () => {
+  it("ignores auth terminal events without the active login request", () => {
     const initial = createInitialConnectionState();
-    const stale = connectionReducer(initial, {
-      type: "authEventReceived",
-      event: { status: "authenticated", requestId: "old", user },
-    });
-    expect(stale).toBe(initial);
-
-    const waiting = connectionReducer(initial, {
-      type: "loginStarted",
-      authorization: {
-        requestId: "current",
-        userCode: "ABCD-EFGH",
-        verificationUri: "https://github.com/login/device",
-        expiresAtUnix: 2_000,
-        intervalSeconds: 5,
-      },
-    });
     expect(
-      connectionReducer(waiting, {
+      connectionReducer(initial, {
         type: "authEventReceived",
-        event: { status: "cancelled", requestId: "old" },
+        event: { status: "authenticated", requestId: "old", user },
       }),
-    ).toBe(waiting);
+    ).toBe(initial);
   });
 
-  it("appends repository pages, deduplicates by stable id, and refreshes repeated items", () => {
-    let state = connectionReducer(createInitialConnectionState(), {
-      type: "authLoaded",
-      auth: { status: "authenticated", user },
+  it("appends repository pages and deduplicates by stable id", () => {
+    const first = repositoryRequest("page-1");
+    let state = connectionReducer(repositoryState(), {
+      type: "repositoryLoading",
+      request: first,
     });
     state = connectionReducer(state, {
       type: "repositoryPageLoaded",
-      userId: user.id,
+      request: first,
       page: { items: [repository("one"), repository("two")], nextCursor: "next" },
-      append: false,
     });
+    const second = repositoryRequest("page-2", "next", true);
+    state = connectionReducer(state, { type: "repositoryLoading", request: second });
     state = connectionReducer(state, {
       type: "repositoryPageLoaded",
-      userId: user.id,
+      request: second,
       page: {
         items: [
           { ...repository("two"), fullName: "Renamed/two-knowledge" },
@@ -195,7 +288,6 @@ describe("connectionReducer", () => {
         ],
         nextCursor: null,
       },
-      append: true,
     });
 
     expect(state.repositories.map((item) => item.id)).toEqual(["one", "two", "three"]);
@@ -203,103 +295,281 @@ describe("connectionReducer", () => {
     expect(state.nextRepositoryCursor).toBeNull();
   });
 
-  it("ignores a repository response that arrives after authentication was invalidated", () => {
-    const signedOut = connectionReducer(readyToInitializeState(), {
-      type: "authLoaded",
-      auth: { status: "signed_out" },
-    });
-    const stale = connectionReducer(signedOut, {
-      type: "repositoryPageLoaded",
-      userId: user.id,
-      page: { items: [repository("stale")], nextCursor: null },
-      append: false,
-    });
-
-    expect(stale).toBe(signedOut);
-    expect(stale.repositories).toEqual([]);
-  });
-
-  it("does not navigate backwards when a repository page arrives after selection", () => {
-    let state = connectionReducer(createInitialConnectionState(), {
-      type: "authLoaded",
-      auth: { status: "authenticated", user },
+  it("rejects an older refresh response for the same account", () => {
+    const oldRequest = repositoryRequest("refresh-old");
+    const newRequest = repositoryRequest("refresh-new");
+    let state = connectionReducer(repositoryState(), {
+      type: "repositoryLoading",
+      request: oldRequest,
     });
     state = connectionReducer(state, {
-      type: "repositorySelected",
-      repository: repository("selected"),
+      type: "repositoryLoading",
+      request: newRequest,
     });
     const stale = connectionReducer(state, {
       type: "repositoryPageLoaded",
-      userId: user.id,
-      page: { items: [repository("late")], nextCursor: null },
-      append: false,
+      request: oldRequest,
+      page: { items: [repository("stale")], nextCursor: "stale-cursor" },
     });
 
     expect(stale).toBe(state);
-    expect(stale.step).toBe("local");
+    expect(stale.activeRepositoryRequest).toEqual(newRequest);
   });
 
-  it("clears every repository-dependent value when repository selection changes", () => {
-    const state = readyToInitializeState();
-    const next = connectionReducer(state, {
+  it("rejects a page whose cursor or append ownership differs", () => {
+    const seed = repositoryRequest("seed");
+    let state = connectionReducer(repositoryState(), {
+      type: "repositoryLoading",
+      request: seed,
+    });
+    state = connectionReducer(state, {
+      type: "repositoryPageLoaded",
+      request: seed,
+      page: { items: [repository("one")], nextCursor: "cursor-1" },
+    });
+    const active = repositoryRequest("append-1", "cursor-1", true);
+    state = connectionReducer(state, {
+      type: "repositoryLoading",
+      request: active,
+    });
+    const wrongOwner = { ...active, cursor: "cursor-older", append: false };
+
+    const stale =
+      connectionReducer(state, {
+        type: "repositoryPageLoaded",
+        request: wrongOwner,
+        page: { items: [repository("stale")], nextCursor: null },
+      });
+    expect(stale).toBe(state);
+    expect(stale.activeRepositoryRequest).toEqual(active);
+  });
+
+  it("rejects stale repository-load failure for an older request", () => {
+    const oldRequest = repositoryRequest("old-failure");
+    const newRequest = repositoryRequest("new-failure");
+    let state = connectionReducer(repositoryState(), {
+      type: "repositoryLoading",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, {
+      type: "repositoryLoading",
+      request: newRequest,
+    });
+    expect(
+      connectionReducer(state, {
+        type: "repositoryLoadFailed",
+        request: oldRequest,
+        error: unavailableError,
+      }),
+    ).toBe(state);
+  });
+
+  it("clears repository-dependent state when repository selection changes", () => {
+    const next = connectionReducer(previewState(), {
       type: "repositorySelected",
       repository: repository("new"),
     });
-
     expect(next).toMatchObject({
       step: "local",
       selectedRepository: { id: "new" },
       localRepository: null,
       workspaceInspection: null,
       initializationPreview: null,
-      connectedWorkspace: null,
     });
   });
 
-  it("clears workspace validation and preview when the local repository changes", () => {
-    const state = connectionReducer(readyToInitializeState(), {
-      type: "repositorySelected",
-      repository: repository("old"),
-    });
-    const next = connectionReducer(state, {
-      type: "localRepositoryChanged",
-      repositoryId: "old",
-      repository: localRepository("/work/new-clone"),
-    });
+  it("treats selecting the current repository as a true no-op", () => {
+    const state = previewState();
 
-    expect(next).toMatchObject({
-      step: "local",
-      localRepository: { root: "/work/new-clone" },
-      workspaceInspection: null,
-      initializationPreview: null,
-      connectedWorkspace: null,
-    });
-  });
-
-  it("accepts clone progress and cancellation only for the active request", () => {
-    let state = connectionReducer(
-      connectionReducer(createInitialConnectionState(), {
-        type: "authLoaded",
-        auth: { status: "authenticated", user },
+    expect(
+      connectionReducer(state, {
+        type: "repositorySelected",
+        repository: repository("old"),
       }),
-      { type: "repositorySelected", repository: repository("one") },
-    );
+    ).toBe(state);
+  });
+
+  it.each(["clone_starting", "cloning", "clone_cancelling"] as const)(
+    "does not change repositories while a clone is %s",
+    (status) => {
+      const request = cloneRequest("clone-selection-guard", "/work");
+      let state = connectionReducer(selectedRepositoryState(), {
+        type: "cloneStarting",
+        request,
+      });
+      if (status !== "clone_starting") {
+        state = connectionReducer(state, {
+          type: "cloneStarted",
+          request,
+          job: {
+            requestId: "backend-selection-guard",
+            targetPath: "/work/old-knowledge",
+          },
+        });
+      }
+      if (status === "clone_cancelling") {
+        state = connectionReducer(state, {
+          type: "cloneCancellationRequested",
+          requestId: "backend-selection-guard",
+        });
+      }
+
+      const blocked = connectionReducer(state, {
+        type: "repositorySelected",
+        repository: repository("new"),
+      });
+
+      expect(blocked).toBe(state);
+      expect(blocked.status).toBe(status);
+      expect(blocked.selectedRepository?.id).toBe("old");
+    },
+  );
+
+  it("keeps clone event ownership after a blocked repository change", () => {
+    const request = cloneRequest("clone-event-owner", "/work");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
     state = connectionReducer(state, {
       type: "cloneStarted",
-      repositoryId: "one",
-      job: { requestId: "clone-1", targetPath: "/work/one-knowledge" },
+      request,
+      job: { requestId: "backend-event-owner", targetPath: "/work/old-knowledge" },
+    });
+    state = connectionReducer(state, {
+      type: "repositorySelected",
+      repository: repository("new"),
     });
 
-    const ignored = connectionReducer(state, {
+    const progressed = connectionReducer(state, {
       type: "cloneEventReceived",
       event: {
         status: "progress",
-        requestId: "clone-other",
-        progress: { stage: "receiving_objects", completed: 5, total: 10 },
+        requestId: "backend-event-owner",
+        progress: { stage: "receiving_objects", completed: 2, total: 3 },
       },
     });
-    expect(ignored).toBe(state);
 
+    expect(progressed).toMatchObject({
+      status: "cloning",
+      selectedRepository: { id: "old" },
+      cloneJob: { requestId: "backend-event-owner" },
+      cloneProgress: { completed: 2, total: 3 },
+    });
+  });
+
+  it("does not change repositories while initialization mutates the workspace", () => {
+    const state = connectionReducer(previewState(), { type: "initializationStarted" });
+
+    const blocked = connectionReducer(state, {
+      type: "repositorySelected",
+      repository: repository("new"),
+    });
+
+    expect(blocked).toBe(state);
+    expect(blocked).toMatchObject({
+      step: "initialize",
+      status: "initializing",
+      selectedRepository: { id: "old" },
+      initializationPreview: { id: "preview-1" },
+    });
+  });
+
+  it("rejects an older folder inspection for the same repository", () => {
+    const oldRequest = localRequest("local-old", "/work/old");
+    const newRequest = localRequest("local-new", "/work/new");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "localInspectionStarted",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, {
+      type: "localInspectionStarted",
+      request: newRequest,
+    });
+    const stale = connectionReducer(state, {
+      type: "localRepositoryChanged",
+      request: oldRequest,
+      repository: localRepository("/work/old"),
+    });
+
+    expect(stale).toBe(state);
+    expect(stale.activeLocalRequest).toEqual(newRequest);
+  });
+
+  it("rejects stale local-operation failures after a newer request takes ownership", () => {
+    const oldLocal = localRequest("old-local-failure", "/work/old");
+    const newLocal = localRequest("new-local-failure", "/work/new");
+    let local = connectionReducer(selectedRepositoryState(), {
+      type: "localInspectionStarted",
+      request: oldLocal,
+    });
+    local = connectionReducer(local, {
+      type: "localInspectionStarted",
+      request: newLocal,
+    });
+    expect(
+      connectionReducer(local, {
+        type: "localInspectionFailed",
+        request: oldLocal,
+        error: unavailableError,
+      }),
+    ).toBe(local);
+
+    const oldClone = cloneRequest("old-clone-failure", "/work/old");
+    const newClone = cloneRequest("new-clone-failure", "/work/new");
+    let clone = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: oldClone,
+    });
+    clone = connectionReducer(clone, { type: "cloneStarting", request: newClone });
+    expect(
+      connectionReducer(clone, {
+        type: "cloneStartFailed",
+        request: oldClone,
+        error: unavailableError,
+      }),
+    ).toBe(clone);
+  });
+
+  it("rejects an older clone start result for the same repository", () => {
+    const oldRequest = cloneRequest("clone-start-old", "/work/old-parent");
+    const newRequest = cloneRequest("clone-start-new", "/work/new-parent");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, { type: "cloneStarting", request: newRequest });
+    const stale = connectionReducer(state, {
+      type: "cloneStarted",
+      request: oldRequest,
+      job: { requestId: "backend-old", targetPath: "/work/old-parent/old-knowledge" },
+    });
+
+    expect(stale).toBe(state);
+    expect(stale.activeCloneStartRequest).toEqual(newRequest);
+  });
+
+  it("correlates clone progress and cancellation by backend request id", () => {
+    const request = cloneRequest("clone-start", "/work");
+    let state = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request,
+    });
+    state = connectionReducer(state, {
+      type: "cloneStarted",
+      request,
+      job: { requestId: "clone-1", targetPath: "/work/old-knowledge" },
+    });
+    expect(
+      connectionReducer(state, {
+        type: "cloneEventReceived",
+        event: {
+          status: "progress",
+          requestId: "clone-other",
+          progress: { stage: "receiving_objects", completed: 5, total: 10 },
+        },
+      }),
+    ).toBe(state);
     state = connectionReducer(state, {
       type: "cloneEventReceived",
       event: {
@@ -308,13 +578,11 @@ describe("connectionReducer", () => {
         progress: { stage: "receiving_objects", completed: 5, total: 10 },
       },
     });
-    expect(state.cloneProgress).toEqual({
-      stage: "receiving_objects",
-      completed: 5,
-      total: 10,
+    expect(state.cloneProgress?.completed).toBe(5);
+    state = connectionReducer(state, {
+      type: "cloneCancellationRequested",
+      requestId: "clone-1",
     });
-
-    state = connectionReducer(state, { type: "cloneCancellationRequested", requestId: "clone-1" });
     expect(state.status).toBe("clone_cancelling");
     state = connectionReducer(state, {
       type: "cloneEventReceived",
@@ -323,45 +591,74 @@ describe("connectionReducer", () => {
     expect(state).toMatchObject({ status: "idle", cloneJob: null, cloneProgress: null });
   });
 
-  it("moves a completed clone into local validation without trusting another request", () => {
-    let state = connectionReducer(
-      connectionReducer(createInitialConnectionState(), {
-        type: "authLoaded",
-        auth: { status: "authenticated", user },
-      }),
-      { type: "repositorySelected", repository: repository("one") },
-    );
-    state = connectionReducer(state, {
-      type: "cloneStarted",
-      repositoryId: "one",
-      job: { requestId: "clone-1", targetPath: "/work/one-knowledge" },
+  it("rejects an older workspace inspection for the same root", () => {
+    const oldRequest = workspaceRequest("workspace-old", "/work/old-knowledge");
+    const newRequest = workspaceRequest("workspace-new", "/work/old-knowledge");
+    let state = connectionReducer(localState(), {
+      type: "workspaceInspectionStarted",
+      request: oldRequest,
     });
     state = connectionReducer(state, {
-      type: "cloneEventReceived",
-      event: {
-        status: "completed",
-        requestId: "clone-1",
-        repository: localRepository("/work/one-knowledge"),
-      },
+      type: "workspaceInspectionStarted",
+      request: newRequest,
+    });
+    const stale = connectionReducer(state, {
+      type: "workspaceInspected",
+      request: oldRequest,
+      inspection: { status: "initialization_required" },
     });
 
-    expect(state).toMatchObject({
-      step: "local",
-      status: "idle",
-      cloneJob: null,
-      localRepository: { root: "/work/one-knowledge" },
-      workspaceInspection: null,
-    });
+    expect(stale).toBe(state);
+    expect(stale.activeWorkspaceInspectionRequest).toEqual(newRequest);
   });
 
-  it("retains invalid YAML and newer schema diagnostics without creating a preview", () => {
-    let state = connectionReducer(readyToInitializeState(), {
-      type: "repositorySelected",
-      repository: repository("old"),
+  it("rejects stale workspace and preview failures", () => {
+    const oldWorkspace = workspaceRequest("old-workspace-failure", "/work/old-knowledge");
+    const newWorkspace = workspaceRequest("new-workspace-failure", "/work/old-knowledge");
+    let workspace = connectionReducer(localState(), {
+      type: "workspaceInspectionStarted",
+      request: oldWorkspace,
+    });
+    workspace = connectionReducer(workspace, {
+      type: "workspaceInspectionStarted",
+      request: newWorkspace,
+    });
+    expect(
+      connectionReducer(workspace, {
+        type: "workspaceInspectionFailed",
+        request: oldWorkspace,
+        error: unavailableError,
+      }),
+    ).toBe(workspace);
+
+    const oldPreview = previewRequest("old-preview-failure", "/work/old-knowledge");
+    const newPreview = previewRequest("new-preview-failure", "/work/old-knowledge");
+    let pendingPreview = connectionReducer(initializationRequiredState(), {
+      type: "initializationPreviewStarted",
+      request: oldPreview,
+    });
+    pendingPreview = connectionReducer(pendingPreview, {
+      type: "initializationPreviewStarted",
+      request: newPreview,
+    });
+    expect(
+      connectionReducer(pendingPreview, {
+        type: "initializationPreviewFailed",
+        request: oldPreview,
+        error: unavailableError,
+      }),
+    ).toBe(pendingPreview);
+  });
+
+  it("retains invalid YAML and newer schema diagnostics", () => {
+    const invalidRequest = workspaceRequest("invalid", "/work/old-knowledge");
+    let state = connectionReducer(localState(), {
+      type: "workspaceInspectionStarted",
+      request: invalidRequest,
     });
     state = connectionReducer(state, {
       type: "workspaceInspected",
-      repositoryRoot: "/work/old-knowledge",
+      request: invalidRequest,
       inspection: {
         status: "invalid",
         diagnostics: [
@@ -376,78 +673,83 @@ describe("connectionReducer", () => {
     expect(state).toMatchObject({
       step: "local",
       status: "validation_failed",
-      initializationPreview: null,
       workspaceInspection: { status: "invalid" },
+      initializationPreview: null,
     });
 
+    const newerRequest = workspaceRequest("newer", "/work/old-knowledge");
+    state = connectionReducer(state, {
+      type: "workspaceInspectionStarted",
+      request: newerRequest,
+    });
     state = connectionReducer(state, {
       type: "workspaceInspected",
-      repositoryRoot: "/work/old-knowledge",
+      request: newerRequest,
       inspection: { status: "unsupported_version", foundVersion: 2 },
     });
     expect(state).toMatchObject({
-      step: "local",
       status: "validation_failed",
-      initializationPreview: null,
       workspaceInspection: { status: "unsupported_version", foundVersion: 2 },
     });
   });
 
-  it("does not mark initialization complete until a backend connection succeeds", () => {
-    const pending = connectionReducer(readyToInitializeState(), {
-      type: "initializationStarted",
+  it("rejects an older initialization preview for the same root and name", () => {
+    const oldRequest = previewRequest("preview-old", "/work/old-knowledge");
+    const newRequest = previewRequest("preview-new", "/work/old-knowledge");
+    let state = connectionReducer(initializationRequiredState(), {
+      type: "initializationPreviewStarted",
+      request: oldRequest,
+    });
+    state = connectionReducer(state, {
+      type: "initializationPreviewStarted",
+      request: newRequest,
+    });
+    const stale = connectionReducer(state, {
+      type: "initializationPreviewLoaded",
+      request: oldRequest,
+      preview: preview("stale"),
     });
 
+    expect(stale).toBe(state);
+    expect(stale.activeInitializationPreviewRequest).toEqual(newRequest);
+  });
+
+  it("does not mark initialization complete until backend connection succeeds", () => {
+    const pending = connectionReducer(previewState(), { type: "initializationStarted" });
     expect(pending).toMatchObject({
       step: "initialize",
       status: "initializing",
       connectedWorkspace: null,
+      initializationPreview: { id: "preview-1" },
     });
   });
 
-  it("ignores a preview response for a local repository that is no longer selected", () => {
-    let state = readyToInitializeState();
-    state = connectionReducer(state, {
-      type: "repositorySelected",
-      repository: repository("new"),
-    });
-
-    const stale = connectionReducer(state, {
-      type: "initializationPreviewLoaded",
-      repositoryRoot: "/work/old-knowledge",
-      preview: preview("stale-preview"),
-    });
-    expect(stale).toBe(state);
-  });
-
-  it("invalidates a stale preview and returns to local validation", () => {
-    const stale: AppError = {
+  it("invalidates a stale initialization preview", () => {
+    const error: AppError = {
       code: "workspace_changed_since_preview",
       message: "초기화 미리보기가 더 이상 유효하지 않습니다.",
       recovery: "retry",
       details: {},
     };
     const next = connectionReducer(
-      connectionReducer(readyToInitializeState(), { type: "initializationStarted" }),
-      { type: "initializationFailed", error: stale },
+      connectionReducer(previewState(), { type: "initializationStarted" }),
+      { type: "initializationFailed", error },
     );
-
     expect(next).toMatchObject({
       step: "local",
-      status: "idle",
+      status: "error",
       initializationPreview: null,
       connectedWorkspace: null,
-      error: stale,
+      error,
     });
   });
 
-  it("marks connected only with the workspace returned by the backend", () => {
-    const workspace = connected("/work/new-knowledge");
+  it("marks connected only with a backend workspace while initialization is pending", () => {
+    const workspace = connected("/work/old-knowledge");
     const next = connectionReducer(
-      connectionReducer(readyToInitializeState(), { type: "initializationStarted" }),
+      connectionReducer(previewState(), { type: "initializationStarted" }),
       { type: "workspaceConnected", workspace },
     );
-
     expect(next).toMatchObject({
       step: "initialize",
       status: "connected",
@@ -455,34 +757,70 @@ describe("connectionReducer", () => {
     });
   });
 
-  it("restores the previous connected workspace when replacement is cancelled", () => {
+  it("cancels replacement into a clean connected state", () => {
     const previous = connected();
     let state = connectionReducer(createInitialConnectionState(), {
       type: "currentWorkspaceLoaded",
       workspace: previous,
     });
     state = connectionReducer(state, { type: "replacementStarted" });
-    expect(state).toMatchObject({ step: "auth", mode: "replacement" });
+    state = connectionReducer(state, {
+      type: "authLoaded",
+      auth: { status: "authenticated", user },
+    });
+    const request = repositoryRequest("replacement-repos");
+    state = connectionReducer(state, { type: "repositoryLoading", request });
+    state = connectionReducer(state, {
+      type: "repositoryPageLoaded",
+      request,
+      page: { items: [repository("new")], nextCursor: "replacement-next" },
+    });
+    state = connectionReducer(state, {
+      type: "repositorySelected",
+      repository: repository("new"),
+    });
+    const pathRequest: LocalInspectionRequest = {
+      id: "replacement-path",
+      repositoryId: "new",
+      path: "/work/new-knowledge",
+    };
+    state = connectionReducer(state, {
+      type: "localInspectionStarted",
+      request: pathRequest,
+    });
+    state = connectionReducer(state, {
+      type: "localRepositoryChanged",
+      request: pathRequest,
+      repository: localRepository("/work/new-knowledge"),
+    });
 
-    state = connectionReducer(state, { type: "replacementCancelled" });
-    expect(state).toMatchObject({
+    const restored = connectionReducer(state, { type: "replacementCancelled" });
+    expect(restored).toEqual({
+      ...createInitialConnectionState(),
       step: "initialize",
       status: "connected",
-      mode: "initial",
       connectedWorkspace: previous,
-      replacementWorkspace: null,
     });
+  });
 
-    const staleCompletion = connectionReducer(state, {
-      type: "workspaceConnected",
-      workspace: connected("/work/stale-replacement"),
+  it("preserves recovery-required startup path for Task 10 diagnostics", () => {
+    const next = connectionReducer(createInitialConnectionState(), {
+      type: "currentWorkspaceLoaded",
+      workspace: { path: "/missing/mockly-knowledge", status: "recovery_required" },
     });
-    expect(staleCompletion).toBe(state);
+    expect(next).toMatchObject({
+      step: "auth",
+      status: "idle",
+      recoveryWorkspace: {
+        path: "/missing/mockly-knowledge",
+        status: "recovery_required",
+      },
+    });
   });
 });
 
 describe("workspace connection gateway adapters", () => {
-  it("selects the desktop adapter only when the official runtime detector succeeds", () => {
+  it("selects the desktop adapter only when runtime detection succeeds", () => {
     expect(createWorkspaceConnectionGateway(() => true)).toBeInstanceOf(
       TauriWorkspaceConnectionGateway,
     );
@@ -491,12 +829,9 @@ describe("workspace connection gateway adapters", () => {
     );
   });
 
-  it("maps every desktop operation to the exact Task 8 command contract", async () => {
+  it("maps every desktop operation to the exact Task 8 command", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
-    const invoke = async <T,>(
-      command: string,
-      args?: Record<string, unknown>,
-    ): Promise<T> => {
+    const invoke = async <T,>(command: string, args?: Record<string, unknown>) => {
       calls.push({ command, args });
       const responses: Record<string, unknown> = {
         get_current_workspace: null,
@@ -554,112 +889,59 @@ describe("workspace connection gateway adapters", () => {
     });
     await gateway.initializeWorkspace("preview-1");
 
-    expect(calls).toEqual([
-      { command: "get_current_workspace", args: undefined },
-      { command: "get_auth_state", args: undefined },
-      { command: "begin_github_auth", args: undefined },
-      { command: "cancel_github_auth", args: { requestId: "auth-1" } },
-      { command: "logout_github", args: undefined },
-      { command: "list_github_repositories", args: { cursor: "cursor-1" } },
-      {
-        command: "inspect_existing_clone",
-        args: { path: "/work/repo", repositoryId: "repo-1" },
-      },
-      {
-        command: "clone_repository",
-        args: {
-          request: {
-            repositoryId: "repo-1",
-            fullName: "Mockly-Company/repo-1-knowledge",
-            httpsUrl: "https://github.com/Mockly-Company/repo-1-knowledge.git",
-            parentDirectory: "/work",
-          },
-        },
-      },
-      { command: "cancel_repository_clone", args: { requestId: "clone-1" } },
-      { command: "inspect_workspace", args: { repositoryPath: "/work/repo" } },
-      { command: "connect_workspace", args: { repositoryPath: "/work/repo" } },
-      {
-        command: "preview_workspace_initialization",
-        args: {
-          request: {
-            repositoryPath: "/work/repo",
-            workspaceName: "Mockly",
-            repositoryId: "repo-1",
-            repositoryFullName: "Mockly-Company/repo-1-knowledge",
-          },
-        },
-      },
-      { command: "initialize_workspace", args: { previewId: "preview-1" } },
+    expect(calls.map(({ command }) => command)).toEqual([
+      "get_current_workspace",
+      "get_auth_state",
+      "begin_github_auth",
+      "cancel_github_auth",
+      "logout_github",
+      "list_github_repositories",
+      "inspect_existing_clone",
+      "clone_repository",
+      "cancel_repository_clone",
+      "inspect_workspace",
+      "connect_workspace",
+      "preview_workspace_initialization",
+      "initialize_workspace",
     ]);
+    expect(calls[8]?.args).toEqual({ requestId: "clone-1" });
   });
 
-  it("uses exact directory options and the opener boundary", async () => {
+  it("uses exact dialog options and caller-owned event teardown", async () => {
     const choose = vi.fn(async () => "/selected");
-    const launch = vi.fn(async () => undefined);
-    const gateway = new TauriWorkspaceConnectionGateway(
-      async <T,>() => undefined as T,
-      async () => () => undefined,
-      choose,
-      launch,
-    );
-
-    await expect(gateway.pickDirectory()).resolves.toBe("/selected");
-    await gateway.openExternal("https://github.com/login/device");
-
-    expect(choose).toHaveBeenCalledWith({ directory: true, multiple: false });
-    expect(launch).toHaveBeenCalledWith("https://github.com/login/device");
-  });
-
-  it("subscribes only to the two public events and returns their teardown functions", async () => {
     const subscriptions: string[] = [];
     const teardowns: string[] = [];
     let authHandler: ((event: Event<AuthStatusEvent>) => void) | undefined;
-    let cloneHandler: ((event: Event<CloneProgressEvent>) => void) | undefined;
-    const listen = async <T,>(
-      event: string,
-      listener: (event: Event<T>) => void,
-    ) => {
+    const listen = async <T,>(event: string, listener: (event: Event<T>) => void) => {
       subscriptions.push(event);
-      if (event === "github-auth-status") {
-        authHandler = listener as (event: Event<AuthStatusEvent>) => void;
-      } else {
-        cloneHandler = listener as (event: Event<CloneProgressEvent>) => void;
-      }
+      authHandler = listener as (event: Event<AuthStatusEvent>) => void;
       return () => teardowns.push(event);
     };
     const gateway = new TauriWorkspaceConnectionGateway(
       async <T,>() => undefined as T,
       listen,
-      async () => null,
+      choose,
       async () => undefined,
     );
-    const authListener = vi.fn();
-    const cloneListener = vi.fn();
+    const listener = vi.fn();
+    const unlisten = await gateway.onAuthStatus(listener);
+    const event: AuthStatusEvent = { status: "waiting_for_user", requestId: "auth-1" };
+    authHandler?.({ event: "github-auth-status", id: 1, payload: event });
+    unlisten();
 
-    const unlistenAuth = await gateway.onAuthStatus(authListener);
-    const unlistenClone = await gateway.onCloneProgress(cloneListener);
-    const authEvent: AuthStatusEvent = { status: "waiting_for_user", requestId: "auth-1" };
-    const cloneEvent: CloneProgressEvent = { status: "cancelled", requestId: "clone-1" };
-    authHandler?.({ event: "github-auth-status", id: 1, payload: authEvent });
-    cloneHandler?.({ event: "repository-clone-progress", id: 2, payload: cloneEvent });
-    unlistenAuth();
-    unlistenClone();
-
-    expect(subscriptions).toEqual(["github-auth-status", "repository-clone-progress"]);
-    expect(authListener).toHaveBeenCalledWith(authEvent);
-    expect(cloneListener).toHaveBeenCalledWith(cloneEvent);
-    expect(teardowns).toEqual(["github-auth-status", "repository-clone-progress"]);
+    await expect(gateway.pickDirectory()).resolves.toBe("/selected");
+    expect(choose).toHaveBeenCalledWith({ directory: true, multiple: false });
+    expect(subscriptions).toEqual(["github-auth-status"]);
+    expect(listener).toHaveBeenCalledWith(event);
+    expect(teardowns).toEqual(["github-auth-status"]);
   });
 
-  it("fails closed in a browser without fabricating auth, repository, or connection success", async () => {
+  it("fails closed in a browser", async () => {
     const gateway = new UnavailableWorkspaceConnectionGateway();
     const expected = desktopOnlyError();
-
     await expect(gateway.getCurrentWorkspace()).rejects.toEqual(expected);
     await expect(gateway.getAuthState()).rejects.toEqual(expected);
     await expect(gateway.listRepositories()).rejects.toEqual(expected);
     await expect(gateway.connectWorkspace("/work/repo")).rejects.toEqual(expected);
-    await expect(gateway.onAuthStatus(() => undefined)).rejects.toEqual(expected);
   });
 });
