@@ -78,8 +78,8 @@ describe("WorkspaceConnectionProvider", () => {
 
     gateway.approveAuthentication();
     expect(await screen.findByText("repository:idle")).toBeInTheDocument();
-    gateway.resolveGithubAuth();
-    await waitFor(() => expect(screen.getByText("repository:idle")).toBeInTheDocument());
+    await gateway.resolveGithubAuth();
+    expect(screen.getByText("repository:idle")).toBeInTheDocument();
     expect(gateway.calls.filter((call) => call.method === "listRepositories")).toHaveLength(1);
   });
 
@@ -101,10 +101,12 @@ describe("WorkspaceConnectionProvider", () => {
   it("routes only an owned early clone completion into downstream inspection", async () => {
     const gateway = FakeWorkspaceConnectionGateway.disconnected();
     gateway.deferClone = true;
+    gateway.workspaceInspection = { status: "initialization_required" };
     const user = userEvent.setup();
     render(
       <WorkspaceConnectionProvider gateway={gateway}>
         <WorkspaceConnectionPage />
+        <Probe />
       </WorkspaceConnectionProvider>,
     );
 
@@ -134,10 +136,10 @@ describe("WorkspaceConnectionProvider", () => {
     await waitFor(() =>
       expect(gateway.calls.filter((call) => call.method === "inspectWorkspace")).toHaveLength(1),
     );
-    gateway.resolveClone();
-    await waitFor(() =>
-      expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1),
-    );
+    await gateway.resolveClone();
+    expect(screen.getByText("local:idle")).toBeInTheDocument();
+    expect(gateway.calls.filter((call) => call.method === "inspectWorkspace")).toHaveLength(1);
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
   });
 
   it("loads an empty first repository page only once after accepted authentication", async () => {
@@ -156,6 +158,33 @@ describe("WorkspaceConnectionProvider", () => {
     await waitFor(() =>
       expect(gateway.calls.filter((call) => call.method === "listRepositories")).toHaveLength(1),
     );
+  });
+
+  it("does not connect after an initialization result names a different root", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    gateway.workspaceInspection = { status: "initialization_required" };
+    gateway.initializationResult = { ...gateway.initializationResult, root: "/other/root" };
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <WorkspaceConnectionPage />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "GitHub 로그인" }));
+    gateway.approveAuthentication();
+    await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
+    await user.click(screen.getByRole("button", { name: "워크스페이스 초기화" }));
+
+    await waitFor(() =>
+      expect(gateway.calls.filter((call) => call.method === "initializeWorkspace")).toHaveLength(1),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gateway.calls.filter((call) => call.method === "connectWorkspace")).toHaveLength(0);
   });
 
   it("retries a failed clone with a fresh operation id and reducer-held semantic input", async () => {

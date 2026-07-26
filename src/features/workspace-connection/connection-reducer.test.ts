@@ -1232,6 +1232,27 @@ describe("connectionReducer", () => {
       localRepository: { root: "/work/old-knowledge" },
       cloneJob: null,
     });
+    expect(
+      connectionReducer(state, {
+        type: "cloneStarted",
+        request,
+        job: { requestId: request.id, targetPath: request.targetPath },
+      }),
+    ).toBe(state);
+  });
+
+  it("rejects a duplicate active clone start without replacing its owned request", () => {
+    const original = cloneRequest("clone-original", "/work");
+    const duplicate = cloneRequest("clone-duplicate", "/other");
+    const active = connectionReducer(selectedRepositoryState(), {
+      type: "cloneStarting",
+      request: original,
+    });
+
+    expect(
+      connectionReducer(active, { type: "cloneStarting", request: duplicate }),
+    ).toBe(active);
+    expect(active).toMatchObject({ activeCloneStartRequest: original });
   });
 
   it("rejects same-id clone results and completions with a different owned target", () => {

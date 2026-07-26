@@ -273,15 +273,17 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     });
   }
 
-  resolveGithubAuth(): void {
+  async resolveGithubAuth(): Promise<void> {
     if (!this.activeAuthorization || !this.pendingAuthorization) {
       throw new Error("A deferred GitHub authorization must be pending");
     }
     this.pendingAuthorization.resolve(this.activeAuthorization);
     this.pendingAuthorization = null;
+    await Promise.resolve();
+    await Promise.resolve();
   }
 
-  resolveClone(repository = this.repositorySnapshot): void {
+  async resolveClone(repository = this.repositorySnapshot): Promise<void> {
     if (!this.activeCloneRequestId || !this.pendingClone) {
       throw new Error("A deferred clone must be pending");
     }
@@ -290,6 +292,8 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
       targetPath: repository.root,
     });
     this.pendingClone = null;
+    await Promise.resolve();
+    await Promise.resolve();
   }
 
   expireAuthentication(): void {
