@@ -1,0 +1,248 @@
+.doc-shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: 264px minmax(0, 1fr);
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  height: 100vh;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--canvas);
+  padding: 24px 18px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-bottom: 28px;
+  color: var(--text-strong);
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.brand-mark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--primary);
+  color: var(--on-logo);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.nav-label {
+  margin: 0 8px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.sidebar nav {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar nav a {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 10px;
+  border-radius: var(--radius-md);
+  padding: 7px 9px;
+  color: var(--text-default);
+  font-size: 13px;
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.sidebar nav a:hover,
+.sidebar nav a:focus-visible {
+  background: var(--primary-soft);
+  color: var(--primary-text);
+}
+
+.nav-number {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  flex: 0 0 21px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  padding: 16px 8px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.sidebar-footer a {
+  font-weight: 650;
+}
+
+.main {
+  min-width: 0;
+  background: var(--surface);
+  padding: 56px clamp(28px, 6vw, 88px) 96px;
+}
+
+.content {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+}
+
+.hero {
+  margin-bottom: 40px;
+}
+
+.hero-topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.hero-copy {
+  max-width: 760px;
+  margin-bottom: 0;
+  color: var(--text-muted);
+  font-size: 17px;
+  line-height: 1.7;
+}
+
+.section {
+  scroll-margin-top: 24px;
+  margin-bottom: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  padding: clamp(24px, 4vw, 38px);
+}
+
+.section-header {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 14px;
+  margin-bottom: 26px;
+}
+
+.section-number {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--primary-soft);
+  color: var(--primary-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.section-header p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.subsection + .subsection {
+  margin-top: 30px;
+  border-top: 1px solid var(--border);
+  padding-top: 28px;
+}
+
+.two-column {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.three-column {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.footer {
+  padding-top: 24px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .doc-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: relative;
+    z-index: 2;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 16px 20px;
+  }
+
+  .brand {
+    margin-bottom: 14px;
+  }
+
+  .nav-label,
+  .sidebar-footer {
+    display: none;
+  }
+
+  .sidebar nav {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .sidebar nav a {
+    flex: 0 0 auto;
+  }
+
+  .main {
+    padding-top: 38px;
+  }
+}
+
+@media (max-width: 680px) {
+  .main {
+    padding: 30px 16px 64px;
+  }
+
+  .section {
+    padding: 22px 18px;
+  }
+
+  .two-column,
+  .three-column {
+    grid-template-columns: 1fr;
+  }
+
+  .section-header {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+
+  .section-number {
+    width: 32px;
+    height: 32px;
+  }
+}

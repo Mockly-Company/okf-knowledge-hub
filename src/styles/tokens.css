@@ -2,9 +2,11 @@
   color-scheme: light;
   --color-primary: #009e8e;
   --color-primary-hover: #00a394;
+  --color-primary-action: #007c71;
+  --color-primary-action-hover: #00665f;
   --color-primary-text: #007c71;
   --color-primary-soft: #e5f5f3;
-  --color-on-primary: #082b28;
+  --color-on-primary: #ffffff;
   --color-on-logo: #ffffff;
   --color-text-strong: #16181d;
   --color-text-default: #343941;

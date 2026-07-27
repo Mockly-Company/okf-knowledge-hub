@@ -1,0 +1,28 @@
+schema_version: 1
+workspace:
+  id: "89bf04ef-df57-4a76-b10a-b33107d8a6c2"
+  name: "Mockly"
+  workspace_extension: workspace-value
+documents:
+  documents_extension: documents-value
+  roots:
+    - path: "docs"
+      root_extension: root-value
+repositories:
+  - key: "backend"
+    label: "Mockly API 서버"
+    repository_extension: repository-value
+    github:
+      id: "R_kgDOExampleBackend"
+      full_name: "Mockly-Company/mockly-backend"
+      repository_github_extension: repository-github-value
+github:
+  github_extension: github-value
+  project:
+    id: "PVT_kwDOExample"
+    owner: "Mockly-Company"
+    number: 3
+    project_extension: project-value
+extensions:
+  mockly:
+    owner: platform-team

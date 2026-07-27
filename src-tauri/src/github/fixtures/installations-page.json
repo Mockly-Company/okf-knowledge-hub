@@ -1,0 +1,53 @@
+{
+  "total_count": 2,
+  "installations": [
+    {
+      "id": 42,
+      "account": {
+        "login": "Mockly-Company",
+        "id": 1001,
+        "node_id": "O_kgDOExample",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1001?v=4",
+        "html_url": "https://github.com/Mockly-Company",
+        "type": "Organization"
+      },
+      "repository_selection": "selected",
+      "access_tokens_url": "https://api.github.com/app/installations/42/access_tokens",
+      "repositories_url": "https://api.github.com/installation/repositories",
+      "html_url": "https://github.com/settings/installations/42",
+      "app_id": 500,
+      "target_id": 1001,
+      "target_type": "Organization",
+      "permissions": {
+        "contents": "write",
+        "metadata": "read",
+        "pull_requests": "write"
+      },
+      "events": []
+    },
+    {
+      "id": 77,
+      "account": {
+        "login": "hyeeun",
+        "id": 1002,
+        "node_id": "U_kgDOExample",
+        "avatar_url": "https://avatars.githubusercontent.com/u/1002?v=4",
+        "html_url": "https://github.com/hyeeun",
+        "type": "User"
+      },
+      "repository_selection": "all",
+      "access_tokens_url": "https://api.github.com/app/installations/77/access_tokens",
+      "repositories_url": "https://api.github.com/installation/repositories",
+      "html_url": "https://github.com/settings/installations/77",
+      "app_id": 500,
+      "target_id": 1002,
+      "target_type": "User",
+      "permissions": {
+        "contents": "write",
+        "metadata": "read",
+        "pull_requests": "write"
+      },
+      "events": []
+    }
+  ]
+}

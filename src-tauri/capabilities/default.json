@@ -2,6 +2,33 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default desktop capability for OkHub",
-  "windows": ["main"],
-  "permissions": ["core:default", "store:default"]
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/login/device"
+        },
+        {
+          "url": "https://github.com/settings/installations"
+        },
+        {
+          "url": "https://github.com/Mockly-Company/okf-knowledge-hub/releases"
+        }
+      ]
+    },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "**/.okf/workspace.yml"
+        }
+      ]
+    }
+  ]
 }

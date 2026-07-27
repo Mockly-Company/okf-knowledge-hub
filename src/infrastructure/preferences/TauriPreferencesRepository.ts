@@ -1,25 +1,25 @@
-import { load, type Store } from "@tauri-apps/plugin-store";
+import { invoke } from "@tauri-apps/api/core";
 import {
   parseDisplayDensity,
   type DisplayDensity,
 } from "@/features/preferences/display-density";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
 
-const DISPLAY_DENSITY_KEY = "display-density";
+type InvokeCommand = (
+  command: string,
+  args?: Record<string, unknown>,
+) => Promise<unknown>;
+
+const invokeCommand: InvokeCommand = (command, args) => invoke(command, args);
 
 export class TauriPreferencesRepository implements PreferencesRepository {
-  private readonly store: Promise<Store> = load("settings.json", {
-    autoSave: false,
-  });
+  constructor(private readonly invokeDesktop: InvokeCommand = invokeCommand) {}
 
   async getDisplayDensity(): Promise<DisplayDensity> {
-    const store = await this.store;
-    return parseDisplayDensity(await store.get(DISPLAY_DENSITY_KEY));
+    return parseDisplayDensity(await this.invokeDesktop("get_display_density"));
   }
 
   async setDisplayDensity(value: DisplayDensity): Promise<void> {
-    const store = await this.store;
-    await store.set(DISPLAY_DENSITY_KEY, value);
-    await store.save();
+    await this.invokeDesktop("set_display_density", { density: value });
   }
 }
