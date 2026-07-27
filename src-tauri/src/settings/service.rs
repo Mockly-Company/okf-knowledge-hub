@@ -412,7 +412,7 @@ mod tests {
         let service = LocalSettingsService::new(store.clone());
         let context = PendingInitializationContext {
             preview_id: Uuid::new_v4(),
-            root: PathBuf::from("/tmp/mockly-knowledge"),
+            root: std::env::temp_dir().join("mockly-knowledge"),
             repository_id: "R_kgDOMockly".into(),
             repository_full_name: "Mockly-Company/mockly-knowledge".into(),
             author_id: 42,
@@ -440,7 +440,7 @@ mod tests {
         let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
         let base = PendingInitializationContext {
             preview_id: Uuid::new_v4(),
-            root: PathBuf::from("/tmp/mockly-knowledge"),
+            root: std::env::temp_dir().join("mockly-knowledge"),
             repository_id: "R_kgDOMockly".into(),
             repository_full_name: "Mockly-Company/mockly-knowledge".into(),
             author_id: 42,
@@ -465,7 +465,7 @@ mod tests {
         let mut mismatched_completion = base;
         mismatched_completion.completed_result =
             Some(crate::repository::model::InitializationResult {
-                root: PathBuf::from("/tmp/different-repository"),
+                root: std::env::temp_dir().join("different-repository"),
                 branch: "okf/init-workspace".into(),
                 commit_oid: "abc123".into(),
                 commit_message: "chore: initialize OkHub workspace".into(),

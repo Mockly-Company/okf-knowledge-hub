@@ -1193,7 +1193,7 @@ mod tests {
     fn pending_context(author_id: u64) -> PendingInitializationContext {
         PendingInitializationContext {
             preview_id: Uuid::new_v4(),
-            root: PathBuf::from("/tmp/mockly-knowledge"),
+            root: std::env::temp_dir().join("mockly-knowledge"),
             repository_id: "R_kgDOMockly".into(),
             repository_full_name: "Mockly-Company/mockly-knowledge".into(),
             author_id,
@@ -1215,7 +1215,7 @@ mod tests {
 
     fn cloned_snapshot() -> RepositorySnapshot {
         RepositorySnapshot {
-            root: PathBuf::from("/tmp/mockly-knowledge"),
+            root: std::env::temp_dir().join("mockly-knowledge"),
             head_oid: Some("abc123".into()),
             default_branch: Some("main".into()),
             is_dirty: false,
@@ -1255,7 +1255,7 @@ mod tests {
 
     fn initialization_result() -> InitializationResult {
         InitializationResult {
-            root: PathBuf::from("/tmp/mockly-knowledge"),
+            root: std::env::temp_dir().join("mockly-knowledge"),
             branch: "okf/init-workspace".into(),
             commit_oid: "abc123".into(),
             commit_message: "chore: initialize OkHub workspace".into(),

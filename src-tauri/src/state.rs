@@ -529,7 +529,6 @@ impl crate::settings::service::LocalSettingsStore for CommandTestSettings {
 mod tests {
     use async_trait::async_trait;
     use secrecy::SecretString;
-    use std::path::PathBuf;
     use std::sync::Barrier;
     use std::thread;
 
@@ -696,7 +695,7 @@ mod tests {
         let registry = InitializationContextRegistry::default();
         let context = PendingInitializationContext {
             preview_id: Uuid::new_v4(),
-            root: PathBuf::from("/tmp/mockly-knowledge"),
+            root: std::env::temp_dir().join("mockly-knowledge"),
             repository_id: "R_kgDOMockly".into(),
             repository_full_name: "Mockly-Company/mockly-knowledge".into(),
             author_id: 42,

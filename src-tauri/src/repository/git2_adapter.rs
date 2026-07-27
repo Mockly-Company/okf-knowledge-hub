@@ -26,7 +26,12 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             .canonicalize()
             .map_err(|_| repository_path_error(path))?;
         let repository = Repository::open(&root).map_err(|_| repository_path_error(&root))?;
-        if repository.is_bare() || repository.workdir() != Some(root.as_path()) {
+        let workdir = repository
+            .workdir()
+            .ok_or_else(|| repository_path_error(&root))?
+            .canonicalize()
+            .map_err(|_| repository_path_error(&root))?;
+        if repository.is_bare() || workdir != root {
             return Err(repository_path_error(&root));
         }
 

@@ -1202,9 +1202,10 @@ fn scan_reference_file(
     for (reference_path, repository_key) in references {
         if !known_keys.contains(repository_key.as_str()) {
             let relative_path = path.strip_prefix(repository_root).unwrap_or(path);
+            let portable_path = relative_path.to_string_lossy().replace('\\', "/");
             diagnostics.push(WorkspaceDiagnostic {
                 code: WorkspaceDiagnosticCode::UnknownRepositoryKey,
-                path: format!("{}:{reference_path}", relative_path.display()),
+                path: format!("{portable_path}:{reference_path}"),
                 message: format!("알 수 없는 저장소 key를 참조합니다: {repository_key}"),
                 value: Some(repository_key),
             });

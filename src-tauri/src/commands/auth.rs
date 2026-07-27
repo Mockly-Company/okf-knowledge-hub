@@ -225,7 +225,6 @@ fn auth_job_registration_error(error: JobRegistrationError, request_id: Uuid) ->
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
@@ -487,7 +486,7 @@ mod tests {
     fn pending_context() -> PendingInitializationContext {
         PendingInitializationContext {
             preview_id: Uuid::new_v4(),
-            root: PathBuf::from("/tmp/mockly-knowledge"),
+            root: std::env::temp_dir().join("mockly-knowledge"),
             repository_id: "R_kgDOMockly".into(),
             repository_full_name: "Mockly-Company/mockly-knowledge".into(),
             author_id: 7,
