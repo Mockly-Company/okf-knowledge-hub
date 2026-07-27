@@ -23,7 +23,16 @@ jobs:
           cache: pnpm
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: pnpm test:run
       - run: pnpm build
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: pnpm tauri build --debug --no-bundle
+
+  rust-minimum:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: cargo check --manifest-path src-tauri/Cargo.toml

@@ -33,6 +33,8 @@
 | [화면 구성](docs/product/screens.md) | 화면 후보와 화면별 책임 |
 | [정보 모델](docs/product/information-model.md) | 제품 구조, 문서, 리뷰와 이력의 관계 |
 | [기술 구조](docs/architecture/system-design.md) | 저장소, GitHub, 로컬 앱, 인증, MCP, API 문서 전략 |
+| [승인된 GitHub 워크스페이스 연결 설계](docs/superpowers/specs/2026-07-25-github-workspace-connection-design.md) | GitHub App 인증, OKF 저장소 연결과 초기화의 승인된 경계 |
+| [GitHub App 개발 설정](docs/development/github-app.md) | 공개 GitHub App 등록, 로컬 Device Flow와 보안 저장소 확인 방법 |
 | [미결정 사항](docs/product/open-questions.md) | 트리 깊이, 문서 타입 등 추가 논의가 필요한 항목 |
 
 ## 현재 합의된 원칙
@@ -46,6 +48,20 @@
 - Hub는 코드를 읽고 검색하고 diff를 보여주지만, 실제 코드 수정과 실행은 IDE에서 진행합니다.
 - 별도 AI API를 내장하지 않고, Codex 같은 외부 AI가 MCP를 통해 Hub 기능을 사용할 수 있도록 설계합니다.
 - 처음부터 Jira·Confluence·Postman 전체를 대체하지 않고 반복되는 협업 불편부터 해결합니다.
+
+## 개발
+
+Node.js 22.12 이상과 pnpm 10, Rust 1.88.0을 준비한 뒤 의존성을 설치합니다. GitHub 연결을 수동으로 확인하려면 [GitHub App 개발 설정](docs/development/github-app.md)의 공개 Client ID 설정을 먼저 완료하세요.
+
+```bash
+pnpm install --frozen-lockfile
+pnpm test:run
+pnpm build
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml
+pnpm tauri build --debug --no-bundle
+```
 
 ## 아직 확정하지 않은 것
 
