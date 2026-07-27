@@ -14,6 +14,8 @@ import { connectionReducer, createInitialConnectionState } from "./connection-re
 import { cloneTargetPath } from "./types";
 import type {
   AppError,
+  AuthStatusEvent,
+  CloneProgressEvent,
   CloneStartRequest,
   ConnectionState,
   GithubRepositorySummary,
@@ -50,6 +52,7 @@ export interface WorkspaceConnectionContextValue {
   previewInitialization(): Promise<void>;
   cancelInitializationPreview(): void;
   confirmInitialization(): Promise<void>;
+  choosePostMergeClone(): Promise<void>;
   retryLastAction(): Promise<void>;
   revalidateCurrentWorkspace(): Promise<void>;
   startReplacement(): Promise<void>;
@@ -70,16 +73,48 @@ function operationId(): string {
   return crypto.randomUUID();
 }
 
+const secretBoundaryMarkers = ["access_token", "refresh_token", "device_code", "ghu_", "ghr_"];
+
+function containsSecretBoundaryMarker(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return secretBoundaryMarkers.some((marker) => normalized.includes(marker));
+}
+
 function asAppError(error: unknown): AppError {
   if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
-    return error as AppError;
+    const candidate = error as AppError;
+    const details = Object.fromEntries(
+      Object.entries(candidate.details ?? {}).filter(
+        ([key, value]) =>
+          typeof value === "string" &&
+          !containsSecretBoundaryMarker(key) &&
+          !containsSecretBoundaryMarker(value),
+      ),
+    );
+    return {
+      code: candidate.code,
+      message:
+        typeof candidate.message === "string" && !containsSecretBoundaryMarker(candidate.message)
+          ? candidate.message
+          : "연결 작업을 완료할 수 없습니다.",
+      recovery: candidate.recovery,
+      details,
+    };
   }
   return {
     code: "github_unavailable",
-    message: error instanceof Error ? error.message : "연결 작업을 완료할 수 없습니다.",
+    message: "연결 작업을 완료할 수 없습니다.",
     recovery: "retry",
     details: {},
   };
+}
+
+function sanitizeAuthStatusEvent(event: AuthStatusEvent): AuthStatusEvent {
+  return event.status === "failed" ? { ...event, error: asAppError(event.error) } : event;
+}
+
+function sanitizeCloneProgressEvent(event: CloneProgressEvent): CloneProgressEvent {
+  return event.status === "failed" ? { ...event, error: asAppError(event.error) } : event;
 }
 
 function workspaceNameFromRepository(repositoryName: string): string {
@@ -269,6 +304,25 @@ export function WorkspaceConnectionProvider({
     await inspectLocalClone({ id: operationId(), repositoryId: current.selectedRepository.id, path });
   }, [gateway, inspectLocalClone]);
 
+  const choosePostMergeClone = useCallback(async () => {
+    const current = stateRef.current;
+    if (
+      current.step !== "initialize" ||
+      current.status !== "ready_to_connect" ||
+      current.initializationResult.draftPullRequestUrl === null ||
+      !dispatchAccepted({ type: "draftPullRequestCloneSelectionStarted" })
+    ) {
+      return;
+    }
+    const path = await gateway.pickDirectory();
+    if (!path) return;
+    await inspectLocalClone({
+      id: operationId(),
+      repositoryId: current.selectedRepository.id,
+      path,
+    });
+  }, [dispatchAccepted, gateway, inspectLocalClone]);
+
   const selectCloneTarget = useCallback(async (
     mode: CloneTargetPreview["mode"],
   ) => {
@@ -323,11 +377,14 @@ export function WorkspaceConnectionProvider({
       current.step !== "local" ||
       current.status !== "error" ||
       current.errorContext !== "pre_repository" ||
-      current.failedOperation !== "clone" ||
       current.error.recovery !== "choose_another_directory"
     ) return;
+    if (current.failedOperation === "local_inspection") {
+      await connectExistingClone();
+      return;
+    }
     await selectCloneTarget("alternate_directory");
-  }, [selectCloneTarget]);
+  }, [connectExistingClone, selectCloneTarget]);
 
   const previewInitialization = useCallback(async () => {
     const current = stateRef.current;
@@ -526,10 +583,10 @@ export function WorkspaceConnectionProvider({
     const setup = async () => {
       const subscriptions = await Promise.allSettled([
         gateway.onAuthStatus((event) => {
-          dispatchAccepted({ type: "authEventReceived", event });
+          dispatchAccepted({ type: "authEventReceived", event: sanitizeAuthStatusEvent(event) });
         }),
         gateway.onCloneProgress((event) => {
-          dispatchAccepted({ type: "cloneEventReceived", event });
+          dispatchAccepted({ type: "cloneEventReceived", event: sanitizeCloneProgressEvent(event) });
         }),
       ]);
       const [authSubscription, cloneSubscription] = subscriptions;
@@ -616,7 +673,11 @@ export function WorkspaceConnectionProvider({
       });
       return;
     }
-    if (state.step === "initialize" && state.status === "ready_to_connect") {
+    if (
+      state.step === "initialize" &&
+      state.status === "ready_to_connect" &&
+      state.initializationResult.draftPullRequestUrl === null
+    ) {
       void connectInitializedWorkspace({
         id: operationId(),
         repositoryRoot: state.initializationResult.root,
@@ -651,12 +712,13 @@ export function WorkspaceConnectionProvider({
       previewInitialization,
       cancelInitializationPreview,
       confirmInitialization,
+      choosePostMergeClone,
       retryLastAction,
       revalidateCurrentWorkspace,
       startReplacement,
       cancelReplacement,
     }),
-    [cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, openLocalPath, openVerificationUrl, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
+    [cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, choosePostMergeClone, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, openLocalPath, openVerificationUrl, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
   );
 
   return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;

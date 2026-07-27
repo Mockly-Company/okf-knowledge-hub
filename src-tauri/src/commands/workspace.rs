@@ -373,13 +373,7 @@ pub async fn connect_workspace(
     repository_id: String,
     repository_full_name: String,
 ) -> CommandResult<CurrentWorkspace> {
-    connect_workspace_inner(
-        &state,
-        repository_path,
-        repository_id,
-        repository_full_name,
-    )
-    .await
+    connect_workspace_inner(&state, repository_path, repository_id, repository_full_name).await
 }
 
 pub(crate) async fn preview_workspace_initialization_inner(

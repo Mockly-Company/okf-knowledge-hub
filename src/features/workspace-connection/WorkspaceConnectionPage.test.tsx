@@ -4,7 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import type { AppError, WorkspaceInspection } from "./types";
-import { WorkspaceConnectionProvider } from "./WorkspaceConnectionProvider";
+import {
+  useWorkspaceConnection,
+  WorkspaceConnectionProvider,
+} from "./WorkspaceConnectionProvider";
 import { WorkspaceConnectionPage } from "./WorkspaceConnectionPage";
 
 const invalidYaml: WorkspaceInspection = {
@@ -39,6 +42,22 @@ function renderPage(gateway = FakeWorkspaceConnectionGateway.disconnected()) {
   };
 }
 
+function StateRecorder({ states }: { states: unknown[] }) {
+  const connection = useWorkspaceConnection();
+  states.push({
+    state: connection.state,
+    workspaceValidation: connection.workspaceValidation,
+  });
+  return null;
+}
+
+function expectTokenFree(value: unknown) {
+  const serialized = JSON.stringify(value).toLowerCase();
+  for (const marker of ["access_token", "refresh_token", "device_code", "ghu_", "ghr_"]) {
+    expect(serialized).not.toContain(marker);
+  }
+}
+
 async function signInAndChooseRepository(
   gateway: FakeWorkspaceConnectionGateway,
   user: ReturnType<typeof userEvent.setup>,
@@ -50,6 +69,86 @@ async function signInAndChooseRepository(
 }
 
 describe("WorkspaceConnectionPage", () => {
+  it("keeps every gateway state exposed to React outside the token boundary", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    const exposedStates: unknown[] = [];
+    gateway.workspaceInspectionError = {
+      code: "workspace_invalid",
+      message: "워크스페이스 설정이 유효하지 않습니다.",
+      recovery: "open_workspace_file",
+      details: {
+        diagnostic: "access_token refresh_token device_code ghu_private ghr_private",
+      },
+      accessToken: "ghu_private",
+    } as AppError;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <WorkspaceConnectionPage />
+        <StateRecorder states={exposedStates} />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await screen.findByRole("button", { name: "워크스페이스 파일 열기" });
+
+    expect(exposedStates).not.toHaveLength(0);
+    expectTokenFree(exposedStates);
+  });
+
+  it("keeps failed gateway events outside the token boundary", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    const exposedStates: unknown[] = [];
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <WorkspaceConnectionPage />
+        <StateRecorder states={exposedStates} />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "GitHub 로그인" }));
+    const requestId = gateway.calls.find((call) => call.method === "beginGithubAuth")?.args[0];
+    if (typeof requestId !== "string") throw new Error("GitHub login request ID was not recorded");
+    gateway.emitAuth({
+      status: "failed",
+      requestId,
+      error: {
+        code: "github_unavailable",
+        message: "GitHub에 연결할 수 없습니다.",
+        recovery: "retry",
+        details: {
+          diagnostic: "access_token refresh_token device_code ghu_private ghr_private",
+        },
+      },
+    });
+    await screen.findByRole("button", { name: "다시 시도" });
+
+    expectTokenFree(exposedStates);
+  });
+
+  it("uses a fixed public fallback for an untyped gateway error", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    const exposedStates: unknown[] = [];
+    gateway.workspaceInspectionError = new Error(
+      "access_token refresh_token device_code ghu_private ghr_private",
+    ) as unknown as AppError;
+    const user = userEvent.setup();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <WorkspaceConnectionPage />
+        <StateRecorder states={exposedStates} />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await screen.findByRole("button", { name: "다시 시도" });
+
+    expectTokenFree(exposedStates);
+  });
+
   it("presents one h1 and moves keyboard focus to the next decision", async () => {
     const { gateway, user } = renderPage();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
@@ -113,6 +212,26 @@ describe("WorkspaceConnectionPage", () => {
     const cloneCalls = gateway.calls.filter((call) => call.method === "cloneRepository");
     expect(cloneCalls).toHaveLength(2);
     expect(cloneCalls[1]?.args[2]).toBe("/new-work");
+  });
+
+  it("reopens the folder picker after selecting a non-repository as an existing clone", async () => {
+    const { gateway, user } = renderPage();
+    gateway.existingCloneError = {
+      code: "repository_path_conflict",
+      message: "선택한 폴더가 연결 가능한 Git 저장소가 아닙니다.",
+      recovery: "choose_another_directory",
+      details: { path: "/work" },
+    };
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    expect(await screen.findByText("선택한 폴더가 연결 가능한 Git 저장소가 아닙니다.")).toBeInTheDocument();
+
+    gateway.existingCloneError = null;
+    gateway.selectedDirectory = "/work/mockly-knowledge";
+    await user.click(screen.getByRole("button", { name: "다른 위치 선택" }));
+
+    expect(gateway.calls.filter((call) => call.method === "pickDirectory")).toHaveLength(2);
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(2);
   });
 
   it("previews the exact clone target and requires confirmation before writing", async () => {
@@ -271,6 +390,16 @@ describe("WorkspaceConnectionPage", () => {
   it("initializes then connects the exact initialized root", async () => {
     const { gateway, user } = renderPage();
     gateway.workspaceInspection = { status: "initialization_required" };
+    gateway.initializationPreview = {
+      ...gateway.initializationPreview,
+      branch: "main",
+      strategy: { kind: "direct_push" },
+    };
+    gateway.initializationResult = {
+      ...gateway.initializationResult,
+      branch: "main",
+      draftPullRequestUrl: null,
+    };
     await signInAndChooseRepository(gateway, user);
     await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
     await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
@@ -279,6 +408,39 @@ describe("WorkspaceConnectionPage", () => {
     expect(await screen.findByText("워크스페이스가 연결되었습니다.")).toBeInTheDocument();
     expect(gateway.calls.filter((call) => call.method === "initializeWorkspace")).toHaveLength(1);
     expect(gateway.calls.filter((call) => call.method === "connectWorkspace")).toHaveLength(1);
+  });
+
+  it("shows the Draft PR without connecting an unmerged initialization branch", async () => {
+    const { gateway, user } = renderPage();
+    gateway.workspaceInspection = { status: "initialization_required" };
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
+    await user.click(screen.getByRole("button", { name: "워크스페이스 초기화" }));
+
+    expect(await screen.findByRole("heading", { name: "Draft PR을 검수해 주세요" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Draft PR 열기" }));
+    expect(gateway.openedUrls).toContain(gateway.initializationResult.draftPullRequestUrl);
+    expect(gateway.calls.filter((call) => call.method === "connectWorkspace")).toHaveLength(0);
+  });
+
+  it("lets the user select a refreshed clone after the Draft PR is merged", async () => {
+    const { gateway, user } = renderPage();
+    gateway.workspaceInspection = { status: "initialization_required" };
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
+    await user.click(screen.getByRole("button", { name: "워크스페이스 초기화" }));
+    await screen.findByRole("heading", { name: "Draft PR을 검수해 주세요" });
+    gateway.workspaceInspection = {
+      status: "ready",
+      summary: gateway.connectedWorkspace!.summary,
+    };
+
+    await user.click(screen.getByRole("button", { name: "병합 후 clone 선택" }));
+
+    expect(gateway.calls.filter((call) => call.method === "pickDirectory")).toHaveLength(2);
+    expect(await screen.findByText("워크스페이스가 연결되었습니다.")).toBeInTheDocument();
   });
 
   it("uses compact control tokens when compact density is active", () => {

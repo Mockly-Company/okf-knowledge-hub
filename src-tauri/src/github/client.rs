@@ -110,6 +110,11 @@ struct GithubRepositoryOwnerResponse {
 }
 
 #[derive(Deserialize)]
+struct GithubErrorResponse {
+    message: String,
+}
+
+#[derive(Deserialize)]
 struct DraftPullRequestResponse {
     number: u64,
     html_url: String,
@@ -538,7 +543,12 @@ impl GithubHttpClient {
         let response: GithubRepositoryResponse = self
             .get_json(&["repos", owner, name], &[], HttpFailureContext::Repository)
             .await?;
-        ensure_repository_identity(response.into_detail(), expected_repository_id)
+        let mut detail =
+            ensure_repository_identity(response.into_detail(), expected_repository_id)?;
+        if detail.default_branch.is_some() {
+            detail.is_empty = self.repository_is_empty(owner, name).await?;
+        }
+        Ok(detail)
     }
 
     pub async fn resolve_remote_repository(
@@ -637,6 +647,28 @@ impl GithubHttpClient {
         Ok(installation_ids)
     }
 
+    async fn repository_is_empty(&self, owner: &str, name: &str) -> Result<bool, AppError> {
+        let response = self
+            .send(
+                HttpMethod::Get,
+                &["repos", owner, name, "contents"],
+                &[],
+                None,
+            )
+            .await?;
+        if (200..300).contains(&response.status) {
+            return Ok(false);
+        }
+        if response.status == 404 && is_empty_repository_response(&response.body) {
+            return Ok(true);
+        }
+        Err(map_http_error(
+            HttpFailureContext::Repository,
+            response.status,
+            &response.headers,
+        ))
+    }
+
     async fn get_json<T: DeserializeOwned>(
         &self,
         path_segments: &[&str],
@@ -696,6 +728,11 @@ fn deserialize_response<T: DeserializeOwned>(
     response: HttpResponse,
 ) -> Result<T, serde_json::Error> {
     serde_json::from_slice(&response.body)
+}
+
+fn is_empty_repository_response(body: &[u8]) -> bool {
+    serde_json::from_slice::<GithubErrorResponse>(body)
+        .is_ok_and(|response| response.message == "This repository is empty.")
 }
 
 fn split_repository_full_name(value: &str) -> Result<(&str, &str), AppError> {
@@ -1136,16 +1173,19 @@ mod tests {
 
     #[tokio::test]
     async fn repository_detail_maps_clone_information_without_credentials() {
-        let transport = RecordingTransport::with_responses(vec![response(
-            200,
-            &serde_json::to_string(
-                &serde_json::from_str::<serde_json::Value>(include_str!(
-                    "fixtures/repository-page.json"
-                ))
-                .unwrap()["repositories"][0],
-            )
-            .unwrap(),
-        )]);
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                &serde_json::to_string(
+                    &serde_json::from_str::<serde_json::Value>(include_str!(
+                        "fixtures/repository-page.json"
+                    ))
+                    .unwrap()["repositories"][0],
+                )
+                .unwrap(),
+            ),
+            response(200, r#"[{"name":"README.md"}]"#),
+        ]);
         let service = client(SequenceTokenProvider::default(), transport);
 
         let detail = service
@@ -1158,7 +1198,60 @@ mod tests {
             detail.https_url,
             "https://github.com/Mockly-Company/mockly-knowledge.git"
         );
+        assert!(!detail.is_empty);
         assert!(!serde_json::to_string(&detail).unwrap().contains("token"));
+    }
+
+    #[tokio::test]
+    async fn repository_detail_detects_an_empty_repository_even_with_a_default_branch_name() {
+        let repository = r#"{
+          "id":2001,
+          "node_id":"R_kgDOExample",
+          "name":"okhub-empty-test",
+          "full_name":"Mockly-Company/okhub-empty-test",
+          "owner":{"login":"Mockly-Company"},
+          "clone_url":"https://github.com/Mockly-Company/okhub-empty-test.git",
+          "default_branch":"main"
+        }"#;
+        let transport = RecordingTransport::with_responses(vec![
+            response(200, repository),
+            response(404, r#"{"message":"This repository is empty."}"#),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport);
+
+        let detail = service
+            .repository_detail("R_kgDOExample", "Mockly-Company/okhub-empty-test")
+            .await
+            .unwrap();
+
+        assert!(detail.is_empty);
+        assert_eq!(detail.default_branch.as_deref(), Some("main"));
+    }
+
+    #[tokio::test]
+    async fn repository_detail_does_not_treat_a_generic_not_found_response_as_empty() {
+        let repository = r#"{
+          "id":2001,
+          "node_id":"R_kgDOExample",
+          "name":"mockly-knowledge",
+          "full_name":"Mockly-Company/mockly-knowledge",
+          "owner":{"login":"Mockly-Company"},
+          "clone_url":"https://github.com/Mockly-Company/mockly-knowledge.git",
+          "default_branch":"main"
+        }"#;
+        let transport = RecordingTransport::with_responses(vec![
+            response(200, repository),
+            response(404, r#"{"message":"Not Found"}"#),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport);
+
+        let error = service
+            .repository_detail("R_kgDOExample", "Mockly-Company/mockly-knowledge")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubPermissionDenied);
+        assert_eq!(error.recovery, Some(RecoveryAction::ReinstallGithubApp));
     }
 
     #[tokio::test]

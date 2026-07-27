@@ -588,7 +588,7 @@ mod tests {
         TokenGrant,
     };
     use crate::auth::ports::{AuthEventSink, Clock, CredentialStore, Delay, DeviceFlowApi};
-    use crate::error::{AppError, ErrorCode};
+    use crate::error::{AppError, ErrorCode, RecoveryAction};
 
     const CLIENT_ID: &str = "Iv1.public-client-id";
 
@@ -1297,6 +1297,88 @@ mod tests {
 
     fn authorization_tokens() -> StoredTokens {
         StoredTokens::new("ghu_old", "ghr_old", 900, 20_000)
+    }
+
+    #[test]
+    fn token_boundary_serializes_every_public_auth_and_error_variant_without_credentials() {
+        let request_id = uuid::Uuid::parse_str("599a739c-bde8-4fed-b750-d085adf562eb").unwrap();
+        let user = GithubUserSummary {
+            id: 7,
+            login: "octocat".into(),
+            avatar_url: "https://example.test/avatar.png".into(),
+        };
+        let secret_like_value = "access_token refresh_token device_code ghu_private ghr_private";
+        let error_codes = [
+            ErrorCode::AuthenticationExpired,
+            ErrorCode::AuthenticationDenied,
+            ErrorCode::ReauthenticationRequired,
+            ErrorCode::CredentialStoreUnavailable,
+            ErrorCode::GithubPermissionDenied,
+            ErrorCode::GithubUnavailable,
+            ErrorCode::RepositoryPathConflict,
+            ErrorCode::RepositoryRemoteMismatch,
+            ErrorCode::RepositoryDirty,
+            ErrorCode::CloneFailed,
+            ErrorCode::WorkspaceMissing,
+            ErrorCode::WorkspaceInvalid,
+            ErrorCode::WorkspaceVersionUnsupported,
+            ErrorCode::WorkspaceChangedSincePreview,
+            ErrorCode::PushFailed,
+            ErrorCode::DraftPullRequestFailed,
+            ErrorCode::LocalSettingsUnavailable,
+            ErrorCode::DesktopOnly,
+        ];
+        let recovery_actions = [
+            RecoveryAction::RestartLogin,
+            RecoveryAction::ReinstallGithubApp,
+            RecoveryAction::ChooseAnotherDirectory,
+            RecoveryAction::ConnectExistingClone,
+            RecoveryAction::CleanWorkingTree,
+            RecoveryAction::OpenWorkspaceFile,
+            RecoveryAction::UpdateOkhub,
+            RecoveryAction::Retry,
+        ];
+        let errors = error_codes
+            .into_iter()
+            .zip(recovery_actions.into_iter().cycle())
+            .map(|(code, recovery)| {
+                AppError::new(code, secret_like_value)
+                    .with_recovery(recovery)
+                    .with_detail("diagnostic", secret_like_value)
+            });
+        let events = vec![
+            AuthStatusEvent::WaitingForUser { request_id },
+            AuthStatusEvent::Authenticated { request_id, user },
+            AuthStatusEvent::ReauthenticationRequired { request_id },
+            AuthStatusEvent::Failed {
+                request_id,
+                error: AppError::new(ErrorCode::GithubUnavailable, secret_like_value)
+                    .with_detail("diagnostic", secret_like_value),
+            },
+            AuthStatusEvent::Cancelled { request_id },
+        ];
+
+        for value in errors
+            .map(|error| serde_json::to_string(&error))
+            .chain(std::iter::once(serde_json::to_string(&events)))
+        {
+            assert_token_boundary(value.unwrap());
+        }
+    }
+
+    fn assert_token_boundary(serialized: String) {
+        for marker in [
+            "access_token",
+            "refresh_token",
+            "device_code",
+            "ghu_",
+            "ghr_",
+        ] {
+            assert!(
+                !serialized.contains(marker),
+                "public Rust boundary leaked {marker}: {serialized}"
+            );
+        }
     }
 
     fn service(

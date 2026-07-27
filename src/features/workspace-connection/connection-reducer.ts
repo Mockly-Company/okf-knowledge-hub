@@ -1006,8 +1006,15 @@ export function connectionReducer(
     }
     case "localInspectionStarted": {
       const context = localContext(state);
+      const isReselectedPath =
+        state.step === "local" &&
+        state.status === "error" &&
+        state.errorContext === "pre_repository" &&
+        state.failedOperation === "local_inspection" &&
+        action.request.id !== state.failedLocalInspectionRequest.id &&
+        action.request.path !== state.failedLocalInspectionRequest.path;
       if (
-        !canStartLocalInspection(state) ||
+        (!canStartLocalInspection(state) && !isReselectedPath) ||
         !context ||
         context.selectedRepository.id !== action.request.repositoryId
       ) {
@@ -1412,6 +1419,12 @@ export function connectionReducer(
       }
       return initializationCommandError(state, action.error);
     }
+    case "draftPullRequestCloneSelectionStarted":
+      return state.step === "initialize" &&
+        state.status === "ready_to_connect" &&
+        state.initializationResult.draftPullRequestUrl !== null
+        ? localIdle(initializationContext(state))
+        : state;
     case "workspaceConnectionStarted": {
       const context = localContext(state);
       if (

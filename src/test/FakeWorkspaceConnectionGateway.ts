@@ -71,6 +71,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   nextRepositoryCursor: string | null = null;
   selectedDirectory: string | null = "/work";
   repositorySnapshot: RepositorySnapshot = defaultSnapshot;
+  existingCloneError: AppError | null = null;
   workspaceInspection: WorkspaceInspection = {
     status: "ready",
     summary: defaultSummary,
@@ -226,6 +227,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     repositoryId: string,
   ): Promise<RepositorySnapshot> {
     this.record("inspectExistingClone", path, repositoryId);
+    if (this.existingCloneError) throw this.existingCloneError;
     return this.repositorySnapshot;
   }
 

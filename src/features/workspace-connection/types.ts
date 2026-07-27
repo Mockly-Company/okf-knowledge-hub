@@ -871,6 +871,7 @@ export type ConnectionAction =
       result: InitializationResult;
     }
   | { type: "initializationFailed"; request: InitializationRequest; error: AppError }
+  | { type: "draftPullRequestCloneSelectionStarted" }
   | { type: "workspaceConnectionStarted"; request: WorkspaceConnectionRequest }
   | {
       type: "workspaceConnected";

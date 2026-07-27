@@ -502,7 +502,7 @@ impl RepositoryService {
                     && attempt.preview.branch == "okf/init-workspace"
                     && selected.default_branch.as_deref() == Some(base_branch.as_str()) => {}
             InitializationStrategy::DirectPush
-                if selected.is_empty
+                if (selected.is_empty || attempt.outcome.is_some())
                     && attempt.preview.branch
                         == selected.default_branch.as_deref().unwrap_or("main") => {}
             _ => return Err(untrusted_attempt_error()),
@@ -2757,5 +2757,94 @@ mod tests {
             .find_reference("refs/heads/main")
             .is_ok());
         assert!(remote.draft_requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn empty_repository_retry_accepts_its_commit_after_the_remote_becomes_non_empty() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        let bare_remote = tempfile::tempdir().unwrap();
+        Repository::init_bare(bare_remote.path()).unwrap();
+        repository
+            .remote("origin", bare_remote.path().to_str().unwrap())
+            .unwrap();
+        drop(repository);
+        let root = directory.path().to_path_buf();
+        let previews = Arc::new(PreviewRegistry::default());
+        let remote = FakeRemote {
+            resolved_id: "R_empty".into(),
+            accepted_remote_url: Default::default(),
+            resolve_requests: Default::default(),
+            resolve_action: Default::default(),
+            origin_swap_after_resolve: Default::default(),
+            draft_requests: Default::default(),
+            draft_failures_remaining: Default::default(),
+            draft_failures_after_create: Default::default(),
+            open_pull_request: Default::default(),
+        };
+        let repository_detail = |is_empty| GithubRepositoryDetail {
+            id: "R_empty".into(),
+            owner: "example".into(),
+            name: "empty".into(),
+            full_name: "example/empty".into(),
+            default_branch: Some("main".into()),
+            is_empty,
+            https_url: "https://github.com/example/empty.git".into(),
+        };
+        let service = RepositoryService::new(
+            Arc::new(AmbiguousPushGit {
+                inner: LocalRemoteGit {
+                    inner: Git2RepositoryAdapter,
+                    transport_url: bare_remote.path().to_string_lossy().into_owned(),
+                    approved_url: "https://github.com/example/empty.git".into(),
+                },
+                fail_after_push_once: Mutex::new(true),
+            }),
+            Arc::new(remote.clone()),
+            Arc::new(FakeCredentials),
+            previews.clone(),
+            root.clone(),
+            repository_detail(true),
+            RepositoryIdentity {
+                database_id: 42,
+                login: "hyeeun".into(),
+            },
+        );
+        let snapshot = Git2RepositoryAdapter.inspect(&root).unwrap();
+        let preview = WorkspaceService::create_initialization_preview(
+            &root,
+            "Empty",
+            &snapshot.fingerprint,
+            RepositoryPopulation::Empty {
+                default_branch: "main".into(),
+            },
+        )
+        .unwrap();
+        previews.insert(preview.clone()).unwrap();
+
+        let first_error = service.initialize(preview.id).await.unwrap_err();
+        assert_eq!(first_error.code, ErrorCode::PushFailed);
+
+        let restarted = RepositoryService::new(
+            Arc::new(LocalRemoteGit {
+                inner: Git2RepositoryAdapter,
+                transport_url: bare_remote.path().to_string_lossy().into_owned(),
+                approved_url: "https://github.com/example/empty.git".into(),
+            }),
+            Arc::new(remote.clone()),
+            Arc::new(FakeCredentials),
+            Arc::new(PreviewRegistry::default()),
+            root,
+            repository_detail(false),
+            RepositoryIdentity {
+                database_id: 42,
+                login: "hyeeun".into(),
+            },
+        );
+
+        let result = restarted.initialize(preview.id).await.unwrap();
+
+        assert_eq!(result.branch, "main");
+        assert!(result.draft_pull_request_url.is_none());
     }
 }

@@ -51,9 +51,14 @@ pub struct AppError {
 
 impl AppError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
             code,
-            message: message.into(),
+            message: if is_secret_like_value(&message) {
+                "연결 작업을 완료할 수 없습니다.".to_owned()
+            } else {
+                message
+            },
             recovery: None,
             details: BTreeMap::new(),
         }
@@ -66,8 +71,9 @@ impl AppError {
 
     pub fn with_detail(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         let key = key.into();
-        if !is_secret_like_detail_key(&key) {
-            self.details.insert(key, value.into());
+        let value = value.into();
+        if !is_secret_like_detail_key(&key) && !is_secret_like_detail_value(&value) {
+            self.details.insert(key, value);
         }
         self
     }
@@ -78,6 +84,23 @@ fn is_secret_like_detail_key(key: &str) -> bool {
     ["authorization", "password", "secret", "token"]
         .iter()
         .any(|marker| key.contains(marker))
+}
+
+fn is_secret_like_detail_value(value: &str) -> bool {
+    is_secret_like_value(value)
+}
+
+fn is_secret_like_value(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    [
+        "access_token",
+        "refresh_token",
+        "device_code",
+        "ghu_",
+        "ghr_",
+    ]
+    .iter()
+    .any(|marker| value.contains(marker))
 }
 
 #[cfg(test)]

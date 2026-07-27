@@ -79,8 +79,7 @@ impl LocalSettingsService {
         let stored = StoredCurrentWorkspace::decode(&raw_connection);
         let saved_path = stored.path;
         let repository = stored.repository.filter(|repository| {
-            !repository.id.trim().is_empty()
-                && valid_repository_full_name(&repository.full_name)
+            !repository.id.trim().is_empty() && valid_repository_full_name(&repository.full_name)
         });
         let canonical_path = match self.path_resolver.canonicalize(&saved_path) {
             Ok(path) => path,
@@ -146,9 +145,7 @@ impl LocalSettingsService {
         repository_path: &Path,
         repository: KnowledgeRepository,
     ) -> Result<CurrentWorkspace, AppError> {
-        if repository.id.trim().is_empty()
-            || !valid_repository_full_name(&repository.full_name)
-        {
+        if repository.id.trim().is_empty() || !valid_repository_full_name(&repository.full_name) {
             return Err(AppError::new(
                 ErrorCode::LocalSettingsUnavailable,
                 "현재 지식 저장소 정보를 로컬 설정에 저장할 수 없습니다.",
