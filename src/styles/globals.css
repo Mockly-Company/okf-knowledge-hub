@@ -242,6 +242,15 @@ select {
   margin-top: 20px;
 }
 
+.workspace-connection__repository-list {
+  max-height: min(420px, 45vh);
+  align-content: start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
 .workspace-connection__cleanup-guidance {
   display: grid;
   gap: 12px;
@@ -277,6 +286,10 @@ select {
   cursor: pointer;
 }
 
+.workspace-connection__repository-option input {
+  accent-color: var(--color-primary);
+}
+
 .workspace-connection__repository-option:has(input:checked) {
   border-color: var(--color-primary);
   background: var(--color-primary-soft);
@@ -285,6 +298,17 @@ select {
 .workspace-connection__repository-option small {
   display: block;
   color: var(--color-text-muted);
+}
+
+.workspace-connection__next:not(:disabled) {
+  border-color: var(--color-primary-action);
+  background: var(--color-primary-action);
+  color: var(--color-on-primary);
+}
+
+.workspace-connection__next:not(:disabled):hover {
+  border-color: var(--color-primary-action-hover);
+  background: var(--color-primary-action-hover);
 }
 
 .workspace-connection code,

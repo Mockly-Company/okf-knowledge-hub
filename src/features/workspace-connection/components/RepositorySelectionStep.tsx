@@ -35,7 +35,7 @@ export function RepositorySelectionStep({ state, onSelect, onRefresh, onLoadNext
           {state.status === "loading" ? <LoaderCircle className="animate-spin" aria-hidden="true" strokeWidth={1.75} /> : <RefreshCw aria-hidden="true" strokeWidth={1.75} />} 새로고침
         </Button>
         <Button variant="secondary" asChild><a href="https://github.com/new" target="_blank" rel="noreferrer">GitHub에서 새 저장소 만들기</a></Button>
-        <Button disabled={!selected} onClick={() => selected && onSelect(selected)}>다음</Button>
+        <Button className="workspace-connection__next" disabled={!selected} onClick={() => selected && onSelect(selected)}>다음</Button>
       </div>
     </section>
   );

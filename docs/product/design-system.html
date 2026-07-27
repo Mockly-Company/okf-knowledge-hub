@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="OkHub 초기 제품의 시각·상호작용 디자인 시스템" />
+  <title>OkHub 디자인 시스템</title>
+  <link rel="stylesheet" href="design-system-assets/foundation.css" />
+  <link rel="stylesheet" href="design-system-assets/layout.css" />
+  <link rel="stylesheet" href="design-system-assets/components.css" />
+</head>
+<body>
+  <div class="doc-shell">
+    <aside class="sidebar" aria-label="디자인 시스템 목차">
+      <div class="brand"><span class="brand-mark">OK</span><span>OkHub Design</span></div>
+      <p class="nav-label">Contents</p>
+      <nav>
+        <a href="#principles"><span class="nav-number">01</span>원칙</a>
+        <a href="#brand"><span class="nav-number">02</span>브랜드</a>
+        <a href="#color"><span class="nav-number">03</span>색상</a>
+        <a href="#type"><span class="nav-number">04</span>타이포·밀도</a>
+        <a href="#spacing"><span class="nav-number">05</span>간격·크기</a>
+        <a href="#surface"><span class="nav-number">06</span>표면·깊이</a>
+        <a href="#icons"><span class="nav-number">07</span>아이콘</a>
+        <a href="#components"><span class="nav-number">08</span>컴포넌트</a>
+        <a href="#feedback"><span class="nav-number">09</span>상태·피드백</a>
+        <a href="#responsive"><span class="nav-number">10</span>크기·스크롤</a>
+        <a href="#forms"><span class="nav-number">11</span>Form</a>
+        <a href="#content-states"><span class="nav-number">12</span>빈 화면·오류</a>
+        <a href="#accessibility"><span class="nav-number">13</span>접근성</a>
+        <a href="#scope"><span class="nav-number">14</span>범위·검증</a>
+      </nav>
+      <div class="sidebar-footer">
+        기준 원본<br />
+        <a href="design-system.md">design-system.md 열기</a>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="content">
+        <header class="hero">
+          <div class="hero-topline">
+            <span class="badge badge-approved">합의됨</span>
+            <span class="badge badge-neutral">2026-07-23 승인</span>
+          </div>
+          <h1>OkHub 디자인 시스템</h1>
+          <p class="hero-copy">개발자가 문서, 코드, Issue와 리뷰를 한 화면에서 오래 읽을 수 있도록 정보 밀도와 편안함을 함께 다루는 초기 제품의 시각·상호작용 기준입니다.</p>
+        </header>
+
+        <section class="section" id="principles">
+          <header class="section-header">
+            <span class="section-number">01</span>
+            <div><h2>원칙</h2><p>화면별 HTML 시안보다 우선하며 shadcn primitive와 OkHub pattern에 동일하게 적용합니다.</p></div>
+          </header>
+          <div class="three-column">
+            <article class="summary-card"><strong>읽기 편안한 밀도</strong><p>탐색·Board·Settings는 compact하게, 문서·편집기·리뷰는 넉넉하게 표시합니다.</p></article>
+            <article class="summary-card"><strong>의미를 전달하는 색</strong><p>행동과 상태를 표현하되 색상만으로 상태를 구분하지 않습니다.</p></article>
+            <article class="summary-card"><strong>Border-first</strong><p>일반 콘텐츠는 얇은 테두리, 화면 위에 뜨는 요소에만 그림자를 사용합니다.</p></article>
+          </div>
+          <div class="callout" style="margin-top:16px"><strong>초기 범위:</strong> Light 테마를 우선 지원하고 토큰은 역할 중심으로 이름을 붙여 이후 Dark 테마로 확장할 수 있게 합니다.</div>
+        </section>
+
+        <section class="section" id="brand">
+          <header class="section-header">
+            <span class="section-number">02</span>
+            <div><h2>브랜드 표기</h2><p>제품 안에서는 짧고 일관된 이름을 사용합니다.</p></div>
+          </header>
+          <div class="two-column">
+            <div class="logo-sample"><span class="brand-mark">OK</span><div class="logo-copy"><b>OkHub</b><span>앱 화면의 짧은 표기</span></div></div>
+            <article class="rule-card"><strong>정식 프로젝트명</strong><p>Git 저장소와 프로젝트에서는 <code>okf-knowledge-hub</code>를 유지합니다.</p></article>
+          </div>
+          <ul class="interaction-list" style="margin-top:16px">
+            <li>Aqua Mint 배경에 흰색 <code>OK</code>를 넣은 현재 로고 마크는 임시 형태입니다.</li>
+            <li>흰색은 로고의 <code>OK</code>와 충분히 어두운 Primary action 배경의 버튼 label에만 사용합니다. Aqua Mint 위 일반 텍스트에는 사용하지 않습니다.</li>
+          </ul>
+        </section>
+
+        <section class="section" id="color">
+          <header class="section-header">
+            <span class="section-number">03</span>
+            <div><h2>색상</h2><p>장식이 아니라 행동, 선택과 상태의 의미를 전달합니다.</p></div>
+          </header>
+
+          <div class="subsection">
+            <h3>Primary</h3>
+            <div class="token-table-wrap">
+              <table class="token-table">
+                <thead><tr><th>Preview</th><th>Token</th><th>Value</th><th>Use</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="swatch" style="background:#009e8e"></span></td><td class="token-name">color.primary</td><td><code>#009E8E</code></td><td>로고 배경, 선택, 포커스</td></tr>
+                  <tr><td><span class="swatch" style="background:#00a394"></span></td><td class="token-name">color.primary.hover</td><td><code>#00A394</code></td><td>Aqua Mint 강조 요소의 hover</td></tr>
+                  <tr><td><span class="swatch" style="background:#007c71"></span></td><td class="token-name">color.primary.action</td><td><code>#007C71</code></td><td>주요 버튼 배경</td></tr>
+                  <tr><td><span class="swatch" style="background:#00665f"></span></td><td class="token-name">color.primary.action.hover</td><td><code>#00665F</code></td><td>주요 버튼 hover</td></tr>
+                  <tr><td><span class="swatch" style="background:#00544f"></span></td><td class="token-name">color.primary.action.pressed</td><td><code>#00544F</code></td><td>주요 버튼 pressed</td></tr>
+                  <tr><td><span class="swatch" style="background:#007c71"></span></td><td class="token-name">color.primary.text</td><td><code>#007C71</code></td><td>흰 배경의 링크와 활성 텍스트</td></tr>
+                  <tr><td><span class="swatch" style="background:#e5f5f3"></span></td><td class="token-name">color.primary.soft</td><td><code>#E5F5F3</code></td><td>선택, badge와 avatar 배경</td></tr>
+                  <tr><td><span class="swatch" style="background:#d4efec"></span></td><td class="token-name">color.primary.soft.pressed</td><td><code>#D4EFEC</code></td><td>Ghost와 선택 항목 pressed</td></tr>
+                  <tr><td><span class="swatch" style="background:#fff"></span></td><td class="token-name">color.on-primary</td><td><code>#FFFFFF</code></td><td>Primary action의 버튼 텍스트</td></tr>
+                  <tr><td><span class="swatch" style="background:#fff"></span></td><td class="token-name">color.on-logo</td><td><code>#FFFFFF</code></td><td>로고 마크의 OK 전용</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="callout" style="margin-top:14px">브랜드 Aqua Mint <code>#009E8E</code>와 주요 행동의 배경을 분리합니다. Primary 버튼은 <code>#007C71</code>, hover는 <code>#00665F</code>, pressed는 <code>#00544F</code> 배경과 흰색 텍스트를 사용합니다.</p>
+          </div>
+
+          <div class="subsection">
+            <h3>Neutral</h3>
+            <div class="token-table-wrap">
+              <table class="token-table">
+                <thead><tr><th>Preview</th><th>Token</th><th>Value</th><th>Use</th></tr></thead>
+                <tbody>
+                  <tr><td><span class="swatch" style="background:#16181d"></span></td><td class="token-name">color.text.strong</td><td><code>#16181D</code></td><td>제목과 주요 본문</td></tr>
+                  <tr><td><span class="swatch" style="background:#343941"></span></td><td class="token-name">color.text.default</td><td><code>#343941</code></td><td>일반 본문</td></tr>
+                  <tr><td><span class="swatch" style="background:#6b717c"></span></td><td class="token-name">color.text.muted</td><td><code>#6B717C</code></td><td>보조 설명과 metadata</td></tr>
+                  <tr><td><span class="swatch" style="background:#7d918f"></span></td><td class="token-name">color.text.disabled</td><td><code>#7D918F</code></td><td>비활성 control label</td></tr>
+                  <tr><td><span class="swatch" style="background:#e2e5e9"></span></td><td class="token-name">color.border</td><td><code>#E2E5E9</code></td><td>기본 테두리</td></tr>
+                  <tr><td><span class="swatch" style="background:#c7cdd4"></span></td><td class="token-name">color.border.hover</td><td><code>#C7CDD4</code></td><td>Hover control 테두리</td></tr>
+                  <tr><td><span class="swatch" style="background:#aeb5bf"></span></td><td class="token-name">color.border.strong</td><td><code>#AEB5BF</code></td><td>Pressed control 테두리</td></tr>
+                  <tr><td><span class="swatch" style="background:#f1f3f5"></span></td><td class="token-name">color.control.disabled</td><td><code>#F1F3F5</code></td><td>비활성 control 배경</td></tr>
+                  <tr><td><span class="swatch" style="background:#eceff2"></span></td><td class="token-name">color.surface.pressed</td><td><code>#ECEFF2</code></td><td>Neutral pressed 배경</td></tr>
+                  <tr><td><span class="swatch" style="background:#f6f7f9"></span></td><td class="token-name">color.canvas</td><td><code>#F6F7F9</code></td><td>Sidebar와 보조 영역</td></tr>
+                  <tr><td><span class="swatch" style="background:#fff"></span></td><td class="token-name">color.surface</td><td><code>#FFFFFF</code></td><td>Main, card, panel과 input</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="subsection">
+            <h3>Semantic</h3>
+            <div class="semantic-grid">
+              <div class="semantic-sample semantic-success"><div><strong>Success</strong><code>#11764F</code> · 완료, 연결 정상, 승인</div></div>
+              <div class="semantic-sample semantic-info"><div><strong>Information</strong><code>#2563B5</code> · 검토, 안내, 일반 정보</div></div>
+              <div class="semantic-sample semantic-warning"><div><strong>Warning</strong><code>#A15C00</code> · 결정 필요, 지연, 주의</div></div>
+              <div class="semantic-sample semantic-error"><div><strong>Error</strong><code>#B23B4A</code> · 실패, 충돌, 파괴적 행동</div></div>
+            </div>
+            <p style="margin:14px 0 0;color:var(--text-muted)">Semantic 색상은 해당 의미에만 사용하며 아이콘 또는 텍스트 label을 항상 함께 제공합니다.</p>
+          </div>
+        </section>
+
+        <section class="section" id="type">
+          <header class="section-header">
+            <span class="section-number">04</span>
+            <div><h2>타이포그래피와 표시 밀도</h2><p>Pretendard Variable을 기본으로 하며 읽는 콘텐츠와 조작 UI의 밀도를 분리합니다.</p></div>
+          </header>
+          <div class="type-specimen">
+            <div class="type-row"><span class="type-label">페이지 H1</span><span class="type-h1">프로젝트 진행 상황</span><span class="type-value">28 / 36</span></div>
+            <div class="type-row"><span class="type-label">문서 H2</span><span class="type-h2">API 오류 계약</span><span class="type-value">20 / 28</span></div>
+            <div class="type-row"><span class="type-label">문서 본문</span><span class="type-document">사람과 AI가 함께 읽는 지식 원본입니다.</span><span class="type-value">16 / 28</span></div>
+            <div class="type-row"><span class="type-label">UI 본문</span><span class="type-ui">기본 브랜치 · main</span><span class="type-value">13 / 20</span></div>
+            <div class="type-row"><span class="type-label">코드</span><span class="type-code">GET /places</span><span class="type-value">13 / 20</span></div>
+          </div>
+          <div class="subsection">
+            <h3>Default / Compact</h3>
+            <div class="token-table-wrap">
+              <table class="token-table">
+                <thead><tr><th>Item</th><th>Default</th><th>Compact</th></tr></thead>
+                <tbody>
+                  <tr><td>UI 본문</td><td><code>13/20px</code></td><td><code>12/18px</code></td></tr>
+                  <tr><td>문서 본문</td><td><code>16/28px</code></td><td><code>15/25px</code></td></tr>
+                  <tr><td>페이지 H1</td><td><code>28/36px</code></td><td><code>24/32px</code></td></tr>
+                  <tr><td>문서 H2</td><td><code>20/28px</code></td><td><code>18/26px</code></td></tr>
+                  <tr><td>코드 본문</td><td><code>13/20px</code></td><td><code>12/18px</code></td></tr>
+                  <tr><td>기본 control</td><td><code>36px</code></td><td><code>32px</code></td></tr>
+                  <tr><td>기본 아이콘</td><td><code>16px</code></td><td><code>14px</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <ul class="interaction-list" style="margin-top:14px">
+              <li>초기값은 Default이며 <code>Settings → 화면 → 표시 밀도</code>에서 변경합니다.</li>
+              <li>선택값은 기기별 로컬 설정에 저장하고 Git이나 <code>.okf/workspace.yml</code>에는 기록하지 않습니다.</li>
+              <li>표시 모드는 Markdown 원문, Git diff, export와 다른 팀원의 화면에 영향을 주지 않습니다.</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="section" id="spacing">
+          <header class="section-header">
+            <span class="section-number">05</span>
+            <div><h2>간격과 크기</h2><p>4px grid를 사용하고 허용된 값을 우선합니다.</p></div>
+          </header>
+          <div class="two-column">
+            <div>
+              <h3>Spacing scale</h3>
+              <div class="spacing-scale">
+                <div class="spacing-row"><span>4px</span><i class="spacing-bar" style="width:4px"></i></div>
+                <div class="spacing-row"><span>8px</span><i class="spacing-bar" style="width:8px"></i></div>
+                <div class="spacing-row"><span>12px</span><i class="spacing-bar" style="width:12px"></i></div>
+                <div class="spacing-row"><span>16px</span><i class="spacing-bar" style="width:16px"></i></div>
+                <div class="spacing-row"><span>20px</span><i class="spacing-bar" style="width:20px"></i></div>
+                <div class="spacing-row"><span>24px</span><i class="spacing-bar" style="width:24px"></i></div>
+                <div class="spacing-row"><span>32px</span><i class="spacing-bar" style="width:32px"></i></div>
+                <div class="spacing-row"><span>40px</span><i class="spacing-bar" style="width:40px"></i></div>
+                <div class="spacing-row"><span>48px</span><i class="spacing-bar" style="width:48px"></i></div>
+              </div>
+            </div>
+            <div>
+              <h3>Radius</h3>
+              <div class="radius-grid">
+                <div class="radius-sample" style="border-radius:6px">sm · 6</div>
+                <div class="radius-sample" style="border-radius:8px">md · 8</div>
+                <div class="radius-sample" style="border-radius:12px">lg · 12</div>
+                <div class="radius-sample" style="border-radius:999px">full</div>
+              </div>
+            </div>
+          </div>
+          <p class="callout" style="margin-top:18px"><strong>간격 소유 원칙</strong><br />컴포넌트는 자신의 바깥쪽 <code>margin</code>을 소유하지 않습니다. 부모 layout의 <code>gap</code>이 형제 컴포넌트 사이의 간격을 결정합니다.</p>
+          <div class="spacing-rules">
+            <div>
+              <h3>컴포넌트 사이 간격</h3>
+              <div class="token-table-wrap">
+                <table class="token-table spacing-table">
+                  <thead><tr><th>관계</th><th>Default</th><th>Compact</th><th>예시</th></tr></thead>
+                  <tbody>
+                    <tr><td>아이콘과 텍스트</td><td><code>8px</code></td><td><code>8px</code></td><td>Button, menu item</td></tr>
+                    <tr><td>같은 action group</td><td><code>8px</code></td><td><code>8px</code></td><td>확인·취소, toolbar</td></tr>
+                    <tr><td>컴포넌트 내부 요소</td><td><code>12px</code></td><td><code>8px</code></td><td>제목·본문·metadata</td></tr>
+                    <tr><td>반복되는 같은 항목</td><td><code>12px</code></td><td><code>8px</code></td><td>목록 row, Board card</td></tr>
+                    <tr><td>Form field 사이</td><td><code>16px</code></td><td><code>12px</code></td><td>label·input 단위</td></tr>
+                    <tr><td>관련 component group</td><td><code>24px</code></td><td><code>20px</code></td><td>검색과 filter</td></tr>
+                    <tr><td>Page section 사이</td><td><code>32px</code></td><td><code>24px</code></td><td>제목·요약·본문</td></tr>
+                    <tr><td>큰 화면 영역 사이</td><td><code>48px</code></td><td><code>40px</code></td><td>독립 dashboard 영역</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div>
+              <h3>Container padding</h3>
+              <div class="token-table-wrap">
+                <table class="token-table spacing-table">
+                  <thead><tr><th>대상</th><th>Default</th><th>Compact</th></tr></thead>
+                  <tbody>
+                    <tr><td>작은 card·popover</td><td><code>16px</code></td><td><code>12px</code></td></tr>
+                    <tr><td>기본 card·panel</td><td><code>24px</code></td><td><code>20px</code></td></tr>
+                    <tr><td>Dialog</td><td><code>24px</code></td><td><code>20px</code></td></tr>
+                    <tr><td>Page 좌우 여백</td><td><code>40px</code></td><td><code>32px</code></td></tr>
+                    <tr><td>Button 좌우</td><td><code>12px</code></td><td><code>12px</code></td></tr>
+                    <tr><td>Input 좌우</td><td><code>12px</code></td><td><code>12px</code></td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <p class="callout" style="margin-top:18px">새로운 임의 값을 만들기 전에 가장 가까운 spacing 또는 radius 토큰을 사용합니다.</p>
+        </section>
+
+        <section class="section" id="surface">
+          <header class="section-header">
+            <span class="section-number">06</span>
+            <div><h2>표면과 깊이</h2><p>Border-first Hybrid로 화면의 깊이를 절제합니다.</p></div>
+          </header>
+          <div class="shell-demo" aria-label="Sidebar와 Main 배경 예시">
+            <aside class="shell-demo-sidebar">
+              <span class="mini-brand"><b>OK</b> OkHub</span>
+              <span class="mini-nav active">Settings</span>
+              <span class="mini-nav">Documents</span>
+            </aside>
+            <div class="shell-demo-main">
+              <strong>Main · surface</strong>
+              <div class="shell-demo-panel">보조 영역 · canvas</div>
+            </div>
+          </div>
+          <div class="surface-demo">
+            <div class="surface-panel"><strong>Card / Panel</strong><p style="margin:6px 0 0;color:var(--text-muted)">1px 테두리, 그림자 없음</p></div>
+            <div class="surface-overlay"><strong>Popover / Dialog</strong><br /><code>0 12px 28px rgba(25,30,38,.13)</code></div>
+          </div>
+          <ul class="interaction-list" style="margin-top:16px">
+            <li>Sidebar는 Canvas <code>#F6F7F9</code>, 우측 Main은 Surface <code>#FFFFFF</code>를 사용합니다.</li>
+            <li>Main 안에서 다시 구분해야 하는 보조 영역에 Canvas를 사용합니다.</li>
+            <li>Card, Panel, Input은 기본 1px 테두리를 사용하고 원칙적으로 그림자를 쓰지 않습니다.</li>
+            <li>앱 shell은 테두리와 매우 약한 깊이만 허용합니다.</li>
+            <li>Dialog, Popover, Dropdown, Tooltip에만 overlay 그림자를 사용합니다.</li>
+            <li>선택은 그림자가 아니라 Primary soft 배경과 label로 표현합니다.</li>
+            <li>Hover에서 요소가 이동하거나 커지지 않습니다.</li>
+          </ul>
+        </section>
+
+        <section class="section" id="icons">
+          <header class="section-header">
+            <span class="section-number">07</span>
+            <div><h2>아이콘</h2><p>Lucide를 사용하고 의미가 불명확한 동작에는 항상 텍스트를 함께 제공합니다.</p></div>
+          </header>
+          <div class="icon-rules">
+            <div class="icon-rule"><span class="line-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18" /></svg></span><div><strong>크기와 선</strong><div>Default 16px · Compact 14px · 주요 단독 20px · strokeWidth 1.75</div></div></div>
+            <div class="icon-rule"><span class="line-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M7 7V4h10v3M6 7l1 13h10l1-13" /></svg></span><div><strong>아이콘 + 텍스트</strong><div>삭제, 복제, 경로 변경처럼 오해할 수 있는 작업은 텍스트를 함께 표시합니다.</div></div></div>
+            <div class="icon-rule"><span class="line-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="m8 12 2.5 2.5L16 9" /></svg></span><div><strong>역할별 아이콘</strong><div>Loading은 LoaderCircle, 성공은 CircleCheck, 오류는 CircleAlert로 고정합니다.</div></div></div>
+          </div>
+          <p class="callout" style="margin-top:16px">아이콘 단독 버튼은 사이드바 접기, 닫기, 검색, 더보기처럼 보편적인 경우에만 사용하며 tooltip과 <code>aria-label</code>이 필요합니다. Emoji와 문자 기호는 제품 아이콘으로 사용하지 않습니다.</p>
+        </section>
+
+        <section class="section" id="components">
+          <header class="section-header">
+            <span class="section-number">08</span>
+            <div><h2>컴포넌트 구조</h2><p>shadcn은 완성품이 아니라 접근 가능한 primitive 기반으로 사용합니다.</p></div>
+          </header>
+          <div class="component-tree">
+            <pre><code>components/ui
+├─ Button
+├─ Input
+├─ Dialog
+├─ Popover
+├─ DropdownMenu
+└─ Tooltip</code></pre>
+            <pre><code>components/patterns
+├─ StatusBadge
+├─ SettingsRow
+├─ DocumentTreeItem
+├─ ReviewComment
+├─ DecisionRequest
+└─ RepositoryConnection</code></pre>
+          </div>
+          <ul class="interaction-list" style="margin-top:16px">
+            <li><code>components/ui</code>는 색상, 밀도, focus, radius와 상태 variant를 소유합니다.</li>
+            <li><code>components/patterns</code>는 OkHub에서 반복되는 제품 의미와 조합을 소유합니다.</li>
+            <li>화면에서 임의 Tailwind class로 동일 패턴을 다시 만들지 않습니다.</li>
+            <li>pattern은 데이터 fetching이나 Git/GitHub mutation을 직접 수행하지 않습니다.</li>
+          </ul>
+          <div class="subsection">
+            <h3>Button variants</h3>
+            <div class="button-row">
+              <button class="demo-button demo-primary">Primary</button>
+              <button class="demo-button demo-secondary">Secondary</button>
+              <button class="demo-button demo-ghost">Ghost</button>
+              <button class="demo-button demo-destructive">Destructive</button>
+              <button class="demo-button demo-icon" aria-label="더 보기">•••</button>
+            </div>
+            <div class="token-table-wrap" style="margin-top:16px">
+              <table class="token-table">
+                <thead><tr><th>Variant</th><th>Role</th></tr></thead>
+                <tbody>
+                  <tr><td class="token-name">primary</td><td>한 영역에서 가장 중요한 한 행동</td></tr>
+                  <tr><td class="token-name">secondary</td><td>보조 행동</td></tr>
+                  <tr><td class="token-name">ghost</td><td>toolbar와 낮은 우선순위 행동</td></tr>
+                  <tr><td class="token-name">destructive</td><td>삭제, 폐기, 연결 해제</td></tr>
+                  <tr><td class="token-name">icon</td><td>의미가 보편적이고 tooltip이 있는 단독 행동</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="callout" style="margin-top:14px">한 Dialog 또는 좁은 action group 안에는 Primary button을 하나만 둡니다.</p>
+          </div>
+          <div class="subsection">
+            <h3>Button states</h3>
+            <div class="state-grid">
+              <div class="state-sample"><span>Default</span><button class="demo-button demo-primary">저장</button></div>
+              <div class="state-sample"><span>Hover</span><button class="demo-button demo-primary is-hover">저장</button></div>
+              <div class="state-sample"><span>Pressed</span><button class="demo-button demo-primary is-pressed">저장</button></div>
+              <div class="state-sample"><span>Focus</span><button class="demo-button demo-primary is-focus">저장</button></div>
+              <div class="state-sample"><span>Disabled</span><button class="demo-button demo-primary" disabled>저장</button></div>
+              <div class="state-sample"><span>Loading</span><button class="demo-button demo-primary"><i class="mini-spinner"></i>저장 중</button></div>
+            </div>
+            <div class="token-table-wrap" style="margin-top:16px">
+              <table class="token-table">
+                <thead><tr><th>Variant</th><th>Default</th><th>Hover</th><th>Pressed</th><th>Disabled</th></tr></thead>
+                <tbody>
+                  <tr><td>Primary</td><td><code>#007C71</code></td><td><code>#00665F</code></td><td><code>#00544F</code></td><td><code>#DDE8E6</code></td></tr>
+                  <tr><td>Secondary</td><td>흰색 + border</td><td><code>#F6F7F9</code></td><td><code>#ECEFF2</code></td><td><code>#F1F3F5</code></td></tr>
+                  <tr><td>Ghost</td><td>투명</td><td><code>#E5F5F3</code></td><td><code>#D4EFEC</code></td><td>투명 + muted</td></tr>
+                  <tr><td>Destructive</td><td><code>#FFF0F1</code></td><td><code>#FFE2E5</code></td><td><code>#F8CDD3</code></td><td><code>#F1F3F5</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="subsection">
+            <h3>Input·Select·selection states</h3>
+            <div class="control-state-grid">
+              <label class="control-sample"><span>Default</span><input value="문서 제목" readonly /></label>
+              <label class="control-sample is-hover"><span>Hover</span><input value="문서 제목" readonly /></label>
+              <label class="control-sample is-focus"><span>Focus</span><input value="문서 제목" readonly /></label>
+              <label class="control-sample is-invalid"><span>Invalid</span><input value="" placeholder="경로 입력" readonly /><small>저장할 경로를 입력해 주세요.</small></label>
+              <label class="control-sample"><span>Disabled</span><input value="수정할 수 없음" disabled /></label>
+              <label class="selection-sample"><input type="radio" checked readonly /><span><b>Selected row</b><small>Primary soft 배경과 radio를 함께 사용</small></span></label>
+            </div>
+          </div>
+          <div class="subsection">
+            <h3>Pointer cursor</h3>
+            <div class="cursor-grid">
+              <span class="cursor-sample cursor-pointer">Button·link<br /><code>pointer</code></span>
+              <span class="cursor-sample cursor-text">Input·textarea<br /><code>text</code></span>
+              <span class="cursor-sample cursor-disabled">Disabled<br /><code>not-allowed</code></span>
+              <span class="cursor-sample cursor-grab">Drag item<br /><code>grab</code></span>
+              <span class="cursor-sample cursor-resize">Resize handle<br /><code>col-resize</code></span>
+            </div>
+            <p class="callout" style="margin-top:14px">클릭 동작이 없는 Card에는 pointer cursor를 사용하지 않습니다.</p>
+          </div>
+        </section>
+
+        <section class="section" id="feedback">
+          <header class="section-header">
+            <span class="section-number">09</span>
+            <div><h2>상태와 피드백</h2><p>작업 규모와 사용자의 판단 필요 여부에 맞는 피드백을 사용합니다.</p></div>
+          </header>
+          <div class="two-column">
+            <ul class="interaction-list">
+              <li>Hover는 배경과 색상만 120–160ms로 변경합니다.</li>
+              <li>Pressed는 Hover보다 한 단계 진한 배경을 사용합니다.</li>
+              <li>Selected는 Primary soft 배경, 활성 텍스트와 필요한 경우 왼쪽 표시선을 사용합니다.</li>
+              <li>Focus는 2px Aqua Mint ring과 바깥 offset을 사용합니다.</li>
+              <li>Disabled는 명도와 대비를 낮추되 설명은 읽을 수 있어야 합니다.</li>
+            </ul>
+            <ul class="interaction-list">
+              <li>버튼 작업은 LoaderCircle, 화면 최초 로딩은 skeleton을 사용합니다.</li>
+              <li>Form 오류는 field 아래에 원인과 해결 방법을 표시합니다.</li>
+              <li>짧은 Git·동기화 성공 결과는 toast로 표시합니다.</li>
+              <li>충돌, 인증, push 실패는 본문 또는 Dialog에서 판단할 수 있게 합니다.</li>
+              <li>삭제·연결 교체·변경 폐기는 대상 이름이 포함된 확인 Dialog를 사용합니다.</li>
+            </ul>
+          </div>
+          <p class="callout" style="margin-top:16px">Dialog와 panel 전환은 160–200ms로 제한하고 <code>prefers-reduced-motion</code>에서는 기능에 필요하지 않은 애니메이션을 제거합니다. 전체 화면 spinner는 사용하지 않습니다.</p>
+        </section>
+
+        <section class="section" id="responsive">
+          <header class="section-header">
+            <span class="section-number">10</span>
+            <div><h2>화면 크기, 스크롤과 반응형</h2><p>창 크기가 달라져도 주요 action과 content가 잘리지 않게 합니다.</p></div>
+          </header>
+          <div class="breakpoint-grid">
+            <article><b>≥ 1440</b><span>Sidebar 260px</span><small>Main 유동 너비</small></article>
+            <article><b>1024–1439</b><span>Sidebar 244px</span><small>기본 desktop</small></article>
+            <article><b>768–1023</b><span>Overlay drawer</span><small>Main 전체 너비</small></article>
+            <article><b>&lt; 768</b><span>한 열 구성</span><small>Action wrap·stack</small></article>
+          </div>
+          <div class="two-column" style="margin-top:18px">
+            <article class="rule-card"><strong>세로 스크롤</strong><ul><li>Shell은 <code>100dvh</code></li><li>Sidebar와 Main 독립 scroll</li><li>긴 Dialog는 본문만 scroll</li><li>목록은 max-height 이후 내부 scroll</li></ul></article>
+            <article class="rule-card"><strong>가로 스크롤</strong><ul><li>페이지 전체에는 금지</li><li>Board는 자체 영역에서 허용</li><li>Table과 diff는 좁은 화면에서 내부 허용</li><li>긴 text는 wrap 또는 ellipsis 규칙 명시</li></ul></article>
+          </div>
+          <div class="width-rules">
+            <span><b>문서 읽기</b><code>max 880px</code></span>
+            <span><b>일반 Settings</b><code>max 1120px</code></span>
+            <span><b>Board</b><code>available width</code></span>
+            <span><b>최소 지원 창</b><code>720 × 600px</code></span>
+          </div>
+        </section>
+
+        <section class="section" id="forms">
+          <header class="section-header">
+            <span class="section-number">11</span>
+            <div><h2>Form</h2><p>Label, 도움말, control과 오류 메시지의 순서와 행동을 통일합니다.</p></div>
+          </header>
+          <div class="form-demo">
+            <label for="demo-path">문서 경로 <em>필수</em></label>
+            <p>지식 저장소 안에서 사용할 상대 경로입니다.</p>
+            <input id="demo-path" value="docs/api/map-search.md" readonly />
+            <small class="form-status">사용 가능한 경로입니다.</small>
+          </div>
+          <div class="form-demo form-demo-error" style="margin-top:14px">
+            <label for="demo-error">저장소 경로 <em>필수</em></label>
+            <p>로컬에서 clone할 빈 폴더를 선택합니다.</p>
+            <input id="demo-error" value="/Users/me/existing" aria-invalid="true" readonly />
+            <small class="form-status">이미 파일이 있는 폴더입니다. 빈 폴더를 선택해 주세요.</small>
+          </div>
+          <ul class="interaction-list" style="margin-top:16px">
+            <li>Placeholder를 Label 대신 사용하지 않고 필수·선택 여부를 텍스트로 표시합니다.</li>
+            <li>오류는 blur 또는 제출 이후 표시하고 문제와 해결 방법을 함께 설명합니다.</li>
+            <li>제출 실패 시 값을 보존하고 첫 오류 field로 focus를 이동합니다.</li>
+            <li><code>label</code>, <code>aria-describedby</code>, <code>aria-invalid</code>를 연결합니다.</li>
+            <li>비동기 제출 중에는 중복 실행을 막고 submit button에 LoaderCircle을 표시합니다.</li>
+          </ul>
+        </section>
+
+        <section class="section" id="content-states">
+          <header class="section-header">
+            <span class="section-number">12</span>
+            <div><h2>빈 화면, 로딩과 오류</h2><p>상태의 범위와 사용자가 취할 수 있는 다음 행동을 함께 보여줍니다.</p></div>
+          </header>
+          <div class="content-state-grid">
+            <article class="content-state empty-state"><span class="state-icon">＋</span><strong>아직 문서가 없습니다</strong><p>첫 문서를 만들거나 기존 Markdown을 연결하세요.</p><button class="demo-button demo-primary">새 문서</button></article>
+            <article class="content-state loading-state"><div class="skeleton wide"></div><div class="skeleton"></div><div class="skeleton short"></div><strong>불러오는 중</strong><p>최초 화면은 실제 content 구조를 닮은 skeleton을 사용합니다.</p></article>
+            <article class="content-state error-state"><span class="state-icon">!</span><strong>저장소를 불러오지 못했습니다</strong><p>GitHub 연결 상태를 확인한 뒤 다시 시도해 주세요.</p><button class="demo-button demo-secondary">다시 시도</button><details><summary>기술 상세</summary><code>repository_fetch_failed</code></details></article>
+          </div>
+          <div class="two-column" style="margin-top:18px">
+            <article class="rule-card"><strong>Loading 원칙</strong><ul><li>목록 refresh는 기존 content 유지</li><li>장기 Git 작업은 현재 단계 표시</li><li>전체 화면 spinner 단독 사용 금지</li></ul></article>
+            <article class="rule-card"><strong>Error 원칙</strong><ul><li>일부 실패는 component 내부</li><li>진행 불가는 본문 오류 화면</li><li>입력값과 작성 내용 보존</li><li>판단이 필요한 오류는 toast만 사용하지 않음</li></ul></article>
+          </div>
+        </section>
+
+        <section class="section" id="accessibility">
+          <header class="section-header">
+            <span class="section-number">13</span>
+            <div><h2>접근성</h2><p>색, 키보드, focus와 확대 환경을 함께 검증합니다.</p></div>
+          </header>
+          <ul class="check-list">
+            <li>일반 텍스트와 control label은 WCAG AA 대비를 목표로 합니다.</li>
+            <li>색상만으로 상태, 선택과 오류를 전달하지 않습니다.</li>
+            <li>키보드로 모든 action과 overlay에 접근할 수 있어야 합니다.</li>
+            <li>Dialog는 focus trap을 사용하고 닫힌 뒤 trigger로 focus를 돌려줍니다.</li>
+            <li>Tooltip은 hover뿐 아니라 keyboard focus에서도 노출합니다.</li>
+            <li>icon-only button은 접근 가능한 이름을 갖습니다.</li>
+            <li>OS 확대와 앱 zoom에서 중요한 content와 action이 잘리지 않아야 합니다.</li>
+          </ul>
+        </section>
+
+        <section class="section" id="scope">
+          <header class="section-header">
+            <span class="section-number">14</span>
+            <div><h2>초기 범위와 검증</h2><p>지금 지원할 것과 의도적으로 제외한 것을 분리합니다.</p></div>
+          </header>
+          <div class="two-column">
+            <article class="rule-card"><strong>초기 범위</strong><ul><li>Light 테마</li><li>Default / Compact 표시 밀도</li><li>macOS / Windows 데스크톱</li><li>shadcn primitive와 OkHub pattern</li></ul></article>
+            <article class="rule-card"><strong>제외</strong><ul><li>Dark 테마</li><li>사용자 정의 Primary 색상</li><li>워크스페이스가 강제하는 팀 공용 표시 밀도</li><li>문서 타입·담당 영역별 장식 색상</li></ul></article>
+          </div>
+          <div class="subsection">
+            <h3>구현 검증 체크리스트</h3>
+            <ul class="check-list">
+              <li>primitive의 모든 variant와 상태를 Storybook 또는 동등한 component preview에서 확인합니다.</li>
+              <li>Default와 Compact로 Home, Documents, Project, 문서 상세와 Settings를 확인합니다.</li>
+              <li>keyboard navigation, focus 복귀, tooltip과 Dialog를 검사합니다.</li>
+              <li>Primary와 Semantic foreground/background 대비를 자동 검사합니다.</li>
+              <li>macOS와 Windows에서 Pretendard fallback, control 높이와 scroll 영역을 확인합니다.</li>
+            </ul>
+          </div>
+        </section>
+
+        <footer class="footer">이 HTML은 검토 편의를 위한 시각 문서입니다. 제품 기준의 원본은 <a href="design-system.md">design-system.md</a>입니다.</footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

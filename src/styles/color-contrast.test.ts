@@ -27,9 +27,15 @@ function contrast(a: string, b: string): number {
 }
 
 describe("OkHub color tokens", () => {
+  it("uses white text on a dedicated accessible primary action color", () => {
+    expect(token(css, "--color-primary-action")).toBe("#007c71");
+    expect(token(css, "--color-primary-action-hover")).toBe("#00665f");
+    expect(token(css, "--color-on-primary")).toBe("#ffffff");
+  });
+
   it.each([
-    ["--color-on-primary", "--color-primary"],
-    ["--color-on-primary", "--color-primary-hover"],
+    ["--color-on-primary", "--color-primary-action"],
+    ["--color-on-primary", "--color-primary-action-hover"],
     ["--color-primary-text", "--color-surface"],
     ["--color-primary-text", "--color-primary-soft"],
     ["--color-text-muted", "--color-surface"],
