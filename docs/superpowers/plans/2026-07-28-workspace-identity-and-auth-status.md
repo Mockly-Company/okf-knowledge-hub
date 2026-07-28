@@ -187,17 +187,17 @@ Proposed commit: `feat: preserve workspace across GitHub account changes`
 - Consumes: `useWorkspaceConnection().state`, `.account`, and `.isCurrentWorkspaceLoading`.
 - Produces: no new public API.
 
-- [ ] **Step 1: Write failing sidebar tests**
+- [x] **Step 1: Write failing sidebar tests**
 
 Verify `Mockly`, `@hyeeun`, and the avatar URL for a connected authenticated fake. Verify `GitHub 재로그인 필요` after logout. Fire an image `error` event and verify the visible fallback is `H`. Use a long workspace name and assert its full value is available through `title`.
 
-- [ ] **Step 2: Run the sidebar tests and verify RED**
+- [x] **Step 2: Run the sidebar tests and verify RED**
 
 Run: `pnpm vitest run src/components/patterns/AppSidebar.test.tsx src/components/patterns/AppShell.test.tsx`
 
 Expected: FAIL on placeholder text and missing image.
 
-- [ ] **Step 3: Implement derived sidebar presentation**
+- [x] **Step 3: Implement derived sidebar presentation**
 
 - Read context in `AppSidebar`; do not introduce component-local account data.
 - Render the connected workspace summary name.
@@ -205,13 +205,13 @@ Expected: FAIL on placeholder text and missing image.
 - On image error, switch only presentation to the uppercase first Unicode character of `login`, falling back to `GH`.
 - Render stable loading skeleton dimensions using design tokens.
 
-- [ ] **Step 4: Run focused tests and accessibility scan**
+- [x] **Step 4: Run focused tests and accessibility scan**
 
 Run: `pnpm vitest run src/components/patterns/AppSidebar.test.tsx src/components/patterns/AppShell.test.tsx`
 
 Expected: all tests pass with no duplicate accessible account labels.
 
-- [ ] **Step 5: Run the frontend suite**
+- [x] **Step 5: Run the frontend suite**
 
 Run: `pnpm test:run && pnpm build`
 
