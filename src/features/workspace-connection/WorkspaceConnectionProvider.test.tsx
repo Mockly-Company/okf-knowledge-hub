@@ -12,6 +12,12 @@ function Probe() {
   return (
     <>
       <output>{`${connection.state.step}:${connection.state.status}`}</output>
+      <output aria-label="account session">
+        {connection.account.status === "authenticated" ||
+        connection.account.status === "logging_out"
+          ? `${connection.account.status}:${connection.account.user.login}`
+          : connection.account.status}
+      </output>
       <output aria-label="replacement cancellation">
         {String(connection.canCancelReplacement)}
       </output>
@@ -27,11 +33,93 @@ function Probe() {
       <button onClick={() => void connection.startReplacement()}>replace</button>
       <button onClick={() => void connection.cancelReplacement()}>cancel replacement</button>
       <button onClick={() => void connection.revalidateCurrentWorkspace()}>revalidate</button>
+      <button onClick={() => void connection.logoutGithub()}>logout</button>
     </>
   );
 }
 
 describe("WorkspaceConnectionProvider", () => {
+  it("loads the GitHub account while retaining the connected workspace", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+
+    expect(await screen.findByText("initialize:connected")).toBeInTheDocument();
+    expect(await screen.findByText("authenticated:hyeeun")).toBeInTheDocument();
+    expect(
+      gateway.calls.filter((call) => call.method === "getAuthState"),
+    ).toHaveLength(1);
+  });
+
+  it("signs out of GitHub without discarding the connected workspace", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+    await screen.findByText("authenticated:hyeeun");
+
+    await userEvent.click(screen.getByRole("button", { name: "logout" }));
+
+    expect(await screen.findByText("signed_out")).toBeInTheDocument();
+    expect(screen.getByText("initialize:connected")).toBeInTheDocument();
+    expect(gateway.currentWorkspace?.status).toBe("connected");
+  });
+
+  it("restores the account and workspace when logout fails", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.logoutError = {
+      code: "credential_store_unavailable",
+      message: "GitHub 로그아웃을 완료할 수 없습니다.",
+      recovery: "retry",
+      details: {},
+    };
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+    await screen.findByText("authenticated:hyeeun");
+
+    await userEvent.click(screen.getByRole("button", { name: "logout" }));
+
+    expect(await screen.findByText("authenticated:hyeeun")).toBeInTheDocument();
+    expect(screen.getByText("initialize:connected")).toBeInTheDocument();
+  });
+
+  it("reauthenticates an owned account request without entering onboarding", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.authState = { status: "signed_out" };
+    gateway.deferGithubAuth = true;
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+    await screen.findByText("signed_out");
+
+    await userEvent.click(screen.getByRole("button", { name: "login" }));
+    const authCall = gateway.calls.find((call) => call.method === "beginGithubAuth");
+    expect(authCall?.args[0]).toEqual(expect.any(String));
+    expect(screen.getByText("login_beginning")).toBeInTheDocument();
+    expect(screen.getByText("initialize:connected")).toBeInTheDocument();
+
+    gateway.emitAuth({
+      status: "authenticated",
+      requestId: "7c4be76a-a56e-4c69-a02f-97ce2441f0ad",
+      user: { id: 99, login: "stale", avatarUrl: "https://example.test/stale.png" },
+    });
+    expect(screen.getByText("login_beginning")).toBeInTheDocument();
+
+    gateway.approveAuthentication();
+    expect(await screen.findByText("authenticated:hyeeun")).toBeInTheDocument();
+    expect(screen.getByText("initialize:connected")).toBeInTheDocument();
+  });
+
   it("subscribes before commands and tears down both event listeners", async () => {
     const gateway = FakeWorkspaceConnectionGateway.disconnected();
     const view = render(

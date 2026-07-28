@@ -127,7 +127,7 @@ Proposed commit: `feat: add GitHub account session state`
 - Consumes: Task 1 account reducer.
 - Produces additions to `WorkspaceConnectionContextValue`: `account: AccountSessionState` and `logoutGithub(): Promise<void>`.
 
-- [ ] **Step 1: Write failing Provider tests**
+- [x] **Step 1: Write failing Provider tests**
 
 Add tests that prove:
 
@@ -140,17 +140,17 @@ expect(result.current.account.status).toBe("signed_out");
 
 Add a rejected fake logout and assert the connected workspace and authenticated user remain. Start login while connected, emit a stale event and then the owned event, and assert only the owned event updates `account` while `state.status` remains `connected`.
 
-- [ ] **Step 2: Run focused Provider tests and verify RED**
+- [x] **Step 2: Run focused Provider tests and verify RED**
 
 Run: `pnpm vitest run src/features/workspace-connection/WorkspaceConnectionProvider.test.tsx`
 
 Expected: FAIL because the context has no `account` or `logoutGithub`.
 
-- [ ] **Step 3: Extend the fake gateway**
+- [x] **Step 3: Extend the fake gateway**
 
 Add `logoutError: AppError | null`. `logoutGithub()` throws it before mutating `authState`; success changes `authState` to `signed_out`.
 
-- [ ] **Step 4: Integrate the account reducer**
+- [x] **Step 4: Integrate the account reducer**
 
 - Initialize `useReducer(accountSessionReducer, ..., createInitialAccountSessionState)`.
 - Keep one auth listener; dispatch sanitized events to the account reducer first.
@@ -159,13 +159,13 @@ Add `logoutError: AppError | null`. `logoutGithub()` throws it before mutating `
 - Before `beginGithubAuth`, register the request ID in the account reducer. When connected, do not send login actions into the onboarding reducer.
 - Add `logoutGithub()` that dispatches `logoutStarted`, awaits the gateway, and dispatches success or sanitized failure.
 
-- [ ] **Step 5: Run Provider and existing machine tests**
+- [x] **Step 5: Run Provider and existing machine tests**
 
 Run: `pnpm vitest run src/features/workspace-connection/WorkspaceConnectionProvider.test.tsx src/features/workspace-connection/machine`
 
 Expected: all tests pass, including stale event ownership tests.
 
-- [ ] **Step 6: Run the frontend suite**
+- [x] **Step 6: Run the frontend suite**
 
 Run: `pnpm test:run && pnpm build`
 
