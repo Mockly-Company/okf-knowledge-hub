@@ -237,27 +237,27 @@ Proposed commit: `feat: show workspace and GitHub identity in the shell`
 - Consumes: `account`, `startLogin`, `cancelLogin`, `openVerificationUrl`, and `logoutGithub` from `WorkspaceConnectionContextValue`.
 - Produces: `GitHubAccountPanel` with no props.
 
-- [ ] **Step 1: Add Radix Alert Dialog**
+- [x] **Step 1: Add Radix Alert Dialog**
 
 Run: `pnpm add @radix-ui/react-alert-dialog`
 
 Expected: dependency and lockfile update without unrelated version changes.
 
-- [ ] **Step 2: Write failing panel tests**
+- [x] **Step 2: Write failing panel tests**
 
 Test authenticated account content, logout confirmation copy, initial focus on Cancel, successful logout, failed logout error, signed-out login, Device Flow code display, verification URL action, and cancel action.
 
-- [ ] **Step 3: Run focused tests and verify RED**
+- [x] **Step 3: Run focused tests and verify RED**
 
 Run: `pnpm vitest run src/features/workspace-connection/components/GitHubAccountPanel.test.tsx src/pages/SettingsPage.test.tsx`
 
 Expected: FAIL because `외부 연결` is still a placeholder.
 
-- [ ] **Step 4: Implement the confirmation dialog**
+- [x] **Step 4: Implement the confirmation dialog**
 
 Use Radix Alert Dialog. Title: `GitHub에서 로그아웃할까요?`. Description: `로컬 워크스페이스와 문서는 유지되며 GitHub 동기화, Issue와 PR 기능은 다시 로그인할 때까지 사용할 수 없습니다.` Actions: `취소`, `로그아웃`.
 
-- [ ] **Step 5: Implement the GitHub account panel**
+- [x] **Step 5: Implement the GitHub account panel**
 
 - Authenticated and logging-out states retain account identity.
 - Signed-out and reauthentication states show `GitHub 다시 로그인`.
@@ -265,11 +265,11 @@ Use Radix Alert Dialog. Title: `GitHub에서 로그아웃할까요?`. Descriptio
 - Public errors render with `role="alert"`.
 - Disable duplicate login/logout actions while their command owns the state.
 
-- [ ] **Step 6: Connect Settings category routing**
+- [x] **Step 6: Connect Settings category routing**
 
 Render `GitHubAccountPanel` when `activeCategory === "외부 연결"`. Preserve the existing workspace and display panels unchanged.
 
-- [ ] **Step 7: Run focused and full frontend verification**
+- [x] **Step 7: Run focused and full frontend verification**
 
 Run: `pnpm vitest run src/features/workspace-connection/components/GitHubAccountPanel.test.tsx src/pages/SettingsPage.test.tsx`
 

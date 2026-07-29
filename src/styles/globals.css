@@ -384,3 +384,154 @@ select {
 .connection-error h2 {
   margin: 0 0 8px;
 }
+
+.github-account-panel {
+  display: grid;
+  align-content: start;
+  gap: 24px;
+}
+
+.github-account-card {
+  display: grid;
+  gap: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: 20px;
+}
+
+.github-account-card__heading,
+.github-account-card__account,
+.github-account-card__identity,
+.github-account-card__actions {
+  display: flex;
+  align-items: center;
+}
+
+.github-account-card__heading {
+  gap: 12px;
+}
+
+.github-account-card__heading h3,
+.github-account-card__heading p,
+.github-account-card__signed-out p,
+.github-account-card__device-flow p,
+.github-account-card__status {
+  margin: 0;
+}
+
+.github-account-card__heading p,
+.github-account-card__identity span,
+.github-account-card__signed-out p,
+.github-account-card__device-flow p,
+.github-account-card__status {
+  color: var(--color-text-muted);
+}
+
+.github-account-card__provider-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+}
+
+.github-account-card__provider-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.github-account-card__account {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.github-account-card__identity {
+  min-width: 0;
+  gap: 10px;
+}
+
+.github-account-card__identity img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.github-account-card__identity strong,
+.github-account-card__identity span {
+  display: block;
+}
+
+.github-account-card__signed-out,
+.github-account-card__device-flow {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+}
+
+.github-account-card__device-flow code {
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+  padding: 8px 10px;
+  color: var(--color-text-strong);
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.github-account-card__actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.github-account-card__error {
+  margin: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-error-soft);
+  padding: 10px 12px;
+  color: var(--color-error);
+}
+
+.account-dialog__overlay {
+  position: fixed;
+  z-index: 50;
+  inset: 0;
+  background: rgb(20 24 30 / 42%);
+}
+
+.account-dialog__content {
+  position: fixed;
+  z-index: 51;
+  top: 50%;
+  left: 50%;
+  width: min(calc(100vw - 32px), 440px);
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: 24px;
+  box-shadow: 0 18px 48px rgb(20 24 30 / 20%);
+}
+
+.account-dialog__title {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.account-dialog__description {
+  margin: 10px 0 0;
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+
+.account-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+}
