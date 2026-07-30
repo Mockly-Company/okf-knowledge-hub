@@ -1,6 +1,8 @@
 import { CircleUserRound, ExternalLink } from "lucide-react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceConnection } from "../WorkspaceConnectionProvider";
+import { DeviceCodeCopy } from "./DeviceCodeCopy";
 import { LogoutConfirmationDialog } from "./LogoutConfirmationDialog";
 
 export function GitHubAccountPanel() {
@@ -11,6 +13,18 @@ export function GitHubAccountPanel() {
     logoutGithub,
     openVerificationUrl,
   } = useWorkspaceConnection();
+  const accountUser =
+    account.status === "authenticated" || account.status === "logging_out"
+      ? account.user
+      : null;
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const accountInitial = accountUser
+    ? (Array.from(accountUser.login.trim())[0]?.toLocaleUpperCase() ?? "GH")
+    : "GH";
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [accountUser?.id, accountUser?.avatarUrl]);
 
   return (
     <div className="github-account-panel">
@@ -41,7 +55,17 @@ export function GitHubAccountPanel() {
         ) : account.status === "authenticated" || account.status === "logging_out" ? (
           <div className="github-account-card__account">
             <div className="github-account-card__identity">
-              <img src={account.user.avatarUrl} alt="" />
+              <span className="github-account-card__avatar" aria-hidden="true">
+                {!avatarFailed ? (
+                  <img
+                    src={account.user.avatarUrl}
+                    alt=""
+                    onError={() => setAvatarFailed(true)}
+                  />
+                ) : (
+                  accountInitial
+                )}
+              </span>
               <div>
                 <strong>@{account.user.login}</strong>
                 <span>연결됨</span>
@@ -55,7 +79,7 @@ export function GitHubAccountPanel() {
         ) : account.status === "waiting_for_user" ? (
           <div className="github-account-card__device-flow">
             <p>GitHub 인증 페이지에 다음 코드를 입력하세요.</p>
-            <code>{account.authorization.userCode}</code>
+            <DeviceCodeCopy code={account.authorization.userCode} />
             <div className="github-account-card__actions">
               <Button
                 type="button"

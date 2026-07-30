@@ -1,7 +1,8 @@
-import { Copy, ExternalLink, LoaderCircle } from "lucide-react";
+import { ExternalLink, LoaderCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { AuthConnectionState, RecoveryAction } from "../types";
 import { ConnectionError } from "./ConnectionError";
+import { DeviceCodeCopy } from "./DeviceCodeCopy";
 
 interface GitHubLoginStepProps {
   state: AuthConnectionState;
@@ -23,12 +24,7 @@ export function GitHubLoginStep({ state, onStart, onCancel, onOpen, onRecover }:
       {authorization ? (
         <div className="workspace-connection__device-flow">
           <p>GitHub에서 아래 코드를 입력해 인증을 계속하세요.</p>
-          <div className="workspace-connection__code-row">
-            <code>{authorization.userCode}</code>
-            <Button variant="secondary" aria-label="사용자 코드 복사" onClick={() => void navigator.clipboard?.writeText(authorization.userCode)}>
-              <Copy aria-hidden="true" strokeWidth={1.75} /> 코드 복사
-            </Button>
-          </div>
+          <DeviceCodeCopy code={authorization.userCode} />
           <p>인증 코드는 {new Date(authorization.expiresAtUnix * 1000).toLocaleTimeString("ko-KR")}까지 유효합니다.</p>
           <div className="workspace-connection__actions">
             <Button variant="secondary" asChild>

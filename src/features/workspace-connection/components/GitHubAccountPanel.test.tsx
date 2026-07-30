@@ -1,5 +1,5 @@
 import axe from "axe-core";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
@@ -23,6 +23,18 @@ describe("GitHubAccountPanel", () => {
 
     expect(await screen.findByText("@hyeeun")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+  });
+
+  it("falls back to the login initial when the avatar cannot load", async () => {
+    const { container } = renderPanel();
+    await screen.findByText("@hyeeun");
+
+    const avatar = container.querySelector(".github-account-card__identity img");
+    expect(avatar).not.toBeNull();
+    fireEvent.error(avatar as HTMLImageElement);
+
+    expect(container.querySelector(".github-account-card__identity img")).toBeNull();
+    expect(screen.getByText("H")).toBeInTheDocument();
   });
 
   it("explains retained local access before logout and focuses cancel", async () => {
