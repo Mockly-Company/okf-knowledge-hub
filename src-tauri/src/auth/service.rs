@@ -32,6 +32,16 @@ struct ActiveJob {
     cancellation: CancellationToken,
 }
 
+enum AccessSession {
+    Uninitialized,
+    SignedOut,
+    Authenticated {
+        access_token: SecretString,
+        expires_at_unix: i64,
+    },
+    ReauthenticationRequired,
+}
+
 #[derive(Default)]
 struct Lifecycle {
     generation: u64,
@@ -87,6 +97,7 @@ pub struct AuthService {
     lifecycle: Mutex<Lifecycle>,
     begin_reservations: Arc<std::sync::Mutex<HashMap<Uuid, u64>>>,
     refresh: Mutex<()>,
+    access_session: Mutex<AccessSession>,
 }
 
 impl AuthService {
@@ -108,6 +119,7 @@ impl AuthService {
             lifecycle: Mutex::new(Lifecycle::default()),
             begin_reservations: Arc::new(std::sync::Mutex::new(HashMap::new())),
             refresh: Mutex::new(()),
+            access_session: Mutex::new(AccessSession::Uninitialized),
         }
     }
 
@@ -309,11 +321,16 @@ impl AuthService {
                     }
                     lifecycle.active.remove(&request_id);
                     drop(lifecycle);
+                    *self.access_session.lock().await = AccessSession::Authenticated {
+                        access_token: tokens.access_token().clone(),
+                        expires_at_unix: tokens.access_expires_at_unix(),
+                    };
                     if !self
                         .events
                         .emit(AuthStatusEvent::Authenticated { request_id, user })
                     {
                         self.credentials.delete().await?;
+                        *self.access_session.lock().await = AccessSession::SignedOut;
                     }
                     return Ok(());
                 }
@@ -324,6 +341,28 @@ impl AuthService {
     pub(crate) async fn valid_access_token(&self) -> Result<AccessToken, AppError> {
         self.ensure_client_id()?;
         let _single_flight = self.refresh.lock().await;
+        self.access_token_locked()
+            .await?
+            .ok_or_else(|| self.reauthentication_required())
+    }
+
+    async fn access_token_locked(&self) -> Result<Option<AccessToken>, AppError> {
+        let now = self.clock.now_unix();
+        {
+            let session = self.access_session.lock().await;
+            match &*session {
+                AccessSession::Authenticated {
+                    access_token,
+                    expires_at_unix,
+                } if *expires_at_unix > now.saturating_add(EXPIRY_SAFETY_WINDOW_SECONDS) => {
+                    return Ok(Some(AccessToken::from_secret(access_token.clone())));
+                }
+                AccessSession::SignedOut => return Ok(None),
+                AccessSession::ReauthenticationRequired => return Err(reauthentication_error()),
+                AccessSession::Uninitialized | AccessSession::Authenticated { .. } => {}
+            }
+        }
+
         let job_id = Uuid::new_v4();
         let (generation, cancellation) = {
             let mut lifecycle = self.lifecycle.lock().await;
@@ -361,29 +400,37 @@ impl AuthService {
         let tokens = match loaded {
             Ok(Some(tokens)) => tokens,
             Ok(None) => {
+                *self.access_session.lock().await = AccessSession::SignedOut;
                 self.finish_job(job_id).await;
-                return Err(self.reauthentication_required());
+                return Ok(None);
             }
             Err(error) => {
                 if error.code == ErrorCode::ReauthenticationRequired {
+                    *self.access_session.lock().await = AccessSession::ReauthenticationRequired;
                     self.emit_reauthentication_required();
                 }
                 return Err(error);
             }
         };
-        let now = self.clock.now_unix();
 
         if tokens.access_expires_at_unix() > now.saturating_add(EXPIRY_SAFETY_WINDOW_SECONDS) {
             if !self.finish_job_if_current(job_id, generation).await {
                 return Err(self.reauthentication_required());
             }
-            return Ok(AccessToken::from_secret(tokens.access_token().clone()));
+            *self.access_session.lock().await = AccessSession::Authenticated {
+                access_token: tokens.access_token().clone(),
+                expires_at_unix: tokens.access_expires_at_unix(),
+            };
+            return Ok(Some(AccessToken::from_secret(
+                tokens.access_token().clone(),
+            )));
         }
         if tokens.refresh_expires_at_unix() <= now {
             self.delete_if_current(job_id, generation).await?;
             return Err(self.reauthentication_required());
         }
 
+        self.ensure_client_id()?;
         let refresh_result = tokio::select! {
             _ = cancellation.cancelled() => {
                 self.finish_job(job_id).await;
@@ -419,14 +466,22 @@ impl AuthService {
         let save_result = self.credentials.save(&refreshed).await;
         lifecycle.active.remove(&job_id);
         save_result?;
-        Ok(access_token)
+        *self.access_session.lock().await = AccessSession::Authenticated {
+            access_token: refreshed.access_token().clone(),
+            expires_at_unix: refreshed.access_expires_at_unix(),
+        };
+        Ok(Some(access_token))
     }
 
     pub async fn logout(&self) -> Result<(), AppError> {
         let mut lifecycle = self.lifecycle.lock().await;
         invalidate_lifecycle(&mut lifecycle);
         self.clear_begin_reservations();
-        self.credentials.delete().await
+        let result = self.credentials.delete().await;
+        if result.is_ok() {
+            *self.access_session.lock().await = AccessSession::SignedOut;
+        }
+        result
     }
 
     fn has_begin_reservation(&self, generation: u64) -> bool {
@@ -454,7 +509,8 @@ impl AuthService {
     }
 
     pub(crate) async fn has_stored_credentials(&self) -> Result<bool, AppError> {
-        self.credentials.load().await.map(|tokens| tokens.is_some())
+        let _single_flight = self.refresh.lock().await;
+        Ok(self.access_token_locked().await?.is_some())
     }
 
     fn ensure_client_id(&self) -> Result<(), AppError> {
@@ -469,11 +525,7 @@ impl AuthService {
 
     fn reauthentication_required(&self) -> AppError {
         self.emit_reauthentication_required();
-        AppError::new(
-            ErrorCode::ReauthenticationRequired,
-            "GitHub에 다시 로그인해 주세요.",
-        )
-        .with_recovery(RecoveryAction::RestartLogin)
+        reauthentication_error()
     }
 
     fn emit_reauthentication_required(&self) {
@@ -502,6 +554,9 @@ impl AuthService {
         }
         let result = self.credentials.delete().await;
         lifecycle.active.remove(&job_id);
+        if result.is_ok() {
+            *self.access_session.lock().await = AccessSession::ReauthenticationRequired;
+        }
         result
     }
 
@@ -553,6 +608,14 @@ fn remaining_seconds(now_unix: i64, expires_at_unix: i64) -> Option<u64> {
         .flatten()
 }
 
+fn reauthentication_error() -> AppError {
+    AppError::new(
+        ErrorCode::ReauthenticationRequired,
+        "GitHub에 다시 로그인해 주세요.",
+    )
+    .with_recovery(RecoveryAction::RestartLogin)
+}
+
 fn authentication_expired_error() -> AppError {
     AppError::new(
         ErrorCode::AuthenticationExpired,
@@ -573,7 +636,7 @@ fn invalid_duration_error() -> AppError {
 mod tests {
     use std::collections::VecDeque;
     use std::future::pending;
-    use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -669,6 +732,8 @@ mod tests {
     struct MemoryCredentialStore {
         tokens: Arc<Mutex<Option<StoredTokens>>>,
         deletes: Arc<Mutex<usize>>,
+        loads: Arc<AtomicUsize>,
+        fail_delete: Arc<AtomicBool>,
     }
 
     impl MemoryCredentialStore {
@@ -676,6 +741,8 @@ mod tests {
             Self {
                 tokens: Arc::new(Mutex::new(Some(tokens))),
                 deletes: Arc::new(Mutex::new(0)),
+                loads: Arc::new(AtomicUsize::new(0)),
+                fail_delete: Arc::new(AtomicBool::new(false)),
             }
         }
 
@@ -698,11 +765,20 @@ mod tests {
         fn delete_count(&self) -> usize {
             *self.deletes.lock().unwrap()
         }
+
+        fn load_count(&self) -> usize {
+            self.loads.load(Ordering::SeqCst)
+        }
+
+        fn fail_delete(&self) {
+            self.fail_delete.store(true, Ordering::SeqCst);
+        }
     }
 
     #[async_trait]
     impl CredentialStore for MemoryCredentialStore {
         async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
             Ok(self.tokens.lock().unwrap().clone())
         }
 
@@ -712,6 +788,12 @@ mod tests {
         }
 
         async fn delete(&self) -> Result<(), AppError> {
+            if self.fail_delete.swap(false, Ordering::SeqCst) {
+                return Err(AppError::new(
+                    ErrorCode::CredentialStoreUnavailable,
+                    "fixture delete failure",
+                ));
+            }
             *self.tokens.lock().unwrap() = None;
             *self.deletes.lock().unwrap() += 1;
             Ok(())
@@ -1451,6 +1533,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn device_flow_seeds_the_access_session_after_durable_save() {
+        let api = FakeDeviceFlowApi::approved_after_two_polls();
+        let credentials = MemoryCredentialStore::default();
+        let clock = FakeClock::at(1_000);
+        let service = service(
+            api,
+            credentials.clone(),
+            clock.clone(),
+            AdvancingDelay::new(clock),
+            RecordingAuthEvents::default(),
+        );
+
+        let authorization = service.begin(uuid::Uuid::new_v4()).await.unwrap();
+        service
+            .run(authorization.request_id, CancellationToken::new())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service.valid_access_token().await.unwrap().expose_secret(),
+            "ghu_private"
+        );
+        assert_eq!(credentials.load_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn auth_probe_and_repeated_requests_share_one_credential_load() {
+        let credentials = MemoryCredentialStore::with_tokens(StoredTokens::new(
+            "ghu_cached",
+            "ghr_durable",
+            10_000,
+            20_000,
+        ));
+        let service = service(
+            FakeDeviceFlowApi::with_polls([]),
+            credentials.clone(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        );
+
+        assert!(service.has_stored_credentials().await.unwrap());
+        assert_eq!(
+            service.valid_access_token().await.unwrap().expose_secret(),
+            "ghu_cached"
+        );
+        assert_eq!(
+            service.valid_access_token().await.unwrap().expose_secret(),
+            "ghu_cached"
+        );
+
+        assert_eq!(credentials.load_count(), 1);
+    }
+
+    #[tokio::test]
     async fn expired_access_token_rotates_both_tokens_without_a_client_secret() {
         let api = FakeDeviceFlowApi::with_refresh_result(TokenGrant::new(
             "ghu_new", "ghr_new", 28_800, 15_897_600,
@@ -1478,6 +1615,30 @@ mod tests {
             Some((CLIENT_ID.to_owned(), "ghr_old".to_owned()))
         );
         assert_eq!(api.last_refresh_client_secret(), None);
+    }
+
+    #[tokio::test]
+    async fn auth_probe_refreshes_an_expired_access_token_from_one_credential_load() {
+        let api = FakeDeviceFlowApi::with_refresh_result(TokenGrant::new(
+            "ghu_new", "ghr_new", 28_800, 15_897_600,
+        ));
+        let credentials = MemoryCredentialStore::with_tokens(authorization_tokens());
+        let service = service(
+            api.clone(),
+            credentials.clone(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        );
+
+        assert!(service.has_stored_credentials().await.unwrap());
+        assert_eq!(
+            service.valid_access_token().await.unwrap().expose_secret(),
+            "ghu_new"
+        );
+
+        assert_eq!(credentials.load_count(), 1);
+        assert_eq!(api.refresh_count(), 1);
     }
 
     #[tokio::test]
@@ -1699,10 +1860,13 @@ mod tests {
             Ok(_) => panic!("an expired refresh token must not produce an access token"),
             Err(error) => error,
         };
+        let repeated = service.valid_access_token().await;
 
         assert_eq!(error.code, ErrorCode::ReauthenticationRequired);
+        assert!(repeated.is_err());
         assert_eq!(api.refresh_count(), 0);
         assert_eq!(credentials.delete_count(), 1);
+        assert_eq!(credentials.load_count(), 1);
         assert_eq!(events.statuses(), vec!["reauthentication_required"]);
     }
 
@@ -1922,6 +2086,7 @@ mod tests {
         let second_token = second.await.unwrap().unwrap();
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(credentials.load_count(), 1);
         assert_eq!(first_token.expose_secret(), "ghu_rotated");
         assert_eq!(second_token.expose_secret(), "ghu_rotated");
         assert_eq!(
@@ -2076,5 +2241,63 @@ mod tests {
 
         assert_eq!(credentials.saved_access_token(), None);
         assert_eq!(credentials.delete_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn successful_logout_clears_the_cached_access_session() {
+        let credentials = MemoryCredentialStore::with_tokens(StoredTokens::new(
+            "ghu_cached",
+            "ghr_durable",
+            10_000,
+            20_000,
+        ));
+        let service = service(
+            FakeDeviceFlowApi::with_polls([]),
+            credentials.clone(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        );
+
+        assert_eq!(
+            service.valid_access_token().await.unwrap().expose_secret(),
+            "ghu_cached"
+        );
+        service.logout().await.unwrap();
+
+        assert!(service.valid_access_token().await.is_err());
+        assert_eq!(credentials.load_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_logout_keeps_the_cached_access_session() {
+        let credentials = MemoryCredentialStore::with_tokens(StoredTokens::new(
+            "ghu_cached",
+            "ghr_durable",
+            10_000,
+            20_000,
+        ));
+        let service = service(
+            FakeDeviceFlowApi::with_polls([]),
+            credentials.clone(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        );
+
+        assert_eq!(
+            service.valid_access_token().await.unwrap().expose_secret(),
+            "ghu_cached"
+        );
+        credentials.fail_delete();
+
+        let error = service.logout().await.unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::CredentialStoreUnavailable);
+        assert_eq!(
+            service.valid_access_token().await.unwrap().expose_secret(),
+            "ghu_cached"
+        );
+        assert_eq!(credentials.load_count(), 1);
     }
 }
