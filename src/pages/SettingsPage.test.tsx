@@ -120,6 +120,23 @@ describe("SettingsPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the connected GitHub account under external connections", async () => {
+    render(
+      <PreferencesProvider repository={new FakePreferencesRepository()}>
+        <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+          <SettingsPage />
+        </WorkspaceConnectionProvider>
+      </PreferencesProvider>,
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "외부 연결" }),
+    );
+
+    expect(await screen.findByText("@hyeeun")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
+  });
+
   it("revalidates the current workspace and shows the session result", async () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
     render(

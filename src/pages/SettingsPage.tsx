@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check } from "lucide-react";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
 import { WorkspaceSettingsPanel } from "@/features/workspace-connection/components/WorkspaceSettingsPanel";
+import { GitHubAccountPanel } from "@/features/workspace-connection/components/GitHubAccountPanel";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { cn } from "@/lib/utils";
 
@@ -69,6 +70,8 @@ export function SettingsPage() {
         </aside>
         {activeCategory === "워크스페이스" ? (
           <WorkspaceSettingsPanel />
+        ) : activeCategory === "외부 연결" ? (
+          <GitHubAccountPanel />
         ) : activeCategory === "화면" ? (
         <div>
           <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">

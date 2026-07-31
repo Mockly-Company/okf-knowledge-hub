@@ -5,10 +5,11 @@ import {
   Settings,
   SquareKanban,
 } from "lucide-react";
-import type { RefObject } from "react";
+import { useEffect, useState, type RefObject } from "react";
 import { NavLink } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { cn } from "@/lib/utils";
 
 const navigationGroups = [
@@ -36,6 +37,22 @@ interface AppSidebarProps {
 }
 
 export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
+  const { state, account, isCurrentWorkspaceLoading } = useWorkspaceConnection();
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const connectedWorkspace =
+    state.status === "connected" ? state.connectedWorkspace : null;
+  const accountUser =
+    account.status === "authenticated" || account.status === "logging_out"
+      ? account.user
+      : null;
+  const accountInitial = accountUser
+    ? (Array.from(accountUser.login.trim())[0]?.toLocaleUpperCase() ?? "GH")
+    : "GH";
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [accountUser?.id, accountUser?.avatarUrl]);
+
   return (
     <aside className="app-sidebar">
       <div className="app-sidebar__brand">
@@ -55,7 +72,19 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
           </Button>
         </Tooltip>
       </div>
-      <div className="app-sidebar__workspace">연결된 워크스페이스 없음</div>
+      {isCurrentWorkspaceLoading ? (
+        <div
+          className="app-sidebar__workspace app-sidebar__skeleton"
+          aria-label="워크스페이스 불러오는 중"
+        />
+      ) : (
+        <div
+          className="app-sidebar__workspace"
+          title={connectedWorkspace?.summary.name}
+        >
+          {connectedWorkspace?.summary.name ?? "워크스페이스 연결 필요"}
+        </div>
+      )}
       {navigationGroups.map(({ label: groupLabel, className, items }) => (
         <nav key={groupLabel} aria-label={groupLabel} className={className}>
           {items.map(({ to, label, icon: Icon, end }) => (
@@ -77,13 +106,46 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
         </nav>
       ))}
       <div className="app-sidebar__user">
-        <span className="app-sidebar__avatar" aria-hidden="true">
-          GH
-        </span>
-        <span>
-          <strong>로그인 필요</strong>
-          <small>GitHub 계정</small>
-        </span>
+        {account.status === "loading" ? (
+          <>
+            <span
+              className="app-sidebar__avatar app-sidebar__skeleton"
+              aria-hidden="true"
+            />
+            <span
+              className="app-sidebar__user-copy app-sidebar__user-copy--loading"
+              aria-label="GitHub 계정 불러오는 중"
+            >
+              <span className="app-sidebar__skeleton" />
+              <span className="app-sidebar__skeleton" />
+            </span>
+          </>
+        ) : (
+          <>
+            <span className="app-sidebar__avatar" aria-hidden="true">
+              {accountUser && !avatarFailed ? (
+                <img
+                  src={accountUser.avatarUrl}
+                  alt=""
+                  onError={() => setAvatarFailed(true)}
+                />
+              ) : (
+                accountInitial
+              )}
+            </span>
+            <span className="app-sidebar__user-copy">
+              <strong>
+                {accountUser
+                  ? `@${accountUser.login}`
+                  : account.status === "login_beginning" ||
+                      account.status === "waiting_for_user"
+                    ? "GitHub 연결 중"
+                    : "GitHub 재로그인 필요"}
+              </strong>
+              <small>{accountUser ? "GitHub 계정" : "Settings에서 연결"}</small>
+            </span>
+          </>
+        )}
       </div>
     </aside>
   );

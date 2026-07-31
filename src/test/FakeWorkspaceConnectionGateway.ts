@@ -96,6 +96,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     draftPullRequestUrl: "https://github.com/Mockly-Company/mockly-knowledge/pull/1",
   };
   cloneError: AppError | null = null;
+  logoutError: AppError | null = null;
   authSubscriptionError: Error | null = null;
   cloneSubscriptionError: Error | null = null;
   deferGithubAuth = false;
@@ -192,6 +193,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
 
   async logoutGithub(): Promise<void> {
     this.record("logoutGithub");
+    if (this.logoutError) throw this.logoutError;
     this.authState = { status: "signed_out" };
   }
 
