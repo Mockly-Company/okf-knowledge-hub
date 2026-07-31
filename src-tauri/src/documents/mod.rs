@@ -2,4 +2,7 @@ pub mod cache;
 pub mod contract;
 pub mod discovery;
 pub mod frontmatter;
+pub mod indexer;
+pub mod runtime;
 pub mod search_text;
+pub mod watcher;

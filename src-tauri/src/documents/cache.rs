@@ -28,6 +28,8 @@ pub enum CacheError {
         #[source]
         source: std::str::Utf8Error,
     },
+    #[error("cached document metadata is invalid: {0}")]
+    InvalidMetadata(#[from] serde_json::Error),
 }
 
 pub struct DocumentCache {
@@ -96,6 +98,64 @@ impl DocumentCache {
             params![name],
             |row| row.get(0),
         )?)
+    }
+
+    pub fn last_opened_path(&self) -> Result<Option<String>, CacheError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'last_opened_path'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_last_opened_path(&self, path: Option<&str>) -> Result<(), CacheError> {
+        match path {
+            Some(path) => self.connection.execute(
+                "INSERT INTO meta (key, value) VALUES ('last_opened_path', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![path],
+            )?,
+            None => self
+                .connection
+                .execute("DELETE FROM meta WHERE key = 'last_opened_path'", [])?,
+        };
+        Ok(())
+    }
+
+    pub fn cached_summaries(&self) -> Result<Vec<DocumentSummary>, CacheError> {
+        let mut statement = self.connection.prepare(
+            "SELECT path, file_name, title, document_id, frontmatter_status_json,
+                    modified_at_unix_ms, size
+             FROM documents
+             ORDER BY path",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })?;
+        rows.map(|row| {
+            let (path, file_name, title, document_id, status, modified_at_unix_ms, size) = row?;
+            Ok(DocumentSummary {
+                path,
+                file_name,
+                title,
+                document_id: document_id.and_then(|value| Uuid::parse_str(&value).ok()),
+                frontmatter_status: serde_json::from_str(&status)?,
+                modified_at_unix_ms,
+                size: u64::try_from(size).unwrap_or_default(),
+            })
+        })
+        .collect()
     }
 
     pub fn reconcile_metadata(
@@ -974,5 +1034,42 @@ mod tests {
         assert_eq!(item.match_field, SearchMatchField::Title);
         assert_eq!(item.match_text, "KELVIN");
         assert!(item.snippet.starts_with("KELVIN"));
+    }
+
+    #[test]
+    fn last_opened_path_round_trips_as_disposable_cache_metadata_and_can_be_cleared() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("search.sqlite3");
+        let cache = DocumentCache::open(&path, workspace_id()).unwrap();
+
+        assert_eq!(cache.last_opened_path().unwrap(), None);
+        cache.set_last_opened_path(Some("docs/guide.md")).unwrap();
+        drop(cache);
+
+        let cache = DocumentCache::open(&path, workspace_id()).unwrap();
+        assert_eq!(
+            cache.last_opened_path().unwrap().as_deref(),
+            Some("docs/guide.md")
+        );
+        cache.set_last_opened_path(None).unwrap();
+        assert_eq!(cache.last_opened_path().unwrap(), None);
+    }
+
+    #[test]
+    fn cached_summaries_restore_catalog_metadata_without_markdown_reads() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("search.sqlite3");
+        let mut cache = DocumentCache::open(&path, workspace_id()).unwrap();
+        let mut guide = summary("docs/guide.md", 10, 100);
+        guide.title = "Guide".to_owned();
+        cache
+            .upsert_content(&guide, b"cached searchable body")
+            .unwrap();
+        drop(cache);
+
+        let cache = DocumentCache::open(&path, workspace_id()).unwrap();
+        let summaries = cache.cached_summaries().unwrap();
+
+        assert_eq!(summaries, [guide]);
     }
 }
