@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod commands;
+pub mod documents;
 pub mod error;
 pub mod github;
 pub mod repository;

@@ -21,6 +21,7 @@ pub enum ErrorCode {
     WorkspaceInvalid,
     WorkspaceVersionUnsupported,
     WorkspaceChangedSincePreview,
+    DocumentPathInvalid,
     PushFailed,
     DraftPullRequestFailed,
     LocalSettingsUnavailable,
