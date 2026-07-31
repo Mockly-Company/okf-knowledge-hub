@@ -26,13 +26,16 @@ pub fn discover_documents(
     let mut tree_roots = Vec::new();
 
     for root in roots {
+        let root_path = resolve_root(&repository_root, root)?;
         if contains_git_component(root) {
             continue;
         }
-        let root_path = resolve_root(&repository_root, root)?;
+        let mut visited_directories = HashSet::from([root_path.clone()]);
         let tree = discover_directory(
             &repository_root,
             &root_path,
+            &root_path,
+            &mut visited_directories,
             &mut documents,
             &mut seen_documents,
         )?;
@@ -83,7 +86,9 @@ fn resolve_root(repository_root: &Path, configured_root: &str) -> Result<PathBuf
 
 fn discover_directory(
     repository_root: &Path,
+    configured_root: &Path,
     directory: &Path,
+    visited_directories: &mut HashSet<PathBuf>,
     documents: &mut Vec<DocumentSummary>,
     seen_documents: &mut HashSet<PathBuf>,
 ) -> Result<DocumentTreeEntry, AppError> {
@@ -101,16 +106,21 @@ fn discover_directory(
         let canonical_path = path
             .canonicalize()
             .map_err(|error| document_path_error(&path, error.to_string()))?;
-        if !canonical_path.starts_with(repository_root) {
+        if !canonical_path.starts_with(repository_root)
+            || !canonical_path.starts_with(configured_root)
+            || is_git_path(repository_root, &canonical_path)
+        {
             continue;
         }
         let metadata = fs::metadata(&canonical_path)
             .map_err(|error| document_path_error(&canonical_path, error.to_string()))?;
 
-        if metadata.is_dir() {
+        if metadata.is_dir() && visited_directories.insert(canonical_path.clone()) {
             children.push(discover_directory(
                 repository_root,
+                configured_root,
                 &canonical_path,
+                visited_directories,
                 documents,
                 seen_documents,
             )?);
@@ -191,7 +201,7 @@ fn compare_tree_entries(left: &DocumentTreeEntry, right: &DocumentTreeEntry) -> 
 fn tree_sort_fields(entry: &DocumentTreeEntry) -> (bool, &str, &str) {
     match entry {
         DocumentTreeEntry::Folder { name, path, .. } => (true, name, path),
-        DocumentTreeEntry::Document { summary } => (false, &summary.file_name, &summary.path),
+        DocumentTreeEntry::Document { summary } => (false, &summary.title, &summary.path),
     }
 }
 
@@ -216,6 +226,14 @@ fn contains_git_component(path: &str) -> bool {
     path.replace('\\', "/")
         .split('/')
         .any(|component| component == ".git")
+}
+
+fn is_git_path(repository_root: &Path, path: &Path) -> bool {
+    path.strip_prefix(repository_root).is_ok_and(|relative| {
+        relative
+            .components()
+            .any(|component| component.as_os_str() == OsStr::new(".git"))
+    })
 }
 
 fn document_path_error(path: &Path, reason: impl Into<String>) -> AppError {
@@ -265,6 +283,24 @@ mod tests {
     }
 
     #[test]
+    fn discovery_validates_an_escape_before_skipping_a_git_root() {
+        let repo = fixture_repo(&[]);
+
+        let error = discover_documents(repo.path(), &["../.git".into()]).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::DocumentPathInvalid);
+    }
+
+    #[test]
+    fn discovery_rejects_windows_style_root_escapes() {
+        let repo = fixture_repo(&[]);
+
+        let error = discover_documents(repo.path(), &["..\\outside".into()]).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::DocumentPathInvalid);
+    }
+
+    #[test]
     fn discovery_skips_git_entries_and_orders_folders_before_documents() {
         let repo = fixture_repo(&[
             ("docs/zeta/last.MD", "# last"),
@@ -302,6 +338,98 @@ mod tests {
 
         assert!(catalog.documents.is_empty());
         assert!(catalog.roots.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_skips_symlinked_targets_outside_the_root_and_git_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let repo = fixture_repo(&[
+            ("docs/kept.md", "# kept"),
+            ("outside/leaked.md", "# leaked"),
+            (".git/internal.md", "# internal"),
+        ]);
+        symlink(
+            repo.path().join("outside"),
+            repo.path().join("docs/outside-link"),
+        )
+        .unwrap();
+        symlink(repo.path().join(".git"), repo.path().join("docs/git-alias")).unwrap();
+
+        let catalog = discover_documents(repo.path(), &["docs".into()]).unwrap();
+
+        assert_eq!(
+            catalog
+                .documents
+                .iter()
+                .map(|document| document.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/kept.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_skips_a_git_alias_even_when_the_repository_is_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let repo = fixture_repo(&[
+            ("docs/kept.md", "# kept"),
+            (".git/internal.md", "# internal"),
+        ]);
+        symlink(repo.path().join(".git"), repo.path().join("git-alias")).unwrap();
+
+        let catalog = discover_documents(repo.path(), &[".".into()]).unwrap();
+
+        assert_eq!(
+            catalog
+                .documents
+                .iter()
+                .map(|document| document.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/kept.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_does_not_recurse_through_a_directory_symlink_cycle() {
+        use std::os::unix::fs::symlink;
+
+        let repo = fixture_repo(&[("docs/kept.md", "# kept")]);
+        symlink(repo.path().join("docs"), repo.path().join("docs/loop")).unwrap();
+
+        let catalog = discover_documents(repo.path(), &["docs".into()]).unwrap();
+
+        assert_eq!(
+            catalog
+                .documents
+                .iter()
+                .map(|document| document.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/kept.md"]
+        );
+    }
+
+    #[test]
+    fn tree_documents_sort_by_display_title_instead_of_file_name() {
+        let repo = fixture_repo(&[
+            ("docs/a-file.md", "---\ntitle: Zebra\n---\n"),
+            ("docs/z-file.md", "---\ntitle: Alpha\n---\n"),
+        ]);
+
+        let catalog = discover_documents(repo.path(), &["docs".into()]).unwrap();
+        let DocumentTreeEntry::Folder { children, .. } = &catalog.roots[0] else {
+            panic!();
+        };
+
+        assert!(
+            matches!(children[0], DocumentTreeEntry::Document { ref summary } if summary.title == "Alpha")
+        );
+        assert!(
+            matches!(children[1], DocumentTreeEntry::Document { ref summary } if summary.title == "Zebra")
+        );
     }
 
     #[test]

@@ -75,7 +75,7 @@ enum FrontmatterRead {
 }
 
 fn read_frontmatter<R: BufRead>(reader: &mut R) -> FrontmatterRead {
-    let Some(first_line) = read_line(reader, None) else {
+    let Some(first_line) = read_line(reader, Some(MAX_UNTERMINATED_FRONTMATTER_BYTES)) else {
         return FrontmatterRead::Missing;
     };
     if delimiter(&first_line) != Some("---") {
@@ -149,7 +149,9 @@ fn filename_title(file_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_document;
+    use std::io::{BufRead, Read};
+
+    use super::{parse_document, parse_document_reader, MAX_UNTERMINATED_FRONTMATTER_BYTES};
     use crate::documents::contract::FrontmatterStatus;
 
     #[test]
@@ -178,5 +180,64 @@ mod tests {
         assert!(error.line >= 1);
         assert!(!error.message.is_empty());
         assert_eq!(metadata.title, "broken");
+    }
+
+    #[test]
+    fn non_delimiter_prefix_is_bounded_before_classifying_it_as_missing() {
+        let mut reader = SpyReader::new(vec![b'x'; 10 * 1024 * 1024]);
+
+        let metadata = parse_document_reader(&mut reader, "large.md");
+
+        assert_eq!(metadata.frontmatter_status, FrontmatterStatus::Missing);
+        assert_eq!(reader.bytes_consumed, MAX_UNTERMINATED_FRONTMATTER_BYTES);
+    }
+
+    #[test]
+    fn unterminated_frontmatter_stops_at_the_256_kib_prefix_cap() {
+        let mut source = b"---\n".to_vec();
+        source.extend(std::iter::repeat_n(b'x', 10 * 1024 * 1024));
+        let mut reader = SpyReader::new(source);
+
+        let metadata = parse_document_reader(&mut reader, "large.md");
+
+        assert!(matches!(
+            metadata.frontmatter_status,
+            FrontmatterStatus::Invalid { .. }
+        ));
+        assert_eq!(
+            reader.bytes_consumed,
+            4 + MAX_UNTERMINATED_FRONTMATTER_BYTES
+        );
+    }
+
+    struct SpyReader {
+        inner: std::io::Cursor<Vec<u8>>,
+        bytes_consumed: usize,
+    }
+
+    impl SpyReader {
+        fn new(source: Vec<u8>) -> Self {
+            Self {
+                inner: std::io::Cursor::new(source),
+                bytes_consumed: 0,
+            }
+        }
+    }
+
+    impl Read for SpyReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buffer)
+        }
+    }
+
+    impl BufRead for SpyReader {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            self.inner.fill_buf()
+        }
+
+        fn consume(&mut self, amount: usize) {
+            self.bytes_consumed += amount;
+            self.inner.consume(amount);
+        }
     }
 }
