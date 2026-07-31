@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -39,6 +40,7 @@ impl DocumentCache {
         if path.exists() {
             let connection = Connection::open(path)?;
             if identity_matches(&connection, workspace_id) {
+                register_search_functions(&connection)?;
                 return Ok(Self { connection });
             }
             drop(connection);
@@ -46,6 +48,7 @@ impl DocumentCache {
         }
 
         let mut connection = Connection::open(path)?;
+        register_search_functions(&connection)?;
         let transaction = connection.transaction()?;
         transaction.execute_batch(
             "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -275,33 +278,34 @@ impl DocumentCache {
         let rows = if query.chars().count() >= 3 {
             let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
             self.query_search_rows(
-                "SELECT path, title, COALESCE(body_text, '')
-                 FROM documents
-                 WHERE rowid IN (
-                   SELECT rowid FROM document_search WHERE document_search MATCH ?2
-                 ) OR path LIKE ?3 ESCAPE '\\' COLLATE NOCASE
-                 ORDER BY CASE
-                   WHEN title = ?1 COLLATE NOCASE THEN 0
-                   WHEN title LIKE ?3 ESCAPE '\\' COLLATE NOCASE THEN 1
-                   WHEN path LIKE ?3 ESCAPE '\\' COLLATE NOCASE THEN 2
-                   ELSE 3
-                 END, path
+                "SELECT path, title, body_text
+                 FROM (
+                   SELECT path, title, COALESCE(body_text, '') AS body_text,
+                          okhub_match_rank(title, path, COALESCE(body_text, ''), ?1) AS match_rank
+                   FROM documents
+                   WHERE rowid IN (
+                     SELECT rowid FROM document_search WHERE document_search MATCH ?2
+                   ) OR okhub_match_rank('', path, '', ?1) = 2
+                 )
+                 WHERE match_rank < 4
+                 ORDER BY match_rank, path
                  LIMIT ?4",
                 params![query, fts_query, like, limit],
             )?
         } else {
             self.query_search_rows(
-                "SELECT path, title, COALESCE(body_text, '')
-                 FROM documents
-                 WHERE title LIKE ?2 ESCAPE '\\' COLLATE NOCASE
-                    OR path LIKE ?2 ESCAPE '\\' COLLATE NOCASE
-                    OR body_text LIKE ?2 ESCAPE '\\' COLLATE NOCASE
-                 ORDER BY CASE
-                   WHEN title = ?1 COLLATE NOCASE THEN 0
-                   WHEN title LIKE ?2 ESCAPE '\\' COLLATE NOCASE THEN 1
-                   WHEN path LIKE ?2 ESCAPE '\\' COLLATE NOCASE THEN 2
-                   ELSE 3
-                 END, path
+                "SELECT path, title, body_text
+                 FROM (
+                   SELECT path, title, COALESCE(body_text, '') AS body_text,
+                          okhub_match_rank(title, path, COALESCE(body_text, ''), ?1) AS match_rank
+                   FROM documents
+                   WHERE title LIKE ?2 ESCAPE '\\' COLLATE NOCASE
+                      OR path LIKE ?2 ESCAPE '\\' COLLATE NOCASE
+                      OR body_text LIKE ?2 ESCAPE '\\' COLLATE NOCASE
+                      OR okhub_match_rank(title, path, COALESCE(body_text, ''), ?1) < 4
+                 )
+                 WHERE match_rank < 4
+                 ORDER BY match_rank, path
                  LIMIT ?3",
                 params![query, like, limit],
             )?
@@ -376,25 +380,102 @@ fn search_result(path: String, title: String, body: String, query: &str) -> Sear
 }
 
 fn match_span(value: &str, query: &str) -> Option<(usize, usize)> {
+    let folded = FoldedText::new(value);
     let mut search_from = 0;
-    let mut first = None;
-    let mut end = 0;
+    let mut first_original = None;
+    let mut last_original_end = 0;
     for part in query.split_whitespace() {
-        let remaining = &value[search_from..];
-        let relative = remaining.find(part).or_else(|| {
-            let lowercase = remaining.to_lowercase();
-            let part = part.to_lowercase();
-            lowercase.find(&part).filter(|index| {
-                remaining.is_char_boundary(*index)
-                    && remaining.is_char_boundary(index.saturating_add(part.len()))
-            })
-        })?;
-        let start = search_from + relative;
-        end = start + part.len();
-        first.get_or_insert(start);
-        search_from = end;
+        let part = fold(part);
+        let relative = folded.text[search_from..].find(&part)?;
+        let folded_start = search_from + relative;
+        let folded_end = folded_start + part.len();
+        let original_start = folded.original_start(folded_start)?;
+        last_original_end = folded.original_end(folded_end)?;
+        first_original.get_or_insert(original_start);
+        search_from = folded_end;
     }
-    first.map(|start| (start, end))
+    first_original.map(|start| (start, last_original_end))
+}
+
+fn match_rank(title: &str, path: &str, body: &str, query: &str) -> i64 {
+    if fold(title) == fold(query) {
+        0
+    } else if match_span(title, query).is_some() {
+        1
+    } else if match_span(path, query).is_some() {
+        2
+    } else if match_span(body, query).is_some() {
+        3
+    } else {
+        4
+    }
+}
+
+fn register_search_functions(connection: &Connection) -> Result<(), rusqlite::Error> {
+    connection.create_scalar_function(
+        "okhub_match_rank",
+        4,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let title = context.get::<String>(0)?;
+            let path = context.get::<String>(1)?;
+            let body = context.get::<String>(2)?;
+            let query = context.get::<String>(3)?;
+            Ok(match_rank(&title, &path, &body, &query))
+        },
+    )
+}
+
+fn fold(value: &str) -> String {
+    value.chars().flat_map(char::to_lowercase).collect()
+}
+
+struct FoldedText {
+    text: String,
+    ranges: Vec<FoldedCharRange>,
+}
+
+impl FoldedText {
+    fn new(value: &str) -> Self {
+        let mut text = String::new();
+        let mut ranges = Vec::new();
+        for (original_start, original) in value.char_indices() {
+            let original_end = original_start + original.len_utf8();
+            for folded in original.to_lowercase() {
+                let folded_start = text.len();
+                text.push(folded);
+                ranges.push(FoldedCharRange {
+                    folded_start,
+                    folded_end: text.len(),
+                    original_start,
+                    original_end,
+                });
+            }
+        }
+        Self { text, ranges }
+    }
+
+    fn original_start(&self, folded_start: usize) -> Option<usize> {
+        self.ranges
+            .iter()
+            .find(|range| range.folded_start <= folded_start && folded_start < range.folded_end)
+            .map(|range| range.original_start)
+    }
+
+    fn original_end(&self, folded_end: usize) -> Option<usize> {
+        self.ranges
+            .iter()
+            .rev()
+            .find(|range| range.folded_start < folded_end && folded_end <= range.folded_end)
+            .map(|range| range.original_end)
+    }
+}
+
+struct FoldedCharRange {
+    folded_start: usize,
+    folded_end: usize,
+    original_start: usize,
+    original_end: usize,
 }
 
 fn bounded_snippet(value: &str, span: (usize, usize)) -> String {
@@ -846,5 +927,52 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["docs/quoted.md"]
         );
+    }
+
+    #[test]
+    fn unicode_case_insensitive_search_ranks_exact_then_title_then_body_after_reopen() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("search.sqlite3");
+        let mut cache = DocumentCache::open(&path, workspace_id()).unwrap();
+        for (path, title, body) in [
+            ("docs/1-body.md", "본문 일치", "école 본문"),
+            ("docs/2-title.md", "Guide ÉCOLE", "다른 본문"),
+            ("docs/3-exact.md", "ÉCOLE", "다른 본문"),
+        ] {
+            let mut document = summary(path, 10, 100);
+            document.title = title.to_owned();
+            cache.upsert_content(&document, body.as_bytes()).unwrap();
+        }
+        drop(cache);
+        let cache = DocumentCache::open(&path, workspace_id()).unwrap();
+
+        let result = cache.search("école", 20).unwrap();
+
+        assert_eq!(
+            result
+                .items
+                .iter()
+                .map(|item| item.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/3-exact.md", "docs/2-title.md", "docs/1-body.md"]
+        );
+        assert_eq!(result.items[0].match_field, SearchMatchField::Title);
+        assert_eq!(result.items[0].match_text, "ÉCOLE");
+    }
+
+    #[test]
+    fn unicode_match_text_uses_original_range_when_lowercase_changes_utf8_length() {
+        let temp = tempdir().unwrap();
+        let mut cache =
+            DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
+        let mut document = summary("docs/kelvin.md", 10, 100);
+        document.title = "KELVIN scale".to_owned();
+        cache.upsert_content(&document, b"different body").unwrap();
+
+        let item = cache.search("kelvin", 20).unwrap().items.remove(0);
+
+        assert_eq!(item.match_field, SearchMatchField::Title);
+        assert_eq!(item.match_text, "KELVIN");
+        assert!(item.snippet.starts_with("KELVIN"));
     }
 }
