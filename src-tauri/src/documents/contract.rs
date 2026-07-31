@@ -62,3 +62,34 @@ pub struct DocumentCatalog {
     pub documents: Vec<DocumentSummary>,
     pub roots: Vec<DocumentTreeEntry>,
 }
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReconcileDelta {
+    pub to_index: Vec<String>,
+    pub deleted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SearchMatchField {
+    Title,
+    Path,
+    Body,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub path: String,
+    pub title: String,
+    pub match_field: SearchMatchField,
+    pub match_text: String,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResponse {
+    pub items: Vec<SearchResult>,
+}
