@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -84,7 +83,7 @@ struct RuntimeInner {
     source: Arc<dyn DocumentSource>,
     cache_opener: Arc<CacheOpener>,
     state: Mutex<RuntimeState>,
-    startup_mutations: AsyncMutex<()>,
+    startup_mutations: Arc<AsyncMutex<()>>,
     events: broadcast::Sender<DocumentEvent>,
     #[cfg(test)]
     startup_pause: Mutex<Option<StartupReservationPause>>,
@@ -92,7 +91,6 @@ struct RuntimeInner {
 
 struct RuntimeState {
     generation: Option<Generation>,
-    seen_session_ids: HashSet<Uuid>,
     next_nonce: u64,
 }
 
@@ -100,7 +98,6 @@ impl Default for RuntimeState {
     fn default() -> Self {
         Self {
             generation: None,
-            seen_session_ids: HashSet::new(),
             next_nonce: 1,
         }
     }
@@ -154,7 +151,7 @@ impl DocumentRuntime {
                 source,
                 cache_opener,
                 state: Mutex::new(RuntimeState::default()),
-                startup_mutations: AsyncMutex::new(()),
+                startup_mutations: Arc::new(AsyncMutex::new(())),
                 events,
                 #[cfg(test)]
                 startup_pause: Mutex::new(None),
@@ -191,14 +188,21 @@ impl DocumentRuntime {
         let owner = {
             let _mutation_guard = self.inner.startup_mutations.lock().await;
             let mut state = self.inner.state.lock().expect("document runtime poisoned");
-            if !state.seen_session_ids.insert(session_id) {
+            if state
+                .generation
+                .as_ref()
+                .is_some_and(|generation| generation.owner().session_id == session_id)
+            {
                 return Err(session_conflict());
             }
             let owner = SessionOwner {
                 session_id,
                 nonce: state.next_nonce,
             };
-            state.next_nonce = state.next_nonce.wrapping_add(1).max(1);
+            state.next_nonce = state
+                .next_nonce
+                .checked_add(1)
+                .ok_or_else(session_conflict)?;
             if let Some(previous) = state.generation.take() {
                 previous.cancel();
             }
@@ -342,7 +346,7 @@ impl DocumentRuntime {
     }
 
     pub async fn refresh(&self, session_id: Uuid) -> Result<(), AppError> {
-        self.refresh_inner(session_id, None).await
+        self.refresh_inner(session_id, None, None).await
     }
 
     pub(crate) async fn refresh_affected(
@@ -350,12 +354,23 @@ impl DocumentRuntime {
         session_id: Uuid,
         affected_paths: Vec<String>,
     ) -> Result<(), AppError> {
-        self.refresh_inner(session_id, Some(affected_paths)).await
+        self.refresh_inner(session_id, None, Some(affected_paths))
+            .await
+    }
+
+    async fn refresh_if_owned(
+        &self,
+        owner: SessionOwner,
+        affected_paths: Option<Vec<String>>,
+    ) -> Result<(), AppError> {
+        self.refresh_inner(owner.session_id, Some(owner), affected_paths)
+            .await
     }
 
     async fn refresh_inner(
         &self,
         session_id: Uuid,
+        expected_owner: Option<SessionOwner>,
         affected_paths: Option<Vec<String>>,
     ) -> Result<(), AppError> {
         let (owner, revision, cancellation, workspace) = {
@@ -364,6 +379,9 @@ impl DocumentRuntime {
                 return Err(session_conflict());
             };
             if session.owner.session_id != session_id {
+                return Err(session_conflict());
+            }
+            if expected_owner.is_some_and(|expected| session.owner != expected) {
                 return Err(session_conflict());
             }
             session.index_cancellation.cancel();
@@ -376,7 +394,15 @@ impl DocumentRuntime {
                 session.workspace.clone(),
             )
         };
-        let catalog = self.discover(workspace.clone()).await?;
+        let catalog = match self.discover(workspace.clone()).await {
+            Ok(catalog) => catalog,
+            Err(error) => {
+                if self.fail_if_owned(owner, revision, error.clone()) {
+                    return Err(error);
+                }
+                return Ok(());
+            }
+        };
         {
             let mut state = self.inner.state.lock().expect("document runtime poisoned");
             let Some(Generation::Active(session)) = state.generation.as_mut() else {
@@ -388,7 +414,16 @@ impl DocumentRuntime {
             if session.index_revision != revision {
                 return Ok(());
             }
-            let migrated_open_path = reconcile_open_document(session, &catalog)?;
+            let migrated_open_path = match reconcile_open_document(session, &catalog) {
+                Ok(path) => path,
+                Err(error) => {
+                    let _ = self.inner.events.send(DocumentEvent::Failed {
+                        session_id,
+                        error: error.clone(),
+                    });
+                    return Err(error);
+                }
+            };
             session.snapshot.catalog = catalog.clone();
             session.snapshot.index_status = IndexStatus::Preparing {
                 indexed: 0,
@@ -426,15 +461,7 @@ impl DocumentRuntime {
     }
 
     async fn reconcile_filesystem(&self, owner: SessionOwner) {
-        if let Err(error) = self.refresh(owner.session_id).await {
-            self.publish_if_owned(
-                owner,
-                DocumentEvent::Failed {
-                    session_id: owner.session_id,
-                    error,
-                },
-            );
-        }
+        let _ = self.refresh_if_owned(owner, None).await;
     }
 
     fn start_watcher(&self, owner: SessionOwner) {
@@ -514,18 +541,7 @@ impl DocumentRuntime {
             if affected_paths.is_empty() {
                 continue;
             }
-            if let Err(error) = self
-                .refresh_affected(owner.session_id, affected_paths)
-                .await
-            {
-                self.publish_if_owned(
-                    owner,
-                    DocumentEvent::Failed {
-                        session_id: owner.session_id,
-                        error,
-                    },
-                );
-            }
+            let _ = self.refresh_if_owned(owner, Some(affected_paths)).await;
         }
     }
 
@@ -568,7 +584,7 @@ impl DocumentRuntime {
         let workspace_id = workspace.workspace_id;
         let cache_opener = self.inner.cache_opener.clone();
         let cache = {
-            let _mutation_guard = self.inner.startup_mutations.lock().await;
+            let mutation_guard = self.inner.startup_mutations.clone().lock_owned().await;
             {
                 let state = self.inner.state.lock().expect("document runtime poisoned");
                 if !matches!(state.generation.as_ref(), Some(Generation::Starting { owner: current, .. }) if *current == owner)
@@ -576,10 +592,13 @@ impl DocumentRuntime {
                     return Err(session_conflict());
                 }
             }
-            tokio::task::spawn_blocking(move || cache_opener(cache_path, workspace_id))
-                .await
-                .map_err(join_error)?
-                .map_err(cache_error)?
+            tokio::task::spawn_blocking(move || {
+                let _mutation_guard = mutation_guard;
+                cache_opener(cache_path, workspace_id)
+            })
+            .await
+            .map_err(join_error)?
+            .map_err(cache_error)?
         };
         let cached = cache.cached_summaries().map_err(cache_error)?;
         let warm_start = !cached.is_empty();
@@ -780,7 +799,7 @@ impl DocumentRuntime {
         });
     }
 
-    fn fail_if_owned(&self, owner: SessionOwner, revision: u64, error: AppError) {
+    fn fail_if_owned(&self, owner: SessionOwner, revision: u64, error: AppError) -> bool {
         let state = self.inner.state.lock().expect("document runtime poisoned");
         if matches!(state.generation.as_ref(), Some(Generation::Active(session)) if session.owner == owner && session.index_revision == revision)
         {
@@ -788,7 +807,9 @@ impl DocumentRuntime {
                 session_id: owner.session_id,
                 error,
             });
+            return true;
         }
+        false
     }
 
     fn publish_if_owned(&self, owner: SessionOwner, event: DocumentEvent) {
@@ -913,9 +934,10 @@ mod tests {
     use tokio::sync::{Notify, Semaphore};
     use uuid::Uuid;
 
-    use crate::documents::cache::DocumentCache;
+    use crate::documents::cache::{CacheError, DocumentCache};
     use crate::documents::contract::{
-        DocumentCatalog, DocumentSummary, DocumentTreeEntry, FrontmatterStatus, IndexStatus,
+        DocumentCatalog, DocumentEvent, DocumentSummary, DocumentTreeEntry, FrontmatterStatus,
+        IndexStatus,
     };
     use crate::error::{AppError, ErrorCode};
 
@@ -1049,6 +1071,7 @@ mod tests {
                 .code,
             ErrorCode::DocumentSessionConflict
         );
+        assert_eq!(runtime.snapshot(id).unwrap().session_id, id);
     }
 
     #[derive(Clone)]
@@ -1576,8 +1599,192 @@ mod tests {
         );
     }
 
+    #[derive(Clone)]
+    struct DiscoveryFailureRaceSource {
+        calls: Arc<AtomicUsize>,
+        stale_started: Arc<std::sync::atomic::AtomicBool>,
+        stale_gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    #[async_trait]
+    impl DocumentSource for DiscoveryFailureRaceSource {
+        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            match self.calls.fetch_add(1, Ordering::SeqCst) {
+                0 => Ok(catalog(vec![summary("docs/initial.md")])),
+                1 => {
+                    self.stale_started.store(true, Ordering::SeqCst);
+                    let (lock, wake) = &*self.stale_gate;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = wake.wait(released).unwrap();
+                    }
+                    Err(AppError::new(
+                        ErrorCode::DocumentIndexUnavailable,
+                        "stale discovery failed",
+                    ))
+                }
+                _ => Ok(catalog(vec![summary("docs/current.md")])),
+            }
+        }
+
+        async fn read_body(
+            &self,
+            _workspace: &DocumentWorkspace,
+            path: &str,
+        ) -> Result<Vec<u8>, AppError> {
+            Ok(format!("body for {path}").into_bytes())
+        }
+    }
+
     #[tokio::test]
-    async fn a_session_uuid_cannot_be_reused_after_stop_or_replacement() {
+    async fn a_superseded_discovery_failure_does_not_publish_failed() {
+        let temp = TempDir::new().unwrap();
+        let source = DiscoveryFailureRaceSource {
+            calls: Arc::new(AtomicUsize::new(0)),
+            stale_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stale_gate: Arc::new((Mutex::new(false), Condvar::new())),
+        };
+        let runtime = DocumentRuntime::with_source(Arc::new(source.clone()));
+        let session_id = Uuid::new_v4();
+        let workspace = workspace(&temp);
+        runtime
+            .start_session(session_id, workspace.clone())
+            .await
+            .unwrap();
+        wait_until_idle(&runtime, session_id).await;
+        let owner = runtime
+            .inner
+            .state
+            .lock()
+            .expect("document runtime poisoned")
+            .generation
+            .as_ref()
+            .unwrap()
+            .owner();
+
+        let mut events = runtime.subscribe();
+        let stale_runtime = runtime.clone();
+        let stale_reconciliation =
+            tokio::spawn(async move { stale_runtime.reconcile_filesystem(owner).await });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !source.stale_started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        runtime.refresh(session_id).await.unwrap();
+        wait_until_idle(&runtime, session_id).await;
+        let (lock, wake) = &*source.stale_gate;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+        stale_reconciliation.await.unwrap();
+
+        let failures = std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| matches!(event, DocumentEvent::Failed { .. }))
+            .count();
+        assert_eq!(failures, 0);
+        let snapshot = runtime.snapshot(session_id).unwrap();
+        assert_eq!(snapshot.catalog.documents[0].path, "docs/current.md");
+        assert_eq!(snapshot.index_status, IndexStatus::Ready);
+    }
+
+    #[derive(Clone)]
+    struct CurrentDiscoveryFailureSource {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl DocumentSource for CurrentDiscoveryFailureSource {
+        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(catalog(vec![summary("docs/initial.md")]))
+            } else {
+                Err(AppError::new(
+                    ErrorCode::DocumentIndexUnavailable,
+                    "current discovery failed",
+                ))
+            }
+        }
+
+        async fn read_body(
+            &self,
+            _workspace: &DocumentWorkspace,
+            path: &str,
+        ) -> Result<Vec<u8>, AppError> {
+            Ok(format!("body for {path}").into_bytes())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_current_discovery_failure_still_publishes_failed() {
+        let temp = TempDir::new().unwrap();
+        let source = CurrentDiscoveryFailureSource {
+            calls: Arc::new(AtomicUsize::new(0)),
+        };
+        let runtime = DocumentRuntime::with_source(Arc::new(source));
+        let session_id = Uuid::new_v4();
+        let workspace = workspace(&temp);
+        runtime.start_session(session_id, workspace).await.unwrap();
+        wait_until_idle(&runtime, session_id).await;
+
+        let mut events = runtime.subscribe();
+        let refresh_error = runtime.refresh(session_id).await.unwrap_err();
+        assert_eq!(refresh_error.code, ErrorCode::DocumentIndexUnavailable);
+
+        let error = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let DocumentEvent::Failed { error, .. } = events.recv().await.unwrap() {
+                    return error;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(error.code, ErrorCode::DocumentIndexUnavailable);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_current_open_document_reconciliation_failure_returns_and_publishes_once() {
+        let temp = TempDir::new().unwrap();
+        let workspace = workspace(&temp);
+        let source = MutableDocumentSource::new(vec![summary("docs/previous.md")]);
+        let runtime = DocumentRuntime::with_source(Arc::new(source.clone()));
+        let session_id = Uuid::new_v4();
+        runtime
+            .start_session(session_id, workspace.clone())
+            .await
+            .unwrap();
+        wait_until_idle(&runtime, session_id).await;
+        runtime
+            .set_open_document(session_id, "docs/previous.md")
+            .unwrap();
+        source.replace_documents(vec![summary("docs/current.md")]);
+        rusqlite::Connection::open(&workspace.cache_path)
+            .unwrap()
+            .execute_batch("DROP TABLE meta")
+            .unwrap();
+
+        let mut events = runtime.subscribe();
+        let error = runtime.refresh(session_id).await.unwrap_err();
+        assert_eq!(error.code, ErrorCode::DocumentIndexUnavailable);
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            DocumentEvent::Failed {
+                session_id: failed_session_id,
+                error: AppError {
+                    code: ErrorCode::DocumentIndexUnavailable,
+                    ..
+                },
+            } if failed_session_id == session_id
+        ));
+        assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_session_uuid_can_be_reused_after_stop_or_replacement() {
         let temp = TempDir::new().unwrap();
         let runtime = DocumentRuntime::with_source(Arc::new(MutableDocumentSource::new(vec![])));
         let first = Uuid::new_v4();
@@ -1587,62 +1794,326 @@ mod tests {
             .await
             .unwrap();
         runtime.stop_session(first).await.unwrap();
-        assert_eq!(
-            runtime
-                .start_session(first, workspace(&temp))
-                .await
-                .unwrap_err()
-                .code,
-            ErrorCode::DocumentSessionConflict
-        );
+        runtime
+            .start_session(first, workspace(&temp))
+            .await
+            .unwrap();
 
         runtime
             .start_session(second, workspace(&temp))
             .await
             .unwrap();
-        assert_eq!(
-            runtime
-                .start_session(first, workspace(&temp))
-                .await
-                .unwrap_err()
-                .code,
-            ErrorCode::DocumentSessionConflict
-        );
+        runtime
+            .start_session(first, workspace(&temp))
+            .await
+            .unwrap();
+        assert_eq!(runtime.snapshot(first).unwrap().session_id, first);
+    }
+
+    #[derive(Clone)]
+    struct SameIdReuseRaceSource {
+        discoveries: Arc<AtomicUsize>,
+        stale_started: Arc<std::sync::atomic::AtomicBool>,
+        stale_gate: Arc<(Mutex<bool>, Condvar)>,
+    }
+
+    #[async_trait]
+    impl DocumentSource for SameIdReuseRaceSource {
+        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            match self.discoveries.fetch_add(1, Ordering::SeqCst) {
+                1 => {
+                    self.stale_started.store(true, Ordering::SeqCst);
+                    let (lock, wake) = &*self.stale_gate;
+                    let mut released = lock.lock().unwrap();
+                    while !*released {
+                        released = wake.wait(released).unwrap();
+                    }
+                    Ok(catalog(vec![summary("docs/stale.md")]))
+                }
+                _ => Ok(catalog(vec![summary("docs/current.md")])),
+            }
+        }
+
+        async fn read_body(
+            &self,
+            _workspace: &DocumentWorkspace,
+            path: &str,
+        ) -> Result<Vec<u8>, AppError> {
+            Ok(format!("body for {path}").into_bytes())
+        }
     }
 
     #[tokio::test]
-    async fn stale_work_for_x_cannot_alias_a_later_reuse_attempt_for_x() {
+    async fn stale_work_for_x_cannot_alias_a_later_generation_of_x() {
         let temp = TempDir::new().unwrap();
         let workspace = workspace(&temp);
-        let source = SequencedDocumentSource::new();
+        let source = SameIdReuseRaceSource {
+            discoveries: Arc::new(AtomicUsize::new(0)),
+            stale_started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            stale_gate: Arc::new((Mutex::new(false), Condvar::new())),
+        };
         let runtime = DocumentRuntime::with_source(Arc::new(source.clone()));
         let x = Uuid::new_v4();
         let replacement = Uuid::new_v4();
 
         runtime.start_session(x, workspace.clone()).await.unwrap();
-        source.wait_for_first_read().await;
+        wait_until_idle(&runtime, x).await;
+        let stale_runtime = runtime.clone();
+        let mut stale_refresh = Some(tokio::spawn(async move { stale_runtime.refresh(x).await }));
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !source.stale_started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
         runtime
             .start_session(replacement, workspace.clone())
             .await
             .unwrap();
-        assert_eq!(
-            runtime.start_session(x, workspace).await.unwrap_err().code,
-            ErrorCode::DocumentSessionConflict
-        );
-
-        source.first_release.notify_waiters();
         wait_until_idle(&runtime, replacement).await;
+        let reused = runtime.start_session(x, workspace).await;
+        if reused.is_err() {
+            let (lock, wake) = &*source.stale_gate;
+            *lock.lock().unwrap() = true;
+            wake.notify_all();
+            let _ = stale_refresh.take().unwrap().await;
+        }
+        reused.unwrap();
+        wait_until_idle(&runtime, x).await;
+        let mut events = runtime.subscribe();
 
-        assert!(runtime
-            .search(replacement, "stale generation", 20)
-            .await
-            .unwrap()
-            .items
-            .is_empty());
+        let (lock, wake) = &*source.stale_gate;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
         assert_eq!(
-            runtime.snapshot(x).unwrap_err().code,
+            stale_refresh
+                .take()
+                .unwrap()
+                .await
+                .unwrap()
+                .unwrap_err()
+                .code,
             ErrorCode::DocumentSessionConflict
         );
+        tokio::task::yield_now().await;
+
+        let snapshot = runtime.snapshot(x).unwrap();
+        assert_eq!(snapshot.catalog.documents[0].path, "docs/current.md");
+        assert_eq!(snapshot.index_status, IndexStatus::Ready);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[derive(Clone)]
+    struct DelayedOwnerCallbackSource {
+        discoveries: Arc<AtomicUsize>,
+        return_stale: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait]
+    impl DocumentSource for DelayedOwnerCallbackSource {
+        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            self.discoveries.fetch_add(1, Ordering::SeqCst);
+            let path = if self.return_stale.load(Ordering::SeqCst) {
+                "docs/stale.md"
+            } else {
+                "docs/current.md"
+            };
+            Ok(catalog(vec![summary(path)]))
+        }
+
+        async fn read_body(
+            &self,
+            _workspace: &DocumentWorkspace,
+            path: &str,
+        ) -> Result<Vec<u8>, AppError> {
+            Ok(format!("body for {path}").into_bytes())
+        }
+    }
+
+    #[tokio::test]
+    async fn delayed_callback_for_old_x_cannot_enter_a_later_generation_of_x() {
+        let temp = TempDir::new().unwrap();
+        let workspace = workspace(&temp);
+        let source = DelayedOwnerCallbackSource {
+            discoveries: Arc::new(AtomicUsize::new(0)),
+            return_stale: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let runtime = DocumentRuntime::with_source(Arc::new(source.clone()));
+        let x = Uuid::new_v4();
+        let replacement = Uuid::new_v4();
+
+        runtime.start_session(x, workspace.clone()).await.unwrap();
+        wait_until_idle(&runtime, x).await;
+        let old_owner = runtime
+            .inner
+            .state
+            .lock()
+            .expect("document runtime poisoned")
+            .generation
+            .as_ref()
+            .unwrap()
+            .owner();
+        runtime
+            .start_session(replacement, workspace.clone())
+            .await
+            .unwrap();
+        wait_until_idle(&runtime, replacement).await;
+        runtime.start_session(x, workspace).await.unwrap();
+        wait_until_idle(&runtime, x).await;
+
+        let discoveries_before = source.discoveries.load(Ordering::SeqCst);
+        let mut events = runtime.subscribe();
+        source.return_stale.store(true, Ordering::SeqCst);
+        runtime.reconcile_filesystem(old_owner).await;
+
+        assert_eq!(
+            source.discoveries.load(Ordering::SeqCst),
+            discoveries_before
+        );
+        let snapshot = runtime.snapshot(x).unwrap();
+        assert_eq!(snapshot.catalog.documents[0].path, "docs/current.md");
+        assert_eq!(snapshot.index_status, IndexStatus::Ready);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn repeated_failed_starts_do_not_retain_session_ids() {
+        let temp = TempDir::new().unwrap();
+        let runtime = DocumentRuntime::with_cache_opener(
+            Arc::new(MutableDocumentSource::new(vec![])),
+            Arc::new(|_, _| {
+                Err(CacheError::Io(std::io::Error::other(
+                    "deliberate cache-open failure",
+                )))
+            }),
+        );
+        let ids = (0..64).map(|_| Uuid::new_v4()).collect::<Vec<_>>();
+
+        for session_id in ids.iter().chain(ids.iter()) {
+            assert_eq!(
+                runtime
+                    .start_session(*session_id, workspace(&temp))
+                    .await
+                    .unwrap_err()
+                    .code,
+                ErrorCode::DocumentIndexUnavailable
+            );
+        }
+        assert!(runtime
+            .inner
+            .state
+            .lock()
+            .expect("document runtime poisoned")
+            .generation
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn aborting_start_keeps_the_startup_gate_until_cache_open_finishes() {
+        let temp = TempDir::new().unwrap();
+        let workspace = workspace(&temp);
+        let stale_id = Uuid::new_v4();
+        let replacement_id = Uuid::new_v4();
+        let first_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let first_finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let first_gate = Arc::new((Mutex::new(false), Condvar::new()));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let replacement_stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed_after_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let runtime = DocumentRuntime::with_cache_opener(
+            Arc::new(MutableDocumentSource::new(vec![])),
+            Arc::new({
+                let first_started = first_started.clone();
+                let first_finished = first_finished.clone();
+                let first_gate = first_gate.clone();
+                let calls = calls.clone();
+                let active = active.clone();
+                let max_active = max_active.clone();
+                let replacement_stopped = replacement_stopped.clone();
+                let completed_after_stop = completed_after_stop.clone();
+                move |path, workspace_id| {
+                    let call = calls.fetch_add(1, Ordering::SeqCst);
+                    let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(now_active, Ordering::SeqCst);
+                    if call == 0 {
+                        first_started.store(true, Ordering::SeqCst);
+                        let (lock, wake) = &*first_gate;
+                        let mut released = lock.lock().unwrap();
+                        while !*released {
+                            released = wake.wait(released).unwrap();
+                        }
+                    }
+                    let result = DocumentCache::open(path, workspace_id);
+                    if replacement_stopped.load(Ordering::SeqCst) {
+                        completed_after_stop.store(true, Ordering::SeqCst);
+                    }
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    if call == 0 {
+                        first_finished.store(true, Ordering::SeqCst);
+                    }
+                    result
+                }
+            }),
+        );
+        let mut stale_workspace = workspace.clone();
+        stale_workspace.workspace_id = Uuid::new_v4();
+
+        let stale_runtime = runtime.clone();
+        let stale =
+            tokio::spawn(
+                async move { stale_runtime.start_session(stale_id, stale_workspace).await },
+            );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !first_started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        stale.abort();
+        assert!(stale.await.unwrap_err().is_cancelled());
+
+        let gate_held_after_abort = runtime.inner.startup_mutations.try_lock().is_err();
+        let replacement_runtime = runtime.clone();
+        let replacement_workspace = workspace.clone();
+        let replacement = tokio::spawn(async move {
+            replacement_runtime
+                .start_session(replacement_id, replacement_workspace)
+                .await
+        });
+
+        if gate_held_after_abort {
+            let (lock, wake) = &*first_gate;
+            *lock.lock().unwrap() = true;
+            wake.notify_all();
+            replacement.await.unwrap().unwrap();
+            runtime.stop_session(replacement_id).await.unwrap();
+            replacement_stopped.store(true, Ordering::SeqCst);
+        } else {
+            replacement.await.unwrap().unwrap();
+            runtime.stop_session(replacement_id).await.unwrap();
+            replacement_stopped.store(true, Ordering::SeqCst);
+            let (lock, wake) = &*first_gate;
+            *lock.lock().unwrap() = true;
+            wake.notify_all();
+        }
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !first_finished.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(gate_held_after_abort);
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert!(!completed_after_stop.load(Ordering::SeqCst));
     }
 
     #[derive(Clone)]
