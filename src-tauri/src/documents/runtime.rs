@@ -13,7 +13,7 @@ use super::contract::{
     DocumentCatalog, DocumentEvent, DocumentSessionSnapshot, IndexStatus, SearchResponse,
 };
 use super::discovery::discover_documents;
-use super::indexer::{catalog_from_summaries, spawn_body_reads};
+use super::indexer::{catalog_from_summaries, BodyReadCoordinator};
 use super::watcher::{
     affected_markdown_paths, DocumentWatcher, WatcherMessage, WATCH_COALESCE_WINDOW,
 };
@@ -81,6 +81,7 @@ pub struct DocumentRuntime {
 
 struct RuntimeInner {
     source: Arc<dyn DocumentSource>,
+    body_reads: BodyReadCoordinator,
     cache_opener: Arc<CacheOpener>,
     state: Mutex<RuntimeState>,
     startup_mutations: Arc<AsyncMutex<()>>,
@@ -149,6 +150,7 @@ impl DocumentRuntime {
         Self {
             inner: Arc::new(RuntimeInner {
                 source,
+                body_reads: BodyReadCoordinator::default(),
                 cache_opener,
                 state: Mutex::new(RuntimeState::default()),
                 startup_mutations: Arc::new(AsyncMutex::new(())),
@@ -706,7 +708,7 @@ impl DocumentRuntime {
             Some(workspace) => workspace,
             None => return,
         };
-        let mut reads = spawn_body_reads(
+        let mut reads = self.inner.body_reads.spawn_body_reads(
             self.inner.source.clone(),
             workspace,
             documents,

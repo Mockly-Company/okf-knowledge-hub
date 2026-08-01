@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
@@ -15,42 +15,81 @@ const MAX_CONCURRENT_BODY_READS: usize = 4;
 pub(crate) struct BodyRead {
     pub summary: DocumentSummary,
     pub result: Result<Vec<u8>, AppError>,
+    _permit: OwnedSemaphorePermit,
 }
 
-pub(crate) fn spawn_body_reads(
-    source: Arc<dyn DocumentSource>,
-    workspace: DocumentWorkspace,
-    documents: Vec<DocumentSummary>,
-    cancellation: CancellationToken,
-) -> mpsc::Receiver<BodyRead> {
-    let capacity = documents.len().max(1);
-    let (sender, receiver) = mpsc::channel(capacity);
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_BODY_READS));
+#[derive(Clone)]
+pub(crate) struct BodyReadCoordinator {
+    permits: Arc<Semaphore>,
+}
 
-    for summary in documents {
-        let source = source.clone();
-        let workspace = workspace.clone();
-        let cancellation = cancellation.clone();
-        let semaphore = semaphore.clone();
-        let sender = sender.clone();
-        tokio::spawn(async move {
-            let permit = tokio::select! {
-                _ = cancellation.cancelled() => return,
-                permit = semaphore.acquire_owned() => match permit {
-                    Ok(permit) => permit,
-                    Err(_) => return,
-                },
-            };
-            let result = tokio::select! {
-                _ = cancellation.cancelled() => return,
-                result = source.read_body(&workspace, &summary.path) => result,
-            };
-            drop(permit);
-            let _ = sender.send(BodyRead { summary, result }).await;
-        });
+impl Default for BodyReadCoordinator {
+    fn default() -> Self {
+        Self {
+            permits: Arc::new(Semaphore::new(MAX_CONCURRENT_BODY_READS)),
+        }
     }
-    drop(sender);
-    receiver
+}
+
+impl BodyReadCoordinator {
+    pub(crate) fn spawn_body_reads(
+        &self,
+        source: Arc<dyn DocumentSource>,
+        workspace: DocumentWorkspace,
+        documents: Vec<DocumentSummary>,
+        cancellation: CancellationToken,
+    ) -> mpsc::Receiver<BodyRead> {
+        let (sender, receiver) = mpsc::channel(MAX_CONCURRENT_BODY_READS);
+        let worker_count = documents.len().min(MAX_CONCURRENT_BODY_READS);
+        let documents = Arc::new(Mutex::new(VecDeque::from(documents)));
+
+        for _ in 0..worker_count {
+            let source = source.clone();
+            let workspace = workspace.clone();
+            let cancellation = cancellation.clone();
+            let permits = self.permits.clone();
+            let documents = documents.clone();
+            let sender = sender.clone();
+            tokio::spawn(async move {
+                loop {
+                    let summary = {
+                        documents
+                            .lock()
+                            .expect("document body queue poisoned")
+                            .pop_front()
+                    };
+                    let Some(summary) = summary else {
+                        return;
+                    };
+                    let permit = tokio::select! {
+                        _ = cancellation.cancelled() => return,
+                        permit = permits.clone().acquire_owned() => match permit {
+                            Ok(permit) => permit,
+                            Err(_) => return,
+                        },
+                    };
+                    let result = tokio::select! {
+                        _ = cancellation.cancelled() => return,
+                        result = source.read_body(&workspace, &summary.path) => result,
+                    };
+                    let read = BodyRead {
+                        summary,
+                        result,
+                        _permit: permit,
+                    };
+                    let sent = tokio::select! {
+                        _ = cancellation.cancelled() => return,
+                        sent = sender.send(read) => sent,
+                    };
+                    if sent.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        drop(sender);
+        receiver
+    }
 }
 
 pub(crate) fn catalog_from_summaries(
@@ -191,11 +230,12 @@ mod tests {
     use crate::documents::runtime::{DocumentSource, DocumentWorkspace};
     use crate::error::AppError;
 
-    use super::{catalog_from_summaries, spawn_body_reads, tree_path};
+    use super::{catalog_from_summaries, tree_path, BodyReadCoordinator};
 
     struct ConcurrencySource {
         active: AtomicUsize,
         maximum: AtomicUsize,
+        total_started: AtomicUsize,
         started: Notify,
         release: Semaphore,
     }
@@ -213,6 +253,7 @@ mod tests {
         ) -> Result<Vec<u8>, AppError> {
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.maximum.fetch_max(active, Ordering::SeqCst);
+            self.total_started.fetch_add(1, Ordering::SeqCst);
             self.started.notify_waiters();
             self.release.acquire().await.unwrap().forget();
             self.active.fetch_sub(1, Ordering::SeqCst);
@@ -225,6 +266,7 @@ mod tests {
         let source = Arc::new(ConcurrencySource {
             active: AtomicUsize::new(0),
             maximum: AtomicUsize::new(0),
+            total_started: AtomicUsize::new(0),
             started: Notify::new(),
             release: Semaphore::new(0),
         });
@@ -238,7 +280,7 @@ mod tests {
         let documents = (0..6)
             .map(|index| summary(&format!("docs/{index}.md")))
             .collect::<Vec<_>>();
-        let mut reads = spawn_body_reads(
+        let mut reads = BodyReadCoordinator::default().spawn_body_reads(
             source.clone(),
             workspace,
             documents,
@@ -261,6 +303,124 @@ mod tests {
         }
         assert_eq!(completed.lock().unwrap().len(), 6);
         assert!(source.maximum.load(Ordering::SeqCst) <= 4);
+    }
+
+    #[tokio::test]
+    async fn overlapping_generations_share_one_four_read_budget() {
+        let source = Arc::new(ConcurrencySource {
+            active: AtomicUsize::new(0),
+            maximum: AtomicUsize::new(0),
+            total_started: AtomicUsize::new(0),
+            started: Notify::new(),
+            release: Semaphore::new(0),
+        });
+        let temp = TempDir::new().unwrap();
+        let workspace = DocumentWorkspace {
+            workspace_id: uuid::Uuid::new_v4(),
+            repository_root: temp.path().join("repository"),
+            document_roots: vec!["docs".to_owned()],
+            cache_path: temp.path().join("search.sqlite3"),
+        };
+        let first_documents = (0..8)
+            .map(|index| summary(&format!("docs/first-{index}.md")))
+            .collect::<Vec<_>>();
+        let second_documents = (0..8)
+            .map(|index| summary(&format!("docs/second-{index}.md")))
+            .collect::<Vec<_>>();
+        let coordinator = BodyReadCoordinator::default();
+        let first_reads = coordinator.spawn_body_reads(
+            source.clone(),
+            workspace.clone(),
+            first_documents,
+            CancellationToken::new(),
+        );
+        let second_reads = coordinator.spawn_body_reads(
+            source.clone(),
+            workspace,
+            second_documents,
+            CancellationToken::new(),
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while source.total_started.load(Ordering::SeqCst) < 4 {
+                tokio::task::yield_now().await;
+            }
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(source.maximum.load(Ordering::SeqCst), 4);
+
+        drop(first_reads);
+        drop(second_reads);
+        source.release.add_permits(16);
+    }
+
+    struct ImmediateSource {
+        total_started: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl DocumentSource for ImmediateSource {
+        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            unreachable!()
+        }
+
+        async fn read_body(
+            &self,
+            _workspace: &DocumentWorkspace,
+            path: &str,
+        ) -> Result<Vec<u8>, AppError> {
+            self.total_started.fetch_add(1, Ordering::SeqCst);
+            Ok(path.as_bytes().to_vec())
+        }
+    }
+
+    #[tokio::test]
+    async fn unconsumed_bodies_backpressure_a_large_catalog_at_the_read_window() {
+        let source = Arc::new(ImmediateSource {
+            total_started: AtomicUsize::new(0),
+        });
+        let temp = TempDir::new().unwrap();
+        let workspace = DocumentWorkspace {
+            workspace_id: uuid::Uuid::new_v4(),
+            repository_root: temp.path().join("repository"),
+            document_roots: vec!["docs".to_owned()],
+            cache_path: temp.path().join("search.sqlite3"),
+        };
+        let documents = (0..100)
+            .map(|index| summary(&format!("docs/{index}.md")))
+            .collect::<Vec<_>>();
+        let mut reads = BodyReadCoordinator::default().spawn_body_reads(
+            source.clone(),
+            workspace,
+            documents,
+            CancellationToken::new(),
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while source.total_started.load(Ordering::SeqCst) < 4 {
+                tokio::task::yield_now().await;
+            }
+            for _ in 0..10 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(source.total_started.load(Ordering::SeqCst), 4);
+
+        drop(reads.recv().await.unwrap());
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while source.total_started.load(Ordering::SeqCst) < 5 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(source.total_started.load(Ordering::SeqCst), 5);
     }
 
     #[test]
