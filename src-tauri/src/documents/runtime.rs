@@ -266,11 +266,21 @@ impl DocumentRuntime {
 
         self.start_watcher(owner);
 
+        let started_snapshot = {
+            let state = self.inner.state.lock().expect("document runtime poisoned");
+            match state.generation.as_ref() {
+                Some(Generation::Active(session)) if session.owner == owner => {
+                    session.snapshot.clone()
+                }
+                _ => snapshot,
+            }
+        };
+
         let runtime = self.clone();
         tokio::spawn(async move {
             runtime.reconcile_filesystem(owner).await;
         });
-        Ok(snapshot)
+        Ok(started_snapshot)
     }
 
     #[cfg(test)]
@@ -453,18 +463,25 @@ impl DocumentRuntime {
                 }
             };
             session.snapshot.catalog = catalog.clone();
-            session.snapshot.index_status = IndexStatus::Preparing {
-                indexed: 0,
-                total: catalog.documents.len(),
-            };
+            let degraded = session.watcher_degraded.clone();
+            let status = update_effective_index_status(
+                &mut session.snapshot.index_status,
+                degraded.as_deref(),
+                IndexStatus::Preparing {
+                    indexed: 0,
+                    total: catalog.documents.len(),
+                },
+            );
             let _ = self.inner.events.send(DocumentEvent::TreeChanged {
                 session_id,
                 catalog: catalog.clone(),
             });
-            let _ = self.inner.events.send(DocumentEvent::IndexStatusChanged {
-                session_id,
-                status: session.snapshot.index_status.clone(),
-            });
+            if let Some(status) = status {
+                let _ = self
+                    .inner
+                    .events
+                    .send(DocumentEvent::IndexStatusChanged { session_id, status });
+            }
             if let Some(path) = migrated_open_path {
                 let _ = self
                     .inner
@@ -538,8 +555,9 @@ impl DocumentRuntime {
                     None => return,
                 },
             };
-            let mut paths = match message {
-                WatcherMessage::Paths(paths) => paths,
+            let (mut paths, mut rescan) = match message {
+                WatcherMessage::Paths(paths) => (paths, false),
+                WatcherMessage::Rescan => (Vec::new(), true),
                 WatcherMessage::BackendError => {
                     let Some(inner) = runtime.upgrade() else {
                         return;
@@ -556,6 +574,7 @@ impl DocumentRuntime {
                 };
                 match next {
                     Ok(Some(WatcherMessage::Paths(more))) => paths.extend(more),
+                    Ok(Some(WatcherMessage::Rescan)) => rescan = true,
                     Ok(Some(WatcherMessage::BackendError)) => {
                         let Some(inner) = runtime.upgrade() else {
                             return;
@@ -565,25 +584,34 @@ impl DocumentRuntime {
                     Ok(None) | Err(_) => break,
                 }
             }
-            let affected_paths = affected_markdown_paths(
-                &workspace.repository_root,
-                &workspace.document_roots,
-                &paths,
-            );
-            if affected_paths.is_empty() {
-                continue;
-            }
+            let affected_paths = if rescan {
+                None
+            } else {
+                let paths = affected_markdown_paths(
+                    &workspace.repository_root,
+                    &workspace.document_roots,
+                    &paths,
+                );
+                if paths.is_empty() {
+                    continue;
+                }
+                Some(paths)
+            };
             let Some(inner) = runtime.upgrade() else {
                 return;
             };
             let worker = DocumentRuntime { inner };
-            let _ = worker.refresh_if_owned(owner, Some(affected_paths)).await;
+            let _ = worker.refresh_if_owned(owner, affected_paths).await;
         }
     }
 
     fn mark_watcher_degraded(&self, owner: SessionOwner) {
         const MESSAGE: &str =
             "파일 변경 감시를 사용할 수 없습니다. 수동 새로 고침은 계속 사용할 수 있습니다.";
+        self.mark_watcher_degraded_with_message(owner, MESSAGE);
+    }
+
+    fn mark_watcher_degraded_with_message(&self, owner: SessionOwner, message: &str) {
         let mut state = self.inner.state.lock().expect("document runtime poisoned");
         let Some(Generation::Active(session)) = state.generation.as_mut() else {
             return;
@@ -591,15 +619,19 @@ impl DocumentRuntime {
         if session.owner != owner {
             return;
         }
-        session.watcher_degraded = Some(MESSAGE.to_owned());
-        let status = IndexStatus::Degraded {
-            message: MESSAGE.to_owned(),
-        };
-        session.snapshot.index_status = status.clone();
-        let _ = self.inner.events.send(DocumentEvent::IndexStatusChanged {
-            session_id: owner.session_id,
-            status,
-        });
+        session.watcher_degraded = Some(message.to_owned());
+        let requested = session.snapshot.index_status.clone();
+        let degraded = session.watcher_degraded.clone();
+        if let Some(status) = update_effective_index_status(
+            &mut session.snapshot.index_status,
+            degraded.as_deref(),
+            requested,
+        ) {
+            let _ = self.inner.events.send(DocumentEvent::IndexStatusChanged {
+                session_id: owner.session_id,
+                status,
+            });
+        }
     }
 
     async fn prepare_session(
@@ -814,17 +846,17 @@ impl DocumentRuntime {
         if session.owner != owner || session.index_revision != revision {
             return;
         }
-        let status = match (&status, &session.watcher_degraded) {
-            (IndexStatus::Ready, Some(message)) => IndexStatus::Degraded {
-                message: message.clone(),
-            },
-            _ => status,
-        };
-        session.snapshot.index_status = status.clone();
-        let _ = self.inner.events.send(DocumentEvent::IndexStatusChanged {
-            session_id: owner.session_id,
+        let degraded = session.watcher_degraded.clone();
+        if let Some(status) = update_effective_index_status(
+            &mut session.snapshot.index_status,
+            degraded.as_deref(),
             status,
-        });
+        ) {
+            let _ = self.inner.events.send(DocumentEvent::IndexStatusChanged {
+                session_id: owner.session_id,
+                status,
+            });
+        }
     }
 
     fn fail_if_owned(&self, owner: SessionOwner, revision: u64, error: AppError) -> bool {
@@ -882,6 +914,21 @@ fn validate_session_id(session_id: Uuid) -> Result<(), AppError> {
     } else {
         Err(session_conflict())
     }
+}
+
+fn update_effective_index_status(
+    current: &mut IndexStatus,
+    watcher_degraded: Option<&str>,
+    requested: IndexStatus,
+) -> Option<IndexStatus> {
+    let effective = watcher_degraded.map_or(requested, |message| IndexStatus::Degraded {
+        message: message.to_owned(),
+    });
+    if *current == effective {
+        return None;
+    }
+    *current = effective.clone();
+    Some(effective)
 }
 
 fn session_conflict() -> AppError {
@@ -964,10 +1011,11 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Condvar, Mutex};
-    use std::time::Duration;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use async_trait::async_trait;
+    use notify::event::{AccessKind, AccessMode, DataChange, ModifyKind};
+    use notify::{Event, EventKind};
     use tempfile::TempDir;
     use tokio::sync::{mpsc, Notify, Semaphore};
     use uuid::Uuid;
@@ -977,10 +1025,48 @@ mod tests {
         DocumentCatalog, DocumentEvent, DocumentSummary, DocumentTreeEntry, FrontmatterStatus,
         IndexStatus,
     };
-    use crate::documents::watcher::{WatcherFactory, WatcherGuard, WatcherMessage};
+    use crate::documents::watcher::{
+        dispatch_notify_result, WatcherFactory, WatcherGuard, WatcherMessage, WATCH_COALESCE_WINDOW,
+    };
     use crate::error::{AppError, ErrorCode};
 
-    use super::{DocumentRuntime, DocumentSource, DocumentWorkspace, StartupReservationPause};
+    use super::{
+        update_effective_index_status, DocumentRuntime, DocumentSource, DocumentWorkspace,
+        StartupReservationPause,
+    };
+
+    #[test]
+    fn effective_status_suppresses_identical_degradation_but_publishes_message_changes() {
+        let mut current = IndexStatus::Ready;
+        let degraded_a = IndexStatus::Degraded {
+            message: "watcher A".to_owned(),
+        };
+        let degraded_b = IndexStatus::Degraded {
+            message: "watcher B".to_owned(),
+        };
+
+        assert_eq!(
+            update_effective_index_status(&mut current, Some("watcher A"), IndexStatus::Ready),
+            Some(degraded_a.clone())
+        );
+        assert_eq!(
+            update_effective_index_status(
+                &mut current,
+                Some("watcher A"),
+                IndexStatus::Preparing {
+                    indexed: 1,
+                    total: 2,
+                },
+            ),
+            None
+        );
+        assert_eq!(current, degraded_a);
+        assert_eq!(
+            update_effective_index_status(&mut current, Some("watcher B"), IndexStatus::Ready),
+            Some(degraded_b.clone())
+        );
+        assert_eq!(current, degraded_b);
+    }
 
     #[derive(Clone)]
     struct SequencedDocumentSource {
@@ -1116,6 +1202,7 @@ mod tests {
     #[derive(Clone)]
     struct MutableDocumentSource {
         documents: Arc<Mutex<Vec<DocumentSummary>>>,
+        discoveries: Arc<AtomicUsize>,
         reads: Arc<Mutex<Vec<String>>>,
         bodies: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         body_started: Arc<Notify>,
@@ -1136,6 +1223,7 @@ mod tests {
                 .collect();
             Self {
                 documents: Arc::new(Mutex::new(documents)),
+                discoveries: Arc::new(AtomicUsize::new(0)),
                 reads: Arc::new(Mutex::new(Vec::new())),
                 bodies: Arc::new(Mutex::new(bodies)),
                 body_started: Arc::new(Notify::new()),
@@ -1158,11 +1246,16 @@ mod tests {
         fn take_reads(&self) -> Vec<String> {
             std::mem::take(&mut *self.reads.lock().unwrap())
         }
+
+        fn discovery_count(&self) -> usize {
+            self.discoveries.load(Ordering::SeqCst)
+        }
     }
 
     #[async_trait]
     impl DocumentSource for MutableDocumentSource {
         fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            self.discoveries.fetch_add(1, Ordering::SeqCst);
             Ok(catalog(self.documents.lock().unwrap().clone()))
         }
 
@@ -1374,6 +1467,75 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(source.take_reads(), ["docs/guide.md"]);
+    }
+
+    #[tokio::test]
+    async fn access_open_from_native_watcher_does_not_start_a_second_refresh() {
+        let temp = TempDir::new().unwrap();
+        let source = MutableDocumentSource::new(vec![summary("docs/guide.md")]);
+        let watcher_sender = Arc::new(Mutex::new(None));
+        let captured_sender = watcher_sender.clone();
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(
+            move |_repository_root: &std::path::Path,
+                  _roots: &[String],
+                  sender: mpsc::UnboundedSender<WatcherMessage>| {
+                *captured_sender.lock().unwrap() = Some(sender);
+                Ok(Box::new(()) as Box<dyn WatcherGuard>)
+            },
+        );
+        let runtime = DocumentRuntime::with_source_and_watcher_factory(
+            Arc::new(source.clone()),
+            watcher_factory,
+        );
+        let session_id = Uuid::new_v4();
+        let workspace = workspace(&temp);
+        runtime
+            .start_session(session_id, workspace.clone())
+            .await
+            .unwrap();
+        wait_until_idle(&runtime, session_id).await;
+        source.take_reads();
+        let baseline_discoveries = source.discovery_count();
+        let mut events = runtime.subscribe();
+        let sender = watcher_sender.lock().unwrap().as_ref().unwrap().clone();
+        let watched_path = workspace.repository_root.join("docs/guide.md");
+
+        dispatch_notify_result(
+            &sender,
+            Ok(
+                Event::new(EventKind::Access(AccessKind::Open(AccessMode::Read)))
+                    .add_path(watched_path.clone()),
+            ),
+        );
+        tokio::time::sleep(WATCH_COALESCE_WINDOW + Duration::from_millis(75)).await;
+
+        assert_eq!(source.discovery_count(), baseline_discoveries);
+        assert!(source.take_reads().is_empty());
+        assert!(events.try_recv().is_err());
+
+        dispatch_notify_result(
+            &sender,
+            Ok(
+                Event::new(EventKind::Modify(ModifyKind::Data(DataChange::Content)))
+                    .add_path(watched_path),
+            ),
+        );
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while source.discovery_count() != baseline_discoveries + 1
+                || source.reads.lock().unwrap().len() != 1
+                || runtime.snapshot(session_id).unwrap().index_status != IndexStatus::Ready
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(source.take_reads(), ["docs/guide.md"]);
+        let refreshes = std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| matches!(event, DocumentEvent::TreeChanged { .. }))
+            .count();
+        assert_eq!(refreshes, 1);
     }
 
     #[tokio::test]
@@ -1596,25 +1758,36 @@ mod tests {
         let workspace = workspace(&temp);
         runtime.start_session(session_id, workspace).await.unwrap();
         wait_until_idle(&runtime, session_id).await;
+        let mut events = runtime.subscribe();
+        let sender = watcher_sender.lock().unwrap().as_ref().unwrap().clone();
 
-        watcher_sender
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .send(WatcherMessage::BackendError)
-            .unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !matches!(
-                runtime.snapshot(session_id).unwrap().index_status,
-                IndexStatus::Degraded { .. }
-            ) {
-                tokio::task::yield_now().await;
+        dispatch_notify_result(
+            &sender,
+            Err(notify::Error::generic("same injected backend failure")),
+        );
+        dispatch_notify_result(
+            &sender,
+            Err(notify::Error::generic("same injected backend failure")),
+        );
+        sender.send(WatcherMessage::Rescan).unwrap();
+        let statuses_before_rescan = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut statuses = Vec::new();
+            loop {
+                match events.recv().await.unwrap() {
+                    DocumentEvent::IndexStatusChanged { status, .. } => statuses.push(status),
+                    DocumentEvent::TreeChanged { .. } => return statuses,
+                    _ => {}
+                }
             }
         })
         .await
         .unwrap();
 
+        assert_eq!(statuses_before_rescan.len(), 1);
+        assert!(matches!(
+            statuses_before_rescan.as_slice(),
+            [IndexStatus::Degraded { .. }]
+        ));
         assert!(matches!(
             runtime.snapshot(session_id).unwrap().index_status,
             IndexStatus::Degraded { .. }
@@ -1659,23 +1832,45 @@ mod tests {
             watcher_factory,
         );
         let session_id = Uuid::new_v4();
+        let mut events = runtime.subscribe();
 
-        runtime
+        let started = runtime
             .start_session(session_id, workspace(&temp))
             .await
             .unwrap();
+        assert!(matches!(started.index_status, IndexStatus::Degraded { .. }));
         tokio::time::timeout(Duration::from_secs(2), async {
-            while source.reads.lock().unwrap().is_empty()
-                || !matches!(
-                    runtime.snapshot(session_id).unwrap().index_status,
-                    IndexStatus::Degraded { .. }
-                )
+            while source.discovery_count() < 2
+                || source.reads.lock().unwrap().is_empty()
+                || runtime
+                    .search(session_id, "guide", 20)
+                    .await
+                    .unwrap()
+                    .items
+                    .is_empty()
             {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        let startup_statuses = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                DocumentEvent::IndexStatusChanged { status, .. } => Some(status),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(startup_statuses.len(), 2);
+        assert_eq!(
+            startup_statuses[0],
+            IndexStatus::Preparing {
+                indexed: 0,
+                total: 1,
+            }
+        );
+        assert!(matches!(startup_statuses[1], IndexStatus::Degraded { .. }));
 
         assert!(runtime
             .search(session_id, "guide", 20)
@@ -1684,17 +1879,45 @@ mod tests {
             .items
             .iter()
             .any(|item| item.path == "docs/guide.md"));
+        let mut updated = summary("docs/guide.md");
+        updated.modified_at_unix_ms = 2;
+        source.replace_documents(vec![updated]);
+        source.bodies.lock().unwrap().insert(
+            "docs/guide.md".to_owned(),
+            b"manual refresh remains searchable".to_vec(),
+        );
+        let discoveries_before_refresh = source.discovery_count();
         runtime.refresh(session_id).await.unwrap();
         tokio::time::timeout(Duration::from_secs(2), async {
-            while !matches!(
-                runtime.snapshot(session_id).unwrap().index_status,
-                IndexStatus::Degraded { .. }
-            ) {
+            while source.discovery_count() != discoveries_before_refresh + 1
+                || runtime
+                    .search(session_id, "manual refresh remains", 20)
+                    .await
+                    .unwrap()
+                    .items
+                    .is_empty()
+            {
                 tokio::task::yield_now().await;
             }
         })
         .await
         .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert_eq!(
+            runtime.snapshot(session_id).unwrap().catalog.documents[0].modified_at_unix_ms,
+            2
+        );
+        assert!(matches!(
+            runtime.snapshot(session_id).unwrap().index_status,
+            IndexStatus::Degraded { .. }
+        ));
+        assert_eq!(
+            std::iter::from_fn(|| events.try_recv().ok())
+                .filter(|event| matches!(event, DocumentEvent::IndexStatusChanged { .. }))
+                .count(),
+            0
+        );
     }
 
     struct DropWatcher {

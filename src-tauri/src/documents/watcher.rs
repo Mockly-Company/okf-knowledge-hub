@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::ModifyKind;
+use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 
 pub(crate) const WATCH_COALESCE_WINDOW: std::time::Duration = std::time::Duration::from_millis(150);
@@ -9,6 +10,7 @@ pub(crate) const WATCH_COALESCE_WINDOW: std::time::Duration = std::time::Duratio
 #[derive(Debug)]
 pub(crate) enum WatcherMessage {
     Paths(Vec<PathBuf>),
+    Rescan,
     BackendError,
 }
 
@@ -35,16 +37,49 @@ impl DocumentWatcher {
         sender: mpsc::UnboundedSender<WatcherMessage>,
     ) -> Result<Self, notify::Error> {
         let mut watcher = notify::recommended_watcher(move |result: notify::Result<Event>| {
-            let message = match result {
-                Ok(event) => WatcherMessage::Paths(event.paths),
-                Err(_) => WatcherMessage::BackendError,
-            };
-            let _ = sender.send(message);
+            dispatch_notify_result(&sender, result);
         })?;
         for root in roots {
             watcher.watch(&repository_root.join(root), RecursiveMode::Recursive)?;
         }
         Ok(Self { _watcher: watcher })
+    }
+}
+
+pub(crate) fn dispatch_notify_result(
+    sender: &mpsc::UnboundedSender<WatcherMessage>,
+    result: notify::Result<Event>,
+) {
+    if let Some(message) = watcher_message(result) {
+        let _ = sender.send(message);
+    }
+}
+
+fn watcher_message(result: notify::Result<Event>) -> Option<WatcherMessage> {
+    let event = match result {
+        Ok(event) => event,
+        Err(_) => return Some(WatcherMessage::BackendError),
+    };
+    if event.need_rescan() {
+        return Some(WatcherMessage::Rescan);
+    }
+    let mutating = matches!(
+        event.kind,
+        EventKind::Any
+            | EventKind::Create(_)
+            | EventKind::Modify(ModifyKind::Any)
+            | EventKind::Modify(ModifyKind::Data(_))
+            | EventKind::Modify(ModifyKind::Name(_))
+            | EventKind::Modify(ModifyKind::Other)
+            | EventKind::Remove(_)
+    );
+    if !mutating {
+        return None;
+    }
+    if event.paths.is_empty() {
+        Some(WatcherMessage::Rescan)
+    } else {
+        Some(WatcherMessage::Paths(event.paths))
     }
 }
 
@@ -221,7 +256,83 @@ fn components_start_with(path: &[String], root: &[String], case_insensitive: boo
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use super::affected_markdown_paths;
+    use notify::event::{
+        AccessKind, AccessMode, CreateKind, DataChange, Flag, MetadataKind, ModifyKind, RemoveKind,
+        RenameMode,
+    };
+    use notify::{Event, EventKind};
+
+    use super::{affected_markdown_paths, watcher_message, WatcherMessage};
+
+    #[test]
+    fn native_events_ignore_access_and_metadata_noise() {
+        let ignored = [
+            EventKind::Access(AccessKind::Open(AccessMode::Read)),
+            EventKind::Access(AccessKind::Close(AccessMode::Read)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime)),
+            EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+            EventKind::Other,
+        ];
+
+        for kind in ignored {
+            assert!(
+                watcher_message(Ok(Event::new(kind).add_path(PathBuf::from("docs/guide.md"))))
+                    .is_none(),
+                "{kind:?} should not trigger a document refresh"
+            );
+        }
+    }
+
+    #[test]
+    fn native_events_forward_catalog_mutations_and_preserve_rename_order() {
+        let path = PathBuf::from("docs/guide.md");
+        let forwarded = [
+            EventKind::Any,
+            EventKind::Create(CreateKind::File),
+            EventKind::Modify(ModifyKind::Any),
+            EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            EventKind::Modify(ModifyKind::Other),
+            EventKind::Remove(RemoveKind::File),
+        ];
+
+        for kind in forwarded {
+            let Some(WatcherMessage::Paths(paths)) =
+                watcher_message(Ok(Event::new(kind).add_path(path.clone())))
+            else {
+                panic!("{kind:?} should trigger a document refresh");
+            };
+            assert_eq!(paths, [path.clone()]);
+        }
+
+        let old_path = PathBuf::from("docs/old.md");
+        let new_path = PathBuf::from("docs/new.md");
+        let Some(WatcherMessage::Paths(paths)) = watcher_message(Ok(Event::new(
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)),
+        )
+        .add_path(old_path.clone())
+        .add_path(new_path.clone()))) else {
+            panic!("rename should trigger a document refresh");
+        };
+        assert_eq!(paths, [old_path, new_path]);
+    }
+
+    #[test]
+    fn native_events_prioritize_rescan_and_keep_backend_errors_safe() {
+        let rescan = Event::new(EventKind::Access(AccessKind::Open(AccessMode::Read)))
+            .set_flag(Flag::Rescan);
+        assert!(matches!(
+            watcher_message(Ok(rescan)),
+            Some(WatcherMessage::Rescan)
+        ));
+        assert!(matches!(
+            watcher_message(Ok(Event::new(EventKind::Create(CreateKind::File)))),
+            Some(WatcherMessage::Rescan)
+        ));
+        assert!(matches!(
+            watcher_message(Err(notify::Error::generic("injected watcher failure"))),
+            Some(WatcherMessage::BackendError)
+        ));
+    }
 
     #[test]
     fn rename_produces_delete_and_add_paths() {
