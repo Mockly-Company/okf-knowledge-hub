@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, mpsc, Mutex as AsyncMutex};
@@ -15,7 +15,8 @@ use super::contract::{
 use super::discovery::discover_documents;
 use super::indexer::{catalog_from_summaries, BodyReadCoordinator};
 use super::watcher::{
-    affected_markdown_paths, DocumentWatcher, WatcherMessage, WATCH_COALESCE_WINDOW,
+    affected_markdown_paths, native_watcher_factory, relative_paths_match, WatcherFactory,
+    WatcherGuard, WatcherMessage, WATCH_COALESCE_WINDOW,
 };
 
 #[derive(Debug, Clone)]
@@ -83,6 +84,7 @@ struct RuntimeInner {
     source: Arc<dyn DocumentSource>,
     body_reads: BodyReadCoordinator,
     cache_opener: Arc<CacheOpener>,
+    watcher_factory: Arc<WatcherFactory>,
     state: Mutex<RuntimeState>,
     startup_mutations: Arc<AsyncMutex<()>>,
     events: broadcast::Sender<DocumentEvent>,
@@ -127,7 +129,7 @@ struct ActiveSession {
     index_revision: u64,
     index_cancellation: CancellationToken,
     watcher_degraded: Option<String>,
-    watcher: Option<DocumentWatcher>,
+    watcher: Option<Box<dyn WatcherGuard>>,
 }
 
 impl Default for DocumentRuntime {
@@ -146,12 +148,30 @@ impl DocumentRuntime {
     }
 
     fn with_cache_opener(source: Arc<dyn DocumentSource>, cache_opener: Arc<CacheOpener>) -> Self {
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(native_watcher_factory);
+        Self::with_dependencies(source, cache_opener, watcher_factory)
+    }
+
+    #[cfg(test)]
+    fn with_source_and_watcher_factory(
+        source: Arc<dyn DocumentSource>,
+        watcher_factory: Arc<WatcherFactory>,
+    ) -> Self {
+        Self::with_dependencies(source, Arc::new(DocumentCache::open), watcher_factory)
+    }
+
+    fn with_dependencies(
+        source: Arc<dyn DocumentSource>,
+        cache_opener: Arc<CacheOpener>,
+        watcher_factory: Arc<WatcherFactory>,
+    ) -> Self {
         let (events, _) = broadcast::channel(64);
         Self {
             inner: Arc::new(RuntimeInner {
                 source,
                 body_reads: BodyReadCoordinator::default(),
                 cache_opener,
+                watcher_factory,
                 state: Mutex::new(RuntimeState::default()),
                 startup_mutations: Arc::new(AsyncMutex::new(())),
                 events,
@@ -221,7 +241,7 @@ impl DocumentRuntime {
         let result = self
             .prepare_session(owner, workspace, cancellation.clone())
             .await;
-        let (snapshot, catalog, warm_start, index_cancellation) = match result {
+        let (snapshot, catalog) = match result {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.clear_if_owned(owner);
@@ -248,13 +268,7 @@ impl DocumentRuntime {
 
         let runtime = self.clone();
         tokio::spawn(async move {
-            if warm_start {
-                runtime.reconcile_filesystem(owner).await;
-            } else {
-                runtime
-                    .index_catalog(owner, 0, catalog, index_cancellation, None)
-                    .await;
-            }
+            runtime.reconcile_filesystem(owner).await;
         });
         Ok(snapshot)
     }
@@ -405,6 +419,18 @@ impl DocumentRuntime {
                 return Ok(());
             }
         };
+        let affected_paths = affected_paths.map(|paths| {
+            catalog
+                .documents
+                .iter()
+                .filter(|document| {
+                    paths.iter().any(|path| {
+                        relative_paths_match(&workspace.repository_root, &document.path, path)
+                    })
+                })
+                .map(|document| document.path.clone())
+                .collect()
+        });
         {
             let mut state = self.inner.state.lock().expect("document runtime poisoned");
             let Some(Generation::Active(session)) = state.generation.as_mut() else {
@@ -471,7 +497,7 @@ impl DocumentRuntime {
             return;
         };
         let (sender, receiver) = mpsc::unbounded_channel();
-        match DocumentWatcher::start(
+        match (self.inner.watcher_factory)(
             &workspace.repository_root,
             &workspace.document_roots,
             sender,
@@ -488,11 +514,9 @@ impl DocumentRuntime {
                     session.watcher = Some(watcher);
                     session.cancellation.clone()
                 };
-                let runtime = self.clone();
+                let runtime = Arc::downgrade(&self.inner);
                 tokio::spawn(async move {
-                    runtime
-                        .watch_changes(owner, workspace, receiver, cancellation)
-                        .await;
+                    Self::watch_changes(runtime, owner, workspace, receiver, cancellation).await;
                 });
             }
             Err(_) => self.mark_watcher_degraded(owner),
@@ -500,7 +524,7 @@ impl DocumentRuntime {
     }
 
     async fn watch_changes(
-        &self,
+        runtime: Weak<RuntimeInner>,
         owner: SessionOwner,
         workspace: DocumentWorkspace,
         mut receiver: mpsc::UnboundedReceiver<WatcherMessage>,
@@ -517,7 +541,10 @@ impl DocumentRuntime {
             let mut paths = match message {
                 WatcherMessage::Paths(paths) => paths,
                 WatcherMessage::BackendError => {
-                    self.mark_watcher_degraded(owner);
+                    let Some(inner) = runtime.upgrade() else {
+                        return;
+                    };
+                    DocumentRuntime { inner }.mark_watcher_degraded(owner);
                     continue;
                 }
             };
@@ -530,7 +557,10 @@ impl DocumentRuntime {
                 match next {
                     Ok(Some(WatcherMessage::Paths(more))) => paths.extend(more),
                     Ok(Some(WatcherMessage::BackendError)) => {
-                        self.mark_watcher_degraded(owner);
+                        let Some(inner) = runtime.upgrade() else {
+                            return;
+                        };
+                        DocumentRuntime { inner }.mark_watcher_degraded(owner);
                     }
                     Ok(None) | Err(_) => break,
                 }
@@ -543,7 +573,11 @@ impl DocumentRuntime {
             if affected_paths.is_empty() {
                 continue;
             }
-            let _ = self.refresh_if_owned(owner, Some(affected_paths)).await;
+            let Some(inner) = runtime.upgrade() else {
+                return;
+            };
+            let worker = DocumentRuntime { inner };
+            let _ = worker.refresh_if_owned(owner, Some(affected_paths)).await;
         }
     }
 
@@ -573,15 +607,7 @@ impl DocumentRuntime {
         owner: SessionOwner,
         workspace: DocumentWorkspace,
         cancellation: CancellationToken,
-    ) -> Result<
-        (
-            DocumentSessionSnapshot,
-            DocumentCatalog,
-            bool,
-            CancellationToken,
-        ),
-        AppError,
-    > {
+    ) -> Result<(DocumentSessionSnapshot, DocumentCatalog), AppError> {
         let cache_path = workspace.cache_path.clone();
         let workspace_id = workspace.workspace_id;
         let cache_opener = self.inner.cache_opener.clone();
@@ -654,7 +680,7 @@ impl DocumentRuntime {
             watcher: None,
         };
         state.generation = Some(Generation::Active(active));
-        Ok((snapshot, catalog, warm_start, index_cancellation))
+        Ok((snapshot, catalog))
     }
 
     async fn index_catalog(
@@ -905,7 +931,17 @@ fn reconcile_open_document(
         .documents
         .iter()
         .find(|document| document.path == open_path)
-        .and_then(|document| document.document_id);
+        .and_then(|document| document.document_id)
+        .filter(|document_id| {
+            session
+                .snapshot
+                .catalog
+                .documents
+                .iter()
+                .filter(|document| document.document_id == Some(*document_id))
+                .count()
+                == 1
+        });
     let renamed_path = previous_id.and_then(|document_id| {
         let mut matches = catalog
             .documents
@@ -933,7 +969,7 @@ mod tests {
 
     use async_trait::async_trait;
     use tempfile::TempDir;
-    use tokio::sync::{Notify, Semaphore};
+    use tokio::sync::{mpsc, Notify, Semaphore};
     use uuid::Uuid;
 
     use crate::documents::cache::{CacheError, DocumentCache};
@@ -941,6 +977,7 @@ mod tests {
         DocumentCatalog, DocumentEvent, DocumentSummary, DocumentTreeEntry, FrontmatterStatus,
         IndexStatus,
     };
+    use crate::documents::watcher::{WatcherFactory, WatcherGuard, WatcherMessage};
     use crate::error::{AppError, ErrorCode};
 
     use super::{DocumentRuntime, DocumentSource, DocumentWorkspace, StartupReservationPause};
@@ -1175,6 +1212,78 @@ mod tests {
         );
     }
 
+    #[derive(Clone)]
+    struct WatcherHandoffSource {
+        discoveries: Arc<AtomicUsize>,
+        reads: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl DocumentSource for WatcherHandoffSource {
+        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            let path = if self.discoveries.fetch_add(1, Ordering::SeqCst) == 0 {
+                "docs/before-watch.md"
+            } else {
+                "docs/after-watch.md"
+            };
+            Ok(catalog(vec![summary(path)]))
+        }
+
+        async fn read_body(
+            &self,
+            _workspace: &DocumentWorkspace,
+            path: &str,
+        ) -> Result<Vec<u8>, AppError> {
+            self.reads.lock().unwrap().push(path.to_owned());
+            Ok(format!("body for {path}").into_bytes())
+        }
+    }
+
+    #[tokio::test]
+    async fn cold_start_reconciles_after_watcher_install_to_close_the_handoff_window() {
+        let temp = TempDir::new().unwrap();
+        let source = WatcherHandoffSource {
+            discoveries: Arc::new(AtomicUsize::new(0)),
+            reads: Arc::new(Mutex::new(Vec::new())),
+        };
+        let discoveries_at_install = source.discoveries.clone();
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(
+            move |_repository_root: &std::path::Path,
+                  _roots: &[String],
+                  _sender: mpsc::UnboundedSender<WatcherMessage>| {
+                assert_eq!(discoveries_at_install.load(Ordering::SeqCst), 1);
+                Ok(Box::new(()) as Box<dyn WatcherGuard>)
+            },
+        );
+        let runtime = DocumentRuntime::with_source_and_watcher_factory(
+            Arc::new(source.clone()),
+            watcher_factory,
+        );
+        let session_id = Uuid::new_v4();
+
+        let initial = runtime
+            .start_session(session_id, workspace(&temp))
+            .await
+            .unwrap();
+
+        assert_eq!(initial.catalog.documents[0].path, "docs/before-watch.md");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = runtime.snapshot(session_id).unwrap();
+                if snapshot.catalog.documents[0].path == "docs/after-watch.md"
+                    && snapshot.index_status == IndexStatus::Ready
+                {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(source.discoveries.load(Ordering::SeqCst), 2);
+        assert_eq!(*source.reads.lock().unwrap(), ["docs/after-watch.md"]);
+    }
+
     #[tokio::test]
     async fn refresh_re_reads_only_the_changed_document() {
         let temp = TempDir::new().unwrap();
@@ -1220,6 +1329,51 @@ mod tests {
         wait_until_idle(&runtime, session_id).await;
 
         assert_eq!(source.take_reads(), ["docs/first.md"]);
+    }
+
+    #[tokio::test]
+    async fn windows_watcher_path_casing_maps_to_the_discovered_catalog_path() {
+        let temp = TempDir::new().unwrap();
+        let source = MutableDocumentSource::new(vec![summary("docs/guide.md")]);
+        let watcher_sender = Arc::new(Mutex::new(None));
+        let captured_sender = watcher_sender.clone();
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(
+            move |_repository_root: &std::path::Path,
+                  _roots: &[String],
+                  sender: mpsc::UnboundedSender<WatcherMessage>| {
+                *captured_sender.lock().unwrap() = Some(sender);
+                Ok(Box::new(()) as Box<dyn WatcherGuard>)
+            },
+        );
+        let runtime = DocumentRuntime::with_source_and_watcher_factory(
+            Arc::new(source.clone()),
+            watcher_factory,
+        );
+        let session_id = Uuid::new_v4();
+        let mut workspace = workspace(&temp);
+        workspace.repository_root = PathBuf::from(r"C:\Workspace");
+        runtime.start_session(session_id, workspace).await.unwrap();
+        wait_until_idle(&runtime, session_id).await;
+        source.take_reads();
+
+        watcher_sender
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .send(WatcherMessage::Paths(vec![PathBuf::from(
+                r"c:\workspace\DOCS\GUIDE.md",
+            )]))
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while source.reads.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(source.take_reads(), ["docs/guide.md"]);
     }
 
     #[tokio::test]
@@ -1423,15 +1577,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watcher_failure_degrades_status_without_disabling_search_or_refresh() {
+    async fn injected_watcher_failure_degrades_without_disabling_search_or_refresh() {
         let temp = TempDir::new().unwrap();
         let source = MutableDocumentSource::new(vec![summary("docs/guide.md")]);
-        let runtime = DocumentRuntime::with_source(Arc::new(source));
+        let watcher_sender = Arc::new(Mutex::new(None));
+        let captured_sender = watcher_sender.clone();
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(
+            move |_repository_root: &std::path::Path,
+                  _roots: &[String],
+                  sender: mpsc::UnboundedSender<WatcherMessage>| {
+                *captured_sender.lock().unwrap() = Some(sender);
+                Ok(Box::new(()) as Box<dyn WatcherGuard>)
+            },
+        );
+        let runtime =
+            DocumentRuntime::with_source_and_watcher_factory(Arc::new(source), watcher_factory);
         let session_id = Uuid::new_v4();
         let workspace = workspace(&temp);
-        std::fs::remove_dir_all(workspace.repository_root.join("docs")).unwrap();
         runtime.start_session(session_id, workspace).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        wait_until_idle(&runtime, session_id).await;
+
+        watcher_sender
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .send(WatcherMessage::BackendError)
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !matches!(
+                runtime.snapshot(session_id).unwrap().index_status,
+                IndexStatus::Degraded { .. }
+            ) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
 
         assert!(matches!(
             runtime.snapshot(session_id).unwrap().index_status,
@@ -1445,7 +1627,16 @@ mod tests {
             .iter()
             .any(|item| item.path == "docs/guide.md"));
         runtime.refresh(session_id).await.unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !matches!(
+                runtime.snapshot(session_id).unwrap().index_status,
+                IndexStatus::Degraded { .. }
+            ) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(matches!(
             runtime.snapshot(session_id).unwrap().index_status,
             IndexStatus::Degraded { .. }
@@ -1453,45 +1644,174 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn filesystem_watcher_coalesces_changes_and_refreshes_search_content() {
+    async fn injected_watcher_setup_error_degrades_without_disabling_refresh_and_search() {
+        let temp = TempDir::new().unwrap();
+        let source = MutableDocumentSource::new(vec![summary("docs/guide.md")]);
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(
+            |_repository_root: &std::path::Path,
+             _roots: &[String],
+             _sender: mpsc::UnboundedSender<WatcherMessage>| {
+                Err(notify::Error::generic("injected watcher setup failure"))
+            },
+        );
+        let runtime = DocumentRuntime::with_source_and_watcher_factory(
+            Arc::new(source.clone()),
+            watcher_factory,
+        );
+        let session_id = Uuid::new_v4();
+
+        runtime
+            .start_session(session_id, workspace(&temp))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while source.reads.lock().unwrap().is_empty()
+                || !matches!(
+                    runtime.snapshot(session_id).unwrap().index_status,
+                    IndexStatus::Degraded { .. }
+                )
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(runtime
+            .search(session_id, "guide", 20)
+            .await
+            .unwrap()
+            .items
+            .iter()
+            .any(|item| item.path == "docs/guide.md"));
+        runtime.refresh(session_id).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !matches!(
+                runtime.snapshot(session_id).unwrap().index_status,
+                IndexStatus::Degraded { .. }
+            ) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    struct DropWatcher {
+        _sender: mpsc::UnboundedSender<WatcherMessage>,
+        drops: Arc<AtomicUsize>,
+    }
+
+    impl Drop for DropWatcher {
+        fn drop(&mut self) {
+            self.drops.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_the_last_runtime_handle_releases_watcher_task_and_cache_state() {
+        let temp = TempDir::new().unwrap();
+        let watcher_drops = Arc::new(AtomicUsize::new(0));
+        let observed_drops = watcher_drops.clone();
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(
+            move |_repository_root: &std::path::Path,
+                  _roots: &[String],
+                  sender: mpsc::UnboundedSender<WatcherMessage>| {
+                Ok(Box::new(DropWatcher {
+                    _sender: sender,
+                    drops: observed_drops.clone(),
+                }) as Box<dyn WatcherGuard>)
+            },
+        );
+        let runtime = DocumentRuntime::with_source_and_watcher_factory(
+            Arc::new(MutableDocumentSource::new(Vec::new())),
+            watcher_factory,
+        );
+        let weak_inner = Arc::downgrade(&runtime.inner);
+        let session_id = Uuid::new_v4();
+        runtime
+            .start_session(session_id, workspace(&temp))
+            .await
+            .unwrap();
+        wait_until_idle(&runtime, session_id).await;
+        tokio::task::yield_now().await;
+
+        drop(runtime);
+
+        tokio::time::timeout(Duration::from_millis(250), async {
+            while weak_inner.upgrade().is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(watcher_drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn watcher_coalesces_distinct_events_inside_one_150_ms_refresh_batch() {
         let temp = TempDir::new().unwrap();
         let workspace = workspace(&temp);
-        let path = workspace.repository_root.join("docs/watched.md");
-        std::fs::write(&path, "old watcher body").unwrap();
-        let runtime = DocumentRuntime::new();
+        let source =
+            MutableDocumentSource::new(vec![summary("docs/first.md"), summary("docs/second.md")]);
+        let watcher_sender = Arc::new(Mutex::new(None));
+        let captured_sender = watcher_sender.clone();
+        let watcher_factory: Arc<WatcherFactory> = Arc::new(
+            move |_repository_root: &std::path::Path,
+                  _roots: &[String],
+                  sender: mpsc::UnboundedSender<WatcherMessage>| {
+                *captured_sender.lock().unwrap() = Some(sender);
+                Ok(Box::new(()) as Box<dyn WatcherGuard>)
+            },
+        );
+        let runtime = DocumentRuntime::with_source_and_watcher_factory(
+            Arc::new(source.clone()),
+            watcher_factory,
+        );
         let session_id = Uuid::new_v4();
-        runtime.start_session(session_id, workspace).await.unwrap();
+        runtime
+            .start_session(session_id, workspace.clone())
+            .await
+            .unwrap();
         wait_until_idle(&runtime, session_id).await;
+        source.take_reads();
         let mut events = runtime.subscribe();
+        let sender = watcher_sender.lock().unwrap().as_ref().unwrap().clone();
 
-        std::fs::write(&path, "watcher refreshed body").unwrap();
+        let first_sent_at = Instant::now();
+        sender
+            .send(WatcherMessage::Paths(vec![workspace
+                .repository_root
+                .join("docs/first.md")]))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        assert!(first_sent_at.elapsed() < super::WATCH_COALESCE_WINDOW);
+        sender
+            .send(WatcherMessage::Paths(vec![workspace
+                .repository_root
+                .join("docs/second.md")]))
+            .unwrap();
 
-        let refreshed = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if runtime
-                    .search(session_id, "watcher refreshed", 20)
-                    .await
-                    .unwrap()
-                    .items
-                    .iter()
-                    .any(|item| item.path == "docs/watched.md")
+                if source.reads.lock().unwrap().len() == 2
+                    && runtime.snapshot(session_id).unwrap().index_status == IndexStatus::Ready
                 {
                     return;
                 }
-                tokio::time::sleep(Duration::from_millis(25)).await;
+                tokio::task::yield_now().await;
             }
         })
-        .await;
-        if refreshed.is_err() {
-            let mut observed = Vec::new();
-            while let Ok(event) = events.try_recv() {
-                observed.push(format!("{event:?}"));
-            }
-            panic!(
-                "watcher refresh timed out; snapshot={:?}; events={observed:?}",
-                runtime.snapshot(session_id).unwrap()
-            );
-        }
+        .await
+        .unwrap();
+
+        let mut reads = source.take_reads();
+        reads.sort();
+        assert_eq!(reads, ["docs/first.md", "docs/second.md"]);
+        let refresh_batches = std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|event| matches!(event, DocumentEvent::TreeChanged { .. }))
+            .count();
+        assert_eq!(refresh_batches, 1);
     }
 
     #[tokio::test]
@@ -1527,6 +1847,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn duplicate_old_document_id_does_not_move_last_opened_path() {
+        let temp = TempDir::new().unwrap();
+        let document_id = Uuid::new_v4();
+        let mut opened = summary("docs/opened.md");
+        opened.document_id = Some(document_id);
+        let mut duplicate = summary("docs/duplicate.md");
+        duplicate.document_id = Some(document_id);
+        let source = MutableDocumentSource::new(vec![opened, duplicate]);
+        let runtime = DocumentRuntime::with_source(Arc::new(source.clone()));
+        let session_id = Uuid::new_v4();
+        runtime
+            .start_session(session_id, workspace(&temp))
+            .await
+            .unwrap();
+        wait_until_idle(&runtime, session_id).await;
+        runtime
+            .set_open_document(session_id, "docs/opened.md")
+            .unwrap();
+
+        let mut renamed = summary("docs/new.md");
+        renamed.document_id = Some(document_id);
+        source.replace_documents(vec![renamed]);
+        runtime.refresh(session_id).await.unwrap();
+
+        assert_eq!(runtime.snapshot(session_id).unwrap().last_opened_path, None);
+    }
+
     #[derive(Clone)]
     struct OutOfOrderDiscoverySource {
         calls: Arc<AtomicUsize>,
@@ -1538,8 +1886,8 @@ mod tests {
     impl DocumentSource for OutOfOrderDiscoverySource {
         fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
             match self.calls.fetch_add(1, Ordering::SeqCst) {
-                0 => Ok(catalog(vec![summary("docs/initial.md")])),
-                1 => {
+                0 | 1 => Ok(catalog(vec![summary("docs/initial.md")])),
+                2 => {
                     self.first_refresh_started.store(true, Ordering::SeqCst);
                     let (lock, wake) = &*self.first_refresh_gate;
                     let mut released = lock.lock().unwrap();
@@ -1612,8 +1960,8 @@ mod tests {
     impl DocumentSource for DiscoveryFailureRaceSource {
         fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
             match self.calls.fetch_add(1, Ordering::SeqCst) {
-                0 => Ok(catalog(vec![summary("docs/initial.md")])),
-                1 => {
+                0 | 1 => Ok(catalog(vec![summary("docs/initial.md")])),
+                2 => {
                     self.stale_started.store(true, Ordering::SeqCst);
                     let (lock, wake) = &*self.stale_gate;
                     let mut released = lock.lock().unwrap();
@@ -1700,7 +2048,7 @@ mod tests {
     #[async_trait]
     impl DocumentSource for CurrentDiscoveryFailureSource {
         fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            if self.calls.fetch_add(1, Ordering::SeqCst) < 2 {
                 Ok(catalog(vec![summary("docs/initial.md")]))
             } else {
                 Err(AppError::new(
@@ -1823,7 +2171,7 @@ mod tests {
     impl DocumentSource for SameIdReuseRaceSource {
         fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
             match self.discoveries.fetch_add(1, Ordering::SeqCst) {
-                1 => {
+                2 => {
                     self.stale_started.store(true, Ordering::SeqCst);
                     let (lock, wake) = &*self.stale_gate;
                     let mut released = lock.lock().unwrap();
