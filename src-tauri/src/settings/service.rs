@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::settings::model::{
-    CurrentWorkspace, DisplayDensity, KnowledgeRepository, PendingInitializationContext,
+    CurrentWorkspace, CurrentWorkspaceStatus, DisplayDensity, KnowledgeRepository,
+    PendingInitializationContext,
 };
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
@@ -11,6 +12,14 @@ pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
 pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
 const INVALIDATED_PENDING_INITIALIZATION: &str = r#"{"state":"invalidated"}"#;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConnectedDocumentWorkspace {
+    pub(crate) repository_root: PathBuf,
+    pub(crate) workspace_id: uuid::Uuid,
+    pub(crate) document_roots: Vec<String>,
+    pub(crate) repository_full_name: String,
+}
 
 pub trait LocalSettingsStore: Send + Sync {
     fn read(&self, key: &str) -> Result<Option<String>, AppError>;
@@ -108,6 +117,28 @@ impl LocalSettingsService {
                 Ok(Some(CurrentWorkspace::recovery_required(saved_path)))
             }
         }
+    }
+
+    pub(crate) fn load_connected_document_workspace(
+        &self,
+    ) -> Result<ConnectedDocumentWorkspace, AppError> {
+        let current = self
+            .load_current()?
+            .ok_or_else(document_workspace_missing)?;
+        if current.status != CurrentWorkspaceStatus::Connected {
+            return Err(document_workspace_unavailable());
+        }
+        let summary = current.summary.ok_or_else(document_workspace_unavailable)?;
+        let repository = current
+            .repository
+            .ok_or_else(document_workspace_unavailable)?;
+
+        Ok(ConnectedDocumentWorkspace {
+            repository_root: current.path,
+            workspace_id: summary.id,
+            document_roots: summary.document_roots,
+            repository_full_name: repository.full_name,
+        })
     }
 
     pub fn set_current(&self, repository_path: &Path) -> Result<CurrentWorkspace, AppError> {
@@ -230,6 +261,22 @@ impl LocalSettingsService {
             INVALIDATED_PENDING_INITIALIZATION,
         )
     }
+}
+
+fn document_workspace_missing() -> AppError {
+    AppError::new(
+        ErrorCode::WorkspaceMissing,
+        "연결된 지식 저장소가 없습니다.",
+    )
+    .with_recovery(RecoveryAction::OpenWorkspaceFile)
+}
+
+fn document_workspace_unavailable() -> AppError {
+    AppError::new(
+        ErrorCode::WorkspaceInvalid,
+        "현재 워크스페이스가 GitHub 저장소에 연결되어 있지 않습니다.",
+    )
+    .with_recovery(RecoveryAction::OpenWorkspaceFile)
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
