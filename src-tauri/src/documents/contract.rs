@@ -13,6 +13,70 @@ pub struct DocumentSummary {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentContent {
+    pub summary: DocumentSummary,
+    pub markdown: String,
+    pub properties: serde_json::Value,
+    pub table_of_contents: Vec<TableOfContentsItem>,
+    pub last_commit: Option<DocumentCommitSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryCursor {
+    pub before_commit_oid: String,
+    pub tracked_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryItem {
+    pub commit_oid: String,
+    pub short_oid: String,
+    pub path_at_commit: String,
+    pub author_name: String,
+    pub authored_at_unix: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryPage {
+    pub items: Vec<HistoryItem>,
+    pub next_cursor: Option<HistoryCursor>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentCommitSummary {
+    pub commit_oid: String,
+    pub short_oid: String,
+    pub author_name: String,
+    pub authored_at_unix: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TableOfContentsItem {
+    pub level: u8,
+    pub title: String,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+pub enum DocumentAsset {
+    Raster { mime_type: String, base64: String },
+    Svg { source: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FrontmatterError {
@@ -128,6 +192,11 @@ pub enum DocumentEvent {
     Failed {
         session_id: Uuid,
         error: crate::error::AppError,
+    },
+    Resynced {
+        session_id: Uuid,
+        barrier_id: Uuid,
+        snapshot: DocumentSessionSnapshot,
     },
 }
 

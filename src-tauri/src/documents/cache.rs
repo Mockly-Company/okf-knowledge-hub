@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,10 +31,23 @@ pub enum CacheError {
     },
     #[error("cached document metadata is invalid: {0}")]
     InvalidMetadata(#[from] serde_json::Error),
+    #[error("document reconciliation batch is incomplete: {0}")]
+    IncompleteBatch(String),
+    #[cfg(test)]
+    #[error("test hook failed reconciliation before commit")]
+    FailBeforeCommit,
+}
+
+#[derive(Debug)]
+pub(crate) struct IndexedContent {
+    pub summary: DocumentSummary,
+    pub markdown: Vec<u8>,
 }
 
 pub struct DocumentCache {
     connection: Connection,
+    #[cfg(test)]
+    fail_next_batch_before_commit: bool,
 }
 
 impl DocumentCache {
@@ -43,7 +57,11 @@ impl DocumentCache {
             let connection = Connection::open(path)?;
             if identity_matches(&connection, workspace_id) {
                 register_search_functions(&connection)?;
-                return Ok(Self { connection });
+                return Ok(Self {
+                    connection,
+                    #[cfg(test)]
+                    fail_next_batch_before_commit: false,
+                });
             }
             drop(connection);
             std::fs::rename(path, invalid_cache_path(path))?;
@@ -81,7 +99,11 @@ impl DocumentCache {
             params![workspace_id.to_string()],
         )?;
         transaction.commit()?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            #[cfg(test)]
+            fail_next_batch_before_commit: false,
+        })
     }
 
     pub fn index_version(&self) -> Result<i64, CacheError> {
@@ -225,6 +247,272 @@ impl DocumentCache {
         }
         transaction.commit()?;
         Ok(ReconcileDelta { to_index, deleted })
+    }
+
+    pub(crate) fn plan_reconcile(
+        &self,
+        summaries: &[DocumentSummary],
+    ) -> Result<ReconcileDelta, CacheError> {
+        let mut to_index = Vec::new();
+        for summary in summaries {
+            let size = sqlite_size(summary.size)?;
+            let document_id = summary.document_id.map(|id| id.to_string());
+            let frontmatter_status_json = serde_json::to_string(&summary.frontmatter_status)?;
+            let stored = self
+                .connection
+                .query_row(
+                    "SELECT file_name, title, document_id, frontmatter_status_json,
+                            modified_at_unix_ms, size
+                     FROM documents WHERE path = ?1",
+                    params![summary.path],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, i64>(4)?,
+                            row.get::<_, i64>(5)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let unchanged = matches!(
+                stored,
+                Some((file_name, title, stored_document_id, stored_frontmatter, modified, stored_size))
+                    if file_name == summary.file_name
+                        && title == summary.title
+                        && stored_document_id == document_id
+                        && stored_frontmatter == frontmatter_status_json
+                        && modified == summary.modified_at_unix_ms
+                        && stored_size == size
+            );
+            if !unchanged {
+                to_index.push(summary.path.clone());
+            }
+        }
+
+        let mut statement = self
+            .connection
+            .prepare("SELECT path FROM documents ORDER BY path")?;
+        let stored_paths = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let current_paths = summaries
+            .iter()
+            .map(|summary| summary.path.as_str())
+            .collect::<HashSet<_>>();
+        let deleted = stored_paths
+            .into_iter()
+            .filter(|path| !current_paths.contains(path.as_str()))
+            .collect();
+
+        Ok(ReconcileDelta { to_index, deleted })
+    }
+
+    pub(crate) fn apply_reconcile(
+        &mut self,
+        summaries: &[DocumentSummary],
+        contents: &[IndexedContent],
+    ) -> Result<(), CacheError> {
+        struct PreparedSummary<'a> {
+            summary: &'a DocumentSummary,
+            document_id: Option<String>,
+            frontmatter_status_json: String,
+            size: i64,
+        }
+
+        struct PreparedContent<'a> {
+            summary: &'a DocumentSummary,
+            content_hash: String,
+            body_text: String,
+        }
+
+        let delta = self.plan_reconcile(summaries)?;
+        let mut summary_by_path = HashMap::new();
+        let mut prepared_summaries = Vec::with_capacity(summaries.len());
+        for summary in summaries {
+            if summary_by_path
+                .insert(summary.path.as_str(), summary)
+                .is_some()
+            {
+                return Err(CacheError::IncompleteBatch(format!(
+                    "duplicate summary for {}",
+                    summary.path
+                )));
+            }
+            prepared_summaries.push(PreparedSummary {
+                summary,
+                document_id: summary.document_id.map(|id| id.to_string()),
+                frontmatter_status_json: serde_json::to_string(&summary.frontmatter_status)?,
+                size: sqlite_size(summary.size)?,
+            });
+        }
+
+        let expected_paths = delta
+            .to_index
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut supplied_paths = HashSet::new();
+        let mut prepared_contents = Vec::with_capacity(contents.len());
+        for content in contents {
+            let path = content.summary.path.as_str();
+            let Some(expected_summary) = summary_by_path.get(path) else {
+                return Err(CacheError::IncompleteBatch(format!(
+                    "content supplied for unknown path {path}"
+                )));
+            };
+            if *expected_summary != &content.summary {
+                return Err(CacheError::IncompleteBatch(format!(
+                    "content metadata does not match catalog summary for {path}"
+                )));
+            }
+            if !expected_paths.contains(path) {
+                return Err(CacheError::IncompleteBatch(format!(
+                    "content supplied for unchanged path {path}"
+                )));
+            }
+            if !supplied_paths.insert(path) {
+                return Err(CacheError::IncompleteBatch(format!(
+                    "duplicate content for {path}"
+                )));
+            }
+            let markdown = std::str::from_utf8(&content.markdown).map_err(|source| {
+                CacheError::InvalidUtf8 {
+                    path: path.to_owned(),
+                    source,
+                }
+            })?;
+            prepared_contents.push(PreparedContent {
+                summary: &content.summary,
+                content_hash: sha256_hex(markdown.as_bytes()),
+                body_text: markdown_to_plain_text(markdown),
+            });
+        }
+        if let Some(missing) = delta
+            .to_index
+            .iter()
+            .find(|path| !supplied_paths.contains(path.as_str()))
+        {
+            return Err(CacheError::IncompleteBatch(format!(
+                "missing content for {missing}"
+            )));
+        }
+
+        #[cfg(test)]
+        let fail_before_commit = std::mem::replace(&mut self.fail_next_batch_before_commit, false);
+
+        let transaction = self.connection.transaction()?;
+        let prepared_content_by_path = prepared_contents
+            .iter()
+            .map(|content| (content.summary.path.as_str(), content))
+            .collect::<HashMap<_, _>>();
+        for prepared in &prepared_summaries {
+            let summary = prepared.summary;
+            if let Some(content) = prepared_content_by_path.get(summary.path.as_str()) {
+                let rowid = transaction
+                    .query_row(
+                        "SELECT rowid FROM documents WHERE path = ?1",
+                        params![summary.path],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?;
+                let rowid = if let Some(rowid) = rowid {
+                    transaction.execute(
+                        "UPDATE documents SET
+                           file_name = ?2, title = ?3, document_id = ?4,
+                           frontmatter_status_json = ?5, modified_at_unix_ms = ?6, size = ?7,
+                           content_hash = ?8, body_text = ?9
+                         WHERE path = ?1",
+                        params![
+                            summary.path,
+                            summary.file_name,
+                            summary.title,
+                            prepared.document_id,
+                            prepared.frontmatter_status_json,
+                            summary.modified_at_unix_ms,
+                            prepared.size,
+                            content.content_hash,
+                            content.body_text,
+                        ],
+                    )?;
+                    transaction.execute(
+                        "DELETE FROM document_search WHERE rowid = ?1",
+                        params![rowid],
+                    )?;
+                    rowid
+                } else {
+                    transaction.execute(
+                        "INSERT INTO documents (
+                           path, file_name, title, document_id, frontmatter_status_json,
+                           modified_at_unix_ms, size, content_hash, body_text
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                        params![
+                            summary.path,
+                            summary.file_name,
+                            summary.title,
+                            prepared.document_id,
+                            prepared.frontmatter_status_json,
+                            summary.modified_at_unix_ms,
+                            prepared.size,
+                            content.content_hash,
+                            content.body_text,
+                        ],
+                    )?;
+                    transaction.last_insert_rowid()
+                };
+                transaction.execute(
+                    "INSERT INTO document_search (rowid, path, title, body_text)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![rowid, summary.path, summary.title, content.body_text],
+                )?;
+            } else {
+                let updated = transaction.execute(
+                    "UPDATE documents SET
+                       file_name = ?2, title = ?3, document_id = ?4,
+                       frontmatter_status_json = ?5, modified_at_unix_ms = ?6, size = ?7
+                     WHERE path = ?1",
+                    params![
+                        summary.path,
+                        summary.file_name,
+                        summary.title,
+                        prepared.document_id,
+                        prepared.frontmatter_status_json,
+                        summary.modified_at_unix_ms,
+                        prepared.size,
+                    ],
+                )?;
+                if updated != 1 {
+                    return Err(CacheError::IncompleteBatch(format!(
+                        "unchanged path disappeared before commit: {}",
+                        summary.path
+                    )));
+                }
+            }
+        }
+
+        for path in &delta.deleted {
+            transaction.execute(
+                "DELETE FROM document_search
+                 WHERE rowid = (SELECT rowid FROM documents WHERE path = ?1)",
+                params![path],
+            )?;
+            transaction.execute("DELETE FROM documents WHERE path = ?1", params![path])?;
+        }
+
+        #[cfg(test)]
+        if fail_before_commit {
+            return Err(CacheError::FailBeforeCommit);
+        }
+
+        transaction.commit()?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn fail_next_batch_before_commit_for_test(&mut self) {
+        self.fail_next_batch_before_commit = true;
     }
 
     pub fn upsert_content(
@@ -589,7 +877,7 @@ mod tests {
     use tempfile::tempdir;
     use uuid::Uuid;
 
-    use super::{CacheError, DocumentCache};
+    use super::{CacheError, DocumentCache, IndexedContent};
 
     fn workspace_id() -> Uuid {
         Uuid::parse_str("9f9e8ac7-cf5a-4f83-b716-0b52e69fb9d6").unwrap()
@@ -762,6 +1050,102 @@ mod tests {
 
         assert_eq!(delta.to_index, ["docs/changed.md", "docs/new.md"]);
         assert_eq!(delta.deleted, ["docs/deleted.md"]);
+    }
+
+    #[test]
+    fn reconcile_batch_rolls_back_metadata_and_content_together() {
+        let temp = tempdir().unwrap();
+        let mut cache =
+            DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
+        let original = summary("docs/api.md", 100, 8);
+        seed(&cache, &original, "old body");
+        let changed = summary("docs/api.md", 200, 20);
+        cache.fail_next_batch_before_commit_for_test();
+
+        assert!(cache
+            .apply_reconcile(
+                std::slice::from_ref(&changed),
+                &[IndexedContent {
+                    summary: changed.clone(),
+                    markdown: b"new body".to_vec(),
+                }],
+            )
+            .is_err());
+
+        assert_eq!(cache.search("old body", 10).unwrap().items.len(), 1);
+        assert!(cache.search("new body", 10).unwrap().items.is_empty());
+        assert_eq!(cache.cached_summaries().unwrap(), vec![original]);
+    }
+
+    #[test]
+    fn plan_reconcile_reports_changes_without_mutating_cached_rows() {
+        let temp = tempdir().unwrap();
+        let cache =
+            DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
+        let original = summary("docs/api.md", 100, 8);
+        seed(&cache, &original, "old body");
+        let changed = summary("docs/api.md", 200, 20);
+
+        let delta = cache
+            .plan_reconcile(std::slice::from_ref(&changed))
+            .unwrap();
+
+        assert_eq!(delta.to_index, vec!["docs/api.md"]);
+        assert!(delta.deleted.is_empty());
+        assert_eq!(cache.cached_summaries().unwrap(), vec![original]);
+        assert_eq!(cache.search("old body", 10).unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn incomplete_reconcile_batch_preserves_previous_cache() {
+        let temp = tempdir().unwrap();
+        let mut cache =
+            DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
+        let original = summary("docs/api.md", 100, 8);
+        seed(&cache, &original, "old body");
+        let changed = summary("docs/api.md", 200, 20);
+
+        assert!(cache
+            .apply_reconcile(std::slice::from_ref(&changed), &[])
+            .is_err());
+
+        assert_eq!(cache.cached_summaries().unwrap(), vec![original]);
+        assert_eq!(cache.search("old body", 10).unwrap().items.len(), 1);
+    }
+
+    #[test]
+    fn complete_reconcile_batch_publishes_updates_and_deletions_together() {
+        let temp = tempdir().unwrap();
+        let mut cache =
+            DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
+        let original = summary("docs/api.md", 100, 8);
+        let deleted = summary("docs/deleted.md", 100, 12);
+        seed(&cache, &original, "old body");
+        seed(&cache, &deleted, "deleted body");
+        let changed = summary("docs/api.md", 200, 20);
+        let added = summary("docs/new.md", 300, 8);
+
+        cache
+            .apply_reconcile(
+                &[changed.clone(), added.clone()],
+                &[
+                    IndexedContent {
+                        summary: changed.clone(),
+                        markdown: b"new body".to_vec(),
+                    },
+                    IndexedContent {
+                        summary: added.clone(),
+                        markdown: b"new doc".to_vec(),
+                    },
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(cache.cached_summaries().unwrap(), vec![changed, added]);
+        assert!(cache.search("old body", 10).unwrap().items.is_empty());
+        assert!(cache.search("deleted body", 10).unwrap().items.is_empty());
+        assert_eq!(cache.search("new body", 10).unwrap().items.len(), 1);
+        assert_eq!(cache.search("new doc", 10).unwrap().items.len(), 1);
     }
 
     #[test]

@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, OwnedSemaphorePermit, Semaphore};
@@ -7,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::AppError;
 
+use super::cache::IndexedContent;
 use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry};
 use super::runtime::{DocumentSource, DocumentWorkspace};
 
@@ -32,6 +32,24 @@ impl Default for BodyReadCoordinator {
 }
 
 impl BodyReadCoordinator {
+    pub(crate) async fn read_changed(
+        &self,
+        source: Arc<dyn DocumentSource>,
+        workspace: DocumentWorkspace,
+        documents: Vec<DocumentSummary>,
+    ) -> Vec<Result<IndexedContent, AppError>> {
+        let mut reads =
+            self.spawn_body_reads(source, workspace, documents, CancellationToken::new());
+        let mut contents = Vec::new();
+        while let Some(read) = reads.recv().await {
+            contents.push(read.result.map(|markdown| IndexedContent {
+                summary: read.summary,
+                markdown,
+            }));
+        }
+        contents
+    }
+
     pub(crate) fn spawn_body_reads(
         &self,
         source: Arc<dyn DocumentSource>,
@@ -94,37 +112,71 @@ impl BodyReadCoordinator {
 
 pub(crate) fn catalog_from_summaries(
     roots: &[String],
-    mut documents: Vec<DocumentSummary>,
+    documents: Vec<DocumentSummary>,
 ) -> DocumentCatalog {
-    documents.sort_by(|left, right| left.path.cmp(&right.path));
-    let mut assigned = HashSet::new();
-    let mut tree_roots = roots
+    let normalized_roots = roots
         .iter()
         .filter_map(|root| {
-            let portable_root = root.replace('\\', "/").trim_matches('/').to_owned();
-            if portable_root.is_empty() {
+            let components = normalize_relative_components(root)?;
+            if components
+                .iter()
+                .any(|component| component.eq_ignore_ascii_case(".git"))
+            {
                 return None;
             }
-            let mut node = FolderNode::new(
-                Path::new(&portable_root)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or_default()
-                    .to_owned(),
-                portable_root.clone(),
-            );
+            let path = components.join("/");
+            let name = components.last().cloned().unwrap_or_else(|| ".".to_owned());
+            Some((components, path, name))
+        })
+        .collect::<Vec<_>>();
+    let mut seen_paths = HashSet::new();
+    let mut documents = documents
+        .into_iter()
+        .filter_map(|mut document| {
+            let components = normalize_relative_components(&document.path)?;
+            if components.is_empty()
+                || components
+                    .iter()
+                    .any(|component| component.eq_ignore_ascii_case(".git"))
+                || !components.last().is_some_and(|file_name| {
+                    file_name
+                        .rsplit_once('.')
+                        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("md"))
+                })
+                || !normalized_roots
+                    .iter()
+                    .any(|(root, _, _)| components_start_with(&components, root))
+            {
+                return None;
+            }
+            document.path = components.join("/");
+            seen_paths.insert(document.path.clone()).then_some(document)
+        })
+        .collect::<Vec<_>>();
+    documents.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut assigned = HashSet::new();
+    let mut tree_roots = normalized_roots
+        .iter()
+        .map(|(root, portable_root, name)| {
+            let mut node = FolderNode::new(name.clone(), portable_root.clone());
             for document in &documents {
                 if assigned.contains(&document.path) {
                     continue;
                 }
-                let Some(relative) = document.path.strip_prefix(&format!("{portable_root}/"))
-                else {
+                let document_components = document.path.split('/').collect::<Vec<_>>();
+                if document_components.len() <= root.len()
+                    || !document_components
+                        .iter()
+                        .zip(root)
+                        .all(|(document, root)| *document == root)
+                {
                     continue;
-                };
-                node.insert(relative, document.clone());
+                }
+                let relative = document_components[root.len()..].join("/");
+                node.insert(&relative, document.clone());
                 assigned.insert(document.path.clone());
             }
-            Some(node.into_entry())
+            node.into_entry()
         })
         .collect::<Vec<_>>();
     tree_roots.sort_by(compare_tree_entries);
@@ -132,6 +184,29 @@ pub(crate) fn catalog_from_summaries(
         documents,
         roots: tree_roots,
     }
+}
+
+fn normalize_relative_components(path: &str) -> Option<Vec<String>> {
+    let portable = path.replace('\\', "/");
+    let bytes = portable.as_bytes();
+    if portable.starts_with('/')
+        || (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+    {
+        return None;
+    }
+    let mut components = Vec::new();
+    for component in portable.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => return None,
+            component => components.push(component.to_owned()),
+        }
+    }
+    Some(components)
+}
+
+fn components_start_with(path: &[String], root: &[String]) -> bool {
+    path.len() >= root.len() && path.iter().zip(root).all(|(path, root)| path == root)
 }
 
 struct FolderNode {
@@ -228,9 +303,69 @@ mod tests {
         DocumentCatalog, DocumentSummary, DocumentTreeEntry, FrontmatterStatus,
     };
     use crate::documents::runtime::{DocumentSource, DocumentWorkspace};
-    use crate::error::AppError;
+    use crate::error::{AppError, ErrorCode};
 
     use super::{catalog_from_summaries, tree_path, BodyReadCoordinator};
+
+    #[derive(Clone)]
+    struct CountingDocumentSource {
+        documents: Arc<std::collections::HashMap<String, Vec<u8>>>,
+        read_paths: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl CountingDocumentSource {
+        fn with_documents<const N: usize>(documents: [(&str, &[u8]); N]) -> Self {
+            Self {
+                documents: Arc::new(
+                    documents
+                        .into_iter()
+                        .map(|(path, body)| (path.to_owned(), body.to_vec()))
+                        .collect(),
+                ),
+                read_paths: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn read_paths(&self) -> Vec<String> {
+            self.read_paths.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl DocumentSource for CountingDocumentSource {
+        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
+            unreachable!()
+        }
+
+        async fn read_body(
+            &self,
+            _workspace: &DocumentWorkspace,
+            path: &str,
+        ) -> Result<Vec<u8>, AppError> {
+            self.read_paths.lock().unwrap().push(path.to_owned());
+            self.documents.get(path).cloned().ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::DocumentIndexUnavailable,
+                    format!("missing test document: {path}"),
+                )
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn indexer_reads_only_metadata_changed_documents() {
+        let source = CountingDocumentSource::with_documents([
+            ("docs/same.md", b"same".as_slice()),
+            ("docs/changed.md", b"changed".as_slice()),
+        ]);
+        let candidates = vec![summary("docs/changed.md")];
+        let contents = BodyReadCoordinator::default()
+            .read_changed(Arc::new(source.clone()), workspace(), candidates)
+            .await;
+
+        assert_eq!(contents.len(), 1);
+        assert_eq!(source.read_paths(), vec!["docs/changed.md"]);
+    }
 
     struct ConcurrencySource {
         active: AtomicUsize,
@@ -468,6 +603,75 @@ mod tests {
         assert!(overlapping.is_empty());
     }
 
+    #[test]
+    fn cached_catalog_filters_to_normalized_roots_and_excludes_git() {
+        let catalog = catalog_from_summaries(
+            &[
+                "./docs".to_owned(),
+                "docs/alpha".to_owned(),
+                ".git".to_owned(),
+            ],
+            vec![
+                summary("docs/readme.md"),
+                summary("docs/alpha/a.md"),
+                summary("docs/.git/hidden.md"),
+                summary(".git/internal.md"),
+                summary("docs2/prefix.md"),
+                summary("legacy/old.md"),
+            ],
+        );
+
+        assert_eq!(
+            catalog
+                .documents
+                .iter()
+                .map(|document| document.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/alpha/a.md", "docs/readme.md"]
+        );
+        assert_eq!(
+            catalog.roots.iter().map(tree_path).collect::<Vec<_>>(),
+            ["docs/alpha", "docs"]
+        );
+        let DocumentTreeEntry::Folder { children, .. } = catalog
+            .roots
+            .iter()
+            .find(|entry| tree_path(entry) == "docs")
+            .unwrap()
+        else {
+            panic!();
+        };
+        assert_eq!(
+            document_paths(children),
+            ["docs/alpha/a.md", "docs/readme.md"]
+        );
+        let DocumentTreeEntry::Folder {
+            children: overlapping,
+            ..
+        } = catalog
+            .roots
+            .iter()
+            .find(|entry| tree_path(entry) == "docs/alpha")
+            .unwrap()
+        else {
+            panic!();
+        };
+        assert!(overlapping.is_empty());
+    }
+
+    fn document_paths(entries: &[DocumentTreeEntry]) -> Vec<&str> {
+        let mut paths = Vec::new();
+        for entry in entries {
+            match entry {
+                DocumentTreeEntry::Folder { children, .. } => {
+                    paths.extend(document_paths(children));
+                }
+                DocumentTreeEntry::Document { summary } => paths.push(summary.path.as_str()),
+            }
+        }
+        paths
+    }
+
     fn summary(path: &str) -> DocumentSummary {
         DocumentSummary {
             path: path.to_owned(),
@@ -477,6 +681,16 @@ mod tests {
             frontmatter_status: FrontmatterStatus::Missing,
             modified_at_unix_ms: 1,
             size: 1,
+        }
+    }
+
+    fn workspace() -> DocumentWorkspace {
+        let temp = TempDir::new().unwrap();
+        DocumentWorkspace {
+            workspace_id: uuid::Uuid::new_v4(),
+            repository_root: temp.path().join("repository"),
+            document_roots: vec!["docs".to_owned()],
+            cache_path: temp.path().join("search.sqlite3"),
         }
     }
 }
