@@ -59,7 +59,7 @@ impl LargeWorkspace {
 
 #[derive(Clone)]
 struct GatedFileSystemSource {
-    entered_body_gate: Arc<AtomicUsize>,
+    entered_body_gate: Arc<Semaphore>,
     completed_body_reads: Arc<AtomicUsize>,
     body_gate: Arc<Semaphore>,
 }
@@ -67,7 +67,7 @@ struct GatedFileSystemSource {
 impl GatedFileSystemSource {
     fn new() -> Self {
         Self {
-            entered_body_gate: Arc::new(AtomicUsize::new(0)),
+            entered_body_gate: Arc::new(Semaphore::new(0)),
             completed_body_reads: Arc::new(AtomicUsize::new(0)),
             body_gate: Arc::new(Semaphore::new(0)),
         }
@@ -78,13 +78,11 @@ impl GatedFileSystemSource {
     }
 
     async fn wait_for_body_gate(&self) {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while self.entered_body_gate.load(Ordering::SeqCst) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("background body indexer should reach the source gate");
+        self.entered_body_gate
+            .acquire()
+            .await
+            .expect("source entry semaphore should remain open")
+            .forget();
     }
 
     fn open_body_gate(&self, documents: usize) {
@@ -103,7 +101,7 @@ impl DocumentSource for GatedFileSystemSource {
         workspace: &DocumentWorkspace,
         path: &str,
     ) -> Result<Vec<u8>, AppError> {
-        self.entered_body_gate.fetch_add(1, Ordering::SeqCst);
+        self.entered_body_gate.add_permits(1);
         self.body_gate
             .acquire()
             .await
