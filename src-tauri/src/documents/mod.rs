@@ -9,3 +9,6 @@ pub mod reconcile;
 pub mod runtime;
 pub mod search_text;
 pub mod watcher;
+
+#[cfg(test)]
+mod performance_tests;
