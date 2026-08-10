@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
+import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import "@/features/documents/documents.css";
 
@@ -44,10 +45,17 @@ export function DocumentsPage() {
   if (state.selectedPath !== null) {
     return (
       <section className="documents-page" aria-labelledby="documents-title">
-        <header className="documents-page__header">
-          <h1 id="documents-title">Documents</h1>
-          <p>{state.selectedDocument?.summary.title ?? "문서를 여는 중…"}</p>
-        </header>
+        <h1 id="documents-title" className="sr-only">Documents</h1>
+        {state.documentNotice ? (
+          <div className="documents-page__notice" role="alert">
+            <span>{state.documentNotice}</span>
+          </div>
+        ) : null}
+        {state.selectedDocument ? (
+          <DocumentReader document={state.selectedDocument} />
+        ) : (
+          <p className="documents-page__loading">문서를 여는 중…</p>
+        )}
       </section>
     );
   }
@@ -58,6 +66,12 @@ export function DocumentsPage() {
         <h1 id="documents-title">Documents</h1>
         <p>프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다.</p>
       </header>
+
+      {state.documentNotice ? (
+        <div className="documents-page__notice" role="alert">
+          <span>{state.documentNotice}</span>
+        </div>
+      ) : null}
 
       {state.indexStatus.status === "degraded" ? (
         <div className="documents-page__notice" role="alert">

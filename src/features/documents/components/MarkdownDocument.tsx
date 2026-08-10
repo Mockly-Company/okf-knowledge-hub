@@ -253,9 +253,10 @@ function RepositoryImage({
 
 export interface MarkdownDocumentProps {
   document: DocumentContent;
+  hideHeader?: boolean;
 }
 
-export function MarkdownDocument({ document }: MarkdownDocumentProps) {
+export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocumentProps) {
   const { selectDocument, readAsset, openExternal, state } = useDocuments();
   const headerRef = useRef<HTMLElement>(null);
   const articleRef = useRef<HTMLElement>(null);
@@ -358,10 +359,12 @@ export function MarkdownDocument({ document }: MarkdownDocumentProps) {
 
   return (
     <article className="markdown-document" ref={articleRef}>
-      <header className="markdown-document__header" ref={headerRef} tabIndex={-1}>
-        <h1>{document.summary.title}</h1>
-        <p>{document.summary.path}</p>
-      </header>
+      {hideHeader ? null : (
+        <header className="markdown-document__header" ref={headerRef} tabIndex={-1}>
+          <h1>{document.summary.title}</h1>
+          <p>{document.summary.path}</p>
+        </header>
+      )}
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}

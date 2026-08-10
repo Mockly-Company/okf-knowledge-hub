@@ -220,6 +220,203 @@
   color: var(--color-text-strong);
 }
 
+.documents-page__loading {
+  color: var(--color-text-muted);
+}
+
+.document-reader__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.document-reader__header h1,
+.document-reader__header p,
+.document-reader__header small {
+  margin: 0;
+}
+
+.document-reader__header h1 {
+  color: var(--color-text-strong);
+  font-size: var(--font-h1-size);
+  line-height: var(--font-h1-line);
+}
+
+.document-reader__header p,
+.document-reader__header small,
+.document-overview__properties p,
+.document-overview__toc p,
+.document-reader__connections p {
+  color: var(--color-text-muted);
+}
+
+.document-reader__actions {
+  position: relative;
+}
+
+.document-reader__menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  min-width: 190px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: 4px;
+  box-shadow: 0 8px 18px rgb(0 0 0 / 12%);
+}
+
+.document-reader__menu button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 8px 10px;
+  color: var(--color-text-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.document-reader__menu button:hover {
+  background: var(--color-primary-soft);
+}
+
+.document-reader__warning {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 20px;
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  background: var(--color-warning-soft);
+  padding: 12px 14px;
+}
+
+.document-reader__historical-version {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: 10px 12px;
+}
+
+.document-reader__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  gap: 32px;
+}
+
+.document-reader__context {
+  border-left: 1px solid var(--color-border);
+  padding-left: 20px;
+}
+
+.document-reader__tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+
+.document-reader__tabs button {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 6px 8px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.document-reader__tabs button[aria-selected="true"] {
+  background: var(--color-primary-soft);
+  color: var(--color-primary-text);
+  font-weight: 600;
+}
+
+.document-overview__properties,
+.document-overview__toc,
+.document-reader__connections,
+.document-history {
+  margin-bottom: 24px;
+}
+
+.document-overview__properties h2,
+.document-overview__toc h2,
+.document-reader__connections h2,
+.document-history h2 {
+  margin: 0 0 10px;
+  color: var(--color-text-strong);
+  font-size: 14px;
+}
+
+.document-overview__properties dl,
+.document-overview__toc ol {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.document-overview__properties dl > div {
+  display: grid;
+  gap: 2px;
+}
+
+.document-overview__properties dt {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.document-overview__properties dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.document-overview__toc ol {
+  list-style: none;
+}
+
+.document-overview__toc a {
+  color: var(--color-primary-text);
+}
+
+.document-history ol {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.document-history li button {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  padding: 8px;
+  color: var(--color-text-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.document-history li button:hover {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.document-history li span,
+.document-history p {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
 .markdown-document__header p {
   margin: 6px 0 0;
   color: var(--color-text-muted);
@@ -279,5 +476,16 @@
 @media (max-width: 760px) {
   .documents-page {
     padding: 28px 22px;
+  }
+
+  .document-reader__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .document-reader__context {
+    border-top: 1px solid var(--color-border);
+    border-left: 0;
+    padding-top: 20px;
+    padding-left: 0;
   }
 }
