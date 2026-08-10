@@ -381,6 +381,40 @@ describe("documentsReducer", () => {
     expect(state.latestRevision).toBe(1);
   });
 
+  it("opens the migrated path after a tree update provisionally removes the selected path", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "sessionStarted",
+      sessionId: SESSION_ID,
+      snapshot: startSnapshot(),
+    });
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(1, {
+        type: "tree_changed",
+        sessionId: SESSION_ID,
+        catalog: API_CATALOG,
+      }),
+    });
+
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(2, {
+        type: "open_document_changed",
+        sessionId: SESSION_ID,
+        path: "docs/api.md",
+      }),
+    });
+
+    expect(state.selectedPath).toBe("docs/api.md");
+    expect(state.documentsHomeRequested).toBe(false);
+    expect(state.documentNotice).toBeNull();
+    expect(state.activeReadRequest).toMatchObject({
+      kind: "current",
+      path: "docs/api.md",
+      status: "queued",
+    });
+  });
+
   it("owns history pages by the selected path and rejects a stale page after selection changes", () => {
     let state = documentsReducer(sessionStarting(), {
       type: "documentSelectionRequested",

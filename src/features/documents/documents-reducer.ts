@@ -3,6 +3,7 @@ import type {
   DocumentCatalog,
   DocumentContent,
   DocumentEventEnvelope,
+  DocumentSummary,
   DocumentSearchResponse,
   DocumentSessionSnapshot,
   HistoryCursor,
@@ -60,6 +61,7 @@ export interface DocumentsState {
   searchResults: SearchResult[];
   searchError: AppError | null;
   documentsHomeRequested: boolean;
+  selectionRemovedByTreeChange: boolean;
   selectedPath: string | null;
   selectedSearchMatch: Pick<SearchResult, "matchField" | "matchText"> | null;
   selectedVersion: SelectedDocumentVersion | null;
@@ -176,6 +178,7 @@ export function createInitialDocumentsState(): DocumentsState {
     searchResults: [],
     searchError: null,
     documentsHomeRequested: false,
+    selectionRemovedByTreeChange: false,
     selectedPath: null,
     selectedSearchMatch: null,
     selectedVersion: null,
@@ -208,7 +211,35 @@ function clearSelection(state: DocumentsState): DocumentsState {
     historyStatus: "idle",
     activeHistoryPath: null,
     activeHistoryRequest: null,
+    selectionRemovedByTreeChange: false,
   };
+}
+
+function sameFrontmatterStatus(
+  left: DocumentSummary["frontmatterStatus"],
+  right: DocumentSummary["frontmatterStatus"],
+): boolean {
+  if (left.status !== right.status) return false;
+  if (left.status !== "invalid" || right.status !== "invalid") return true;
+  return (
+    left.error.line === right.error.line &&
+    left.error.message === right.error.message
+  );
+}
+
+function sameDocumentSummary(
+  left: DocumentSummary,
+  right: DocumentSummary,
+): boolean {
+  return (
+    left.path === right.path &&
+    left.fileName === right.fileName &&
+    left.title === right.title &&
+    left.documentId === right.documentId &&
+    left.modifiedAtUnixMs === right.modifiedAtUnixMs &&
+    left.size === right.size &&
+    sameFrontmatterStatus(left.frontmatterStatus, right.frontmatterStatus)
+  );
 }
 
 function openCurrentDocument(
@@ -262,7 +293,9 @@ function openCurrentDocument(
     historyStatus: "idle",
     activeHistoryPath: null,
     activeHistoryRequest: null,
+    selectionRemovedByTreeChange: false,
     documentNotice: preserveDocumentNotice ? state.documentNotice : null,
+    recoverableError: null,
   };
 }
 
@@ -385,23 +418,50 @@ export function documentsReducer(
       switch (received.type) {
         case "tree_changed":
           {
+            const previousSelectedSummary = state.selectedPath
+              ? state.catalog.documents.find(
+                  (document) => document.path === state.selectedPath,
+                )
+              : undefined;
+            const nextSelectedSummary = state.selectedPath
+              ? received.catalog.documents.find(
+                  (document) => document.path === state.selectedPath,
+                )
+              : undefined;
             const next = {
               ...state,
               latestRevision: received.revision,
               catalog: received.catalog,
             };
             const selectionDeleted =
+              state.selectedPath !== null && nextSelectedSummary === undefined;
+            if (selectionDeleted) {
+              return {
+                ...clearSelection(next),
+                documentsHomeRequested: true,
+                selectionRemovedByTreeChange: true,
+                lastOpenedPath: null,
+                documentNotice: "선택한 문서가 삭제되었습니다.",
+              };
+            }
+            const selectedSummaryChanged =
               state.selectedPath !== null &&
-              !received.catalog.documents.some(
-                (document) => document.path === state.selectedPath,
-              );
-            return selectionDeleted
-              ? {
-                  ...clearSelection(next),
-                  documentsHomeRequested: true,
-                  lastOpenedPath: null,
-                  documentNotice: "선택한 문서가 삭제되었습니다.",
-                }
+              state.selectedVersion === null &&
+              previousSelectedSummary !== undefined &&
+              nextSelectedSummary !== undefined &&
+              !sameDocumentSummary(previousSelectedSummary, nextSelectedSummary);
+            return selectedSummaryChanged
+              ? openCurrentDocument(
+                  {
+                    ...next,
+                    documentNotice: "외부 변경사항을 반영했습니다.",
+                  },
+                  state.selectedPath,
+                  `event:${received.sessionId}:${received.revision}`,
+                  undefined,
+                  true,
+                  true,
+                )
               : next;
           }
         case "index_status_changed":
@@ -416,20 +476,25 @@ export function documentsReducer(
             latestRevision: received.revision,
             lastOpenedPath: received.path,
           };
-          if (state.documentsHomeRequested) return next;
+          if (received.path === state.selectedPath) return next;
+          if (state.documentsHomeRequested && !state.selectionRemovedByTreeChange) {
+            return next;
+          }
+          if (
+            !state.catalog.documents.some(
+              (document) => document.path === received.path,
+            )
+          ) {
+            return next;
+          }
           return openCurrentDocument(
             {
               ...next,
-              documentNotice:
-                received.path === state.selectedPath
-                  ? "외부 변경사항을 반영했습니다."
-                  : state.documentNotice,
+              documentsHomeRequested: false,
+              documentNotice: null,
             },
             received.path,
             `event:${received.sessionId}:${received.revision}`,
-            undefined,
-            received.path === state.selectedPath,
-            received.path === state.selectedPath,
           );
         }
         case "failed":
@@ -504,7 +569,11 @@ export function documentsReducer(
     case "documentSelectionRequested":
       if (state.activeSessionId !== action.sessionId) return state;
       return openCurrentDocument(
-        { ...state, documentsHomeRequested: false },
+        {
+          ...state,
+          documentsHomeRequested: false,
+          selectionRemovedByTreeChange: false,
+        },
         action.path,
         action.requestId,
         action.searchMatch ?? null,
@@ -512,7 +581,11 @@ export function documentsReducer(
 
     case "documentsHomeRequested":
       return state.activeSessionId === action.sessionId
-        ? { ...clearSelection(state), documentsHomeRequested: true }
+        ? {
+            ...clearSelection(state),
+            documentsHomeRequested: true,
+            selectionRemovedByTreeChange: false,
+          }
         : state;
 
     case "currentVersionRequested":
@@ -534,6 +607,7 @@ export function documentsReducer(
         },
         activeVersionRequestId: null,
         documentNotice: null,
+        recoverableError: null,
       };
 
     case "documentVersionRequested":
@@ -557,6 +631,7 @@ export function documentsReducer(
         },
         activeVersionRequestId: action.requestId,
         documentNotice: null,
+        recoverableError: null,
       };
 
     case "documentReadStarted":
@@ -579,6 +654,7 @@ export function documentsReducer(
             documentStatus: "ready",
             activeReadRequest: null,
             activeVersionRequestId: null,
+            recoverableError: null,
           }
         : state;
 

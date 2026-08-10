@@ -86,10 +86,16 @@ export class FakeDocumentsGateway implements DocumentsGateway {
       reject: (error: unknown) => void;
     }
   >();
+  private activeSessionId: string | null = null;
+  private rememberedPath: string | null = null;
+  private revision = 0;
 
   async startSession(requestId: string): Promise<DocumentSessionSnapshot> {
     this.record("startSession", requestId);
     if (this.startError) throw this.startError;
+    this.activeSessionId = requestId;
+    this.rememberedPath = this.sessionSnapshot.lastOpenedPath;
+    this.revision = this.sessionSnapshot.revision;
     const event = this.eventBeforeStartResult?.(requestId);
     if (event) this.emit(event);
     if (this.deferStart) {
@@ -102,6 +108,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
 
   async stopSession(sessionId: string): Promise<void> {
     this.record("stopSession", sessionId);
+    if (this.activeSessionId === sessionId) this.activeSessionId = null;
   }
 
   async refreshSession(sessionId: string): Promise<void> {
@@ -126,13 +133,23 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   async readDocument(sessionId: string, path: string): Promise<DocumentContent> {
     this.record("readDocument", sessionId, path);
     const summary = path === apiSummary.path ? apiSummary : guideSummary;
-    return {
+    const content = {
       summary: { ...summary, path },
       markdown: `# ${summary.title}`,
       properties: {},
       tableOfContents: [],
       lastCommit: null,
     };
+    if (this.activeSessionId === sessionId && this.rememberedPath !== path) {
+      this.rememberedPath = path;
+      this.emit({
+        revision: ++this.revision,
+        type: "open_document_changed",
+        sessionId,
+        path,
+      });
+    }
+    return content;
   }
 
   async readDocumentAsset(
@@ -221,6 +238,12 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   }
 
   emit(event: DocumentEventEnvelope): void {
+    if (event.sessionId === this.activeSessionId) {
+      this.revision = Math.max(this.revision, event.revision);
+      if (event.type === "open_document_changed") {
+        this.rememberedPath = event.path;
+      }
+    }
     for (const listener of this.listeners) listener(event);
   }
 

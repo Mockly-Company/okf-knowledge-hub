@@ -21,6 +21,7 @@ function Probe() {
       </output>
       <output data-testid="selected">{state.selectedPath ?? "none"}</output>
       <output data-testid="last-opened">{state.lastOpenedPath ?? "none"}</output>
+      <output data-testid="document-notice">{state.documentNotice ?? "none"}</output>
       <output data-testid="search-results">
         {state.searchResults.map((result) => result.title).join(",")}
       </output>
@@ -123,6 +124,13 @@ describe("DocumentsProvider", () => {
   it("reads only after an accepted open-document event becomes reducer state", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.sessionSnapshot.catalog = {
+      documents: [
+        ...gateway.guideCatalog.documents,
+        ...gateway.apiCatalog.documents,
+      ],
+      roots: [...gateway.guideCatalog.roots, ...gateway.apiCatalog.roots],
+    };
     renderProvider(gateway);
     await screen.findByText("ready");
     gateway.calls.length = 0;
@@ -145,7 +153,7 @@ describe("DocumentsProvider", () => {
     );
   });
 
-  it("re-reads the selected document after an accepted external-change event", async () => {
+  it("does not re-read or show an external-change notice for the same-path event emitted after the first read", async () => {
     const gateway = new FakeDocumentsGateway();
     renderProvider(gateway);
     await waitFor(() =>
@@ -163,11 +171,48 @@ describe("DocumentsProvider", () => {
         path: "docs/guide.md",
       });
     });
+    await act(async () => Promise.resolve());
+
+    expect(
+      gateway.calls.filter((call) => call.method === "readDocument"),
+    ).toEqual([]);
+    expect(screen.getByTestId("document-notice")).toHaveTextContent("none");
+  });
+
+  it("re-reads and notifies when tree reconciliation changes the selected summary", async () => {
+    const gateway = new FakeDocumentsGateway();
+    renderProvider(gateway);
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "readDocument"),
+      ).toHaveLength(1),
+    );
+    gateway.calls.length = 0;
+    const changedSummary = {
+      ...gateway.guideCatalog.documents[0],
+      modifiedAtUnixMs: gateway.guideCatalog.documents[0].modifiedAtUnixMs + 1,
+      size: gateway.guideCatalog.documents[0].size + 10,
+    };
+
+    act(() => {
+      gateway.emit({
+        revision: 1,
+        type: "tree_changed",
+        sessionId: SESSION_ID,
+        catalog: {
+          documents: [changedSummary],
+          roots: [{ kind: "document", summary: changedSummary }],
+        },
+      });
+    });
 
     await waitFor(() =>
       expect(
         gateway.calls.filter((call) => call.method === "readDocument"),
       ).toEqual([{ method: "readDocument", args: [SESSION_ID, "docs/guide.md"] }]),
+    );
+    expect(screen.getByTestId("document-notice")).toHaveTextContent(
+      "외부 변경사항을 반영했습니다.",
     );
   });
 
