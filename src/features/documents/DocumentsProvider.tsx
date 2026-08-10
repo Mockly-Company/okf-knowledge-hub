@@ -6,6 +6,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type PropsWithChildren,
 } from "react";
 import type { DocumentsGateway } from "./DocumentsGateway";
@@ -21,6 +22,7 @@ import type {
   DocumentAsset,
   DocumentEventEnvelope,
   HistoryItem,
+  SearchResult,
 } from "./model";
 
 const DEFAULT_SEARCH_DEBOUNCE_MS = 250;
@@ -98,7 +100,12 @@ function sanitizedEvent(event: DocumentEventEnvelope): DocumentEventEnvelope {
 export interface DocumentsContextValue {
   state: DocumentsState;
   setSearchQuery(query: string): void;
-  selectDocument(path: string): void;
+  selectDocument(
+    path: string,
+    searchMatch?: Pick<SearchResult, "matchField" | "matchText">,
+  ): void;
+  showDocumentsHome(): void;
+  retrySession(): void;
   selectCurrentVersion(): void;
   selectDocumentVersion(
     version: SelectedDocumentVersion | Pick<HistoryItem, "commitOid" | "pathAtCommit">,
@@ -131,6 +138,7 @@ export function DocumentsProvider({
     undefined,
     createInitialDocumentsState,
   );
+  const [sessionAttempt, setSessionAttempt] = useState(0);
   const stateRef = useRef(state);
 
   const dispatchAccepted = useCallback((action: DocumentsAction) => {
@@ -182,7 +190,7 @@ export function DocumentsProvider({
       unlisten?.();
       void gateway.stopSession(sessionId).catch(() => undefined);
     };
-  }, [createId, dispatchAccepted, gateway]);
+  }, [createId, dispatchAccepted, gateway, sessionAttempt]);
 
   useEffect(() => {
     if (
@@ -355,7 +363,10 @@ export function DocumentsProvider({
   );
 
   const selectDocument = useCallback(
-    (path: string) => {
+    (
+      path: string,
+      searchMatch?: Pick<SearchResult, "matchField" | "matchText">,
+    ) => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null) return;
       dispatchAccepted({
@@ -363,10 +374,21 @@ export function DocumentsProvider({
         sessionId,
         requestId: createId(),
         path,
+        searchMatch,
       });
     },
     [createId, dispatchAccepted],
   );
+
+  const showDocumentsHome = useCallback(() => {
+    const sessionId = stateRef.current.activeSessionId;
+    if (sessionId === null) return;
+    dispatchAccepted({ type: "documentsHomeRequested", sessionId });
+  }, [dispatchAccepted]);
+
+  const retrySession = useCallback(() => {
+    setSessionAttempt((attempt) => attempt + 1);
+  }, []);
 
   const selectCurrentVersion = useCallback(() => {
     const sessionId = stateRef.current.activeSessionId;
@@ -493,6 +515,8 @@ export function DocumentsProvider({
       state,
       setSearchQuery,
       selectDocument,
+      showDocumentsHome,
+      retrySession,
       selectCurrentVersion,
       selectDocumentVersion,
       loadHistory,
@@ -515,6 +539,8 @@ export function DocumentsProvider({
       selectDocument,
       selectDocumentVersion,
       setSearchQuery,
+      showDocumentsHome,
+      retrySession,
       state,
     ],
   );

@@ -52,6 +52,8 @@ export class FakeDocumentsGateway implements DocumentsGateway {
     lastOpenedPath: "docs/guide.md",
   };
   historyPage: HistoryPage = { items: [], nextCursor: null };
+  searchResults: SearchResult[] = [];
+  startError: unknown | null = null;
   asset: DocumentAsset = { kind: "svg", source: "<svg />" };
   deferSubscription = false;
   deferStart = false;
@@ -87,6 +89,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
 
   async startSession(requestId: string): Promise<DocumentSessionSnapshot> {
     this.record("startSession", requestId);
+    if (this.startError) throw this.startError;
     const event = this.eventBeforeStartResult?.(requestId);
     if (event) this.emit(event);
     if (this.deferStart) {
@@ -117,7 +120,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
         this.pendingSearches.set(requestId, { sessionId, resolve, reject });
       });
     }
-    return { sessionId, requestId, items: [] };
+    return { sessionId, requestId, items: this.searchResults };
   }
 
   async readDocument(sessionId: string, path: string): Promise<DocumentContent> {

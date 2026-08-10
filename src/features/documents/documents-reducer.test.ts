@@ -315,4 +315,69 @@ describe("documentsReducer", () => {
 
     expect(rejected).toBe(state);
   });
+
+  it("keeps the search match that requested document navigation", () => {
+    const state = documentsReducer(sessionStarting(), {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "a0989d32-3ca8-494e-aece-7d7c22c92bc1",
+      path: "docs/api.md",
+      searchMatch: { matchField: "body", matchText: "응답 DTO" },
+    });
+
+    expect(state.selectedSearchMatch).toEqual({
+      matchField: "body",
+      matchText: "응답 DTO",
+    });
+  });
+
+  it("preserves a search match when the matching open event arrives before the read", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "a0989d32-3ca8-494e-aece-7d7c22c92bc1",
+      path: "docs/api.md",
+      searchMatch: { matchField: "body", matchText: "응답 DTO" },
+    });
+
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(1, {
+        type: "open_document_changed",
+        sessionId: SESSION_ID,
+        path: "docs/api.md",
+      }),
+    });
+
+    expect(state.selectedSearchMatch).toEqual({
+      matchField: "body",
+      matchText: "응답 DTO",
+    });
+  });
+
+  it("keeps the Documents home open when a canceled read emits a late open event", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "a0989d32-3ca8-494e-aece-7d7c22c92bc1",
+      path: "docs/api.md",
+    });
+    state = documentsReducer(state, {
+      type: "documentsHomeRequested",
+      sessionId: SESSION_ID,
+    });
+
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(1, {
+        type: "open_document_changed",
+        sessionId: SESSION_ID,
+        path: "docs/api.md",
+      }),
+    });
+
+    expect(state.selectedPath).toBeNull();
+    expect(state.documentsHomeRequested).toBe(true);
+    expect(state.latestRevision).toBe(1);
+  });
 });

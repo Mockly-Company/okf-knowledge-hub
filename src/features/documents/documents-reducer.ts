@@ -59,7 +59,9 @@ export interface DocumentsState {
   searchStatus: AsyncStatus;
   searchResults: SearchResult[];
   searchError: AppError | null;
+  documentsHomeRequested: boolean;
   selectedPath: string | null;
+  selectedSearchMatch: Pick<SearchResult, "matchField" | "matchText"> | null;
   selectedVersion: SelectedDocumentVersion | null;
   selectedDocument: DocumentContent | null;
   documentStatus: AsyncStatus;
@@ -104,7 +106,9 @@ export type DocumentsAction =
       sessionId: string;
       requestId: string;
       path: string;
+      searchMatch?: Pick<SearchResult, "matchField" | "matchText">;
     }
+  | { type: "documentsHomeRequested"; sessionId: string }
   | {
       type: "currentVersionRequested";
       sessionId: string;
@@ -168,7 +172,9 @@ export function createInitialDocumentsState(): DocumentsState {
     searchStatus: "idle",
     searchResults: [],
     searchError: null,
+    documentsHomeRequested: false,
     selectedPath: null,
+    selectedSearchMatch: null,
     selectedVersion: null,
     selectedDocument: null,
     documentStatus: "idle",
@@ -185,6 +191,7 @@ function clearSelection(state: DocumentsState): DocumentsState {
   return {
     ...state,
     selectedPath: null,
+    selectedSearchMatch: null,
     selectedVersion: null,
     selectedDocument: null,
     documentStatus: "idle",
@@ -200,8 +207,14 @@ function openCurrentDocument(
   state: DocumentsState,
   path: string | null,
   requestId: string,
+  searchMatch?: Pick<SearchResult, "matchField" | "matchText"> | null,
 ): DocumentsState {
   if (path === null) return clearSelection(state);
+
+  const nextSearchMatch =
+    searchMatch === undefined && state.selectedPath === path
+      ? state.selectedSearchMatch
+      : (searchMatch ?? null);
 
   const activeRequest = state.activeReadRequest;
   const alreadyReading =
@@ -211,12 +224,16 @@ function openCurrentDocument(
     state.selectedDocument?.summary.path === path &&
     state.documentStatus === "ready";
   if (state.selectedPath === path && (alreadyReading || alreadyLoaded)) {
-    return state;
+    return state.selectedSearchMatch?.matchField === nextSearchMatch?.matchField &&
+      state.selectedSearchMatch?.matchText === nextSearchMatch?.matchText
+      ? state
+      : { ...state, selectedSearchMatch: nextSearchMatch };
   }
 
   return {
     ...state,
     selectedPath: path,
+    selectedSearchMatch: nextSearchMatch,
     selectedVersion: null,
     selectedDocument: null,
     documentStatus: "queued",
@@ -285,6 +302,7 @@ function applyAuthoritativeSnapshot(
     lastOpenedPath: snapshot.lastOpenedPath,
     recoverableError: null,
   };
+  if (state.documentsHomeRequested) return clearSelection(authoritative);
   return openCurrentDocument(authoritative, snapshot.lastOpenedPath, requestId);
 }
 
@@ -363,6 +381,7 @@ export function documentsReducer(
             latestRevision: received.revision,
             lastOpenedPath: received.path,
           };
+          if (state.documentsHomeRequested) return next;
           return openCurrentDocument(
             next,
             received.path,
@@ -440,7 +459,17 @@ export function documentsReducer(
 
     case "documentSelectionRequested":
       if (state.activeSessionId !== action.sessionId) return state;
-      return openCurrentDocument(state, action.path, action.requestId);
+      return openCurrentDocument(
+        { ...state, documentsHomeRequested: false },
+        action.path,
+        action.requestId,
+        action.searchMatch ?? null,
+      );
+
+    case "documentsHomeRequested":
+      return state.activeSessionId === action.sessionId
+        ? { ...clearSelection(state), documentsHomeRequested: true }
+        : state;
 
     case "currentVersionRequested":
       if (state.activeSessionId !== action.sessionId || state.selectedPath === null) {
@@ -449,6 +478,7 @@ export function documentsReducer(
       return {
         ...state,
         selectedVersion: null,
+        selectedSearchMatch: null,
         selectedDocument: null,
         documentStatus: "queued",
         activeReadRequest: {
@@ -467,6 +497,7 @@ export function documentsReducer(
       return {
         ...state,
         selectedVersion: action.version,
+        selectedSearchMatch: null,
         selectedDocument: null,
         documentStatus: "queued",
         activeReadRequest: {
