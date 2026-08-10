@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
@@ -189,5 +189,28 @@ describe("DocumentsPage", () => {
       expect(screen.queryByRole("alert")).toBeNull(),
     );
     expect(await screen.findByRole("region", { name: "API" })).toBeVisible();
+  });
+
+  it("keeps untrusted Markdown inert when a document is opened from the Documents page", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    vi.spyOn(gateway, "readDocument").mockResolvedValue({
+      summary: gateway.guideCatalog.documents[0],
+      markdown:
+        '# Guide\n\n<img src=x onerror="alert(1)">\n\n[bad](javascript:alert(2))',
+      properties: {},
+      tableOfContents: [],
+      lastCommit: null,
+    });
+    const user = userEvent.setup();
+    const view = renderPage(gateway);
+
+    await user.click(await screen.findByRole("button", { name: /Guide/ }));
+
+    expect(await screen.findByText(/<img src=x/)).toBeVisible();
+    expect(screen.getByRole("link", { name: "bad" })).toHaveAttribute("href", "#");
+    expect(view.container.querySelector("script")).toBeNull();
+    expect(view.container.querySelector("img[src='x']")).toBeNull();
+    expect(gateway.openedUrls).toEqual([]);
   });
 });
