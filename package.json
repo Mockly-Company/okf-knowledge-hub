@@ -25,11 +25,16 @@
     "@tauri-apps/plugin-opener": "~2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dompurify": "^3",
     "lucide-react": "^1.26.0",
+    "mermaid": "^11",
     "pretendard": "1",
     "react": "19",
     "react-dom": "19",
+    "react-markdown": "^10",
     "react-router-dom": "7",
+    "rehype-sanitize": "^6",
+    "remark-gfm": "^4",
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
