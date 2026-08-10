@@ -2,19 +2,28 @@ import { createRef } from "react";
 import axe from "axe-core";
 import { MemoryRouter } from "react-router-dom";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
+import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { AppSidebar } from "./AppSidebar";
 
 afterEach(cleanup);
 
-function renderSidebar(gateway: FakeWorkspaceConnectionGateway) {
+function renderSidebar(
+  gateway: FakeWorkspaceConnectionGateway,
+  initialPath = "/",
+  documentsGateway = new FakeDocumentsGateway(),
+) {
   return render(
     <WorkspaceConnectionProvider gateway={gateway}>
-      <MemoryRouter>
-        <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />
-      </MemoryRouter>
+      <DocumentsProvider gateway={documentsGateway}>
+        <MemoryRouter initialEntries={[initialPath]}>
+          <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />
+        </MemoryRouter>
+      </DocumentsProvider>
     </WorkspaceConnectionProvider>,
   );
 }
@@ -73,6 +82,36 @@ describe("AppSidebar", () => {
 
     expect(screen.getByLabelText("워크스페이스 불러오는 중")).toBeInTheDocument();
     expect(screen.getByLabelText("GitHub 계정 불러오는 중")).toBeInTheDocument();
+  });
+
+  it("shows the document tree only on Documents routes without sidebar search", async () => {
+    const documentsGateway = new FakeDocumentsGateway();
+    documentsGateway.sessionSnapshot.lastOpenedPath = null;
+    const view = renderSidebar(
+      FakeWorkspaceConnectionGateway.connected(),
+      "/documents",
+      documentsGateway,
+    );
+
+    expect(await screen.findByRole("tree", { name: "문서" })).toBeVisible();
+    expect(screen.getByRole("treeitem", { name: "Guide" })).toBeVisible();
+    expect(screen.queryByRole("searchbox")).toBeNull();
+
+    view.unmount();
+    renderSidebar(FakeWorkspaceConnectionGateway.connected(), "/project");
+    expect(screen.queryByRole("tree", { name: "문서" })).toBeNull();
+  });
+
+  it("returns to the Documents home when the main Documents link is selected", async () => {
+    const user = userEvent.setup();
+    renderSidebar(FakeWorkspaceConnectionGateway.connected(), "/documents");
+
+    const document = await screen.findByRole("treeitem", { name: "Guide" });
+    expect(document).toHaveAttribute("aria-selected", "true");
+
+    await user.click(screen.getByRole("link", { name: "Documents" }));
+
+    expect(document).toHaveAttribute("aria-selected", "false");
   });
 
   it("has no automatically detectable accessibility violations", async () => {

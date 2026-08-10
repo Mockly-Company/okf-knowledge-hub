@@ -6,9 +6,11 @@ import {
   SquareKanban,
 } from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { DocumentTree } from "@/features/documents/components/DocumentTree";
+import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +39,12 @@ interface AppSidebarProps {
 }
 
 export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
+  const location = useLocation();
+  const {
+    state: documentsState,
+    selectDocument,
+    showDocumentsHome,
+  } = useDocuments();
   const { state, account, isCurrentWorkspaceLoading } = useWorkspaceConnection();
   const [avatarFailed, setAvatarFailed] = useState(false);
   const connectedWorkspace =
@@ -86,24 +94,37 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
         </div>
       )}
       {navigationGroups.map(({ label: groupLabel, className, items }) => (
-        <nav key={groupLabel} aria-label={groupLabel} className={className}>
-          {items.map(({ to, label, icon: Icon, end }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={end}
-              className={({ isActive }) =>
-                cn(
-                  "app-sidebar__link",
-                  isActive && "app-sidebar__link--active",
-                )
-              }
-            >
-              <Icon aria-hidden="true" strokeWidth={1.75} />
-              <span>{label}</span>
-            </NavLink>
-          ))}
-        </nav>
+        <div key={groupLabel} className="app-sidebar__section">
+          <nav aria-label={groupLabel} className={className}>
+            {items.map(({ to, label, icon: Icon, end }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={end}
+                onClick={to === "/documents" ? showDocumentsHome : undefined}
+                className={({ isActive }) =>
+                  cn(
+                    "app-sidebar__link",
+                    isActive && "app-sidebar__link--active",
+                  )
+                }
+              >
+                <Icon aria-hidden="true" strokeWidth={1.75} />
+                <span>{label}</span>
+              </NavLink>
+            ))}
+          </nav>
+          {groupLabel === "주 메뉴" &&
+          location.pathname.startsWith("/documents") ? (
+            <div className="app-sidebar__documents">
+              <DocumentTree
+                entries={documentsState.catalog.roots}
+                selectedPath={documentsState.selectedPath}
+                onSelectDocument={selectDocument}
+              />
+            </div>
+          ) : null}
+        </div>
       ))}
       <div className="app-sidebar__user">
         {account.status === "loading" ? (

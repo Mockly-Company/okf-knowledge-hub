@@ -3,20 +3,24 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
+import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { AppShell } from "./AppShell";
 
 function renderShell() {
   return render(
     <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
-      <MemoryRouter initialEntries={["/"]}>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route index element={<h1>프로젝트 진행 상황</h1>} />
-            <Route path="documents" element={<h1>Documents</h1>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
+      <DocumentsProvider gateway={new FakeDocumentsGateway()}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route index element={<h1>프로젝트 진행 상황</h1>} />
+              <Route path="documents" element={<h1>Documents</h1>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </DocumentsProvider>
     </WorkspaceConnectionProvider>,
   );
 }
