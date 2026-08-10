@@ -66,10 +66,13 @@ export interface DocumentsState {
   selectedDocument: DocumentContent | null;
   documentStatus: AsyncStatus;
   activeReadRequest: DocumentReadRequest | null;
+  activeVersionRequestId: string | null;
   historyItems: HistoryItem[];
   historyNextCursor: HistoryCursor | null;
   historyStatus: AsyncStatus;
+  activeHistoryPath: string | null;
   activeHistoryRequest: DocumentHistoryRequest | null;
+  documentNotice: string | null;
   recoverableError: AppError | null;
 }
 
@@ -179,10 +182,13 @@ export function createInitialDocumentsState(): DocumentsState {
     selectedDocument: null,
     documentStatus: "idle",
     activeReadRequest: null,
+    activeVersionRequestId: null,
     historyItems: [],
     historyNextCursor: null,
     historyStatus: "idle",
+    activeHistoryPath: null,
     activeHistoryRequest: null,
+    documentNotice: null,
     recoverableError: null,
   };
 }
@@ -196,9 +202,11 @@ function clearSelection(state: DocumentsState): DocumentsState {
     selectedDocument: null,
     documentStatus: "idle",
     activeReadRequest: null,
+    activeVersionRequestId: null,
     historyItems: [],
     historyNextCursor: null,
     historyStatus: "idle",
+    activeHistoryPath: null,
     activeHistoryRequest: null,
   };
 }
@@ -208,6 +216,7 @@ function openCurrentDocument(
   path: string | null,
   requestId: string,
   searchMatch?: Pick<SearchResult, "matchField" | "matchText"> | null,
+  force = false,
 ): DocumentsState {
   if (path === null) return clearSelection(state);
 
@@ -223,7 +232,7 @@ function openCurrentDocument(
     state.selectedVersion === null &&
     state.selectedDocument?.summary.path === path &&
     state.documentStatus === "ready";
-  if (state.selectedPath === path && (alreadyReading || alreadyLoaded)) {
+  if (!force && state.selectedPath === path && (alreadyReading || alreadyLoaded)) {
     return state.selectedSearchMatch?.matchField === nextSearchMatch?.matchField &&
       state.selectedSearchMatch?.matchText === nextSearchMatch?.matchText
       ? state
@@ -244,9 +253,11 @@ function openCurrentDocument(
       path,
       status: "queued",
     },
+    activeVersionRequestId: null,
     historyItems: [],
     historyNextCursor: null,
     historyStatus: "idle",
+    activeHistoryPath: null,
     activeHistoryRequest: null,
   };
 }
@@ -294,16 +305,21 @@ function applyAuthoritativeSnapshot(
   revision: number,
   requestId: string,
 ): DocumentsState {
+  const lastOpenedPath =
+    snapshot.lastOpenedPath !== null &&
+    snapshot.catalog.documents.some((document) => document.path === snapshot.lastOpenedPath)
+      ? snapshot.lastOpenedPath
+      : null;
   const authoritative = {
     ...state,
     latestRevision: revision,
     catalog: snapshot.catalog,
     indexStatus: snapshot.indexStatus,
-    lastOpenedPath: snapshot.lastOpenedPath,
+    lastOpenedPath,
     recoverableError: null,
   };
   if (state.documentsHomeRequested) return clearSelection(authoritative);
-  return openCurrentDocument(authoritative, snapshot.lastOpenedPath, requestId);
+  return openCurrentDocument(authoritative, lastOpenedPath, requestId);
 }
 
 export function documentsReducer(
@@ -364,11 +380,26 @@ export function documentsReducer(
       }
       switch (received.type) {
         case "tree_changed":
-          return {
-            ...state,
-            latestRevision: received.revision,
-            catalog: received.catalog,
-          };
+          {
+            const next = {
+              ...state,
+              latestRevision: received.revision,
+              catalog: received.catalog,
+            };
+            const selectionDeleted =
+              state.selectedPath !== null &&
+              !received.catalog.documents.some(
+                (document) => document.path === state.selectedPath,
+              );
+            return selectionDeleted
+              ? {
+                  ...clearSelection(next),
+                  documentsHomeRequested: true,
+                  lastOpenedPath: null,
+                  documentNotice: "선택한 문서가 삭제되었습니다.",
+                }
+              : next;
+          }
         case "index_status_changed":
           return {
             ...state,
@@ -383,9 +414,17 @@ export function documentsReducer(
           };
           if (state.documentsHomeRequested) return next;
           return openCurrentDocument(
-            next,
+            {
+              ...next,
+              documentNotice:
+                received.path === state.selectedPath
+                  ? "외부 변경사항을 반영했습니다."
+                  : state.documentNotice,
+            },
             received.path,
             `event:${received.sessionId}:${received.revision}`,
+            undefined,
+            received.path === state.selectedPath,
           );
         }
         case "failed":
@@ -488,6 +527,7 @@ export function documentsReducer(
           path: state.selectedPath,
           status: "queued",
         },
+        activeVersionRequestId: null,
       };
 
     case "documentVersionRequested":
@@ -509,6 +549,7 @@ export function documentsReducer(
           pathAtCommit: action.version.pathAtCommit,
           status: "queued",
         },
+        activeVersionRequestId: action.requestId,
       };
 
     case "documentReadStarted":
@@ -522,21 +563,27 @@ export function documentsReducer(
         : state;
 
     case "documentReadSucceeded":
-      return sameReadRequest(state.activeReadRequest, action.request)
+      return sameReadRequest(state.activeReadRequest, action.request) &&
+        (action.request.kind !== "version" ||
+          state.activeVersionRequestId === action.request.requestId)
         ? {
             ...state,
             selectedDocument: action.content,
             documentStatus: "ready",
             activeReadRequest: null,
+            activeVersionRequestId: null,
           }
         : state;
 
     case "documentReadFailed":
-      return sameReadRequest(state.activeReadRequest, action.request)
+      return sameReadRequest(state.activeReadRequest, action.request) &&
+        (action.request.kind !== "version" ||
+          state.activeVersionRequestId === action.request.requestId)
         ? {
             ...state,
             documentStatus: "error",
             activeReadRequest: null,
+            activeVersionRequestId: null,
             recoverableError: action.error,
           }
         : state;
@@ -555,12 +602,14 @@ export function documentsReducer(
         ...state,
         historyItems: request.append ? state.historyItems : [],
         historyStatus: "queued",
+        activeHistoryPath: request.path,
         activeHistoryRequest: { ...request, status: "queued" },
       };
     }
 
     case "historyStarted":
-      return sameHistoryRequest(state.activeHistoryRequest, action.request) &&
+      return state.activeHistoryPath === action.request.path &&
+        sameHistoryRequest(state.activeHistoryRequest, action.request) &&
         state.activeHistoryRequest?.status === "queued"
         ? {
             ...state,
@@ -573,7 +622,8 @@ export function documentsReducer(
         : state;
 
     case "historySucceeded":
-      return sameHistoryRequest(state.activeHistoryRequest, action.request)
+      return state.activeHistoryPath === action.request.path &&
+        sameHistoryRequest(state.activeHistoryRequest, action.request)
         ? {
             ...state,
             historyItems: action.request.append
@@ -586,7 +636,8 @@ export function documentsReducer(
         : state;
 
     case "historyFailed":
-      return sameHistoryRequest(state.activeHistoryRequest, action.request)
+      return state.activeHistoryPath === action.request.path &&
+        sameHistoryRequest(state.activeHistoryRequest, action.request)
         ? {
             ...state,
             historyStatus: "error",

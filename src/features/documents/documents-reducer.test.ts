@@ -380,4 +380,64 @@ describe("documentsReducer", () => {
     expect(state.documentsHomeRequested).toBe(true);
     expect(state.latestRevision).toBe(1);
   });
+
+  it("owns history pages by the selected path and rejects a stale page after selection changes", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "a0989d32-3ca8-494e-aece-7d7c22c92bc1",
+      path: "docs/guide.md",
+    });
+    state = documentsReducer(state, {
+      type: "historyRequested",
+      request: {
+        requestId: "34e1764e-4278-41f8-bcf8-9f74ff6f66e0",
+        sessionId: SESSION_ID,
+        path: "docs/guide.md",
+        cursor: null,
+        append: false,
+      },
+    });
+    const historyRequest = state.activeHistoryRequest!;
+    expect(state).toMatchObject({ activeHistoryPath: "docs/guide.md" });
+
+    state = documentsReducer(state, {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "77c039b8-c07d-4fbe-b676-cf3ab0944233",
+      path: "docs/api.md",
+    });
+    const rejected = documentsReducer(state, {
+      type: "historySucceeded",
+      request: historyRequest,
+      page: {
+        items: [
+          {
+            commitOid: "aabbccddeeff",
+            shortOid: "aabbccd",
+            pathAtCommit: "docs/guide.md",
+            authorName: "Kim",
+            authoredAtUnix: 1_721_000_000,
+            message: "stale",
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+
+    expect(rejected).toBe(state);
+    expect(rejected.historyItems).toEqual([]);
+  });
+
+  it("returns home and clears a stale last-opened path when the accepted session has no such catalog document", () => {
+    const state = documentsReducer(sessionStarting(), {
+      type: "sessionStarted",
+      sessionId: SESSION_ID,
+      snapshot: startSnapshot({ lastOpenedPath: "docs/missing.md" }),
+    });
+
+    expect(state.selectedPath).toBeNull();
+    expect(state.lastOpenedPath).toBeNull();
+    expect(state.activeReadRequest).toBeNull();
+  });
 });

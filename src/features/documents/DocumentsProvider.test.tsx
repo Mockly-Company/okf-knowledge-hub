@@ -20,6 +20,7 @@ function Probe() {
         {state.catalog.documents.map((document) => document.title).join(",")}
       </output>
       <output data-testid="selected">{state.selectedPath ?? "none"}</output>
+      <output data-testid="last-opened">{state.lastOpenedPath ?? "none"}</output>
       <output data-testid="search-results">
         {state.searchResults.map((result) => result.title).join(",")}
       </output>
@@ -141,6 +142,32 @@ describe("DocumentsProvider", () => {
       ).toEqual([
         { method: "readDocument", args: [SESSION_ID, "docs/api.md"] },
       ]),
+    );
+  });
+
+  it("re-reads the selected document after an accepted external-change event", async () => {
+    const gateway = new FakeDocumentsGateway();
+    renderProvider(gateway);
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "readDocument"),
+      ).toHaveLength(1),
+    );
+    gateway.calls.length = 0;
+
+    act(() => {
+      gateway.emit({
+        revision: 1,
+        type: "open_document_changed",
+        sessionId: SESSION_ID,
+        path: "docs/guide.md",
+      });
+    });
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "readDocument"),
+      ).toEqual([{ method: "readDocument", args: [SESSION_ID, "docs/guide.md"] }]),
     );
   });
 
