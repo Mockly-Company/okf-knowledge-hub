@@ -556,6 +556,7 @@ export function documentsReducer(
           status: "queued",
         },
         activeVersionRequestId: action.requestId,
+        documentNotice: null,
       };
 
     case "documentReadStarted":

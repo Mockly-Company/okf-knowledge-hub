@@ -475,4 +475,29 @@ describe("documentsReducer", () => {
     });
     expect(state.documentNotice).toBeNull();
   });
+
+  it("clears a prior document notice when a historical version read starts", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "a0989d32-3ca8-494e-aece-7d7c22c92bc1",
+      path: "docs/guide.md",
+    });
+    state = {
+      ...state,
+      documentNotice: "외부 변경사항을 반영했습니다.",
+    };
+
+    state = documentsReducer(state, {
+      type: "documentVersionRequested",
+      sessionId: SESSION_ID,
+      requestId: "77c039b8-c07d-4fbe-b676-cf3ab0944233",
+      version: {
+        commitOid: "aabbccddeeff",
+        pathAtCommit: "docs/guide.md",
+      },
+    });
+
+    expect(state.documentNotice).toBeNull();
+  });
 });
