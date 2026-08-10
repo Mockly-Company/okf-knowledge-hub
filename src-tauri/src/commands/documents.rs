@@ -495,14 +495,16 @@ pub async fn search_documents(
 pub(crate) async fn read_document_inner(
     services: &AppServices,
     session_id: Uuid,
+    request_id: String,
     path: String,
 ) -> CommandResult<DocumentContent> {
-    read_document_with_completion_hook(services, session_id, path, || {}).await
+    read_document_with_completion_hook(services, session_id, request_id, path, || {}).await
 }
 
 async fn read_document_with_completion_hook<F>(
     services: &AppServices,
     session_id: Uuid,
+    request_id: String,
     path: String,
     before_publication: F,
 ) -> CommandResult<DocumentContent>
@@ -510,7 +512,12 @@ where
     F: FnOnce(),
 {
     validate_client_id(session_id, "문서 세션")?;
-    let context = active_context(services, session_id)?;
+    let (context, read_owner) = {
+        let _mutation = services.document_sessions.lock_mutation().await;
+        let context = active_context(services, session_id)?;
+        let read_owner = context.register_document_read(request_id);
+        (context, read_owner)
+    };
     let repository_root = context.workspace().repository_root.clone();
     let document_roots = context.workspace().document_roots.clone();
     let read_path = path.clone();
@@ -528,15 +535,17 @@ where
     let _mutation = services.document_sessions.lock_mutation().await;
     ensure_active_context(services, &context)?;
     let content = content.map_err(sanitize_document_error)?;
-    let snapshot = services
-        .document_runtime
-        .snapshot(session_id)
-        .map_err(map_active_session_error)?;
-    if snapshot.last_opened_path.as_deref() != Some(path.as_str()) {
-        services
+    if context.document_read_is_latest(&read_owner) {
+        let snapshot = services
             .document_runtime
-            .set_open_document(session_id, &path)
+            .snapshot(session_id)
             .map_err(map_active_session_error)?;
+        if snapshot.last_opened_path.as_deref() != Some(path.as_str()) {
+            services
+                .document_runtime
+                .set_open_document(session_id, &path)
+                .map_err(map_active_session_error)?;
+        }
     }
     Ok(content)
 }
@@ -545,9 +554,10 @@ where
 pub async fn read_document(
     state: State<'_, AppServices>,
     session_id: Uuid,
+    request_id: String,
     path: String,
 ) -> CommandResult<DocumentContent> {
-    read_document_inner(&state, session_id, path).await
+    read_document_inner(&state, session_id, request_id, path).await
 }
 
 pub(crate) async fn read_document_asset_inner(
@@ -664,12 +674,14 @@ pub async fn list_document_history(
 pub(crate) async fn read_document_version_inner(
     services: &AppServices,
     session_id: Uuid,
+    request_id: String,
     commit_oid: String,
     path_at_commit: String,
 ) -> CommandResult<DocumentContent> {
     read_document_version_with_completion_hook(
         services,
         session_id,
+        request_id,
         commit_oid,
         path_at_commit,
         || {},
@@ -680,6 +692,7 @@ pub(crate) async fn read_document_version_inner(
 async fn read_document_version_with_completion_hook<F>(
     services: &AppServices,
     session_id: Uuid,
+    request_id: String,
     commit_oid: String,
     path_at_commit: String,
     before_publication: F,
@@ -688,7 +701,12 @@ where
     F: FnOnce(),
 {
     validate_client_id(session_id, "문서 세션")?;
-    let context = active_context(services, session_id)?;
+    let context = {
+        let _mutation = services.document_sessions.lock_mutation().await;
+        let context = active_context(services, session_id)?;
+        context.register_document_read(request_id);
+        context
+    };
     let repository_root = context.workspace().repository_root.clone();
     let authorized = context.version_was_issued(&commit_oid, &path_at_commit);
     let content = if authorized {
@@ -709,10 +727,11 @@ where
 pub async fn read_document_version(
     state: State<'_, AppServices>,
     session_id: Uuid,
+    request_id: String,
     commit_oid: String,
     path_at_commit: String,
 ) -> CommandResult<DocumentContent> {
-    read_document_version_inner(&state, session_id, commit_oid, path_at_commit).await
+    read_document_version_inner(&state, session_id, request_id, commit_oid, path_at_commit).await
 }
 
 async fn load_document_workspace(
@@ -1396,6 +1415,10 @@ mod tests {
         .unwrap();
     }
 
+    fn read_request_id() -> String {
+        Uuid::new_v4().to_string()
+    }
+
     #[tokio::test]
     async fn start_session_uses_the_saved_workspace_and_echoes_client_id() {
         let fixture = DocumentServicesFixture::new();
@@ -1644,6 +1667,7 @@ mod tests {
             read_document_with_completion_hook(
                 &services,
                 session_id,
+                read_request_id(),
                 "docs/guide.md".into(),
                 move || {
                     command_reached.wait();
@@ -1710,9 +1734,14 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let read = read_document_inner(&fixture.services, session_id, "docs/guide.md".into())
-            .await
-            .unwrap_err();
+        let read = read_document_inner(
+            &fixture.services,
+            session_id,
+            read_request_id(),
+            "docs/guide.md".into(),
+        )
+        .await
+        .unwrap_err();
         let asset = read_document_asset_inner(
             &fixture.services,
             session_id,
@@ -1732,6 +1761,7 @@ mod tests {
         let version = read_document_version_inner(
             &fixture.services,
             session_id,
+            read_request_id(),
             "0000000000000000000000000000000000000000".into(),
             "docs/guide.md".into(),
         )
@@ -1997,6 +2027,7 @@ mod tests {
                 read_document_with_completion_hook(
                     &services,
                     session_id,
+                    read_request_id(),
                     "docs/missing.md".into(),
                     move || {
                         reached.wait();
@@ -2050,6 +2081,7 @@ mod tests {
                 read_document_version_with_completion_hook(
                     &services,
                     session_id,
+                    read_request_id(),
                     "0000000000000000000000000000000000000000".into(),
                     "docs/missing.md".into(),
                     move || {
@@ -2096,9 +2128,14 @@ mod tests {
             .await
             .unwrap();
 
-        let content = read_document_inner(&fixture.services, session_id, "docs/guide.md".into())
-            .await
-            .unwrap();
+        let content = read_document_inner(
+            &fixture.services,
+            session_id,
+            read_request_id(),
+            "docs/guide.md".into(),
+        )
+        .await
+        .unwrap();
         assert_eq!(content.summary.title, "API Guide");
         assert_eq!(
             content.last_commit.as_ref().unwrap().message,
@@ -2129,6 +2166,7 @@ mod tests {
         let version = read_document_version_inner(
             &fixture.services,
             session_id,
+            read_request_id(),
             history.items[0].commit_oid.clone(),
             history.items[0].path_at_commit.clone(),
         )
@@ -2161,6 +2199,7 @@ mod tests {
         let guessed = read_document_version_inner(
             &fixture.services,
             session_id,
+            read_request_id(),
             issued.commit_oid.clone(),
             "docs/other.md".into(),
         )
@@ -2176,10 +2215,15 @@ mod tests {
         start_document_session_inner(&fixture.services, session_id)
             .await
             .unwrap();
-        let replacement =
-            read_document_version_inner(&fixture.services, session_id, issued_commit, issued_path)
-                .await
-                .unwrap_err();
+        let replacement = read_document_version_inner(
+            &fixture.services,
+            session_id,
+            read_request_id(),
+            issued_commit,
+            issued_path,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(replacement.code, ErrorCode::DocumentHistoryInvalid);
 
         stop_document_session_inner(&fixture.services, session_id)
@@ -2218,6 +2262,7 @@ mod tests {
         let version = read_document_version_inner(
             &services,
             session_id,
+            read_request_id(),
             history.items[0].commit_oid.clone(),
             history.items[0].path_at_commit.clone(),
         )
@@ -2271,6 +2316,7 @@ mod tests {
         let version = read_document_version_inner(
             &fixture.services,
             session_id,
+            read_request_id(),
             legacy.commit_oid.clone(),
             legacy.path_at_commit.clone(),
         )
@@ -2293,12 +2339,22 @@ mod tests {
             .unwrap();
         events.clear();
 
-        read_document_inner(&fixture.services, session_id, "docs/guide.md".into())
-            .await
-            .unwrap();
-        read_document_inner(&fixture.services, session_id, "docs/guide.md".into())
-            .await
-            .unwrap();
+        read_document_inner(
+            &fixture.services,
+            session_id,
+            read_request_id(),
+            "docs/guide.md".into(),
+        )
+        .await
+        .unwrap();
+        read_document_inner(
+            &fixture.services,
+            session_id,
+            read_request_id(),
+            "docs/guide.md".into(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(
             events
@@ -2313,6 +2369,203 @@ mod tests {
             .unwrap();
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn older_read_completing_last_cannot_reclaim_live_or_restored_selection() {
+        let fixture = DocumentServicesFixture::new();
+        let session_id = Uuid::new_v4();
+        let events = Arc::new(RecordedEvents::default());
+        start_document_session_with_hook(&fixture.services, session_id, events.clone(), || {})
+            .await
+            .unwrap();
+        events.clear();
+
+        let older_reached = Arc::new(Barrier::new(2));
+        let older_release = Arc::new(Barrier::new(2));
+        let older_request_id = Uuid::new_v4().to_string();
+        let newer_request_id = Uuid::new_v4().to_string();
+        let services = fixture.services.clone();
+        let command_reached = older_reached.clone();
+        let command_release = older_release.clone();
+        let older = tokio::spawn(async move {
+            read_document_with_completion_hook(
+                &services,
+                session_id,
+                older_request_id,
+                "docs/guide.md".into(),
+                move || {
+                    command_reached.wait();
+                    command_release.wait();
+                },
+            )
+            .await
+        });
+        wait_at(older_reached).await;
+
+        read_document_inner(
+            &fixture.services,
+            session_id,
+            newer_request_id,
+            "docs/other.md".into(),
+        )
+        .await
+        .unwrap();
+        wait_at(older_release).await;
+        older.await.unwrap().unwrap();
+
+        let live_path = fixture
+            .services
+            .document_runtime
+            .snapshot(session_id)
+            .unwrap()
+            .last_opened_path;
+        let open_events = events
+            .snapshot()
+            .into_iter()
+            .filter_map(|event| match event.event {
+                DocumentEvent::OpenDocumentChanged { path, .. } => Some(path),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        stop_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+
+        let restart_id = Uuid::new_v4();
+        let restored = start_document_session_inner(&fixture.services, restart_id)
+            .await
+            .unwrap();
+        stop_document_session_inner(&fixture.services, restart_id)
+            .await
+            .unwrap();
+
+        assert_eq!(live_path.as_deref(), Some("docs/other.md"));
+        assert_eq!(restored.last_opened_path.as_deref(), Some("docs/other.md"));
+        assert_eq!(open_events, ["docs/other.md"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn duplicate_read_request_ids_cannot_let_the_older_invocation_win() {
+        let fixture = DocumentServicesFixture::new();
+        let session_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4().to_string();
+        let older_request_id = request_id.clone();
+        start_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+        let older_reached = Arc::new(Barrier::new(2));
+        let older_release = Arc::new(Barrier::new(2));
+        let services = fixture.services.clone();
+        let command_reached = older_reached.clone();
+        let command_release = older_release.clone();
+
+        let older = tokio::spawn(async move {
+            read_document_with_completion_hook(
+                &services,
+                session_id,
+                older_request_id,
+                "docs/guide.md".into(),
+                move || {
+                    command_reached.wait();
+                    command_release.wait();
+                },
+            )
+            .await
+        });
+        wait_at(older_reached).await;
+        read_document_inner(
+            &fixture.services,
+            session_id,
+            request_id,
+            "docs/other.md".into(),
+        )
+        .await
+        .unwrap();
+        wait_at(older_release).await;
+        older.await.unwrap().unwrap();
+
+        assert_eq!(
+            fixture
+                .services
+                .document_runtime
+                .snapshot(session_id)
+                .unwrap()
+                .last_opened_path
+                .as_deref(),
+            Some("docs/other.md")
+        );
+        stop_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn newer_historical_read_prevents_an_older_current_read_from_persisting() {
+        let fixture = DocumentServicesFixture::new();
+        let session_id = Uuid::new_v4();
+        let events = Arc::new(RecordedEvents::default());
+        start_document_session_with_hook(&fixture.services, session_id, events.clone(), || {})
+            .await
+            .unwrap();
+        let history = list_document_history_inner(
+            &fixture.services,
+            session_id,
+            "docs/guide.md".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        let version = history.items.first().unwrap().clone();
+        events.clear();
+        let older_reached = Arc::new(Barrier::new(2));
+        let older_release = Arc::new(Barrier::new(2));
+        let services = fixture.services.clone();
+        let command_reached = older_reached.clone();
+        let command_release = older_release.clone();
+
+        let older = tokio::spawn(async move {
+            read_document_with_completion_hook(
+                &services,
+                session_id,
+                read_request_id(),
+                "docs/guide.md".into(),
+                move || {
+                    command_reached.wait();
+                    command_release.wait();
+                },
+            )
+            .await
+        });
+        wait_at(older_reached).await;
+        read_document_version_inner(
+            &fixture.services,
+            session_id,
+            read_request_id(),
+            version.commit_oid,
+            version.path_at_commit,
+        )
+        .await
+        .unwrap();
+        wait_at(older_release).await;
+        older.await.unwrap().unwrap();
+
+        assert_eq!(
+            fixture
+                .services
+                .document_runtime
+                .snapshot(session_id)
+                .unwrap()
+                .last_opened_path,
+            None
+        );
+        assert!(!events
+            .snapshot()
+            .iter()
+            .any(|event| matches!(event.event, DocumentEvent::OpenDocumentChanged { .. })));
+        stop_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn a_new_session_restores_only_the_valid_cached_document_path() {
         let fixture = DocumentServicesFixture::new();
@@ -2320,9 +2573,14 @@ mod tests {
         start_document_session_inner(&fixture.services, first_id)
             .await
             .unwrap();
-        read_document_inner(&fixture.services, first_id, "docs/guide.md".into())
-            .await
-            .unwrap();
+        read_document_inner(
+            &fixture.services,
+            first_id,
+            read_request_id(),
+            "docs/guide.md".into(),
+        )
+        .await
+        .unwrap();
         stop_document_session_inner(&fixture.services, first_id)
             .await
             .unwrap();
@@ -2357,6 +2615,7 @@ mod tests {
         let version = read_document_version_inner(
             &fixture.services,
             session_id,
+            read_request_id(),
             "0000000000000000000000000000000000000000".into(),
             ".okf/workspace.yml".into(),
         )

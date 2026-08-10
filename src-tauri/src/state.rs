@@ -38,7 +38,20 @@ pub(crate) struct DocumentCommandSessionContext {
     pub(crate) session_id: Uuid,
     workspace: OnceLock<DocumentCommandWorkspaceContext>,
     issued_versions: std::sync::Mutex<HashSet<(String, String)>>,
+    read_ownership: std::sync::Mutex<DocumentReadOwnership>,
     next_revision: AtomicU64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocumentReadOwner {
+    request_id: String,
+    sequence: u64,
+}
+
+#[derive(Default)]
+struct DocumentReadOwnership {
+    next_sequence: u64,
+    latest: Option<DocumentReadOwner>,
 }
 
 pub(crate) struct DocumentCommandWorkspaceContext {
@@ -55,6 +68,7 @@ impl DocumentCommandSessionContext {
             session_id,
             workspace: OnceLock::new(),
             issued_versions: std::sync::Mutex::new(HashSet::new()),
+            read_ownership: std::sync::Mutex::new(DocumentReadOwnership::default()),
             next_revision: AtomicU64::new(1),
         }
     }
@@ -96,6 +110,29 @@ impl DocumentCommandSessionContext {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&(commit_oid.to_owned(), path.to_owned()))
+    }
+
+    pub(crate) fn register_document_read(&self, request_id: String) -> DocumentReadOwner {
+        let mut ownership = self
+            .read_ownership
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let owner = DocumentReadOwner {
+            request_id,
+            sequence: ownership.next_sequence,
+        };
+        ownership.next_sequence = ownership.next_sequence.wrapping_add(1);
+        ownership.latest = Some(owner.clone());
+        owner
+    }
+
+    pub(crate) fn document_read_is_latest(&self, owner: &DocumentReadOwner) -> bool {
+        self.read_ownership
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest
+            .as_ref()
+            == Some(owner)
     }
 }
 
