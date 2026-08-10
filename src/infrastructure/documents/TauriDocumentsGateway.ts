@@ -65,8 +65,12 @@ export class TauriDocumentsGateway implements DocumentsGateway {
     });
   }
 
-  readDocument(sessionId: string, path: string): Promise<DocumentContent> {
-    return this.invokeCommand("read_document", { sessionId, path });
+  readDocument(
+    sessionId: string,
+    requestId: string,
+    path: string,
+  ): Promise<DocumentContent> {
+    return this.invokeCommand("read_document", { sessionId, requestId, path });
   }
 
   readDocumentAsset(
@@ -95,11 +99,13 @@ export class TauriDocumentsGateway implements DocumentsGateway {
 
   readDocumentVersion(
     sessionId: string,
+    requestId: string,
     commitOid: string,
     pathAtCommit: string,
   ): Promise<DocumentContent> {
     return this.invokeCommand("read_document_version", {
       sessionId,
+      requestId,
       commitOid,
       pathAtCommit,
     });

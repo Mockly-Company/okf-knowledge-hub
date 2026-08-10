@@ -285,9 +285,14 @@ export function DocumentsProvider({
     let active = true;
     const read =
       request.kind === "current"
-        ? gateway.readDocument(request.sessionId, request.path)
+        ? gateway.readDocument(
+            request.sessionId,
+            request.requestId,
+            request.path,
+          )
         : gateway.readDocumentVersion(
             request.sessionId,
+            request.requestId,
             request.commitOid,
             request.pathAtCommit,
           );

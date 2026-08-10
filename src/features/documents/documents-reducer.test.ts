@@ -415,6 +415,129 @@ describe("documentsReducer", () => {
     });
   });
 
+  it("does not let a different-path open event override an intact newer selection", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "sessionStarted",
+      sessionId: SESSION_ID,
+      snapshot: startSnapshot({
+        catalog: {
+          documents: [GUIDE_SUMMARY, API_SUMMARY],
+          roots: [
+            { kind: "document", summary: GUIDE_SUMMARY },
+            { kind: "document", summary: API_SUMMARY },
+          ],
+        },
+        lastOpenedPath: null,
+      }),
+    });
+    state = documentsReducer(state, {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "a0989d32-3ca8-494e-aece-7d7c22c92bc1",
+      path: "docs/guide.md",
+    });
+    state = documentsReducer(state, {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "77c039b8-c07d-4fbe-b676-cf3ab0944233",
+      path: "docs/api.md",
+    });
+
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(1, {
+        type: "open_document_changed",
+        sessionId: SESSION_ID,
+        path: "docs/api.md",
+      }),
+    });
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(2, {
+        type: "open_document_changed",
+        sessionId: SESSION_ID,
+        path: "docs/guide.md",
+      }),
+    });
+
+    expect(state.selectedPath).toBe("docs/api.md");
+    expect(state.lastOpenedPath).toBe("docs/api.md");
+    expect(state.activeReadRequest).toMatchObject({
+      requestId: "77c039b8-c07d-4fbe-b676-cf3ab0944233",
+      path: "docs/api.md",
+    });
+  });
+
+  it("adopts a migrated path from resync after provisional tree removal", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "sessionStarted",
+      sessionId: SESSION_ID,
+      snapshot: startSnapshot(),
+    });
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(1, {
+        type: "tree_changed",
+        sessionId: SESSION_ID,
+        catalog: API_CATALOG,
+      }),
+    });
+
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(2, {
+        type: "resynced",
+        sessionId: SESSION_ID,
+        barrierId: "54bf90af-b193-4387-8618-ae168b775407",
+        snapshot: {
+          sessionId: SESSION_ID,
+          catalog: API_CATALOG,
+          indexStatus: INDEX_READY,
+          lastOpenedPath: "docs/api.md",
+        },
+      }),
+    });
+
+    expect(state.selectedPath).toBe("docs/api.md");
+    expect(state.documentsHomeRequested).toBe(false);
+    expect(state.activeReadRequest).toMatchObject({
+      kind: "current",
+      path: "docs/api.md",
+      status: "queued",
+    });
+  });
+
+  it("keeps explicit Documents home open across an authoritative resync", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "sessionStarted",
+      sessionId: SESSION_ID,
+      snapshot: startSnapshot(),
+    });
+    state = documentsReducer(state, {
+      type: "documentsHomeRequested",
+      sessionId: SESSION_ID,
+    });
+
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(1, {
+        type: "resynced",
+        sessionId: SESSION_ID,
+        barrierId: "54bf90af-b193-4387-8618-ae168b775407",
+        snapshot: {
+          sessionId: SESSION_ID,
+          catalog: API_CATALOG,
+          indexStatus: INDEX_READY,
+          lastOpenedPath: "docs/api.md",
+        },
+      }),
+    });
+
+    expect(state.selectedPath).toBeNull();
+    expect(state.documentsHomeRequested).toBe(true);
+    expect(state.activeReadRequest).toBeNull();
+  });
+
   it("owns history pages by the selected path and rejects a stale page after selection changes", () => {
     let state = documentsReducer(sessionStarting(), {
       type: "documentSelectionRequested",

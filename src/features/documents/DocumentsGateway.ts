@@ -19,7 +19,11 @@ export interface DocumentsGateway {
     query: string,
     limit: number,
   ): Promise<DocumentSearchResponse>;
-  readDocument(sessionId: string, path: string): Promise<DocumentContent>;
+  readDocument(
+    sessionId: string,
+    requestId: string,
+    path: string,
+  ): Promise<DocumentContent>;
   readDocumentAsset(
     sessionId: string,
     documentPath: string,
@@ -32,6 +36,7 @@ export interface DocumentsGateway {
   ): Promise<HistoryPage>;
   readDocumentVersion(
     sessionId: string,
+    requestId: string,
     commitOid: string,
     pathAtCommit: string,
   ): Promise<DocumentContent>;

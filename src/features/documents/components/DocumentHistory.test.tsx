@@ -89,6 +89,7 @@ describe("DocumentHistory", () => {
     await waitFor(() =>
       expect(readVersion).toHaveBeenCalledWith(
         SESSION_ID,
+        SESSION_ID,
         "aabbccddeeff",
         "docs/renamed-guide.md",
       ),
@@ -139,6 +140,7 @@ describe("DocumentHistory", () => {
     await user.click(screen.getByRole("button", { name: "버전 다시 열기" }));
     await waitFor(() => expect(readVersion).toHaveBeenCalledTimes(2));
     expect(readVersion).toHaveBeenLastCalledWith(
+      SESSION_ID,
       SESSION_ID,
       "aabbccddeeff",
       "docs/renamed-guide.md",

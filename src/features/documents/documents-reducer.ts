@@ -355,8 +355,17 @@ function applyAuthoritativeSnapshot(
     lastOpenedPath,
     recoverableError: null,
   };
-  if (state.documentsHomeRequested) return clearSelection(authoritative);
-  return openCurrentDocument(authoritative, lastOpenedPath, requestId);
+  if (state.documentsHomeRequested && !state.selectionRemovedByTreeChange) {
+    return clearSelection(authoritative);
+  }
+  return openCurrentDocument(
+    {
+      ...authoritative,
+      documentsHomeRequested: lastOpenedPath === null,
+    },
+    lastOpenedPath,
+    requestId,
+  );
 }
 
 export function documentsReducer(
@@ -471,25 +480,26 @@ export function documentsReducer(
             indexStatus: received.status,
           };
         case "open_document_changed": {
-          const next = {
+          const revisionAccepted = {
             ...state,
             latestRevision: received.revision,
-            lastOpenedPath: received.path,
           };
-          if (received.path === state.selectedPath) return next;
-          if (state.documentsHomeRequested && !state.selectionRemovedByTreeChange) {
-            return next;
+          if (received.path === state.selectedPath) {
+            return { ...revisionAccepted, lastOpenedPath: received.path };
           }
           if (
+            !state.documentsHomeRequested ||
+            !state.selectionRemovedByTreeChange ||
             !state.catalog.documents.some(
               (document) => document.path === received.path,
             )
           ) {
-            return next;
+            return revisionAccepted;
           }
           return openCurrentDocument(
             {
-              ...next,
+              ...revisionAccepted,
+              lastOpenedPath: received.path,
               documentsHomeRequested: false,
               documentNotice: null,
             },

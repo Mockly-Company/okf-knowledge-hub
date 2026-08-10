@@ -112,7 +112,7 @@ describe("MarkdownDocument", () => {
     await waitFor(() =>
       expect(gateway.calls).toContainEqual({
         method: "readDocument",
-        args: ["session-id", "docs/api.md"],
+        args: ["session-id", "session-id", "docs/api.md"],
       }),
     );
   });

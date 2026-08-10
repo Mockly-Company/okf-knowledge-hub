@@ -10,7 +10,7 @@ const SEARCH_ONE_ID = "34e1764e-4278-41f8-bcf8-9f74ff6f66e0";
 const SEARCH_TWO_ID = "54bf90af-b193-4387-8618-ae168b775407";
 
 function Probe() {
-  const { state, setSearchQuery } = useDocuments();
+  const { state, setSearchQuery, selectDocument } = useDocuments();
   return (
     <div>
       <output data-testid="status">{state.status}</output>
@@ -27,6 +27,8 @@ function Probe() {
       </output>
       <button onClick={() => setSearchQuery("alpha")}>alpha</button>
       <button onClick={() => setSearchQuery("beta")}>beta</button>
+      <button onClick={() => selectDocument("docs/guide.md")}>open-guide</button>
+      <button onClick={() => selectDocument("docs/api.md")}>open-api</button>
     </div>
   );
 }
@@ -121,7 +123,7 @@ describe("DocumentsProvider", () => {
     expect(screen.getByTestId("selected")).toHaveTextContent("none");
   });
 
-  it("reads only after an accepted open-document event becomes reducer state", async () => {
+  it("does not navigate from an unexplained different-path open-document event", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.sessionSnapshot.lastOpenedPath = null;
     gateway.sessionSnapshot.catalog = {
@@ -144,13 +146,12 @@ describe("DocumentsProvider", () => {
       });
     });
 
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "readDocument"),
-      ).toEqual([
-        { method: "readDocument", args: [SESSION_ID, "docs/api.md"] },
-      ]),
-    );
+    await act(async () => Promise.resolve());
+
+    expect(
+      gateway.calls.filter((call) => call.method === "readDocument"),
+    ).toEqual([]);
+    expect(screen.getByTestId("selected")).toHaveTextContent("none");
   });
 
   it("does not re-read or show an external-change notice for the same-path event emitted after the first read", async () => {
@@ -209,11 +210,65 @@ describe("DocumentsProvider", () => {
     await waitFor(() =>
       expect(
         gateway.calls.filter((call) => call.method === "readDocument"),
-      ).toEqual([{ method: "readDocument", args: [SESSION_ID, "docs/guide.md"] }]),
+      ).toEqual([
+        {
+          method: "readDocument",
+          args: [SESSION_ID, `event:${SESSION_ID}:1`, "docs/guide.md"],
+        },
+      ]),
     );
     expect(screen.getByTestId("document-notice")).toHaveTextContent(
       "외부 변경사항을 반영했습니다.",
     );
+  });
+
+  it("keeps B selected when an older A read emits after B completes", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.sessionSnapshot.catalog = {
+      documents: [
+        ...gateway.guideCatalog.documents,
+        ...gateway.apiCatalog.documents,
+      ],
+      roots: [...gateway.guideCatalog.roots, ...gateway.apiCatalog.roots],
+    };
+    gateway.deferReads = true;
+    const user = userEvent.setup();
+    renderProvider(gateway, [SESSION_ID, SEARCH_ONE_ID, SEARCH_TWO_ID]);
+    await screen.findByText("ready");
+
+    await user.click(screen.getByRole("button", { name: "open-guide" }));
+    await waitFor(() =>
+      expect(gateway.calls).toContainEqual({
+        method: "readDocument",
+        args: [SESSION_ID, SEARCH_ONE_ID, "docs/guide.md"],
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "open-api" }));
+    await waitFor(() =>
+      expect(gateway.calls).toContainEqual({
+        method: "readDocument",
+        args: [SESSION_ID, SEARCH_TWO_ID, "docs/api.md"],
+      }),
+    );
+
+    act(() => {
+      gateway.resolveRead(SEARCH_TWO_ID);
+    });
+    expect(await screen.findByTestId("selected")).toHaveTextContent(
+      "docs/api.md",
+    );
+
+    act(() => {
+      gateway.resolveRead(SEARCH_ONE_ID);
+    });
+    await act(async () => Promise.resolve());
+
+    expect(screen.getByTestId("selected")).toHaveTextContent("docs/api.md");
+    expect(screen.getByTestId("last-opened")).toHaveTextContent(
+      "docs/api.md",
+    );
+    expect(gateway.sessionSnapshot.lastOpenedPath).toBe("docs/api.md");
   });
 
   it("stops the exact session, unlistens, and ignores a late start result", async () => {

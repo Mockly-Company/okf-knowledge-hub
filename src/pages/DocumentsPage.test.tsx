@@ -53,7 +53,7 @@ describe("DocumentsPage", () => {
         gateway.calls.filter((call) => call.method === "readDocument"),
       ).toContainEqual({
         method: "readDocument",
-        args: [expect.any(String), "docs/api.md"],
+        args: [expect.any(String), expect.any(String), "docs/api.md"],
       }),
     );
   });

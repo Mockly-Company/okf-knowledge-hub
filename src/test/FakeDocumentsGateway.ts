@@ -58,6 +58,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   deferSubscription = false;
   deferStart = false;
   deferSearch = false;
+  deferReads = false;
   eventBeforeStartResult:
     | ((sessionId: string) => DocumentEventEnvelope)
     | null = null;
@@ -86,9 +87,20 @@ export class FakeDocumentsGateway implements DocumentsGateway {
       reject: (error: unknown) => void;
     }
   >();
+  private readonly pendingReads = new Map<
+    string,
+    {
+      sessionId: string;
+      path: string;
+      sequence: number;
+      content: DocumentContent;
+      resolve: (content: DocumentContent) => void;
+    }
+  >();
   private activeSessionId: string | null = null;
   private rememberedPath: string | null = null;
   private revision = 0;
+  private latestReadSequence = 0;
 
   async startSession(requestId: string): Promise<DocumentSessionSnapshot> {
     this.record("startSession", requestId);
@@ -96,6 +108,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
     this.activeSessionId = requestId;
     this.rememberedPath = this.sessionSnapshot.lastOpenedPath;
     this.revision = this.sessionSnapshot.revision;
+    this.latestReadSequence = 0;
     const event = this.eventBeforeStartResult?.(requestId);
     if (event) this.emit(event);
     if (this.deferStart) {
@@ -130,25 +143,33 @@ export class FakeDocumentsGateway implements DocumentsGateway {
     return { sessionId, requestId, items: this.searchResults };
   }
 
-  async readDocument(sessionId: string, path: string): Promise<DocumentContent> {
-    this.record("readDocument", sessionId, path);
+  async readDocument(
+    sessionId: string,
+    requestId: string,
+    path: string,
+  ): Promise<DocumentContent> {
+    this.record("readDocument", sessionId, requestId, path);
+    const sequence = ++this.latestReadSequence;
     const summary = path === apiSummary.path ? apiSummary : guideSummary;
-    const content = {
+    const content: DocumentContent = {
       summary: { ...summary, path },
       markdown: `# ${summary.title}`,
       properties: {},
       tableOfContents: [],
       lastCommit: null,
     };
-    if (this.activeSessionId === sessionId && this.rememberedPath !== path) {
-      this.rememberedPath = path;
-      this.emit({
-        revision: ++this.revision,
-        type: "open_document_changed",
-        sessionId,
-        path,
+    if (this.deferReads) {
+      return new Promise((resolve) => {
+        this.pendingReads.set(requestId, {
+          sessionId,
+          path,
+          sequence,
+          content,
+          resolve,
+        });
       });
     }
+    this.completeCurrentRead(sessionId, sequence, path);
     return content;
   }
 
@@ -172,10 +193,18 @@ export class FakeDocumentsGateway implements DocumentsGateway {
 
   async readDocumentVersion(
     sessionId: string,
+    requestId: string,
     commitOid: string,
     pathAtCommit: string,
   ): Promise<DocumentContent> {
-    this.record("readDocumentVersion", sessionId, commitOid, pathAtCommit);
+    this.record(
+      "readDocumentVersion",
+      sessionId,
+      requestId,
+      commitOid,
+      pathAtCommit,
+    );
+    this.latestReadSequence += 1;
     return {
       summary: { ...guideSummary, path: pathAtCommit },
       markdown: "# Historical Guide",
@@ -237,11 +266,27 @@ export class FakeDocumentsGateway implements DocumentsGateway {
     pending.reject(error);
   }
 
+  resolveRead(requestId: string): void {
+    const pending = this.pendingReads.get(requestId);
+    if (!pending) throw new Error(`no deferred read ${requestId}`);
+    this.pendingReads.delete(requestId);
+    this.completeCurrentRead(
+      pending.sessionId,
+      pending.sequence,
+      pending.path,
+    );
+    pending.resolve(pending.content);
+  }
+
   emit(event: DocumentEventEnvelope): void {
     if (event.sessionId === this.activeSessionId) {
       this.revision = Math.max(this.revision, event.revision);
       if (event.type === "open_document_changed") {
         this.rememberedPath = event.path;
+        this.sessionSnapshot = {
+          ...this.sessionSnapshot,
+          lastOpenedPath: event.path,
+        };
       }
     }
     for (const listener of this.listeners) listener(event);
@@ -259,6 +304,28 @@ export class FakeDocumentsGateway implements DocumentsGateway {
       this.unlistenCount += 1;
       this.listeners.delete(listener);
     };
+  }
+
+  private completeCurrentRead(
+    sessionId: string,
+    sequence: number,
+    path: string,
+  ): void {
+    if (
+      this.activeSessionId !== sessionId ||
+      sequence !== this.latestReadSequence ||
+      this.rememberedPath === path
+    ) {
+      return;
+    }
+    this.rememberedPath = path;
+    this.sessionSnapshot = { ...this.sessionSnapshot, lastOpenedPath: path };
+    this.emit({
+      revision: ++this.revision,
+      type: "open_document_changed",
+      sessionId,
+      path,
+    });
   }
 
   private record(method: string, ...args: unknown[]): void {

@@ -32,7 +32,7 @@ describe("TauriDocumentsGateway", () => {
     await gateway.stopSession(SESSION_ID);
     await gateway.refreshSession(SESSION_ID);
     await gateway.searchDocuments(SESSION_ID, REQUEST_ID, "api", 20);
-    await gateway.readDocument(SESSION_ID, "docs/guide.md");
+    await gateway.readDocument(SESSION_ID, REQUEST_ID, "docs/guide.md");
     await gateway.readDocumentAsset(
       SESSION_ID,
       "docs/guide.md",
@@ -45,6 +45,7 @@ describe("TauriDocumentsGateway", () => {
     );
     await gateway.readDocumentVersion(
       SESSION_ID,
+      REQUEST_ID,
       "0123456789abcdef",
       "legacy/guide.md",
     );
@@ -73,7 +74,11 @@ describe("TauriDocumentsGateway", () => {
       },
       {
         command: "read_document",
-        args: { sessionId: SESSION_ID, path: "docs/guide.md" },
+        args: {
+          sessionId: SESSION_ID,
+          requestId: REQUEST_ID,
+          path: "docs/guide.md",
+        },
       },
       {
         command: "read_document_asset",
@@ -95,6 +100,7 @@ describe("TauriDocumentsGateway", () => {
         command: "read_document_version",
         args: {
           sessionId: SESSION_ID,
+          requestId: REQUEST_ID,
           commitOid: "0123456789abcdef",
           pathAtCommit: "legacy/guide.md",
         },
@@ -174,7 +180,7 @@ describe("createDocumentsGateway", () => {
 
     let rejected: unknown;
     try {
-      await gateway.readDocument(SESSION_ID, secretPath);
+      await gateway.readDocument(SESSION_ID, REQUEST_ID, secretPath);
     } catch (error) {
       rejected = error;
     }

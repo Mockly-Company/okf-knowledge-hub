@@ -49,7 +49,11 @@ export class UnavailableDocumentsGateway implements DocumentsGateway {
     return unavailable();
   }
 
-  readDocument(_sessionId: string, _path: string): Promise<DocumentContent> {
+  readDocument(
+    _sessionId: string,
+    _requestId: string,
+    _path: string,
+  ): Promise<DocumentContent> {
     return unavailable();
   }
 
@@ -71,6 +75,7 @@ export class UnavailableDocumentsGateway implements DocumentsGateway {
 
   readDocumentVersion(
     _sessionId: string,
+    _requestId: string,
     _commitOid: string,
     _pathAtCommit: string,
   ): Promise<DocumentContent> {
