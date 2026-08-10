@@ -100,6 +100,7 @@ function sanitizedEvent(event: DocumentEventEnvelope): DocumentEventEnvelope {
 export interface DocumentsContextValue {
   state: DocumentsState;
   setSearchQuery(query: string): void;
+  retrySearch(): void;
   selectDocument(
     path: string,
     searchMatch?: Pick<SearchResult, "matchField" | "matchText">,
@@ -362,6 +363,23 @@ export function DocumentsProvider({
     [dispatchAccepted],
   );
 
+  const retrySearch = useCallback(() => {
+    const current = stateRef.current;
+    if (
+      current.status !== "ready" ||
+      current.activeSessionId === null ||
+      current.searchQuery.trim() === ""
+    ) {
+      return;
+    }
+    dispatchAccepted({
+      type: "searchStarted",
+      sessionId: current.activeSessionId,
+      requestId: createId(),
+      query: current.searchQuery,
+    });
+  }, [createId, dispatchAccepted]);
+
   const selectDocument = useCallback(
     (
       path: string,
@@ -514,6 +532,7 @@ export function DocumentsProvider({
     () => ({
       state,
       setSearchQuery,
+      retrySearch,
       selectDocument,
       showDocumentsHome,
       retrySession,
@@ -539,6 +558,7 @@ export function DocumentsProvider({
       selectDocument,
       selectDocumentVersion,
       setSearchQuery,
+      retrySearch,
       showDocumentsHome,
       retrySession,
       state,

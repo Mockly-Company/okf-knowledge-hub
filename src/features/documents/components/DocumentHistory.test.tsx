@@ -99,4 +99,49 @@ describe("DocumentHistory", () => {
       expect(gateway.calls.filter((call) => call.method === "readDocument")).toHaveLength(2),
     );
   });
+
+  it("shows a historical-version read error and retries the same version", async () => {
+    const gateway = new FakeDocumentsGateway();
+    vi.spyOn(gateway, "listDocumentHistory").mockResolvedValue({
+      items: [
+        {
+          commitOid: "aabbccddeeff",
+          shortOid: "aabbccd",
+          pathAtCommit: "docs/renamed-guide.md",
+          authorName: "Kim",
+          authoredAtUnix: 1_721_000_000,
+          message: "읽을 수 없는 버전",
+        },
+      ],
+      nextCursor: null,
+    });
+    const readVersion = vi
+      .spyOn(gateway, "readDocumentVersion")
+      .mockRejectedValue({
+        code: "document_history_invalid",
+        message: "과거 버전을 읽지 못했습니다.",
+        recovery: "retry",
+        details: {},
+      });
+    const user = userEvent.setup();
+
+    renderSelectedDocument(gateway);
+    await screen.findByRole("region", { name: "Guide" });
+    await user.click(screen.getByRole("tab", { name: "History" }));
+    await user.click(
+      await screen.findByRole("button", { name: /읽을 수 없는 버전/ }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "과거 버전을 읽지 못했습니다.",
+    );
+    expect(screen.queryByText("문서를 여는 중…")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "버전 다시 열기" }));
+    await waitFor(() => expect(readVersion).toHaveBeenCalledTimes(2));
+    expect(readVersion).toHaveBeenLastCalledWith(
+      SESSION_ID,
+      "aabbccddeeff",
+      "docs/renamed-guide.md",
+    );
+  });
 });

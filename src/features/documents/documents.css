@@ -205,6 +205,24 @@
   color: var(--color-text-muted);
 }
 
+.document-search__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--color-text-default);
+}
+
+.document-search__error p,
+.documents-page__read-error p {
+  margin: 0;
+}
+
+.documents-page__error-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .markdown-document {
   color: var(--color-text-default);
   line-height: 1.7;

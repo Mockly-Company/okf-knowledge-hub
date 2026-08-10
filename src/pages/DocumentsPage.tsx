@@ -9,7 +9,10 @@ export function DocumentsPage() {
   const {
     state,
     setSearchQuery,
+    retrySearch,
     selectDocument,
+    selectDocumentVersion,
+    showDocumentsHome,
     refresh,
     retrySession,
     clearRecoverableError,
@@ -53,6 +56,37 @@ export function DocumentsPage() {
         ) : null}
         {state.selectedDocument ? (
           <DocumentReader document={state.selectedDocument} />
+        ) : state.documentStatus === "error" ? (
+          <div className="documents-page__notice documents-page__read-error" role="alert">
+            <div>
+              <strong>
+                {state.selectedVersion
+                  ? "과거 버전을 열지 못했습니다."
+                  : "문서를 열지 못했습니다."}
+              </strong>
+              <p>
+                {state.recoverableError?.message ??
+                  "문서 내용을 불러오지 못했습니다."}
+              </p>
+            </div>
+            <div className="documents-page__error-actions">
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (state.selectedVersion) {
+                    selectDocumentVersion(state.selectedVersion);
+                  } else {
+                    selectDocument(state.selectedPath!);
+                  }
+                }}
+              >
+                {state.selectedVersion ? "버전 다시 열기" : "문서 다시 열기"}
+              </Button>
+              <Button variant="secondary" onClick={showDocumentsHome}>
+                Documents 홈
+              </Button>
+            </div>
+          </div>
         ) : (
           <p className="documents-page__loading">문서를 여는 중…</p>
         )}
@@ -93,6 +127,7 @@ export function DocumentsPage() {
         documents={state.catalog.documents}
         results={state.searchResults}
         searchStatus={state.searchStatus}
+        searchError={state.searchError}
         indexStatus={state.indexStatus}
         onQueryChange={setSearchQuery}
         onSelectDocument={selectDocument}
@@ -102,6 +137,7 @@ export function DocumentsPage() {
             matchText: result.matchText,
           })
         }
+        onRetry={retrySearch}
       />
     </section>
   );

@@ -33,10 +33,12 @@ describe("DocumentSearch", () => {
         documents={[document]}
         results={[]}
         searchStatus="idle"
+        searchError={null}
         indexStatus={{ status: "preparing", indexed: 3, total: 100 }}
         onQueryChange={onQueryChange}
         onSelectDocument={() => {}}
         onSelectResult={() => {}}
+        onRetry={() => {}}
       />,
     );
 
@@ -59,10 +61,12 @@ describe("DocumentSearch", () => {
         documents={[document]}
         results={[result]}
         searchStatus="ready"
+        searchError={null}
         indexStatus={{ status: "ready" }}
         onQueryChange={() => {}}
         onSelectDocument={() => {}}
         onSelectResult={onSelectResult}
+        onRetry={() => {}}
       />,
     );
 

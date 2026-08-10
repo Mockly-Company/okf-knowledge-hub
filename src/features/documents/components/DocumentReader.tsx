@@ -1,5 +1,5 @@
 import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useDocuments } from "../DocumentsProvider";
 import type { DocumentContent } from "../model";
@@ -22,12 +22,28 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
   const [tab, setTab] = useState<ContextTab>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [contextCollapsed, setContextCollapsed] = useState(false);
+  const headerRef = useRef<HTMLElement>(null);
   const branch = state.branch ?? "main";
   const githubUrl = `https://github.com/${state.repositoryFullName}/blob/${branch}/${encodeURIComponent(document.summary.path)}`;
 
+  useEffect(() => {
+    const searchMatch = state.selectedSearchMatch;
+    if (!searchMatch || searchMatch.matchField === "body") return;
+    const frame = window.requestAnimationFrame(() => {
+      const header = headerRef.current;
+      header?.scrollIntoView?.({ block: "center" });
+      header?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [document.summary.path, state.selectedSearchMatch]);
+
   return (
     <section className="document-reader" aria-labelledby="document-reader-title">
-      <header className="document-reader__header">
+      <header
+        className="document-reader__header"
+        ref={headerRef}
+        tabIndex={-1}
+      >
         <div>
           <h1 id="document-reader-title">{document.summary.title}</h1>
           <p>확정본 · {branch}</p>

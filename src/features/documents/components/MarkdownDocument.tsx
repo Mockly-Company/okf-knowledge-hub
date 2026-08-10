@@ -258,7 +258,6 @@ export interface MarkdownDocumentProps {
 
 export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocumentProps) {
   const { selectDocument, readAsset, openExternal, state } = useDocuments();
-  const headerRef = useRef<HTMLElement>(null);
   const articleRef = useRef<HTMLElement>(null);
   const searchMatch = state.selectedSearchMatch;
   const bodySearchQuery = searchMatch?.matchField === "body" ? searchMatch.matchText : "";
@@ -282,14 +281,12 @@ export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocum
   );
 
   useEffect(() => {
-    if (!searchMatch) return;
+    if (!searchMatch || searchMatch.matchField !== "body") return;
     const frame = window.requestAnimationFrame(() => {
-      const target =
-        searchMatch.matchField === "body"
-          ? articleRef.current?.querySelector<HTMLElement>("mark[data-search-match]")
-          : headerRef.current;
+      const target = articleRef.current?.querySelector<HTMLElement>(
+        "mark[data-search-match]",
+      );
       target?.scrollIntoView?.({ block: "center" });
-      if (target === headerRef.current) headerRef.current?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [document.markdown, searchMatch]);
@@ -360,7 +357,7 @@ export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocum
   return (
     <article className="markdown-document" ref={articleRef}>
       {hideHeader ? null : (
-        <header className="markdown-document__header" ref={headerRef} tabIndex={-1}>
+        <header className="markdown-document__header">
           <h1>{document.summary.title}</h1>
           <p>{document.summary.path}</p>
         </header>

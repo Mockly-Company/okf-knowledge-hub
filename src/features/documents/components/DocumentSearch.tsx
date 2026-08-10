@@ -1,5 +1,7 @@
 import { FileText, Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import type {
+  AppError,
   DocumentSummary,
   IndexStatus,
   SearchResult,
@@ -11,10 +13,12 @@ interface DocumentSearchProps {
   documents: DocumentSummary[];
   results: SearchResult[];
   searchStatus: AsyncStatus;
+  searchError: AppError | null;
   indexStatus: IndexStatus;
   onQueryChange(query: string): void;
   onSelectDocument(path: string): void;
   onSelectResult(result: SearchResult): void;
+  onRetry(): void;
 }
 
 function IndexNotice({ status }: { status: IndexStatus }) {
@@ -32,10 +36,12 @@ export function DocumentSearch({
   documents,
   results,
   searchStatus,
+  searchError,
   indexStatus,
   onQueryChange,
   onSelectDocument,
   onSelectResult,
+  onRetry,
 }: DocumentSearchProps) {
   const isSearching = query.trim().length > 0;
   const items = isSearching ? results : documents;
@@ -60,7 +66,16 @@ export function DocumentSearch({
         aria-busy={isSearching && searchStatus === "loading"}
       >
         <h2>{isSearching ? "검색 결과" : "모든 문서"}</h2>
-        {items.length === 0 ? (
+        {isSearching && searchStatus === "error" && searchError ? (
+          <div className="document-search__error" role="alert">
+            <p>{searchError.message}</p>
+            {searchError.recovery === "retry" ? (
+              <Button variant="secondary" onClick={onRetry}>
+                검색 다시 시도
+              </Button>
+            ) : null}
+          </div>
+        ) : items.length === 0 ? (
           <p className="document-search__empty">
             {isSearching && searchStatus !== "loading"
               ? "검색 결과가 없습니다."

@@ -58,6 +58,40 @@ describe("DocumentsPage", () => {
     );
   });
 
+  it("focuses and scrolls the visible reader header for a title search match", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.searchResults = [
+      {
+        path: "docs/guide.md",
+        title: "Guide",
+        matchField: "title",
+        matchText: "Guide",
+        snippet: "Guide",
+      },
+    ];
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.type(
+      await screen.findByRole("searchbox", { name: "문서 검색" }),
+      "Guide",
+    );
+    await user.click(await screen.findByRole("button", { name: /Guide/ }));
+
+    const reader = await screen.findByRole("region", { name: "Guide" });
+    const visibleHeader = reader.querySelector(".document-reader__header");
+    expect(visibleHeader).not.toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(visibleHeader));
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+
+    delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+  });
+
   it("does not nest a second main landmark inside the app shell", async () => {
     const gateway = new FakeDocumentsGateway();
     const view = renderPage(gateway);
@@ -126,6 +160,67 @@ describe("DocumentsPage", () => {
       ).toHaveLength(2),
     );
     expect(await screen.findByText("Guide")).toBeVisible();
+  });
+
+  it("shows a selected-document read error with retry and home actions", async () => {
+    const gateway = new FakeDocumentsGateway();
+    const read = vi.spyOn(gateway, "readDocument").mockRejectedValue({
+      code: "document_index_unavailable",
+      message: "문서 파일을 읽지 못했습니다.",
+      recovery: "retry",
+      details: {},
+    });
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(await screen.findByRole("button", { name: /Guide/ }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("문서 파일을 읽지 못했습니다.");
+    expect(screen.queryByText("문서를 여는 중…")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "문서 다시 열기" }));
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Documents 홈" }));
+    expect(await screen.findByRole("searchbox", { name: "문서 검색" })).toBeVisible();
+  });
+
+  it("shows a search failure instead of an empty-result message and retries the same query", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.deferSearch = true;
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.type(
+      await screen.findByRole("searchbox", { name: "문서 검색" }),
+      "실패",
+    );
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "searchDocuments"),
+      ).toHaveLength(1),
+    );
+    const firstSearch = gateway.calls.find(
+      (call) => call.method === "searchDocuments",
+    )!;
+    act(() => {
+      gateway.rejectSearch(firstSearch.args[1] as string, {
+        code: "document_index_unavailable",
+        message: "검색 서비스를 사용할 수 없습니다.",
+        recovery: "retry",
+        details: {},
+      });
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "검색 서비스를 사용할 수 없습니다.",
+    );
+    expect(screen.queryByText("검색 결과가 없습니다.")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "검색 다시 시도" }));
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "searchDocuments"),
+      ).toHaveLength(2),
+    );
   });
 
   it("returns to Documents home with a notice when a tree update removes the selected document", async () => {
