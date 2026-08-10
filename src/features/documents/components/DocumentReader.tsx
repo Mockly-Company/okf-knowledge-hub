@@ -1,4 +1,4 @@
-import { Ellipsis } from "lucide-react";
+import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useDocuments } from "../DocumentsProvider";
@@ -21,6 +21,7 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
   const { state, copyText, openExternal, selectCurrentVersion } = useDocuments();
   const [tab, setTab] = useState<ContextTab>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [contextCollapsed, setContextCollapsed] = useState(false);
   const branch = state.branch ?? "main";
   const githubUrl = `https://github.com/${state.repositoryFullName}/blob/${branch}/${encodeURIComponent(document.summary.path)}`;
 
@@ -70,11 +71,28 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
           <span>본문은 계속 표시됩니다</span>
         </div>
       ) : null}
-      <div className="document-reader__layout">
+      <div
+        className={`document-reader__layout${contextCollapsed ? " document-reader__layout--context-collapsed" : ""}`}
+      >
         <div className="document-reader__canvas">
           <MarkdownDocument document={document} hideHeader />
         </div>
-        <aside className="document-reader__context" aria-label="문서 문맥">
+        <Button
+          variant="icon"
+          className="document-reader__context-toggle"
+          aria-label={contextCollapsed ? "문서 문맥 펼치기" : "문서 문맥 접기"}
+          aria-controls="document-reader-context"
+          aria-expanded={!contextCollapsed}
+          onClick={() => setContextCollapsed((collapsed) => !collapsed)}
+        >
+          {contextCollapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
+        </Button>
+        <aside
+          id="document-reader-context"
+          className="document-reader__context"
+          aria-label="문서 문맥"
+          hidden={contextCollapsed}
+        >
           <div className="document-reader__tabs" role="tablist" aria-label="문서 문맥 탭">
             <button type="button" role="tab" aria-selected={tab === "overview"} onClick={() => setTab("overview")}>개요</button>
             <button type="button" role="tab" aria-selected={tab === "connections"} onClick={() => setTab("connections")}>연결</button>

@@ -85,4 +85,20 @@ describe("DocumentReader", () => {
       "https://github.com/okf/example-knowledge/blob/main/docs%2Finvalid.md",
     ]);
   });
+
+  it("keeps the context panel visible by default and lets the reader collapse and restore it", async () => {
+    renderSelectedDocument();
+    const user = userEvent.setup();
+
+    expect(await screen.findByRole("complementary", { name: "문서 문맥" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "문서 문맥 접기" }));
+    expect(screen.getByRole("button", { name: "문서 문맥 펼치기" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.queryByRole("complementary", { name: "문서 문맥" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "문서 문맥 펼치기" }));
+    expect(await screen.findByRole("complementary", { name: "문서 문맥" })).toBeVisible();
+  });
 });

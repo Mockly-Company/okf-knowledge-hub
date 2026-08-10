@@ -217,6 +217,7 @@ function openCurrentDocument(
   requestId: string,
   searchMatch?: Pick<SearchResult, "matchField" | "matchText"> | null,
   force = false,
+  preserveDocumentNotice = false,
 ): DocumentsState {
   if (path === null) return clearSelection(state);
 
@@ -235,7 +236,9 @@ function openCurrentDocument(
   if (!force && state.selectedPath === path && (alreadyReading || alreadyLoaded)) {
     return state.selectedSearchMatch?.matchField === nextSearchMatch?.matchField &&
       state.selectedSearchMatch?.matchText === nextSearchMatch?.matchText
-      ? state
+      ? state.documentNotice === null
+        ? state
+        : { ...state, documentNotice: null }
       : { ...state, selectedSearchMatch: nextSearchMatch };
   }
 
@@ -259,6 +262,7 @@ function openCurrentDocument(
     historyStatus: "idle",
     activeHistoryPath: null,
     activeHistoryRequest: null,
+    documentNotice: preserveDocumentNotice ? state.documentNotice : null,
   };
 }
 
@@ -425,6 +429,7 @@ export function documentsReducer(
             `event:${received.sessionId}:${received.revision}`,
             undefined,
             received.path === state.selectedPath,
+            received.path === state.selectedPath,
           );
         }
         case "failed":
@@ -528,6 +533,7 @@ export function documentsReducer(
           status: "queued",
         },
         activeVersionRequestId: null,
+        documentNotice: null,
       };
 
     case "documentVersionRequested":

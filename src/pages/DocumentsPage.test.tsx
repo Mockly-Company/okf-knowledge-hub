@@ -154,4 +154,40 @@ describe("DocumentsPage", () => {
     );
     expect(screen.queryByRole("region", { name: "Guide" })).toBeNull();
   });
+
+  it("clears a deleted-selection notice when the user opens a different document", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = "docs/guide.md";
+    gateway.sessionSnapshot.catalog = {
+      documents: [...gateway.guideCatalog.documents, ...gateway.apiCatalog.documents],
+      roots: [...gateway.guideCatalog.roots, ...gateway.apiCatalog.roots],
+    };
+    render(
+      <MemoryRouter>
+        <DocumentsProvider gateway={gateway} createId={() => gateway.sessionSnapshot.sessionId}>
+          <main aria-label="OkHub"><DocumentsPage /></main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByRole("region", { name: "Guide" });
+
+    act(() => {
+      gateway.emit({
+        revision: 1,
+        type: "tree_changed",
+        sessionId: gateway.sessionSnapshot.sessionId,
+        catalog: gateway.apiCatalog,
+      });
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "선택한 문서가 삭제되었습니다.",
+    );
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /API/ }));
+    await waitFor(() =>
+      expect(screen.queryByRole("alert")).toBeNull(),
+    );
+    expect(await screen.findByRole("region", { name: "API" })).toBeVisible();
+  });
 });

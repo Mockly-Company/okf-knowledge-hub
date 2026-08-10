@@ -307,9 +307,21 @@
 }
 
 .document-reader__layout {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
   gap: 32px;
+}
+
+.document-reader__layout--context-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.document-reader__context-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 1;
 }
 
 .document-reader__context {

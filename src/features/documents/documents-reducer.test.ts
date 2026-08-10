@@ -440,4 +440,39 @@ describe("documentsReducer", () => {
     expect(state.lastOpenedPath).toBeNull();
     expect(state.activeReadRequest).toBeNull();
   });
+
+  it("clears a prior document notice when an unrelated selection or current-version read starts", () => {
+    let state = documentsReducer(sessionStarting(), {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "a0989d32-3ca8-494e-aece-7d7c22c92bc1",
+      path: "docs/guide.md",
+    });
+    state = documentsReducer(state, {
+      type: "documentEventReceived",
+      event: event(1, {
+        type: "open_document_changed",
+        sessionId: SESSION_ID,
+        path: "docs/guide.md",
+      }),
+    });
+    state = documentsReducer(state, {
+      type: "documentSelectionRequested",
+      sessionId: SESSION_ID,
+      requestId: "77c039b8-c07d-4fbe-b676-cf3ab0944233",
+      path: "docs/api.md",
+    });
+    expect(state.documentNotice).toBeNull();
+
+    state = {
+      ...state,
+      documentNotice: "외부 변경사항을 반영했습니다.",
+    };
+    state = documentsReducer(state, {
+      type: "currentVersionRequested",
+      sessionId: SESSION_ID,
+      requestId: "34e1764e-4278-41f8-bcf8-9f74ff6f66e0",
+    });
+    expect(state.documentNotice).toBeNull();
+  });
 });
