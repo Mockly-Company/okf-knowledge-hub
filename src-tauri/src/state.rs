@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::{Uuid, Variant, Version};
@@ -30,8 +31,24 @@ pub struct AppServices {
     pub(crate) auth_jobs: JobRegistry,
     pub(crate) clone_jobs: JobRegistry,
     pub(crate) initialization_contexts: InitializationContextRegistry,
+    pub(crate) authenticated_commands: AuthenticatedCommandGate,
     #[cfg(test)]
     pub(crate) initialization_test_boundaries: Option<InitializationTestBoundaries>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct AuthenticatedCommandGate {
+    lock: Arc<RwLock<()>>,
+}
+
+impl AuthenticatedCommandGate {
+    pub(crate) async fn read(&self) -> OwnedRwLockReadGuard<()> {
+        self.lock.clone().read_owned().await
+    }
+
+    pub(crate) async fn write(&self) -> OwnedRwLockWriteGuard<()> {
+        self.lock.clone().write_owned().await
+    }
 }
 
 pub(crate) struct DocumentCommandSessionContext {
@@ -368,6 +385,16 @@ impl DocumentCommandSessionRegistry {
         } else {
             None
         }
+    }
+
+    pub(crate) fn clear_for_logout(&self) -> Option<ActiveDocumentCommandSession> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.pending = None;
+        state.active.take()
     }
 }
 
@@ -777,6 +804,15 @@ fn initialization_in_progress_error() -> crate::error::AppError {
 }
 
 impl AppServices {
+    pub(crate) async fn acquire_authenticated_command(
+        &self,
+    ) -> Result<OwnedRwLockReadGuard<()>, crate::error::AppError> {
+        let lease = self.authenticated_commands.read().await;
+        let auth = self.auth.clone().ok_or_else(authentication_required)?;
+        auth.valid_access_token().await?;
+        Ok(lease)
+    }
+
     pub fn new(local_settings: LocalSettingsService) -> Self {
         Self {
             auth: None,
@@ -790,6 +826,7 @@ impl AppServices {
             auth_jobs: JobRegistry::default(),
             clone_jobs: JobRegistry::default(),
             initialization_contexts: InitializationContextRegistry::default(),
+            authenticated_commands: AuthenticatedCommandGate::default(),
             #[cfg(test)]
             initialization_test_boundaries: None,
         }
@@ -821,6 +858,7 @@ impl AppServices {
             auth_jobs,
             clone_jobs: JobRegistry::default(),
             initialization_contexts: InitializationContextRegistry::default(),
+            authenticated_commands: AuthenticatedCommandGate::default(),
             #[cfg(test)]
             initialization_test_boundaries: None,
         }
@@ -861,6 +899,14 @@ impl AppServices {
     pub(crate) fn for_command_tests_without_auth() -> Self {
         Self::new(LocalSettingsService::new(CommandTestSettings))
     }
+}
+
+fn authentication_required() -> crate::error::AppError {
+    crate::error::AppError::new(
+        crate::error::ErrorCode::ReauthenticationRequired,
+        "GitHub 로그인이 필요합니다.",
+    )
+    .with_recovery(crate::error::RecoveryAction::RestartLogin)
 }
 
 #[cfg(test)]
@@ -1044,6 +1090,49 @@ mod tests {
         assert_eq!(jobs.finish(running), JobTerminal::Cancelled);
         assert_eq!(jobs.finish(completing), JobTerminal::Completed);
         assert_eq!(jobs.finish(running), JobTerminal::AlreadyTerminal);
+    }
+
+    #[tokio::test]
+    async fn authenticated_command_gate_rejects_services_without_an_auth_session() {
+        let services = AppServices::for_command_tests_without_auth();
+
+        let error = services
+            .acquire_authenticated_command()
+            .await
+            .expect_err("signed-out commands must be rejected by Rust");
+
+        assert_eq!(
+            error.code,
+            crate::error::ErrorCode::ReauthenticationRequired
+        );
+    }
+
+    #[tokio::test]
+    async fn logout_write_lease_waits_for_an_in_flight_authenticated_command() {
+        let gate = AuthenticatedCommandGate::default();
+        let read = gate.read().await;
+        let writer = tokio::spawn({
+            let gate = gate.clone();
+            async move { gate.write().await }
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!writer.is_finished());
+
+        drop(read);
+        let write = writer.await.unwrap();
+        drop(write);
+    }
+
+    #[test]
+    fn clearing_document_sessions_invalidates_pending_ownership() {
+        let sessions = DocumentCommandSessionRegistry::default();
+        let pending = sessions.reserve_pending(Uuid::new_v4()).unwrap();
+
+        let active = sessions.clear_for_logout();
+
+        assert!(active.is_none());
+        assert!(!sessions.is_pending(&pending));
     }
 
     #[test]

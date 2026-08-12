@@ -381,6 +381,7 @@ pub async fn start_document_session(
     app: AppHandle,
     request_id: Uuid,
 ) -> CommandResult<DocumentSessionSnapshot> {
+    let _access = state.acquire_authenticated_command().await?;
     start_document_session_with_hook(
         &state,
         request_id,
@@ -438,6 +439,7 @@ pub async fn refresh_document_session(
     state: State<'_, AppServices>,
     session_id: Uuid,
 ) -> CommandResult<()> {
+    let _access = state.acquire_authenticated_command().await?;
     refresh_document_session_inner(&state, session_id).await
 }
 
@@ -489,6 +491,7 @@ pub async fn search_documents(
     query: String,
     limit: usize,
 ) -> CommandResult<DocumentSearchResponse> {
+    let _access = state.acquire_authenticated_command().await?;
     search_documents_inner(&state, session_id, request_id, query, limit).await
 }
 
@@ -557,6 +560,7 @@ pub async fn read_document(
     request_id: String,
     path: String,
 ) -> CommandResult<DocumentContent> {
+    let _access = state.acquire_authenticated_command().await?;
     read_document_inner(&state, session_id, request_id, path).await
 }
 
@@ -609,6 +613,7 @@ pub async fn read_document_asset(
     document_path: String,
     asset_path: String,
 ) -> CommandResult<DocumentAsset> {
+    let _access = state.acquire_authenticated_command().await?;
     read_document_asset_inner(&state, session_id, document_path, asset_path).await
 }
 
@@ -668,6 +673,7 @@ pub async fn list_document_history(
     path: String,
     cursor: Option<HistoryCursor>,
 ) -> CommandResult<HistoryPage> {
+    let _access = state.acquire_authenticated_command().await?;
     list_document_history_inner(&state, session_id, path, cursor).await
 }
 
@@ -731,6 +737,7 @@ pub async fn read_document_version(
     commit_oid: String,
     path_at_commit: String,
 ) -> CommandResult<DocumentContent> {
+    let _access = state.acquire_authenticated_command().await?;
     read_document_version_inner(&state, session_id, request_id, commit_oid, path_at_commit).await
 }
 
