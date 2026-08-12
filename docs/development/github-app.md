@@ -31,9 +31,12 @@ pnpm tauri dev
 
 Access Token과 Refresh Token은 Rust 계층에서만 다루며, 일반 로컬 설정 파일에는 저장하지 않는다. 현재 native credential entry는 다음과 같다.
 
+macOS의 코드 서명, entitlement, Keychain Access Group, 파일 기반 Keychain과 Data Protection Keychain의 차이 및 `-34018` 조사 기록은 [GitHub 인증 정보 저장과 macOS Keychain](auth-credential-storage.md)을 참고한다.
+
 | OS | 위치 | entry |
 |---|---|---|
-| macOS | Keychain Access → login keychain | service `com.okhub.desktop.github`, account `current-user` |
+| macOS debug / `tauri dev` | SecItem 기반 파일 Keychain | service `com.okhub.desktop.github.dev`, account `current-user` |
+| macOS release | Data Protection Keychain | service `com.okhub.desktop.github`, account `current-user` |
 | Windows | Credential Manager → Windows Credentials | target/service `com.okhub.desktop.github`, account `current-user` |
 
 개발 중 로그아웃은 Tauri command `logout_github`를 호출한다. 이 command는 OS credential entry만 삭제하고, `settings.json`의 현재 workspace 연결과 어떠한 local clone도 삭제하지 않는다. 현재 설정 화면에 전용 Logout control이 연결되기 전에는 Tauri devtools 또는 integration harness에서 `logout_github`를 호출해 확인한다.

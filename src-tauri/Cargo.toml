@@ -18,7 +18,6 @@ async-trait = "0.1"
 base64 = "0.23.0"
 git2 = { version = "0.19", default-features = false, features = ["https", "vendored-libgit2", "vendored-openssl"] }
 indexmap = { version = "2", features = ["serde"] }
-keyring = { version = "3.6.3", default-features = false }
 notify = "8.2.0"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
@@ -41,7 +40,9 @@ url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }
+core-foundation = "0.10.1"
+security-framework = { version = "3.7.0", default-features = false, features = ["OSX_10_15"] }
+security-framework-sys = { version = "2.17.0", default-features = false, features = ["OSX_10_15"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }

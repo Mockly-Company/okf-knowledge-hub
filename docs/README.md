@@ -13,6 +13,11 @@
 7. [기술 구조](architecture/system-design.md)
 8. [미결정 사항](product/open-questions.md)
 
+## 개발 참고 문서
+
+- [GitHub App과 로컬 개발 설정](development/github-app.md)
+- [GitHub 인증 정보 저장과 macOS Keychain](development/auth-credential-storage.md) — 코드 서명, entitlement, Access Group, Keychain 구현 차이와 `-34018` 조사 기록
+
 ## 문서 상태 표기
 
 - **합의**: 현재 대화에서 방향이 확인된 내용

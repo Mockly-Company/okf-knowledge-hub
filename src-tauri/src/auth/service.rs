@@ -733,6 +733,7 @@ mod tests {
         tokens: Arc<Mutex<Option<StoredTokens>>>,
         deletes: Arc<Mutex<usize>>,
         loads: Arc<AtomicUsize>,
+        saves: Arc<AtomicUsize>,
         fail_delete: Arc<AtomicBool>,
     }
 
@@ -742,6 +743,7 @@ mod tests {
                 tokens: Arc::new(Mutex::new(Some(tokens))),
                 deletes: Arc::new(Mutex::new(0)),
                 loads: Arc::new(AtomicUsize::new(0)),
+                saves: Arc::new(AtomicUsize::new(0)),
                 fail_delete: Arc::new(AtomicBool::new(false)),
             }
         }
@@ -770,6 +772,10 @@ mod tests {
             self.loads.load(Ordering::SeqCst)
         }
 
+        fn save_count(&self) -> usize {
+            self.saves.load(Ordering::SeqCst)
+        }
+
         fn fail_delete(&self) {
             self.fail_delete.store(true, Ordering::SeqCst);
         }
@@ -783,6 +789,7 @@ mod tests {
         }
 
         async fn save(&self, tokens: &StoredTokens) -> Result<(), AppError> {
+            self.saves.fetch_add(1, Ordering::SeqCst);
             *self.tokens.lock().unwrap() = Some(tokens.clone());
             Ok(())
         }
@@ -1514,6 +1521,7 @@ mod tests {
             credentials.saved_access_token().as_deref(),
             Some("ghu_private")
         );
+        assert_eq!(credentials.save_count(), 1);
         assert_eq!(events.statuses(), vec!["waiting_for_user", "authenticated"]);
         assert!(events.events().iter().all(|event| match event {
             AuthStatusEvent::WaitingForUser { request_id: actual }
