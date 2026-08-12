@@ -33,15 +33,20 @@ describe("App", () => {
   });
 
   it("shows connection instead of the shell when no workspace is saved", async () => {
+    const documentsGateway = new FakeDocumentsGateway();
     render(
       <App
         workspaceGateway={FakeWorkspaceConnectionGateway.disconnected()}
+        documentsGateway={documentsGateway}
         preferencesRepository={new FakePreferencesRepository()}
       />,
     );
 
     expect(await screen.findByRole("heading", { name: "GitHub에 연결" })).toBeInTheDocument();
     expect(screen.queryByRole("main", { name: "OkHub" })).not.toBeInTheDocument();
+    expect(
+      documentsGateway.calls.filter((call) => call.method === "startSession"),
+    ).toHaveLength(0);
   });
 
   it("connects an existing initialized clone and opens Home", async () => {
@@ -89,6 +94,45 @@ describe("App", () => {
       await screen.findByText("/work/mockly-knowledge"),
     ).toBeInTheDocument();
     expect(gateway.currentWorkspace?.path).toBe("/work/mockly-knowledge");
+  });
+
+  it("closes the document session and returns to GitHub connection after logout", async () => {
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    const documentsGateway = new FakeDocumentsGateway();
+    const user = userEvent.setup();
+    render(
+      <App
+        workspaceGateway={workspaceGateway}
+        documentsGateway={documentsGateway}
+        preferencesRepository={new FakePreferencesRepository()}
+      />,
+    );
+    const sessionId = (
+      await waitFor(() => {
+        const call = documentsGateway.calls.find(
+          (candidate) => candidate.method === "startSession",
+        );
+        expect(call).toBeDefined();
+        return call;
+      })
+    )?.args[0];
+
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "외부 연결" }));
+    await user.click(await screen.findByRole("button", { name: "로그아웃" }));
+    await user.click(screen.getByRole("button", { name: "GitHub에서 로그아웃" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "GitHub에 연결" }),
+    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(documentsGateway.calls).toContainEqual({
+        method: "stopSession",
+        args: [sessionId],
+      });
+      expect(documentsGateway.listenerCount()).toBe(0);
+    });
+    expect(workspaceGateway.currentWorkspace?.status).toBe("connected");
   });
 
   it("reuses the authenticated GitHub session when replacing a workspace", async () => {

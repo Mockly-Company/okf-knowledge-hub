@@ -26,6 +26,75 @@ import {
 } from "./connection-test-helpers";
 
 describe("connectionReducer auth transitions", () => {
+  it("removes the connected workspace from UI state after logout succeeds", () => {
+    const state = connectionReducer(createInitialConnectionState(), {
+      type: "currentWorkspaceLoaded",
+      workspace: connected(),
+    });
+
+    const next = connectionReducer(state, { type: "logoutSucceeded" });
+
+    expect(next).toMatchObject({
+      step: "auth",
+      status: "idle",
+      auth: { status: "signed_out" },
+      connectedWorkspace: null,
+      repositories: [],
+    });
+  });
+
+  it("restores a connected workspace only for the active authenticated load", () => {
+    const request = authLoadRequest("restore-workspace");
+    const loading = connectionReducer(createInitialConnectionState(), {
+      type: "authLoadStarted",
+      request,
+    });
+    const workspace = connected();
+
+    const restored = connectionReducer(loading, {
+      type: "workspaceRestoreLoaded",
+      request,
+      auth: { status: "authenticated", user },
+      workspace,
+    });
+
+    expect(restored).toMatchObject({
+      step: "initialize",
+      status: "connected",
+      connectedWorkspace: workspace,
+    });
+    expect(
+      connectionReducer(restored, {
+        type: "workspaceRestoreLoaded",
+        request,
+        auth: { status: "authenticated", user },
+        workspace: connected("/work/stale"),
+      }),
+    ).toBe(restored);
+  });
+
+  it("continues to repository selection when no saved workspace can be restored", () => {
+    const request = authLoadRequest("restore-empty");
+    const loading = connectionReducer(createInitialConnectionState(), {
+      type: "authLoadStarted",
+      request,
+    });
+
+    const next = connectionReducer(loading, {
+      type: "workspaceRestoreLoaded",
+      request,
+      auth: { status: "authenticated", user },
+      workspace: null,
+    });
+
+    expect(next).toMatchObject({
+      step: "repository",
+      status: "idle",
+      auth: { status: "authenticated", user },
+      connectedWorkspace: null,
+    });
+  });
+
   it("clears all auth-dependent state when login restarts", () => {
     const request = loginBeginRequest("login-2");
     const beginning = connectionReducer(previewState(), {

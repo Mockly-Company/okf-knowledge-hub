@@ -19,6 +19,7 @@ import { connectionReducer, createInitialConnectionState } from "./connection-re
 import { cloneTargetPath } from "./types";
 import type {
   AppError,
+  AuthState,
   AuthStatusEvent,
   CloneProgressEvent,
   CloneStartRequest,
@@ -204,24 +205,67 @@ export function WorkspaceConnectionProvider({
     [dispatchAccepted, gateway],
   );
 
-  const loadAuth = useCallback(async () => {
+  const restoreAuthenticatedWorkspace = useCallback(async (
+    auth: Extract<AuthState, { status: "authenticated" }>,
+  ) => {
+    const request = { id: operationId() };
+    if (!dispatchAccepted({ type: "authLoadStarted", request })) return;
+    try {
+      const workspace = await gateway.getCurrentWorkspace();
+      if (workspace?.status === "connected") {
+        setWorkspaceValidation({
+          requestId: null,
+          path: workspace.path,
+          inspection: { status: "ready", summary: workspace.summary },
+          error: null,
+        });
+      }
+      dispatchAccepted({ type: "workspaceRestoreLoaded", request, auth, workspace });
+    } catch (error) {
+      dispatchAccepted({ type: "authLoadFailed", request, error: asAppError(error) });
+    }
+  }, [dispatchAccepted, gateway]);
+
+  const loadAuth = useCallback(async (restoreSavedWorkspace = true) => {
     const request = { id: operationId() };
     const connectionOwnsRequest =
       stateRef.current.status !== "connected" &&
       dispatchAccepted({ type: "authLoadStarted", request });
+    let auth: AuthState;
     try {
-      const auth = await gateway.getAuthState();
-      dispatchAccountAccepted({ type: "authLoaded", auth });
-      if (connectionOwnsRequest) {
-        dispatchAccepted({ type: "authLoaded", request, auth });
-      }
+      auth = await gateway.getAuthState();
     } catch (error) {
       const appError = asAppError(error);
       dispatchAccountAccepted({ type: "authLoadFailed", error: appError });
       if (connectionOwnsRequest) {
         dispatchAccepted({ type: "authLoadFailed", request, error: appError });
       }
+      return;
     }
+    dispatchAccountAccepted({ type: "authLoaded", auth });
+    if (!connectionOwnsRequest) return;
+    if (auth.status === "authenticated" && restoreSavedWorkspace) {
+      try {
+        const workspace = await gateway.getCurrentWorkspace();
+        if (workspace?.status === "connected") {
+          setWorkspaceValidation({
+            requestId: null,
+            path: workspace.path,
+            inspection: { status: "ready", summary: workspace.summary },
+            error: null,
+          });
+        }
+        dispatchAccepted({ type: "workspaceRestoreLoaded", request, auth, workspace });
+      } catch (error) {
+        dispatchAccepted({
+          type: "authLoadFailed",
+          request,
+          error: asAppError(error),
+        });
+      }
+      return;
+    }
+    dispatchAccepted({ type: "authLoaded", request, auth });
   }, [dispatchAccepted, dispatchAccountAccepted, gateway]);
 
   const inspectWorkspace = useCallback(
@@ -316,10 +360,12 @@ export function WorkspaceConnectionProvider({
     try {
       await gateway.logoutGithub();
       dispatchAccountAccepted({ type: "logoutSucceeded" });
+      dispatchAccepted({ type: "logoutSucceeded" });
+      setWorkspaceValidation(null);
     } catch (error) {
       dispatchAccountAccepted({ type: "logoutFailed", error: asAppError(error) });
     }
-  }, [dispatchAccountAccepted, gateway]);
+  }, [dispatchAccepted, dispatchAccountAccepted, gateway]);
 
   const cancelLogin = useCallback(async () => {
     const current = stateRef.current;
@@ -583,7 +629,7 @@ export function WorkspaceConnectionProvider({
     activeWorkspaceValidationRef.current = null;
     setWorkspaceValidating(false);
     setWorkspaceValidation(null);
-    await loadAuth();
+    await loadAuth(false);
   }, [dispatchAccepted, loadAuth]);
   const cancelReplacement = useCallback(async () => {
     const current = stateRef.current;
@@ -666,7 +712,13 @@ export function WorkspaceConnectionProvider({
             event: sanitizedEvent,
           });
           if (stateRef.current.status !== "connected") {
-            dispatchAccepted({ type: "authEventReceived", event: sanitizedEvent });
+            const accepted = dispatchAccepted({ type: "authEventReceived", event: sanitizedEvent });
+            if (accepted && sanitizedEvent.status === "authenticated") {
+              void restoreAuthenticatedWorkspace({
+                status: "authenticated",
+                user: sanitizedEvent.user,
+              });
+            }
           }
         }),
         gateway.onCloneProgress((event) => {
@@ -692,26 +744,8 @@ export function WorkspaceConnectionProvider({
         unlistenClone?.();
         return;
       }
-      try {
-        const workspace = await gateway.getCurrentWorkspace();
-        if (!active) return;
-        const accepted = dispatchAccepted({ type: "currentWorkspaceLoaded", workspace });
-        if (accepted && workspace?.status === "connected") {
-          setWorkspaceValidation({
-            requestId: null,
-            path: workspace.path,
-            inspection: { status: "ready", summary: workspace.summary },
-            error: null,
-          });
-        }
-        setCurrentWorkspaceLoading(false);
-        if (accepted) void loadAuth();
-      } catch {
-        if (!active) return;
-        dispatchAccepted({ type: "currentWorkspaceLoaded", workspace: null });
-        setCurrentWorkspaceLoading(false);
-        void loadAuth();
-      }
+      await loadAuth();
+      if (active) setCurrentWorkspaceLoading(false);
     };
     void setup();
     return () => {
@@ -719,7 +753,7 @@ export function WorkspaceConnectionProvider({
       unlistenAuth?.();
       unlistenClone?.();
     };
-  }, [dispatchAccepted, dispatchAccountAccepted, gateway, loadAuth]);
+  }, [dispatchAccepted, dispatchAccountAccepted, gateway, loadAuth, restoreAuthenticatedWorkspace]);
 
   useEffect(() => {
     if (

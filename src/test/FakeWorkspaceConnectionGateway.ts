@@ -66,6 +66,7 @@ const defaultPreview: InitializationPreview = {
 
 export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGateway {
   currentWorkspace: CurrentWorkspaceState = null;
+  currentWorkspaceError: AppError | null = null;
   authState: AuthState = { status: "signed_out" };
   repositories: GithubRepositorySummary[] = [defaultRepository];
   nextRepositoryCursor: string | null = null;
@@ -162,6 +163,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   async getCurrentWorkspace(): Promise<CurrentWorkspaceState> {
     this.record("getCurrentWorkspace");
     if (this.currentWorkspacePromise) return this.currentWorkspacePromise;
+    if (this.currentWorkspaceError) throw this.currentWorkspaceError;
     return this.currentWorkspace;
   }
 

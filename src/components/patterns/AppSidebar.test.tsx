@@ -38,13 +38,14 @@ describe("AppSidebar", () => {
       .toBeInTheDocument();
   });
 
-  it("shows reauthentication without hiding the connected workspace", async () => {
+  it("does not expose the saved workspace while reauthentication is required", async () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
     gateway.authState = { status: "signed_out" };
     renderSidebar(gateway);
 
-    expect(await screen.findByText("Mockly")).toBeInTheDocument();
     expect(await screen.findByText("GitHub 재로그인 필요")).toBeInTheDocument();
+    expect(screen.queryByText("Mockly")).toBeNull();
+    expect(screen.getByText("워크스페이스 연결 필요")).toBeInTheDocument();
     expect(screen.getByText("Settings에서 연결")).toBeInTheDocument();
   });
 

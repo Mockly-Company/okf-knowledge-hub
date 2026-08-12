@@ -54,7 +54,7 @@ describe("WorkspaceConnectionProvider", () => {
     ).toHaveLength(1);
   });
 
-  it("signs out of GitHub without discarding the connected workspace", async () => {
+  it("returns to the authentication flow without discarding the saved workspace", async () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
     render(
       <WorkspaceConnectionProvider gateway={gateway}>
@@ -66,8 +66,27 @@ describe("WorkspaceConnectionProvider", () => {
     await userEvent.click(screen.getByRole("button", { name: "logout" }));
 
     expect(await screen.findByText("signed_out")).toBeInTheDocument();
-    expect(screen.getByText("initialize:connected")).toBeInTheDocument();
+    expect(screen.getByText("auth:idle")).toBeInTheDocument();
     expect(gateway.currentWorkspace?.status).toBe("connected");
+  });
+
+  it("restores the saved workspace automatically after logging in again", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+    await screen.findByText("authenticated:hyeeun");
+
+    await userEvent.click(screen.getByRole("button", { name: "logout" }));
+    await userEvent.click(screen.getByRole("button", { name: "login" }));
+    gateway.approveAuthentication();
+
+    expect(await screen.findByText("initialize:connected")).toBeInTheDocument();
+    expect(
+      gateway.calls.filter((call) => call.method === "getCurrentWorkspace"),
+    ).toHaveLength(2);
   });
 
   it("restores the account and workspace when logout fails", async () => {
@@ -91,7 +110,25 @@ describe("WorkspaceConnectionProvider", () => {
     expect(screen.getByText("initialize:connected")).toBeInTheDocument();
   });
 
-  it("reauthenticates an owned account request without entering onboarding", async () => {
+  it("keeps the authenticated account when saved workspace verification fails", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.currentWorkspaceError = {
+      code: "github_permission_denied",
+      message: "현재 GitHub 계정으로 저장소에 접근할 수 없습니다.",
+      recovery: "reinstall_github_app",
+      details: {},
+    };
+    render(
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <Probe />
+      </WorkspaceConnectionProvider>,
+    );
+
+    expect(await screen.findByText("auth:error")).toBeInTheDocument();
+    expect(screen.getByText("authenticated:hyeeun")).toBeInTheDocument();
+  });
+
+  it("keeps a saved workspace hidden until reauthentication restores it", async () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
     gateway.authState = { status: "signed_out" };
     gateway.deferGithubAuth = true;
@@ -106,7 +143,7 @@ describe("WorkspaceConnectionProvider", () => {
     const authCall = gateway.calls.find((call) => call.method === "beginGithubAuth");
     expect(authCall?.args[0]).toEqual(expect.any(String));
     expect(screen.getByText("login_beginning")).toBeInTheDocument();
-    expect(screen.getByText("initialize:connected")).toBeInTheDocument();
+    expect(screen.queryByText("initialize:connected")).toBeNull();
 
     gateway.emitAuth({
       status: "authenticated",
@@ -340,7 +377,6 @@ describe("WorkspaceConnectionProvider", () => {
 
   it("cancels an auth request whose command result is still pending before restoring the workspace", async () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
-    gateway.authState = { status: "signed_out" };
     gateway.deferGithubAuth = true;
     const user = userEvent.setup();
     render(
@@ -349,7 +385,9 @@ describe("WorkspaceConnectionProvider", () => {
       </WorkspaceConnectionProvider>,
     );
 
-    await user.click(await screen.findByRole("button", { name: "replace" }));
+    await screen.findByText("initialize:connected");
+    gateway.authState = { status: "signed_out" };
+    await user.click(screen.getByRole("button", { name: "replace" }));
     await user.click(screen.getByRole("button", { name: "login" }));
     const authCall = gateway.calls.find((call) => call.method === "beginGithubAuth");
 

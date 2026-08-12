@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { HashRouter } from "react-router-dom";
-import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
@@ -29,11 +28,9 @@ export function App({
   return (
     <PreferencesProvider repository={repository}>
       <WorkspaceConnectionProvider gateway={workspace}>
-        <DocumentsProvider gateway={documents}>
-          <HashRouter>
-            <AppRoutes />
-          </HashRouter>
-        </DocumentsProvider>
+        <HashRouter>
+          <AppRoutes documentsGateway={documents} />
+        </HashRouter>
       </WorkspaceConnectionProvider>
     </PreferencesProvider>
   );

@@ -103,6 +103,29 @@ export function connectionReducer(
         state.activeAuthLoadRequest.id === action.request.id
         ? authError(state, action.error)
         : state;
+    case "workspaceRestoreLoaded": {
+      if (
+        state.step !== "auth" ||
+        state.status !== "loading" ||
+        state.activeAuthLoadRequest.id !== action.request.id
+      ) {
+        return state;
+      }
+      if (action.workspace?.status === "connected") {
+        return connectedState(action.workspace);
+      }
+      return repositoryIdle({
+        ...flowFields(state),
+        recoveryWorkspace:
+          action.workspace?.status === "recovery_required" ? action.workspace : null,
+        auth: action.auth,
+        repositories: [],
+        nextRepositoryCursor: null,
+        repositoriesLoaded: false,
+      });
+    }
+    case "logoutSucceeded":
+      return authIdle(initialFlow(), null, { status: "signed_out" });
     case "loginBeginStarted":
       return hasNonCancellableMutationOwnership(state) ||
         (state.step === "auth" &&
