@@ -2168,8 +2168,10 @@ mod tests {
     #[tokio::test]
     async fn warm_start_returns_cached_tree_before_slow_filesystem_reconciliation() {
         let temp = TempDir::new().unwrap();
-        let source = SlowDiscoverySource {
-            slow: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        let source = BlockedWarmReconciliationSource {
+            blocked: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            gate: Arc::new((Mutex::new(false), Condvar::new())),
         };
         let runtime = DocumentRuntime::with_source(Arc::new(source.clone()));
         let first = Uuid::new_v4();
@@ -2179,20 +2181,44 @@ mod tests {
             .unwrap();
         wait_until_idle(&runtime, first).await;
         runtime.stop_session(first).await.unwrap();
-        source.slow.store(true, Ordering::SeqCst);
+        source.started.store(false, Ordering::SeqCst);
+        source.blocked.store(true, Ordering::SeqCst);
+        let second = Uuid::new_v4();
 
-        let started = Instant::now();
-        let snapshot = runtime
-            .start_session(Uuid::new_v4(), workspace(&temp))
-            .await
-            .unwrap();
+        let warm_start = tokio::time::timeout(
+            Duration::from_secs(2),
+            runtime.start_session(second, workspace(&temp)),
+        )
+        .await;
+        if warm_start.is_err() {
+            let (lock, wake) = &*source.gate;
+            *lock.lock().unwrap() = true;
+            wake.notify_all();
+            panic!("warm start waited for filesystem reconciliation");
+        }
+        let snapshot = warm_start.unwrap().unwrap();
+        let reconcile_started = tokio::time::timeout(Duration::from_secs(2), async {
+            while !source.started.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        let (lock, wake) = &*source.gate;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+        assert!(
+            reconcile_started.is_ok(),
+            "warm reconciliation did not start"
+        );
 
-        assert!(started.elapsed() < Duration::from_millis(100));
-        assert_eq!(snapshot.catalog.documents[0].path, "docs/cached.md");
+        assert_eq!(snapshot.catalog.documents[0].path, "docs/kept.md");
+        wait_until_idle(&runtime, second).await;
+        runtime.stop_session(second).await.unwrap();
     }
 
     #[derive(Clone)]
     struct BlockedWarmReconciliationSource {
+        blocked: Arc<std::sync::atomic::AtomicBool>,
         started: Arc<std::sync::atomic::AtomicBool>,
         gate: Arc<(Mutex<bool>, Condvar)>,
     }
@@ -2200,11 +2226,13 @@ mod tests {
     #[async_trait]
     impl DocumentSource for BlockedWarmReconciliationSource {
         fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
-            self.started.store(true, Ordering::SeqCst);
-            let (lock, wake) = &*self.gate;
-            let mut released = lock.lock().unwrap();
-            while !*released {
-                released = wake.wait(released).unwrap();
+            if self.blocked.load(Ordering::SeqCst) {
+                self.started.store(true, Ordering::SeqCst);
+                let (lock, wake) = &*self.gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
             }
             Ok(catalog(vec![summary("docs/kept.md")]))
         }
@@ -2244,6 +2272,7 @@ mod tests {
         cache.set_last_opened_path(Some("legacy/old.md")).unwrap();
         drop(cache);
         let source = BlockedWarmReconciliationSource {
+            blocked: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             started: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             gate: Arc::new((Mutex::new(false), Condvar::new())),
         };
@@ -2313,29 +2342,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["docs/kept.md"]
         );
-    }
-
-    #[derive(Clone)]
-    struct SlowDiscoverySource {
-        slow: Arc<std::sync::atomic::AtomicBool>,
-    }
-
-    #[async_trait]
-    impl DocumentSource for SlowDiscoverySource {
-        fn discover(&self, _workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
-            if self.slow.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(300));
-            }
-            Ok(catalog(vec![summary("docs/cached.md")]))
-        }
-
-        async fn read_body(
-            &self,
-            _workspace: &DocumentWorkspace,
-            _path: &str,
-        ) -> Result<Vec<u8>, AppError> {
-            Ok(b"cached body".to_vec())
-        }
     }
 
     #[tokio::test]
