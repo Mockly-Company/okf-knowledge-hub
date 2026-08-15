@@ -57,12 +57,15 @@ Hub UI와 MCP가 파일을 서로 다른 방식으로 직접 수정하지 않고
 
 GitHub 작업은 온라인 요청이 성공했을 때만 완료로 표시합니다. 초기에는 별도 DB 기반 outbox를 만들지 않고 실패한 요청을 화면에 유지해 사용자가 다시 시도하도록 합니다.
 
-## 인증
+## GitHub 연결과 권한 위임
 
-- GitHub Device Flow 후보
+- GitHub App의 OAuth 2.0 Device Flow 사용
+- OkHub 자체 사용자 계정과 인증 시스템은 운영하지 않음
+- 사용자는 GitHub에서 인증되고, OkHub는 GitHub API 접근 권한을 위임받음
 - 사용자 비밀번호 저장 금지
 - 토큰은 macOS Keychain, Windows Credential Manager 등 OS 보안 저장소에 저장
 - 워크스페이스 설정이나 문서 저장소에 인증 정보 기록 금지
+- 최초 연결과 앱 재실행 시 연결 세션 복원 구조는 [GitHub 권한 위임과 OS 보안 저장소](authentication-and-keychain.md)에 정리합니다.
 
 ## 문서 편집
 

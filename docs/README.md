@@ -10,8 +10,14 @@
 4. [기능 정의](product/features.md)
 5. [정보 모델](product/information-model.md)
 6. [화면 구성](product/screens.md)
-7. [기술 구조](architecture/system-design.md)
-8. [미결정 사항](product/open-questions.md)
+7. [디자인 시스템](product/design-system.md)
+8. [기술 구조](architecture/system-design.md)
+9. [미결정 사항](product/open-questions.md)
+
+## 구현 계획
+
+- [OkHub MVP 구현 로드맵](superpowers/plans/2026-07-23-okhub-mvp-roadmap.md)
+- [1차: 앱 기반·디자인 시스템·공통 셸 구현 계획](superpowers/plans/2026-07-23-foundation-design-system-shell.md)
 
 ## 문서 상태 표기
 
@@ -19,4 +25,4 @@
 - **후보**: 추천 방향이 있으나 추가 확인이 필요한 내용
 - **미결정**: 선택지 조사와 팀 합의가 필요한 내용
 
-이 문서들은 최종 구현 명세가 아닙니다. 제품 흐름과 핵심 선택이 승인된 뒤 별도의 설계 명세와 구현 계획으로 전환합니다.
+제품 문서는 합의한 요구와 제약의 원본이고, 구현 순서·파일·테스트는 별도의 구현 계획에서 관리합니다. 미결정으로 표시한 항목은 해당 구현 단계에 들어가기 전에 확정합니다.
