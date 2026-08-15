@@ -1,4 +1,4 @@
-.app-sidebar__section:has(.app-sidebar__documents) {
+.app-sidebar__section--primary {
   display: flex;
   min-height: 0;
   flex: 1;

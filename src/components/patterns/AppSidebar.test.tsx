@@ -103,6 +103,34 @@ describe("AppSidebar", () => {
     expect(screen.queryByRole("tree", { name: "문서" })).toBeNull();
   });
 
+  it.each(["/", "/documents", "/project"])(
+    "keeps the primary navigation divider directly below Project on %s",
+    async (initialPath) => {
+      renderSidebar(FakeWorkspaceConnectionGateway.connected(), initialPath);
+
+      await screen.findByText("@hyeeun");
+      const primaryNavigation = screen.getByRole("navigation", { name: "주 메뉴" });
+      const divider = screen.getByRole("separator");
+
+      expect(primaryNavigation.nextElementSibling).toBe(divider);
+    },
+  );
+
+  it.each(["/", "/documents", "/project"])(
+    "keeps Settings directly below Project on %s",
+    async (initialPath) => {
+      renderSidebar(FakeWorkspaceConnectionGateway.connected(), initialPath);
+
+      await screen.findByText("@hyeeun");
+      const primaryNavigation = screen.getByRole("navigation", { name: "주 메뉴" });
+      const project = screen.getByRole("link", { name: "Project" });
+      const settings = screen.getByRole("link", { name: "Settings" });
+
+      expect(project.nextElementSibling).toBe(settings);
+      expect(settings.parentElement).toBe(primaryNavigation);
+    },
+  );
+
   it("returns to the Documents home when the main Documents link is selected", async () => {
     const user = userEvent.setup();
     renderSidebar(FakeWorkspaceConnectionGateway.connected(), "/documents");

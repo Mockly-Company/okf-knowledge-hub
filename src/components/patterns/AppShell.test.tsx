@@ -48,11 +48,10 @@ describe("AppShell", () => {
     expect(screen.getByRole("heading", { name: "Documents" })).toBeInTheDocument();
   });
 
-  it("separates product navigation from settings", () => {
+  it("keeps settings with the product navigation", () => {
     renderShell();
 
-    expect(screen.getByRole("navigation", { name: "주 메뉴" })).toBeInTheDocument();
-    expect(screen.getByRole("navigation", { name: "설정" })).toContainElement(
+    expect(screen.getByRole("navigation", { name: "주 메뉴" })).toContainElement(
       screen.getByRole("link", { name: "Settings" }),
     );
   });

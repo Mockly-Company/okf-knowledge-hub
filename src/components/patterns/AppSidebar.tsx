@@ -14,23 +14,11 @@ import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { cn } from "@/lib/utils";
 
-const navigationGroups = [
-  {
-    label: "주 메뉴",
-    className: "app-sidebar__nav",
-    items: [
-      { to: "/", label: "Home", icon: House, end: true },
-      { to: "/documents", label: "Documents", icon: FolderOpen, end: false },
-      { to: "/project", label: "Project", icon: SquareKanban, end: false },
-    ],
-  },
-  {
-    label: "설정",
-    className: "app-sidebar__nav app-sidebar__nav--settings",
-    items: [
-      { to: "/settings", label: "Settings", icon: Settings, end: false },
-    ],
-  },
+const navigationItems = [
+  { to: "/", label: "Home", icon: House, end: true },
+  { to: "/documents", label: "Documents", icon: FolderOpen, end: false },
+  { to: "/project", label: "Project", icon: SquareKanban, end: false },
+  { to: "/settings", label: "Settings", icon: Settings, end: false },
 ] as const;
 
 interface AppSidebarProps {
@@ -93,39 +81,37 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
           {connectedWorkspace?.summary.name ?? "워크스페이스 연결 필요"}
         </div>
       )}
-      {navigationGroups.map(({ label: groupLabel, className, items }) => (
-        <div key={groupLabel} className="app-sidebar__section">
-          <nav aria-label={groupLabel} className={className}>
-            {items.map(({ to, label, icon: Icon, end }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                onClick={to === "/documents" ? showDocumentsHome : undefined}
-                className={({ isActive }) =>
-                  cn(
-                    "app-sidebar__link",
-                    isActive && "app-sidebar__link--active",
-                  )
-                }
-              >
-                <Icon aria-hidden="true" strokeWidth={1.75} />
-                <span>{label}</span>
-              </NavLink>
-            ))}
-          </nav>
-          {groupLabel === "주 메뉴" &&
-          location.pathname.startsWith("/documents") ? (
-            <div className="app-sidebar__documents">
-              <DocumentTree
-                entries={documentsState.catalog.roots}
-                selectedPath={documentsState.selectedPath}
-                onSelectDocument={selectDocument}
-              />
-            </div>
-          ) : null}
-        </div>
-      ))}
+      <div className="app-sidebar__section app-sidebar__section--primary">
+        <nav aria-label="주 메뉴" className="app-sidebar__nav">
+          {navigationItems.map(({ to, label, icon: Icon, end }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              onClick={to === "/documents" ? showDocumentsHome : undefined}
+              className={({ isActive }) =>
+                cn(
+                  "app-sidebar__link",
+                  isActive && "app-sidebar__link--active",
+                )
+              }
+            >
+              <Icon aria-hidden="true" strokeWidth={1.75} />
+              <span>{label}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <hr className="app-sidebar__primary-divider" />
+        {location.pathname.startsWith("/documents") ? (
+          <div className="app-sidebar__documents">
+            <DocumentTree
+              entries={documentsState.catalog.roots}
+              selectedPath={documentsState.selectedPath}
+              onSelectDocument={selectDocument}
+            />
+          </div>
+        ) : null}
+      </div>
       <div className="app-sidebar__user">
         {account.status === "loading" ? (
           <>
