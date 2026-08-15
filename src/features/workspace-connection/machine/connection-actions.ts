@@ -29,6 +29,13 @@ export type ConnectionAction =
   | { type: "authLoadStarted"; request: AuthLoadRequest }
   | { type: "authLoaded"; request: AuthLoadRequest; auth: AuthState }
   | { type: "authLoadFailed"; request: AuthLoadRequest; error: AppError }
+  | {
+      type: "workspaceRestoreLoaded";
+      request: AuthLoadRequest;
+      auth: Extract<AuthState, { status: "authenticated" }>;
+      workspace: CurrentWorkspaceState;
+    }
+  | { type: "logoutSucceeded" }
   | { type: "loginBeginStarted"; request: LoginBeginRequest }
   | {
       type: "loginStarted";

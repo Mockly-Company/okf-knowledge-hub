@@ -185,6 +185,7 @@ pub async fn cancel_github_auth(
 }
 
 pub(crate) async fn logout_github_inner(services: &AppServices) -> CommandResult<()> {
+    let _access = services.authenticated_commands.write().await;
     let auth = services.auth.clone().ok_or_else(auth_unavailable)?;
     let _mutation = services.initialization_contexts.lock_mutation().await;
     crate::commands::workspace::invalidate_pending_initialization_for_auth_transition_locked(
@@ -196,7 +197,17 @@ pub(crate) async fn logout_github_inner(services: &AppServices) -> CommandResult
     let auth_result = auth.logout().await;
     let _ =
         crate::commands::workspace::remove_pending_initialization_tombstone_locked(services).await;
-    auth_result
+    auth_result?;
+    if let Some(active) = services.document_sessions.clear_for_logout() {
+        active.listener.cancel();
+        let result = services
+            .document_runtime
+            .stop_generation(active.runtime_generation)
+            .map_err(|_| auth_unavailable());
+        active.listener.wait().await;
+        result?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

@@ -1,10 +1,15 @@
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::{Uuid, Variant, Version};
 
 use crate::auth::service::AuthService;
+use crate::documents::runtime::{DocumentRuntime, DocumentRuntimeGeneration};
 use crate::github::GithubService;
 use crate::repository::git2_adapter::Git2RepositoryAdapter;
 use crate::repository::service::GitRepositoryPort;
@@ -17,15 +22,380 @@ pub struct AppServices {
     /// empty so they never initialize the developer's real credential store.
     pub auth: Option<Arc<AuthService>>,
     pub github: Option<Arc<GithubService>>,
-    #[allow(dead_code)] // Consumed by Task 8 command wiring.
     pub(crate) repository_git: Arc<dyn GitRepositoryPort>,
     pub initialization_previews: Arc<PreviewRegistry>,
     pub local_settings: LocalSettingsService,
+    pub(crate) document_runtime: DocumentRuntime,
+    pub(crate) document_cache_root: PathBuf,
+    pub(crate) document_sessions: DocumentCommandSessionRegistry,
     pub(crate) auth_jobs: JobRegistry,
     pub(crate) clone_jobs: JobRegistry,
     pub(crate) initialization_contexts: InitializationContextRegistry,
+    pub(crate) authenticated_commands: AuthenticatedCommandGate,
     #[cfg(test)]
     pub(crate) initialization_test_boundaries: Option<InitializationTestBoundaries>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct AuthenticatedCommandGate {
+    lock: Arc<RwLock<()>>,
+}
+
+impl AuthenticatedCommandGate {
+    pub(crate) async fn read(&self) -> OwnedRwLockReadGuard<()> {
+        self.lock.clone().read_owned().await
+    }
+
+    pub(crate) async fn write(&self) -> OwnedRwLockWriteGuard<()> {
+        self.lock.clone().write_owned().await
+    }
+}
+
+pub(crate) struct DocumentCommandSessionContext {
+    pub(crate) session_id: Uuid,
+    workspace: OnceLock<DocumentCommandWorkspaceContext>,
+    issued_versions: std::sync::Mutex<HashSet<(String, String)>>,
+    read_ownership: std::sync::Mutex<DocumentReadOwnership>,
+    next_revision: AtomicU64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocumentReadOwner {
+    request_id: String,
+    sequence: u64,
+}
+
+#[derive(Default)]
+struct DocumentReadOwnership {
+    next_sequence: u64,
+    latest: Option<DocumentReadOwner>,
+}
+
+pub(crate) struct DocumentCommandWorkspaceContext {
+    pub(crate) workspace_id: Uuid,
+    pub(crate) repository_root: PathBuf,
+    pub(crate) document_roots: Vec<String>,
+    pub(crate) repository_full_name: String,
+    pub(crate) branch: String,
+}
+
+impl DocumentCommandSessionContext {
+    pub(crate) fn pending(session_id: Uuid) -> Self {
+        Self {
+            session_id,
+            workspace: OnceLock::new(),
+            issued_versions: std::sync::Mutex::new(HashSet::new()),
+            read_ownership: std::sync::Mutex::new(DocumentReadOwnership::default()),
+            next_revision: AtomicU64::new(1),
+        }
+    }
+
+    pub(crate) fn initialize(
+        &self,
+        workspace: DocumentCommandWorkspaceContext,
+    ) -> Result<(), DocumentCommandWorkspaceContext> {
+        self.workspace.set(workspace)
+    }
+
+    pub(crate) fn workspace(&self) -> &DocumentCommandWorkspaceContext {
+        self.workspace
+            .get()
+            .expect("active document session context is initialized")
+    }
+
+    pub(crate) fn next_revision(&self) -> u64 {
+        self.next_revision.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub(crate) fn issue_versions<'a>(
+        &self,
+        versions: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) {
+        let mut issued = self
+            .issued_versions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        issued.extend(
+            versions
+                .into_iter()
+                .map(|(commit_oid, path)| (commit_oid.to_owned(), path.to_owned())),
+        );
+    }
+
+    pub(crate) fn version_was_issued(&self, commit_oid: &str, path: &str) -> bool {
+        self.issued_versions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&(commit_oid.to_owned(), path.to_owned()))
+    }
+
+    pub(crate) fn register_document_read(&self, request_id: String) -> DocumentReadOwner {
+        let mut ownership = self
+            .read_ownership
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let owner = DocumentReadOwner {
+            request_id,
+            sequence: ownership.next_sequence,
+        };
+        ownership.next_sequence = ownership.next_sequence.wrapping_add(1);
+        ownership.latest = Some(owner.clone());
+        owner
+    }
+
+    pub(crate) fn document_read_is_latest(&self, owner: &DocumentReadOwner) -> bool {
+        self.read_ownership
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .latest
+            .as_ref()
+            == Some(owner)
+    }
+}
+
+pub(crate) struct DocumentSessionListener {
+    cancellation: CancellationToken,
+    task: JoinHandle<()>,
+}
+
+impl DocumentSessionListener {
+    pub(crate) fn new(cancellation: CancellationToken, task: JoinHandle<()>) -> Self {
+        Self { cancellation, task }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancellation.cancel();
+    }
+
+    pub(crate) async fn wait(self) {
+        let _ = self.task.await;
+    }
+}
+
+pub(crate) struct ActiveDocumentCommandSession {
+    pub(crate) context: Arc<DocumentCommandSessionContext>,
+    pub(crate) listener: DocumentSessionListener,
+    pub(crate) runtime_generation: DocumentRuntimeGeneration,
+}
+
+#[derive(Default)]
+struct DocumentCommandSessionState {
+    pending: Option<Arc<DocumentCommandSessionContext>>,
+    active: Option<ActiveDocumentCommandSession>,
+}
+
+struct DocumentCommandSessionRegistryInner {
+    state: std::sync::Mutex<DocumentCommandSessionState>,
+}
+
+impl Drop for DocumentCommandSessionRegistryInner {
+    fn drop(&mut self) {
+        let state = self
+            .state
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(active) = state.active.as_ref() {
+            active.listener.cancel();
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DocumentCommandSessionRegistry {
+    inner: Arc<DocumentCommandSessionRegistryInner>,
+    mutation: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl Default for DocumentCommandSessionRegistry {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(DocumentCommandSessionRegistryInner {
+                state: std::sync::Mutex::new(DocumentCommandSessionState::default()),
+            }),
+            mutation: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+}
+
+impl DocumentCommandSessionRegistry {
+    pub(crate) async fn lock_mutation(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.mutation.clone().lock_owned().await
+    }
+
+    pub(crate) fn active_context(
+        &self,
+        session_id: Uuid,
+    ) -> Option<Arc<DocumentCommandSessionContext>> {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active
+            .as_ref()
+            .filter(|active| active.context.session_id == session_id)
+            .map(|active| active.context.clone())
+    }
+
+    pub(crate) fn reserve_pending(
+        &self,
+        session_id: Uuid,
+    ) -> Result<Arc<DocumentCommandSessionContext>, ()> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.pending.is_some()
+            || state
+                .active
+                .as_ref()
+                .is_some_and(|active| active.context.session_id == session_id)
+        {
+            return Err(());
+        }
+        let context = Arc::new(DocumentCommandSessionContext::pending(session_id));
+        state.pending = Some(context.clone());
+        Ok(context)
+    }
+
+    pub(crate) fn is_pending(&self, context: &Arc<DocumentCommandSessionContext>) -> bool {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending
+            .as_ref()
+            .is_some_and(|pending| Arc::ptr_eq(pending, context))
+    }
+
+    pub(crate) fn is_active(&self, context: &Arc<DocumentCommandSessionContext>) -> bool {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(&active.context, context))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_generation(
+        &self,
+        context: &Arc<DocumentCommandSessionContext>,
+    ) -> Option<DocumentRuntimeGeneration> {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active
+            .as_ref()
+            .filter(|active| Arc::ptr_eq(&active.context, context))
+            .map(|active| active.runtime_generation)
+    }
+
+    pub(crate) fn take_active_for_pending(
+        &self,
+        context: &Arc<DocumentCommandSessionContext>,
+    ) -> Result<Option<ActiveDocumentCommandSession>, ()> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| Arc::ptr_eq(pending, context))
+        {
+            return Err(());
+        }
+        Ok(state.active.take())
+    }
+
+    pub(crate) fn activate_pending(
+        &self,
+        context: Arc<DocumentCommandSessionContext>,
+        listener: DocumentSessionListener,
+        runtime_generation: DocumentRuntimeGeneration,
+    ) -> Result<(), (DocumentSessionListener, DocumentRuntimeGeneration)> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.active.is_some()
+            || !state
+                .pending
+                .as_ref()
+                .is_some_and(|pending| Arc::ptr_eq(pending, &context))
+        {
+            return Err((listener, runtime_generation));
+        }
+        state.pending = None;
+        state.active = Some(ActiveDocumentCommandSession {
+            context,
+            listener,
+            runtime_generation,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn take_if(
+        &self,
+        context: &Arc<DocumentCommandSessionContext>,
+    ) -> Option<ActiveDocumentCommandSession> {
+        let mut active = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if active
+            .active
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(&active.context, context))
+        {
+            active.active.take()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn remove_exact(
+        &self,
+        context: &Arc<DocumentCommandSessionContext>,
+    ) -> Option<ActiveDocumentCommandSession> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|pending| Arc::ptr_eq(pending, context))
+        {
+            state.pending = None;
+        }
+        if state
+            .active
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(&active.context, context))
+        {
+            state.active.take()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn clear_for_logout(&self) -> Option<ActiveDocumentCommandSession> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.pending = None;
+        state.active.take()
+    }
 }
 
 #[cfg(test)]
@@ -434,6 +804,15 @@ fn initialization_in_progress_error() -> crate::error::AppError {
 }
 
 impl AppServices {
+    pub(crate) async fn acquire_authenticated_command(
+        &self,
+    ) -> Result<OwnedRwLockReadGuard<()>, crate::error::AppError> {
+        let lease = self.authenticated_commands.read().await;
+        let auth = self.auth.clone().ok_or_else(authentication_required)?;
+        auth.valid_access_token().await?;
+        Ok(lease)
+    }
+
     pub fn new(local_settings: LocalSettingsService) -> Self {
         Self {
             auth: None,
@@ -441,9 +820,13 @@ impl AppServices {
             repository_git: Arc::new(Git2RepositoryAdapter),
             initialization_previews: Arc::new(PreviewRegistry::default()),
             local_settings,
+            document_runtime: DocumentRuntime::new(),
+            document_cache_root: std::env::temp_dir().join("okhub-document-search"),
+            document_sessions: DocumentCommandSessionRegistry::default(),
             auth_jobs: JobRegistry::default(),
             clone_jobs: JobRegistry::default(),
             initialization_contexts: InitializationContextRegistry::default(),
+            authenticated_commands: AuthenticatedCommandGate::default(),
             #[cfg(test)]
             initialization_test_boundaries: None,
         }
@@ -469,12 +852,23 @@ impl AppServices {
             repository_git: Arc::new(Git2RepositoryAdapter),
             initialization_previews: Arc::new(PreviewRegistry::default()),
             local_settings,
+            document_runtime: DocumentRuntime::new(),
+            document_cache_root: std::env::temp_dir().join("okhub-document-search"),
+            document_sessions: DocumentCommandSessionRegistry::default(),
             auth_jobs,
             clone_jobs: JobRegistry::default(),
             initialization_contexts: InitializationContextRegistry::default(),
+            authenticated_commands: AuthenticatedCommandGate::default(),
             #[cfg(test)]
             initialization_test_boundaries: None,
         }
+    }
+
+    pub(crate) fn with_documents(mut self, runtime: DocumentRuntime, cache_root: PathBuf) -> Self {
+        self.document_runtime = runtime;
+        self.document_cache_root = cache_root;
+        self.document_sessions = DocumentCommandSessionRegistry::default();
+        self
     }
 
     #[cfg(test)]
@@ -505,6 +899,14 @@ impl AppServices {
     pub(crate) fn for_command_tests_without_auth() -> Self {
         Self::new(LocalSettingsService::new(CommandTestSettings))
     }
+}
+
+fn authentication_required() -> crate::error::AppError {
+    crate::error::AppError::new(
+        crate::error::ErrorCode::ReauthenticationRequired,
+        "GitHub 로그인이 필요합니다.",
+    )
+    .with_recovery(crate::error::RecoveryAction::RestartLogin)
 }
 
 #[cfg(test)]
@@ -688,6 +1090,49 @@ mod tests {
         assert_eq!(jobs.finish(running), JobTerminal::Cancelled);
         assert_eq!(jobs.finish(completing), JobTerminal::Completed);
         assert_eq!(jobs.finish(running), JobTerminal::AlreadyTerminal);
+    }
+
+    #[tokio::test]
+    async fn authenticated_command_gate_rejects_services_without_an_auth_session() {
+        let services = AppServices::for_command_tests_without_auth();
+
+        let error = services
+            .acquire_authenticated_command()
+            .await
+            .expect_err("signed-out commands must be rejected by Rust");
+
+        assert_eq!(
+            error.code,
+            crate::error::ErrorCode::ReauthenticationRequired
+        );
+    }
+
+    #[tokio::test]
+    async fn logout_write_lease_waits_for_an_in_flight_authenticated_command() {
+        let gate = AuthenticatedCommandGate::default();
+        let read = gate.read().await;
+        let writer = tokio::spawn({
+            let gate = gate.clone();
+            async move { gate.write().await }
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!writer.is_finished());
+
+        drop(read);
+        let write = writer.await.unwrap();
+        drop(write);
+    }
+
+    #[test]
+    fn clearing_document_sessions_invalidates_pending_ownership() {
+        let sessions = DocumentCommandSessionRegistry::default();
+        let pending = sessions.reserve_pending(Uuid::new_v4()).unwrap();
+
+        let active = sessions.clear_for_logout();
+
+        assert!(active.is_none());
+        assert!(!sessions.is_pending(&pending));
     }
 
     #[test]

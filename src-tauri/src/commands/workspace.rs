@@ -180,6 +180,7 @@ pub async fn list_github_repositories(
     state: State<'_, AppServices>,
     cursor: Option<String>,
 ) -> CommandResult<Page<GithubRepositorySummary>> {
+    let _access = state.acquire_authenticated_command().await?;
     list_github_repositories_inner(&state, cursor).await
 }
 
@@ -203,6 +204,7 @@ pub async fn inspect_existing_clone(
     path: PathBuf,
     repository_id: String,
 ) -> CommandResult<RepositorySnapshot> {
+    let _access = state.acquire_authenticated_command().await?;
     inspect_existing_clone_inner(&state, path, repository_id).await
 }
 
@@ -302,6 +304,7 @@ pub async fn clone_repository(
     request_id: Uuid,
     request: CloneRepositoryCommandRequest,
 ) -> CommandResult<CloneJob> {
+    let _access = state.acquire_authenticated_command().await?;
     clone_repository_inner(
         &state,
         request_id,
@@ -333,7 +336,11 @@ pub(crate) async fn inspect_workspace_inner(
 }
 
 #[tauri::command]
-pub async fn inspect_workspace(repository_path: PathBuf) -> CommandResult<WorkspaceInspection> {
+pub async fn inspect_workspace(
+    state: State<'_, AppServices>,
+    repository_path: PathBuf,
+) -> CommandResult<WorkspaceInspection> {
+    let _access = state.acquire_authenticated_command().await?;
     inspect_workspace_inner(repository_path).await
 }
 
@@ -373,6 +380,7 @@ pub async fn connect_workspace(
     repository_id: String,
     repository_full_name: String,
 ) -> CommandResult<CurrentWorkspace> {
+    let _access = state.acquire_authenticated_command().await?;
     connect_workspace_inner(&state, repository_path, repository_id, repository_full_name).await
 }
 
@@ -470,6 +478,7 @@ pub async fn preview_workspace_initialization(
     state: State<'_, AppServices>,
     request: WorkspaceInitializationRequest,
 ) -> CommandResult<InitializationPreview> {
+    let _access = state.acquire_authenticated_command().await?;
     preview_workspace_initialization_inner(&state, request).await
 }
 
@@ -685,6 +694,7 @@ pub async fn initialize_workspace(
     state: State<'_, AppServices>,
     preview_id: Uuid,
 ) -> CommandResult<InitializationResult> {
+    let _access = state.acquire_authenticated_command().await?;
     initialize_workspace_inner(&state, preview_id).await
 }
 
@@ -692,13 +702,29 @@ pub(crate) async fn get_current_workspace_inner(
     services: &AppServices,
 ) -> CommandResult<Option<CurrentWorkspace>> {
     let settings = services.local_settings.clone();
-    run_blocking(move || settings.load_current()).await
+    let current = run_blocking(move || settings.load_current()).await?;
+    let Some(current) = current else {
+        return Ok(None);
+    };
+    if current.status != crate::settings::model::CurrentWorkspaceStatus::Connected {
+        return Ok(Some(current));
+    }
+    let Some(repository) = current.repository.clone() else {
+        return Ok(Some(CurrentWorkspace::recovery_required(current.path)));
+    };
+    let github = services.github.clone().ok_or_else(service_unavailable)?;
+    github
+        .repository_detail(&repository.id, &repository.full_name)
+        .await?;
+    inspect_existing_clone_inner(services, current.path.clone(), repository.id).await?;
+    Ok(Some(current))
 }
 
 #[tauri::command]
 pub async fn get_current_workspace(
     state: State<'_, AppServices>,
 ) -> CommandResult<Option<CurrentWorkspace>> {
+    let _access = state.acquire_authenticated_command().await?;
     get_current_workspace_inner(&state).await
 }
 

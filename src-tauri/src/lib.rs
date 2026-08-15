@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod commands;
+pub mod documents;
 pub mod error;
 pub mod github;
 pub mod repository;
@@ -46,6 +47,8 @@ pub fn run() {
             let local_settings = settings::service::LocalSettingsService::new(
                 settings::store_adapter::TauriLocalSettingsStore::new(store),
             );
+            let document_cache_root = app.path().app_data_dir()?.join("document-search");
+            std::fs::create_dir_all(&document_cache_root)?;
             let credentials = auth::keyring_store::KeyringCredentialStore::new()
                 .map_err(|_| std::io::Error::other("failed to initialize credential storage"))?;
             let auth_jobs = state::JobRegistry::default();
@@ -60,11 +63,12 @@ pub fn run() {
                     auth_jobs.clone(),
                 ),
             );
-            app.manage(state::AppServices::with_auth_jobs(
-                local_settings,
-                auth,
-                auth_jobs,
-            ));
+            app.manage(
+                state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs).with_documents(
+                    documents::runtime::DocumentRuntime::new(),
+                    document_cache_root,
+                ),
+            );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -81,6 +85,14 @@ pub fn run() {
             commands::workspace::preview_workspace_initialization,
             commands::workspace::initialize_workspace,
             commands::workspace::get_current_workspace,
+            commands::documents::start_document_session,
+            commands::documents::stop_document_session,
+            commands::documents::refresh_document_session,
+            commands::documents::search_documents,
+            commands::documents::read_document,
+            commands::documents::read_document_asset,
+            commands::documents::list_document_history,
+            commands::documents::read_document_version,
             settings::commands::get_display_density,
             settings::commands::set_display_density,
         ])

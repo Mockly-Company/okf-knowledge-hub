@@ -6,12 +6,22 @@ import { ProjectPage } from "@/pages/ProjectPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { DesignSystemPage } from "@/pages/DesignSystemPage";
 import { WorkspaceGate } from "@/features/workspace-connection/WorkspaceGate";
+import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
+import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
 
-export function AppRoutes() {
+function ConnectedAppShell({ documentsGateway }: { documentsGateway: DocumentsGateway }) {
+  return (
+    <DocumentsProvider gateway={documentsGateway}>
+      <AppShell />
+    </DocumentsProvider>
+  );
+}
+
+export function AppRoutes({ documentsGateway }: { documentsGateway: DocumentsGateway }) {
   return (
     <Routes>
       <Route element={<WorkspaceGate />}>
-        <Route element={<AppShell />}>
+        <Route element={<ConnectedAppShell documentsGateway={documentsGateway} />}>
           <Route index element={<HomePage />} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="project" element={<ProjectPage />} />
