@@ -1,4 +1,11 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -190,9 +197,9 @@ describe("DocumentsPage", () => {
     const user = userEvent.setup();
     renderPage(gateway);
 
-    await user.type(
+    fireEvent.change(
       await screen.findByRole("searchbox", { name: "문서 검색" }),
-      "실패",
+      { target: { value: "실패" } },
     );
     await waitFor(() =>
       expect(

@@ -2419,6 +2419,23 @@ mod tests {
         wait_at(older_release).await;
         older.await.unwrap().unwrap();
 
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if events.snapshot().iter().any(|event| {
+                    matches!(
+                        &event.event,
+                        DocumentEvent::OpenDocumentChanged { path, .. }
+                            if path == "docs/other.md"
+                    )
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
         let live_path = fixture
             .services
             .document_runtime
