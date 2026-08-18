@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "tauri": "tauri"
+    "dev:setup:macos": "bash scripts/setup-macos-dev-signing.sh",
+    "tauri": "bash scripts/tauri-with-macos-signing.sh"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.23",

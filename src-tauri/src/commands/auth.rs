@@ -108,10 +108,24 @@ pub(crate) async fn get_auth_state_inner(services: &AppServices) -> CommandResul
         }
         Err(error) => return Err(error),
     }
+    let Some(generation) = auth.lifecycle_generation().await else {
+        return Ok(AuthState::ReauthenticationRequired);
+    };
     let github = services.github.clone().ok_or_else(auth_unavailable)?;
     match github.current_user().await {
-        Ok(user) => Ok(AuthState::Authenticated { user }),
+        Ok(user) => {
+            if auth
+                .establish_authenticated_principal_if_current(generation, user.clone())
+                .await
+            {
+                Ok(AuthState::Authenticated { user })
+            } else {
+                Ok(AuthState::ReauthenticationRequired)
+            }
+        }
         Err(error) if error.code == ErrorCode::ReauthenticationRequired => {
+            auth.invalidate_authenticated_principal_if_current(generation)
+                .await;
             Ok(AuthState::ReauthenticationRequired)
         }
         Err(error) => Err(error),
