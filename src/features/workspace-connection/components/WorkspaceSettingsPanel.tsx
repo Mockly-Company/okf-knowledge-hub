@@ -1,4 +1,5 @@
 import { useWorkspaceConnection } from "../WorkspaceConnectionProvider";
+import { Button } from "@/components/ui/button";
 
 export function WorkspaceSettingsPanel() {
   const {
@@ -49,21 +50,20 @@ export function WorkspaceSettingsPanel() {
         </div>
       </dl>
       <div className="mt-5 flex flex-wrap gap-2">
-        <button
+        <Button
           type="button"
+          variant="secondary"
           disabled={isWorkspaceValidating}
           onClick={() => void revalidateCurrentWorkspace()}
-          className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-2 font-medium text-[var(--color-text-strong)]"
         >
           {isWorkspaceValidating ? "확인 중" : "다시 확인"}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
           onClick={() => void startReplacement()}
-          className="rounded-[var(--radius-md)] bg-[var(--color-primary)] px-4 py-2 font-semibold text-white"
         >
           다른 지식 저장소 연결
-        </button>
+        </Button>
       </div>
       {validation?.status === "ready" ? (
         <p role="status" className="mt-3 text-sm text-[var(--color-text-muted)]">

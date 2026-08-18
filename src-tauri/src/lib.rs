@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod build_info;
 pub mod commands;
 pub mod documents;
 pub mod error;
@@ -9,6 +10,7 @@ pub mod state;
 pub mod workspace;
 
 pub const APP_TITLE: &str = "OkHub";
+const OFFICIAL_GITHUB_CLIENT_ID: &str = "Iv23liwme4YWGbzRMNxH";
 
 fn github_client_id() -> String {
     let runtime = std::env::var("OKHUB_GITHUB_CLIENT_ID").ok();
@@ -19,7 +21,7 @@ fn select_github_client_id(runtime: Option<&str>, compiled: Option<&str>) -> Str
     runtime
         .and_then(non_empty_trimmed)
         .or_else(|| compiled.and_then(non_empty_trimmed))
-        .unwrap_or_default()
+        .unwrap_or(OFFICIAL_GITHUB_CLIENT_ID)
         .to_owned()
 }
 
@@ -37,6 +39,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             use tauri::Manager;
+
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_title(&build_info::window_title())?;
+            }
 
             let store = tauri_plugin_store::StoreBuilder::new(
                 app,
@@ -72,6 +78,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            build_info::get_build_info,
             commands::auth::get_auth_state,
             commands::auth::begin_github_auth,
             commands::auth::cancel_github_auth,
@@ -115,10 +122,27 @@ mod tests {
             select_github_client_id(Some(" runtime-id "), Some("compiled-id")),
             "runtime-id"
         );
+    }
+
+    #[test]
+    fn compiled_client_id_overrides_the_official_public_client_id() {
         assert_eq!(
             select_github_client_id(None, Some(" compiled-id ")),
             "compiled-id"
         );
-        assert_eq!(select_github_client_id(Some("  "), None), "");
+    }
+
+    #[test]
+    fn blank_overrides_fall_back_to_the_official_public_client_id() {
+        assert_eq!(
+            select_github_client_id(Some("  "), Some("\t")),
+            "Iv23liwme4YWGbzRMNxH"
+        );
+    }
+
+    #[test]
+    fn official_repository_build_always_has_a_client_id() {
+        assert!(!select_github_client_id(None, None).is_empty());
+        assert_eq!(select_github_client_id(None, None), "Iv23liwme4YWGbzRMNxH");
     }
 }

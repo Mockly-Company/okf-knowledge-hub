@@ -1,6 +1,7 @@
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Radio } from "@/components/ui/radio";
 import type { GithubRepositorySummary, RecoveryAction, RepositoryConnectionState } from "../types";
 import { ConnectionError } from "./ConnectionError";
 
@@ -24,7 +25,7 @@ export function RepositorySelectionStep({ state, onSelect, onRefresh, onLoadNext
       <div className="workspace-connection__repository-list" role="radiogroup" aria-label="OKF 저장소">
         {state.repositories.map((repository) => (
           <label key={repository.id} className="workspace-connection__repository-option">
-            <input type="radio" name="repository" checked={selectedId === repository.id} onChange={() => setSelectedId(repository.id)} />
+            <Radio name="repository" checked={selectedId === repository.id} onChange={() => setSelectedId(repository.id)} />
             <span><strong>{repository.fullName}</strong><small>기본 브랜치: {repository.defaultBranch ?? "없음"}</small></span>
           </label>
         ))}

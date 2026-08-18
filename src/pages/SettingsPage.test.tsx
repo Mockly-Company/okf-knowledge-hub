@@ -8,6 +8,17 @@ import type { PreferencesRepository } from "@/features/preferences/PreferencesRe
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { SettingsPage } from "./SettingsPage";
+import type { BuildInfoGateway } from "@/features/build-info/BuildInfoGateway";
+
+const buildInfoGateway: BuildInfoGateway = {
+  getBuildInfo: async () => ({
+    mode: "development",
+    branch: "feat/document-creation",
+    commit: "abc12345",
+    dirty: true,
+    credentialBackend: "file-keychain",
+  }),
+};
 
 describe("SettingsPage", () => {
   afterEach(cleanup);
@@ -238,3 +249,17 @@ describe("SettingsPage", () => {
     expect(screen.getByText("유효한 워크스페이스입니다.")).toBeInTheDocument();
   });
 });
+  it("shows the current development build provenance without local paths", async () => {
+    render(
+      <PreferencesProvider repository={new FakePreferencesRepository()}>
+        <SettingsPage buildInfoGateway={buildInfoGateway} />
+      </PreferencesProvider>,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "앱 정보" }));
+
+    expect(await screen.findByText("feat/document-creation@abc12345")).toBeInTheDocument();
+    expect(screen.getByText("변경사항 있음")).toBeInTheDocument();
+    expect(screen.getByText("file-keychain")).toBeInTheDocument();
+    expect(screen.queryByText(/Users\/hyeeun/)).not.toBeInTheDocument();
+  });

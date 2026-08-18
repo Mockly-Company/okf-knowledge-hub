@@ -9,8 +9,9 @@ html,
 body,
 #root {
   min-width: 320px;
-  min-height: 100%;
+  height: 100%;
   margin: 0;
+  overflow: hidden;
 }
 
 body {
@@ -47,13 +48,18 @@ select {
 
 .app-shell {
   display: flex;
-  min-height: 100vh;
-  background: var(--color-canvas);
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--color-surface);
 }
 
 .app-shell__main {
   min-width: 0;
+  height: 100dvh;
   flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--color-surface);
 }
 
 .app-shell__main--sidebar-collapsed {
@@ -68,15 +74,13 @@ select {
 }
 
 .app-sidebar {
-  position: sticky;
-  top: 0;
   display: flex;
   width: 244px;
-  height: 100vh;
+  height: 100dvh;
   flex: 0 0 244px;
   flex-direction: column;
   border-right: 1px solid var(--color-border);
-  background: var(--color-surface);
+  background: var(--color-canvas);
 }
 
 .app-sidebar__brand {
@@ -502,7 +506,7 @@ select {
 
 .device-code-copy__error {
   margin: 0;
-  color: var(--color-danger-text);
+  color: var(--color-error);
   font-size: 13px;
 }
 
@@ -523,7 +527,7 @@ select {
   position: fixed;
   z-index: 50;
   inset: 0;
-  background: rgb(20 24 30 / 42%);
+  background: var(--color-overlay);
 }
 
 .account-dialog__content {
@@ -537,7 +541,7 @@ select {
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   padding: 24px;
-  box-shadow: 0 18px 48px rgb(20 24 30 / 20%);
+  box-shadow: var(--shadow-dialog);
 }
 
 .account-dialog__title {

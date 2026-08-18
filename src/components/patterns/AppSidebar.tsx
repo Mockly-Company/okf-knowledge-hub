@@ -32,6 +32,7 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
     state: documentsState,
     selectDocument,
     showDocumentsHome,
+    openNewDocument,
   } = useDocuments();
   const { state, account, isCurrentWorkspaceLoading } = useWorkspaceConnection();
   const [avatarFailed, setAvatarFailed] = useState(false);
@@ -108,6 +109,7 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
               entries={documentsState.catalog.roots}
               selectedPath={documentsState.selectedPath}
               onSelectDocument={selectDocument}
+              onNewDocument={openNewDocument}
             />
           </div>
         ) : null}

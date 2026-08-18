@@ -1,10 +1,15 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
+import { Radio } from "@/components/ui/radio";
+import { Button } from "@/components/ui/button";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
 import { WorkspaceSettingsPanel } from "@/features/workspace-connection/components/WorkspaceSettingsPanel";
 import { GitHubAccountPanel } from "@/features/workspace-connection/components/GitHubAccountPanel";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { cn } from "@/lib/utils";
+import { BuildInfoPanel } from "@/features/build-info/BuildInfoPanel";
+import type { BuildInfoGateway } from "@/features/build-info/BuildInfoGateway";
+import { createBuildInfoGateway } from "@/infrastructure/build-info/createBuildInfoGateway";
 
 const settingsCategories = [
   "워크스페이스",
@@ -13,6 +18,7 @@ const settingsCategories = [
   "작업 방식",
   "화면",
   "AI 연동",
+  "앱 정보",
 ];
 
 const options: Array<{
@@ -32,7 +38,13 @@ const options: Array<{
   },
 ];
 
-export function SettingsPage() {
+const defaultBuildInfoGateway = createBuildInfoGateway();
+
+export function SettingsPage({
+  buildInfoGateway = defaultBuildInfoGateway,
+}: {
+  buildInfoGateway?: BuildInfoGateway;
+}) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [activeCategory, setActiveCategory] = useState("화면");
 
@@ -52,18 +64,19 @@ export function SettingsPage() {
           <ul className="m-0 grid list-none content-start gap-1 p-0">
             {settingsCategories.map((item) => (
               <li key={item}>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => setActiveCategory(item)}
                   aria-current={item === activeCategory ? "page" : undefined}
                   className={cn(
-                    "block w-full rounded-[var(--radius-md)] px-3 py-2 text-left",
+                    "w-full justify-start",
                     item === activeCategory &&
                       "bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary-text)]",
                   )}
                 >
                   {item}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -91,9 +104,8 @@ export function SettingsPage() {
 
                 return (
                   <div key={option.value}>
-                    <input
+                    <Radio
                       id={id}
-                      type="radio"
                       name="display-density"
                       aria-label={option.label}
                       value={option.value}
@@ -126,6 +138,8 @@ export function SettingsPage() {
             </div>
           </fieldset>
         </div>
+        ) : activeCategory === "앱 정보" ? (
+          <BuildInfoPanel gateway={buildInfoGateway} />
         ) : (
           <div>
             <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">

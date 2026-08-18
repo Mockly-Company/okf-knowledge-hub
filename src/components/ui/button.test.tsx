@@ -1,15 +1,32 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { Settings } from "lucide-react";
 import { Button } from "./button";
+
+afterEach(cleanup);
 
 describe("Button", () => {
   it("renders a primary action", () => {
     render(<Button>연결하기</Button>);
-    expect(screen.getByRole("button", { name: "연결하기" })).toHaveAttribute(
+    const button = screen.getByRole("button", { name: "연결하기" });
+    expect(button).toHaveAttribute(
       "data-variant",
       "primary",
     );
+    expect(button).toHaveClass(
+      "active:bg-[var(--color-primary-action-pressed)]",
+    );
+  });
+
+  it("uses explicit disabled design tokens instead of opacity", () => {
+    render(<Button disabled>연결하기</Button>);
+    const button = screen.getByRole("button", { name: "연결하기" });
+
+    expect(button).toHaveClass(
+      "disabled:bg-[var(--color-control-disabled)]",
+      "disabled:text-[var(--color-text-disabled)]",
+    );
+    expect(button).not.toHaveClass("disabled:opacity-45");
   });
 
   it("supports a named icon action", () => {

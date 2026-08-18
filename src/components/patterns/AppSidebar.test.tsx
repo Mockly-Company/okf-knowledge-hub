@@ -103,6 +103,22 @@ describe("AppSidebar", () => {
     expect(screen.queryByRole("tree", { name: "문서" })).toBeNull();
   });
 
+  it("keeps the Lucide new-document action available on Documents routes", async () => {
+    const documentsGateway = new FakeDocumentsGateway();
+    documentsGateway.sessionSnapshot.lastOpenedPath = "docs/guide.md";
+    const view = renderSidebar(
+      FakeWorkspaceConnectionGateway.connected(),
+      "/documents",
+      documentsGateway,
+    );
+
+    const action = await screen.findByRole("button", { name: "새 문서" });
+    expect(action.querySelector("svg.lucide-plus")).not.toBeNull();
+    expect(view.container.querySelector(".document-tree__header")).toContainElement(
+      action,
+    );
+  });
+
   it.each(["/", "/documents", "/project"])(
     "keeps the primary navigation divider directly below Project on %s",
     async (initialPath) => {
