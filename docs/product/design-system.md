@@ -163,6 +163,11 @@ shadcn을 디자인 완성품이 아니라 접근 가능한 primitive 기반으�
 components/ui
 ├─ Button
 ├─ Input
+├─ Textarea
+├─ Select
+├─ Checkbox
+├─ Radio
+├─ Tabs
 ├─ Dialog
 ├─ Popover
 ├─ DropdownMenu
@@ -196,7 +201,7 @@ components/patterns
 
 | Variant | Default | Hover | Pressed | Disabled |
 |---|---|---|---|---|
-| Primary | `#007C71` + 흰색 | `#00665F` | `#00544F` | `#DDE8E6` + `#7D918F` |
+| Primary | `#007C71` + 흰색 | `#00665F` | `#00544F` | `#F1F3F5` + `#7D918F` |
 | Secondary | 흰색 + `#E2E5E9` border | `#F6F7F9` + `#C7CDD4` | `#ECEFF2` + `#AEB5BF` | `#F1F3F5` + `#7D918F` |
 | Ghost | 투명 | `#E5F5F3` | `#D4EFEC` | 투명 + `#7D918F` |
 | Destructive | `#FFF0F1` + `#B23B4A` | `#FFE2E5` | `#F8CDD3` | `#F1F3F5` + `#7D918F` |

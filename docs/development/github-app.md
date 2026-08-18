@@ -16,9 +16,16 @@ GitHub App 설정에서 다음을 확인한다.
 
 Device Flow와 expiring user access token은 GitHub App 설정에서 명시적으로 활성화해야 한다. GitHub는 만료되는 user access token 사용을 권장하며, 기본 access token 수명은 8시간, refresh token 수명은 6개월이다. Device Flow로 발급된 token refresh에는 Client Secret이 필요하지 않다. 자세한 흐름은 [GitHub App user access token guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app)를 따른다.
 
-## 공개 Client ID 설정
+## 공개 Client ID와 선택적 재정의
 
-`OKHUB_GITHUB_CLIENT_ID`에는 GitHub App의 **Client ID**만 넣는다. 이는 공개 build value이며 secret이 아니다. 로컬 개발에서는 실행 환경에 설정한다.
+OkHub 공식 GitHub App의 Client ID `Iv23liwme4YWGbzRMNxH`는 공개 build value로 앱에 포함되어 있으며 secret이 아니다. 일반 사용자와 기여자는 별도 환경변수 없이 앱을 실행할 수 있다.
+
+```bash
+pnpm dev:setup:macos # macOS 최초 1회
+pnpm tauri dev
+```
+
+포크나 자체 배포판에서 다른 GitHub App을 사용할 때만 `OKHUB_GITHUB_CLIENT_ID`로 기본값을 재정의한다. 실행 시 환경변수가 컴파일 시 환경변수보다 우선하며, 공백 값은 무시된다.
 
 ```bash
 export OKHUB_GITHUB_CLIENT_ID="Iv1_your_public_client_id"
@@ -35,26 +42,26 @@ macOS의 코드 서명, entitlement, Keychain Access Group, 파일 기반 Keycha
 
 | OS | 위치 | entry |
 |---|---|---|
-| macOS debug / `tauri dev` | SecItem 기반 파일 Keychain | service `com.okhub.desktop.github.dev`, account `current-user` |
+| macOS debug / `tauri dev` | 서명된 파일 Keychain | service `com.okhub.desktop.github.dev.signed`, account `current-user` |
 | macOS release | Data Protection Keychain | service `com.okhub.desktop.github`, account `current-user` |
 | Windows | Credential Manager → Windows Credentials | target/service `com.okhub.desktop.github`, account `current-user` |
 
-개발 중 로그아웃은 Tauri command `logout_github`를 호출한다. 이 command는 OS credential entry만 삭제하고, `settings.json`의 현재 workspace 연결과 어떠한 local clone도 삭제하지 않는다. 현재 설정 화면에 전용 Logout control이 연결되기 전에는 Tauri devtools 또는 integration harness에서 `logout_github`를 호출해 확인한다.
+로그아웃은 Settings의 외부 연결 화면에서 수행하며 해당 환경의 OS credential entry와 Rust 메모리 인증 세션을 삭제한다. 어느 환경에서도 `settings.json`의 현재 workspace 연결과 local clone은 삭제하지 않는다.
 
 ```ts
 await invoke("logout_github");
 ```
 
-Keychain Access 또는 Credential Manager에서 위 entry가 사라졌는지 확인하고, 연결했던 clone 폴더와 `settings.json`의 workspace path가 유지되는지 확인한다.
+Keychain Access 또는 Windows Credential Manager에서 위 entry가 사라졌는지 확인하고, 연결했던 clone 폴더와 `settings.json`의 workspace path가 유지되는지 확인한다.
 
 ## Disposable repository smoke test
 
 1. GitHub에서 disposable knowledge repository를 만든다. 실제 제품 또는 운영 지식 저장소를 사용하지 않는다.
 2. 공개 GitHub App을 해당 repository에 설치한다. **Only select repositories**를 쓴 경우 방금 만든 repository만 선택한다.
-3. `OKHUB_GITHUB_CLIENT_ID`를 설정하고 `pnpm tauri dev`로 앱을 시작한다.
+3. 공식 GitHub App을 사용할 때는 `pnpm tauri dev`로 앱을 시작한다. 자체 GitHub App을 사용할 때만 `OKHUB_GITHUB_CLIENT_ID`를 재정의한다.
 4. Device Flow URL과 user code를 사용해 로그인한다. OS credential entry가 생성되고 `settings.json`에는 token이 없는지 확인한다.
 5. repository 목록에서 disposable repository만 선택해 existing clone 또는 새 parent directory clone 경로를 확인한다.
 6. 빈 저장소는 초기화 preview를 확인한 뒤 승인하여 기본 branch 초기화 경로를 검증한다. 콘텐츠가 있는 저장소는 `okf/init-workspace` branch, 한 개의 Draft PR, 그리고 remote push 결과를 확인한다.
 7. 로그아웃 후 credential entry만 사라지고 local clone은 남는지 확인한다. 상세 acceptance matrix는 구현 PR의 Test Plan에 기록한다.
 
-수동 smoke test에는 실제 GitHub App Client ID, App 설치 권한, disposable repository, macOS 또는 Windows keychain access가 필요하다. 자동 CI와 pull request job에는 GitHub token을 주입하지 않는다.
+수동 smoke test에는 GitHub App 설치 권한, disposable repository, macOS 또는 Windows keychain access가 필요하다. 자체 GitHub App을 시험할 때는 해당 App의 공개 Client ID도 필요하다. 자동 CI와 pull request job에는 GitHub token을 주입하지 않는다.
