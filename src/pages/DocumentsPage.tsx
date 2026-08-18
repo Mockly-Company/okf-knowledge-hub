@@ -1,13 +1,24 @@
+import { FilePlus2 } from "lucide-react";
+import { lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { DocumentDraftSwitcher } from "@/features/documents/components/DocumentDraftSwitcher";
+import { NewDocumentDialog } from "@/features/documents/components/NewDocumentDialog";
 import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import "@/features/documents/documents.css";
 
+const DocumentDraftEditor = lazy(() =>
+  import("@/features/documents/components/DocumentDraftEditor").then(
+    (module) => ({ default: module.DocumentDraftEditor }),
+  ),
+);
+
 export function DocumentsPage() {
   const {
     state,
+    authoringState,
     setSearchQuery,
     retrySearch,
     selectDocument,
@@ -16,7 +27,50 @@ export function DocumentsPage() {
     refresh,
     retrySession,
     clearRecoverableError,
+    openNewDocument,
+    closeNewDocument,
+    createNewDocument,
+    useSuggestedFileName,
+    updateDraftMarkdown,
+    setDraftEditorMode,
+    acceptDiskConflict,
+    acceptHubConflict,
+    startConflictMerge,
+    closeDraftEditor,
+    duplicateTeamTemplate,
+    switchDraft,
   } = useDocuments();
+  const creationDialog = (
+    <NewDocumentDialog
+      state={authoringState}
+      onClose={closeNewDocument}
+      onCreate={createNewDocument}
+      onUseSuggestion={useSuggestedFileName}
+      onDuplicateTemplate={duplicateTeamTemplate}
+    />
+  );
+
+  if (authoringState.editor) {
+    return (
+      <>
+        <div className="document-draft-editor__switcher">
+          <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
+        </div>
+        <Suspense fallback={<p className="documents-page__loading">편집기를 준비하는 중…</p>}>
+          <DocumentDraftEditor
+            editor={authoringState.editor}
+            onMarkdownChange={updateDraftMarkdown}
+            onModeChange={setDraftEditorMode}
+            onAcceptDisk={acceptDiskConflict}
+            onAcceptHub={acceptHubConflict}
+            onStartMerge={startConflictMerge}
+            onClose={closeDraftEditor}
+          />
+        </Suspense>
+        {creationDialog}
+      </>
+    );
+  }
 
   if (state.status === "error") {
     const invalidRoot = [
@@ -97,8 +151,11 @@ export function DocumentsPage() {
   return (
     <section className="documents-page" aria-labelledby="documents-title">
       <header className="documents-page__header">
-        <h1 id="documents-title">Documents</h1>
-        <p>프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다.</p>
+        <div>
+          <h1 id="documents-title">Documents</h1>
+          <p>프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다.</p>
+        </div>
+        <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
       </header>
 
       {state.documentNotice ? (
@@ -122,23 +179,30 @@ export function DocumentsPage() {
         </div>
       ) : null}
 
-      <DocumentSearch
-        query={state.searchQuery}
-        documents={state.catalog.documents}
-        results={state.searchResults}
-        searchStatus={state.searchStatus}
-        searchError={state.searchError}
-        indexStatus={state.indexStatus}
-        onQueryChange={setSearchQuery}
-        onSelectDocument={selectDocument}
-        onSelectResult={(result) =>
-          selectDocument(result.path, {
-            matchField: result.matchField,
-            matchText: result.matchText,
-          })
-        }
-        onRetry={retrySearch}
-      />
+      <div className="documents-page__search-row">
+        <DocumentSearch
+          query={state.searchQuery}
+          documents={state.catalog.documents}
+          results={state.searchResults}
+          searchStatus={state.searchStatus}
+          searchError={state.searchError}
+          indexStatus={state.indexStatus}
+          onQueryChange={setSearchQuery}
+          onSelectDocument={selectDocument}
+          onSelectResult={(result) =>
+            selectDocument(result.path, {
+              matchField: result.matchField,
+              matchText: result.matchText,
+            })
+          }
+          onRetry={retrySearch}
+        />
+        <Button className="documents-page__new-document" onClick={() => openNewDocument("docs")}>
+          <FilePlus2 aria-hidden="true" />
+          새 문서
+        </Button>
+      </div>
+      {creationDialog}
     </section>
   );
 }

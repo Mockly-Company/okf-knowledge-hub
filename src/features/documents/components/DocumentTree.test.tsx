@@ -140,4 +140,25 @@ describe("DocumentTree", () => {
     expect(screen.getByText("표시할 문서가 없습니다.")).toBeVisible();
     expect(screen.queryByRole("searchbox")).toBeNull();
   });
+
+  it("opens document creation with the selected tree folder", async () => {
+    const user = userEvent.setup();
+    const onNewDocument = vi.fn();
+    render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={onNewDocument}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "api에 새 문서" }));
+
+    expect(onNewDocument).toHaveBeenCalledWith("docs/api");
+    expect(screen.getByRole("treeitem", { name: "api" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
 });

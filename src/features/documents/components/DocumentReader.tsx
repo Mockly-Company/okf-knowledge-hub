@@ -1,6 +1,7 @@
 import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDocuments } from "../DocumentsProvider";
 import type { DocumentContent } from "../model";
 import { MarkdownDocument } from "./MarkdownDocument";
@@ -18,7 +19,14 @@ function lastModifiedSummary(document: DocumentContent): string {
 }
 
 export function DocumentReader({ document }: { document: DocumentContent }) {
-  const { state, copyText, openExternal, selectCurrentVersion } = useDocuments();
+  const {
+    state,
+    authoringState,
+    copyText,
+    openExternal,
+    selectCurrentVersion,
+    editSelectedDocument,
+  } = useDocuments();
   const [tab, setTab] = useState<ContextTab>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [contextCollapsed, setContextCollapsed] = useState(false);
@@ -50,6 +58,16 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
           <small>{lastModifiedSummary(document)}</small>
         </div>
         <div className="document-reader__actions">
+          {state.selectedVersion === null ? (
+            <Button
+              disabled={authoringState.existingEdit.status === "opening"}
+              onClick={editSelectedDocument}
+            >
+              {authoringState.existingEdit.status === "opening"
+                ? "편집 준비 중…"
+                : "편집"}
+            </Button>
+          ) : null}
           <Button
             variant="icon"
             aria-label="더보기"
@@ -73,6 +91,12 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
           ) : null}
         </div>
       </header>
+      {authoringState.existingEdit.error ? (
+        <div className="document-reader__warning" role="alert">
+          <strong>편집을 시작하지 못했습니다.</strong>
+          <span>{authoringState.existingEdit.error.message}</span>
+        </div>
+      ) : null}
       {state.selectedVersion ? (
         <div className="document-reader__historical-version">
           <span>과거 버전 · {state.selectedVersion.commitOid.slice(0, 7)}</span>
@@ -109,11 +133,11 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
           aria-label="문서 문맥"
           hidden={contextCollapsed}
         >
-          <div className="document-reader__tabs" role="tablist" aria-label="문서 문맥 탭">
-            <button type="button" role="tab" aria-selected={tab === "overview"} onClick={() => setTab("overview")}>개요</button>
-            <button type="button" role="tab" aria-selected={tab === "connections"} onClick={() => setTab("connections")}>연결</button>
-            <button type="button" role="tab" aria-selected={tab === "history"} onClick={() => setTab("history")}>History</button>
-          </div>
+          <TabsList className="document-reader__tabs" aria-label="문서 문맥 탭">
+            <TabsTrigger selected={tab === "overview"} onClick={() => setTab("overview")}>개요</TabsTrigger>
+            <TabsTrigger selected={tab === "connections"} onClick={() => setTab("connections")}>연결</TabsTrigger>
+            <TabsTrigger selected={tab === "history"} onClick={() => setTab("history")}>History</TabsTrigger>
+          </TabsList>
           {tab === "overview" ? (
             <DocumentOverview document={document} />
           ) : tab === "connections" ? (

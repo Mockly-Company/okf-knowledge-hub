@@ -3,6 +3,7 @@ import {
   FileText,
   Folder,
   FolderOpen,
+  Plus,
 } from "lucide-react";
 import {
   useEffect,
@@ -19,6 +20,7 @@ interface DocumentTreeProps {
   entries: DocumentTreeEntry[];
   selectedPath: string | null;
   onSelectDocument(path: string): void;
+  onNewDocument?(folder: string): void;
 }
 
 interface VisibleTreeEntry {
@@ -78,6 +80,7 @@ export function DocumentTree({
   entries,
   selectedPath,
   onSelectDocument,
+  onNewDocument,
 }: DocumentTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(ancestorPaths(entries, selectedPath)),
@@ -106,10 +109,6 @@ export function DocumentTree({
     setActiveKey(visible[0]?.key ?? null);
   }, [activeKey, visible]);
 
-  if (entries.length === 0) {
-    return <p className="document-tree__empty">표시할 문서가 없습니다.</p>;
-  }
-
   const toggleFolder = (path: string, shouldExpand?: boolean) => {
     const expand = shouldExpand ?? !expanded.has(path);
     if (!expand && activeKey?.startsWith(`${path}/`)) setActiveKey(path);
@@ -129,6 +128,19 @@ export function DocumentTree({
 
   return (
     <div className="document-tree" role="tree" aria-label="문서">
+      <div className="document-tree__header">
+        <span>문서</span>
+        {onNewDocument ? (
+          <Tooltip content="새 문서">
+            <button type="button" aria-label="새 문서" onClick={() => onNewDocument("docs")}>
+              <Plus aria-hidden="true" />
+            </button>
+          </Tooltip>
+        ) : null}
+      </div>
+      {entries.length === 0 ? (
+        <p className="document-tree__empty">표시할 문서가 없습니다.</p>
+      ) : null}
       {visible.map(({ entry, key, parentPath, level }, index) => {
         const isFolder = entry.kind === "folder";
         const isExpanded = isFolder && expanded.has(entry.path);
@@ -136,7 +148,6 @@ export function DocumentTree({
         const isSelected = !isFolder && selectedPath === entry.summary.path;
         const item = (
           <button
-            key={key}
             ref={(element) => {
               if (element) itemRefs.current.set(key, element);
               else itemRefs.current.delete(key);
@@ -225,12 +236,31 @@ export function DocumentTree({
           </button>
         );
 
-        return label.length > 28 ? (
-          <Tooltip key={key} content={label}>
-            {item}
-          </Tooltip>
+        const treeItem = label.length > 28 ? (
+          <Tooltip content={label}>{item}</Tooltip>
         ) : (
           item
+        );
+
+        return (
+          <div key={key} className="document-tree__row">
+            {treeItem}
+            {isFolder && onNewDocument ? (
+              <Tooltip content={`${label}에 새 문서`}>
+                <button
+                  type="button"
+                  className="document-tree__folder-create"
+                  aria-label={`${label}에 새 문서`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onNewDocument(entry.path);
+                  }}
+                >
+                  <Plus aria-hidden="true" />
+                </button>
+              </Tooltip>
+            ) : null}
+          </div>
         );
       })}
     </div>

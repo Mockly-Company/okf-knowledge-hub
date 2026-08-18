@@ -10,6 +10,18 @@ import type {
   HistoryPage,
   SearchResult,
   Unlisten,
+  CreateDocumentDraftRequest,
+  CreateDocumentDraftResponse,
+  EditExistingDocumentDraftRequest,
+  DuplicateTeamTemplateRequest,
+  DuplicateTeamTemplateResponse,
+  DocumentTargetValidation,
+  DocumentTemplateCatalog,
+  DraftSummary,
+  SaveDocumentDraftRequest,
+  SaveDocumentDraftResponse,
+  SwitchLocalDocumentDraftResponse,
+  RecoveredDocument,
 } from "@/features/documents/model";
 
 const guideSummary = {
@@ -33,6 +45,31 @@ const apiSummary = {
 };
 
 export class FakeDocumentsGateway implements DocumentsGateway {
+  templateCatalog: DocumentTemplateCatalog = {
+    templates: [
+      {
+        id: "builtin:blank",
+        source: "built_in",
+        label: "빈 문서",
+        description: null,
+        typeKey: null,
+        defaults: { tags: [] },
+        richEditorCompatible: true,
+      },
+      {
+        id: "builtin:api_contract",
+        source: "built_in",
+        label: "API 계약",
+        description: null,
+        typeKey: "api_contract",
+        defaults: { tags: [] },
+        richEditorCompatible: true,
+      },
+    ],
+    diagnostics: [],
+  };
+  drafts: DraftSummary[] = [];
+  activeRecovery: RecoveredDocument | null = null;
   readonly guideCatalog: DocumentCatalog = {
     documents: [guideSummary],
     roots: [{ kind: "document", summary: guideSummary }],
@@ -126,6 +163,151 @@ export class FakeDocumentsGateway implements DocumentsGateway {
 
   async refreshSession(sessionId: string): Promise<void> {
     this.record("refreshSession", sessionId);
+  }
+
+  async listDocumentTemplates(
+    sessionId: string,
+  ): Promise<DocumentTemplateCatalog> {
+    this.record("listDocumentTemplates", sessionId);
+    return this.templateCatalog;
+  }
+
+  async validateDocumentCreation(
+    sessionId: string,
+    folder: string,
+    fileName: string,
+  ): Promise<DocumentTargetValidation> {
+    this.record("validateDocumentCreation", sessionId, folder, fileName);
+    const normalizedFileName = fileName
+      .replace(/\.md$/i, "")
+      .trim()
+      .toLocaleLowerCase()
+      .replace(/[\s_]+/g, "-") + ".md";
+    return {
+      normalizedFileName,
+      relativePath: `${folder}/${normalizedFileName}`,
+      hasCollision: false,
+      suggestedFileName: null,
+    };
+  }
+
+  async createDocumentDraft(
+    request: CreateDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse> {
+    this.record("createDocumentDraft", request);
+    const draft: DraftSummary = {
+      workspaceId: this.sessionSnapshot.workspaceId,
+      changeId: "269482aa-2c25-4a64-9006-c64ff075b9e5",
+      authorLogin: "hyeeun",
+      baseCommit: "0123456789abcdef",
+      branch: "draft/hyeeun/269482aa-map-api",
+      createdAtUnixMs: 1_722_000_000_000,
+      lastOpenedAtUnixMs: 1_722_000_000_000,
+    };
+    this.drafts = [draft];
+    return {
+      requestId: request.requestId,
+      document: {
+        changeId: draft.changeId,
+        documentId: "80a44162-92c6-4f2c-9b77-ef5c42a52e5a",
+        path: `${request.folder}/${request.fileName.replace(/\s+/g, "-").toLocaleLowerCase()}`,
+        markdown: `---\nokf_hub_id: 80a44162-92c6-4f2c-9b77-ef5c42a52e5a\ntitle: ${request.title}\n---\n# ${request.title}\n`,
+        contentHash: "created-hash",
+        draft,
+      },
+    };
+  }
+
+  async editExistingDocumentDraft(
+    request: EditExistingDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse> {
+    this.record("editExistingDocumentDraft", request);
+    const draft: DraftSummary = {
+      workspaceId: this.sessionSnapshot.workspaceId,
+      changeId: "269482aa-2c25-4a64-9006-c64ff075b9e5",
+      authorLogin: "hyeeun",
+      baseCommit: "0123456789abcdef",
+      branch: "draft/hyeeun/269482aa-edit-guide",
+      createdAtUnixMs: 1_722_000_000_000,
+      lastOpenedAtUnixMs: 1_722_000_000_000,
+    };
+    this.drafts = [draft];
+    const summary = request.path === apiSummary.path ? apiSummary : guideSummary;
+    return {
+      requestId: request.requestId,
+      document: {
+        changeId: draft.changeId,
+        documentId:
+          summary.documentId ?? "80a44162-92c6-4f2c-9b77-ef5c42a52e5a",
+        path: request.path,
+        markdown: `# ${request.title}`,
+        contentHash: "existing-hash",
+        draft,
+      },
+    };
+  }
+
+  async duplicateTeamTemplate(
+    request: DuplicateTeamTemplateRequest,
+  ): Promise<DuplicateTeamTemplateResponse> {
+    this.record("duplicateTeamTemplate", request);
+    const draft = this.drafts[0] ?? {
+      workspaceId: this.sessionSnapshot.workspaceId,
+      changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+      authorLogin: "hyeeun",
+      baseCommit: "abc123",
+      branch: "draft/current-user/ad1d6c6e-team-template",
+      createdAtUnixMs: 1,
+      lastOpenedAtUnixMs: 1,
+    };
+    this.drafts = [draft];
+    return {
+      requestId: request.requestId,
+      path: `.okf/templates/${request.fileName}`,
+      draft,
+    };
+  }
+
+  async listLocalDocumentDrafts(sessionId: string): Promise<DraftSummary[]> {
+    this.record("listLocalDocumentDrafts", sessionId);
+    return this.drafts;
+  }
+
+  async getActiveDraftRecovery(sessionId: string): Promise<RecoveredDocument | null> {
+    this.record("getActiveDraftRecovery", sessionId);
+    return this.activeRecovery;
+  }
+
+  async switchLocalDocumentDraft(
+    sessionId: string,
+    requestId: string,
+    changeId: string | null,
+  ): Promise<SwitchLocalDocumentDraftResponse> {
+    this.record("switchLocalDocumentDraft", sessionId, requestId, changeId);
+    return {
+      requestId,
+      draft: this.drafts.find((draft) => draft.changeId === changeId) ?? null,
+    };
+  }
+
+  async closeLocalDocumentDraft(sessionId: string): Promise<void> {
+    this.record("closeLocalDocumentDraft", sessionId);
+  }
+
+  async saveDocumentDraft(
+    request: SaveDocumentDraftRequest,
+  ): Promise<SaveDocumentDraftResponse> {
+    this.record("saveDocumentDraft", request);
+    return {
+      requestId: request.requestId,
+      result: {
+        status: "saved",
+        changeId: request.changeId,
+        documentId: request.documentId,
+        path: request.path,
+        contentHash: `saved-${request.requestId}`,
+      },
+    };
   }
 
   async searchDocuments(

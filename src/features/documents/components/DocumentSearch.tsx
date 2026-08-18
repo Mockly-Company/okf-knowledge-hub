@@ -1,5 +1,6 @@
 import { FileText, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import type {
   AppError,
   DocumentSummary,
@@ -50,7 +51,7 @@ export function DocumentSearch({
     <section className="document-search" aria-label="문서 찾기">
       <div className="document-search__field">
         <Search aria-hidden="true" />
-        <input
+        <Input
           type="search"
           aria-label="문서 검색"
           placeholder="문서 제목, 본문 또는 경로 검색"

@@ -155,6 +155,140 @@ export interface DocumentSessionSnapshot extends DocumentSessionStateSnapshot {
   branch: string;
 }
 
+export type DocumentTemplateSource = "built_in" | "team";
+
+export interface DocumentTemplateDefaults {
+  tags: string[];
+}
+
+export interface NewDocumentTemplate {
+  id: string;
+  source: DocumentTemplateSource;
+  label: string;
+  description: string | null;
+  typeKey: string | null;
+  defaults: DocumentTemplateDefaults;
+  richEditorCompatible: boolean;
+}
+
+export interface DocumentTemplateDiagnostic {
+  templateId: string;
+  message: string;
+}
+
+export interface DocumentTemplateCatalog {
+  templates: NewDocumentTemplate[];
+  diagnostics: DocumentTemplateDiagnostic[];
+}
+
+export interface DocumentTargetValidation {
+  normalizedFileName: string;
+  relativePath: string;
+  hasCollision: boolean;
+  suggestedFileName: string | null;
+}
+
+export interface DraftSummary {
+  workspaceId: string;
+  changeId: string;
+  authorLogin: string;
+  baseCommit: string;
+  branch: string;
+  createdAtUnixMs: number;
+  lastOpenedAtUnixMs: number;
+}
+
+export interface SwitchLocalDocumentDraftResponse {
+  requestId: string;
+  draft: DraftSummary | null;
+}
+
+export interface CreatedDocument {
+  changeId: string;
+  documentId: string;
+  path: string;
+  markdown: string;
+  contentHash: string;
+  draft: DraftSummary;
+}
+
+export interface RecoveredDocument {
+  document: CreatedDocument;
+  conflict: Extract<SaveDocumentResult, { status: "conflict" }> | null;
+  hasUnsavedRecovery: boolean;
+}
+
+export interface CreateDocumentDraftRequest {
+  sessionId: string;
+  requestId: string;
+  title: string;
+  folder: string;
+  fileName: string;
+  templateId: string;
+  separateChange: boolean;
+}
+
+export interface CreateDocumentDraftResponse {
+  requestId: string;
+  document: CreatedDocument;
+}
+
+export interface EditExistingDocumentDraftRequest {
+  sessionId: string;
+  requestId: string;
+  path: string;
+  title: string;
+}
+
+export interface DuplicateTeamTemplateRequest {
+  sessionId: string;
+  requestId: string;
+  sourceTemplateId: string;
+  fileName: string;
+  label: string;
+  description: string | null;
+  separateChange: boolean;
+}
+
+export interface DuplicateTeamTemplateResponse {
+  requestId: string;
+  path: string;
+  draft: DraftSummary;
+}
+
+export interface SaveDocumentDraftRequest {
+  sessionId: string;
+  requestId: string;
+  changeId: string;
+  documentId: string;
+  path: string;
+  expectedHash: string;
+  markdown: string;
+}
+
+export type SaveDocumentResult =
+  | {
+      status: "saved";
+      changeId: string;
+      documentId: string;
+      path: string;
+      contentHash: string;
+    }
+  | {
+      status: "conflict";
+      changeId: string;
+      documentId: string;
+      path: string;
+      diskHash: string;
+      diskMarkdown: string;
+      hubMarkdown: string;
+    };
+
+export interface SaveDocumentDraftResponse {
+  requestId: string;
+  result: SaveDocumentResult;
+}
+
 export type DocumentEvent =
   | {
       type: "tree_changed";

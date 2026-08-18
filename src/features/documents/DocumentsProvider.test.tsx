@@ -10,7 +10,18 @@ const SEARCH_ONE_ID = "34e1764e-4278-41f8-bcf8-9f74ff6f66e0";
 const SEARCH_TWO_ID = "54bf90af-b193-4387-8618-ae168b775407";
 
 function Probe() {
-  const { state, setSearchQuery, selectDocument } = useDocuments();
+  const {
+    state,
+    authoringState,
+    setSearchQuery,
+    selectDocument,
+    openNewDocument,
+    createNewDocument,
+    updateDraftMarkdown,
+    showDocumentsHome,
+    closeDraftEditor,
+    switchDraft,
+  } = useDocuments();
   return (
     <div>
       <output data-testid="status">{state.status}</output>
@@ -25,10 +36,32 @@ function Probe() {
       <output data-testid="search-results">
         {state.searchResults.map((result) => result.title).join(",")}
       </output>
+      <output data-testid="templates">{authoringState.templateCatalog.templates.length}</output>
+      <output data-testid="creation-status">{authoringState.creation.status}</output>
+      <output data-testid="editor-path">{authoringState.editor?.document.path ?? "none"}</output>
+      <output data-testid="save-status">{authoringState.editor?.saveStatus ?? "none"}</output>
       <button onClick={() => setSearchQuery("alpha")}>alpha</button>
       <button onClick={() => setSearchQuery("beta")}>beta</button>
       <button onClick={() => selectDocument("docs/guide.md")}>open-guide</button>
       <button onClick={() => selectDocument("docs/api.md")}>open-api</button>
+      <button onClick={() => openNewDocument("docs/api")}>new-document</button>
+      <button
+        onClick={() =>
+          createNewDocument({
+            title: "지도 API",
+            folder: "docs/api",
+            fileName: "지도 API.md",
+            templateId: "builtin:api_contract",
+            separateChange: true,
+          })
+        }
+      >
+        create-document
+      </button>
+      <button onClick={() => updateDraftMarkdown("# changed")}>edit-document</button>
+      <button onClick={showDocumentsHome}>documents-home</button>
+      <button onClick={closeDraftEditor}>close-editor</button>
+      <button onClick={() => switchDraft(null)}>switch-main</button>
     </div>
   );
 }
@@ -36,6 +69,7 @@ function Probe() {
 function renderProvider(
   gateway: FakeDocumentsGateway,
   ids: string[] = [SESSION_ID],
+  saveDebounceMs = 0,
 ) {
   const remainingIds = [...ids];
   return render(
@@ -47,6 +81,7 @@ function renderProvider(
         return id;
       }}
       searchDebounceMs={0}
+      saveDebounceMs={saveDebounceMs}
     >
       <Probe />
     </DocumentsProvider>,
@@ -352,5 +387,247 @@ describe("DocumentsProvider", () => {
       ]);
     });
     expect(await screen.findByText("New")).toBeInTheDocument();
+  });
+
+  it("validates before creation, restarts on the draft worktree, and autosaves with owned ids", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const user = userEvent.setup();
+    const createRequest = "34e1764e-4278-41f8-bcf8-9f74ff6f66e0";
+    const restartedSession = "54bf90af-b193-4387-8618-ae168b775407";
+    const saveRequest = "5b0df17a-c57d-4e5c-a945-a88f9dbfd6a4";
+    renderProvider(gateway, [SESSION_ID, createRequest, restartedSession, saveRequest]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("templates")).toHaveTextContent("2"),
+    );
+    await user.click(screen.getByRole("button", { name: "new-document" }));
+    await user.click(screen.getByRole("button", { name: "create-document" }));
+
+    await waitFor(() =>
+      expect(gateway.calls.filter((call) => call.method === "validateDocumentCreation")).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(gateway.calls.filter((call) => call.method === "createDocumentDraft")).toHaveLength(1),
+    );
+    expect(
+      gateway.calls.findIndex((call) => call.method === "validateDocumentCreation"),
+    ).toBeLessThan(
+      gateway.calls.findIndex((call) => call.method === "createDocumentDraft"),
+    );
+    expect(await screen.findByTestId("editor-path")).toHaveTextContent(
+      "docs/api/지도-api.md",
+    );
+    await waitFor(() =>
+      expect(gateway.calls).toContainEqual({
+        method: "startSession",
+        args: [restartedSession],
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "edit-document" }));
+    await waitFor(() =>
+      expect(gateway.calls.filter((call) => call.method === "saveDocumentDraft")).toHaveLength(1),
+    );
+    expect(gateway.calls.find((call) => call.method === "saveDocumentDraft")?.args[0]).toMatchObject({
+      requestId: saveRequest,
+      markdown: "# changed",
+    });
+    expect(await screen.findByTestId("save-status")).toHaveTextContent("saved");
+  });
+
+  it("flushes the current editor before replacing it with a newly created document", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const user = userEvent.setup();
+    const firstCreate = "34e1764e-4278-41f8-bcf8-9f74ff6f66e0";
+    const firstSession = "54bf90af-b193-4387-8618-ae168b775407";
+    const flushSave = "5b0df17a-c57d-4e5c-a945-a88f9dbfd6a4";
+    const secondCreate = "632af6ac-8034-4d83-ac65-8dc43cc306c2";
+    const secondSession = "756a7b2c-56dd-4b51-b76e-48c09d2f07cb";
+    renderProvider(
+      gateway,
+      [SESSION_ID, firstCreate, firstSession, flushSave, secondCreate, secondSession],
+      60_000,
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("templates")).toHaveTextContent("2"),
+    );
+    await user.click(screen.getByRole("button", { name: "create-document" }));
+    await screen.findByTestId("editor-path");
+    await user.click(screen.getByRole("button", { name: "edit-document" }));
+
+    gateway.calls.length = 0;
+    await user.click(screen.getByRole("button", { name: "create-document" }));
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "createDocumentDraft"),
+      ).toHaveLength(1),
+    );
+    const saveIndex = gateway.calls.findIndex(
+      (call) => call.method === "saveDocumentDraft",
+    );
+    const validationIndex = gateway.calls.findIndex(
+      (call) => call.method === "validateDocumentCreation",
+    );
+    expect(saveIndex).toBeGreaterThanOrEqual(0);
+    expect(saveIndex).toBeLessThan(validationIndex);
+    expect(gateway.calls[saveIndex]?.args[0]).toMatchObject({
+      requestId: flushSave,
+      markdown: "# changed",
+    });
+  });
+
+  it("flushes and closes the current editor before showing Documents home", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = "docs/guide.md";
+    gateway.activeRecovery = {
+      document: {
+        changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+        documentId: "90e4ad45-f4f4-4cf4-9ef4-5e3d30e46261",
+        path: "docs/draft.md",
+        markdown: "# 저장 전 초안\n",
+        contentHash: "draft-hash",
+        draft: {
+          workspaceId: gateway.sessionSnapshot.workspaceId,
+          changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+          authorLogin: "hyeeun",
+          baseCommit: "abc123",
+          branch: "draft/hyeeun/ad1d6c6e-draft",
+          createdAtUnixMs: 1,
+          lastOpenedAtUnixMs: 2,
+        },
+      },
+      conflict: null,
+      hasUnsavedRecovery: false,
+    };
+    const user = userEvent.setup();
+    renderProvider(gateway);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-path")).toHaveTextContent(
+        "docs/draft.md",
+      ),
+    );
+    expect(screen.getByTestId("selected")).toHaveTextContent("docs/guide.md");
+
+    await user.click(screen.getByRole("button", { name: "documents-home" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-path")).toHaveTextContent("none"),
+    );
+    expect(screen.getByTestId("selected")).toHaveTextContent("none");
+  });
+
+  it("restores a recoverable local draft when the document session starts", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.activeRecovery = {
+      document: {
+        changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+        documentId: "90e4ad45-f4f4-4cf4-9ef4-5e3d30e46261",
+        path: "docs/recovered.md",
+        markdown: "# 복구된 초안\n",
+        contentHash: "disk-hash",
+        draft: {
+          workspaceId: gateway.sessionSnapshot.workspaceId,
+          changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+          authorLogin: "hyeeun",
+          baseCommit: "abc123",
+          branch: "draft/hyeeun/ad1d6c6e-recovered",
+          createdAtUnixMs: 1,
+          lastOpenedAtUnixMs: 2,
+        },
+      },
+      conflict: null,
+      hasUnsavedRecovery: true,
+    };
+
+    renderProvider(gateway);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-path")).toHaveTextContent(
+        "docs/recovered.md",
+      ),
+    );
+    expect(screen.getByTestId("save-status")).toHaveTextContent("dirty");
+  });
+
+  it("reopens the last normally saved draft without scheduling another save", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.activeRecovery = {
+      document: {
+        changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+        documentId: "90e4ad45-f4f4-4cf4-9ef4-5e3d30e46261",
+        path: "docs/saved.md",
+        markdown: "# 저장된 문서\n",
+        contentHash: "saved-hash",
+        draft: {
+          workspaceId: gateway.sessionSnapshot.workspaceId,
+          changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+          authorLogin: "hyeeun",
+          baseCommit: "abc123",
+          branch: "draft/hyeeun/ad1d6c6e-saved",
+          createdAtUnixMs: 1,
+          lastOpenedAtUnixMs: 2,
+        },
+      },
+      conflict: null,
+      hasUnsavedRecovery: false,
+    };
+
+    renderProvider(gateway);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-path")).toHaveTextContent("docs/saved.md"),
+    );
+    expect(screen.getByTestId("save-status")).toHaveTextContent("saved");
+    expect(
+      gateway.calls.filter((call) => call.method === "saveDocumentDraft"),
+    ).toHaveLength(0);
+  });
+
+  it("flushes a dirty draft before switching to main and then restarts the session", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const user = userEvent.setup();
+    const createRequest = "34e1764e-4278-41f8-bcf8-9f74ff6f66e0";
+    const createdSession = "54bf90af-b193-4387-8618-ae168b775407";
+    const autosaveRequest = "5b0df17a-c57d-4e5c-a945-a88f9dbfd6a4";
+    const switchRequest = "632af6ac-8034-4d83-ac65-8dc43cc306c2";
+    const mainSession = "756a7b2c-56dd-4b51-b76e-48c09d2f07cb";
+    renderProvider(gateway, [
+      SESSION_ID,
+      createRequest,
+      createdSession,
+      autosaveRequest,
+      switchRequest,
+      mainSession,
+    ]);
+    await screen.findByText("ready");
+    await user.click(screen.getByRole("button", { name: "create-document" }));
+    await screen.findByTestId("editor-path");
+    await user.click(screen.getByRole("button", { name: "edit-document" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("save-status")).toHaveTextContent("saved"),
+    );
+
+    gateway.calls.length = 0;
+    await user.click(screen.getByRole("button", { name: "switch-main" }));
+
+    await waitFor(() =>
+      expect(gateway.calls).toContainEqual({
+        method: "switchLocalDocumentDraft",
+        args: [createdSession, switchRequest, null],
+      }),
+    );
+    await waitFor(() =>
+      expect(gateway.calls).toContainEqual({
+        method: "startSession",
+        args: [mainSession],
+      }),
+    );
   });
 });

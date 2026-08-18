@@ -55,6 +55,18 @@ function renderSelectedDocument(document = invalidFrontmatterDocument()) {
 }
 
 describe("DocumentReader", () => {
+  it("offers an Edit action for the current document", async () => {
+    const gateway = renderSelectedDocument();
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("button", { name: "편집" }));
+
+    expect(await screen.findByRole("region", { name: "새 문서 편집" })).toBeVisible();
+    expect(
+      gateway.calls.filter((call) => call.method === "editExistingDocumentDraft"),
+    ).toHaveLength(1);
+  });
+
   it("shows properties before the table of contents and keeps invalid documents readable", async () => {
     renderSelectedDocument();
 

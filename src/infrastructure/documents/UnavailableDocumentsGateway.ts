@@ -9,6 +9,18 @@ import type {
   HistoryCursor,
   HistoryPage,
   Unlisten,
+  CreateDocumentDraftRequest,
+  CreateDocumentDraftResponse,
+  EditExistingDocumentDraftRequest,
+  DuplicateTeamTemplateRequest,
+  DuplicateTeamTemplateResponse,
+  DocumentTargetValidation,
+  DocumentTemplateCatalog,
+  DraftSummary,
+  SwitchLocalDocumentDraftResponse,
+  SaveDocumentDraftRequest,
+  SaveDocumentDraftResponse,
+  RecoveredDocument,
 } from "@/features/documents/model";
 
 const DESKTOP_ONLY_MESSAGE =
@@ -37,6 +49,62 @@ export class UnavailableDocumentsGateway implements DocumentsGateway {
   }
 
   refreshSession(_sessionId: string): Promise<void> {
+    return unavailable();
+  }
+
+  listDocumentTemplates(_sessionId: string): Promise<DocumentTemplateCatalog> {
+    return unavailable();
+  }
+
+  validateDocumentCreation(
+    _sessionId: string,
+    _folder: string,
+    _fileName: string,
+  ): Promise<DocumentTargetValidation> {
+    return unavailable();
+  }
+
+  createDocumentDraft(
+    _request: CreateDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse> {
+    return unavailable();
+  }
+
+  editExistingDocumentDraft(
+    _request: EditExistingDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse> {
+    return unavailable();
+  }
+
+  duplicateTeamTemplate(
+    _request: DuplicateTeamTemplateRequest,
+  ): Promise<DuplicateTeamTemplateResponse> {
+    return unavailable();
+  }
+
+  listLocalDocumentDrafts(_sessionId: string): Promise<DraftSummary[]> {
+    return unavailable();
+  }
+
+  getActiveDraftRecovery(_sessionId: string): Promise<RecoveredDocument | null> {
+    return unavailable();
+  }
+
+  switchLocalDocumentDraft(
+    _sessionId: string,
+    _requestId: string,
+    _changeId: string | null,
+  ): Promise<SwitchLocalDocumentDraftResponse> {
+    return unavailable();
+  }
+
+  closeLocalDocumentDraft(_sessionId: string): Promise<void> {
+    return unavailable();
+  }
+
+  saveDocumentDraft(
+    _request: SaveDocumentDraftRequest,
+  ): Promise<SaveDocumentDraftResponse> {
     return unavailable();
   }
 
