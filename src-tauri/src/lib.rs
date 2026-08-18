@@ -54,7 +54,9 @@ pub fn run() {
                 settings::store_adapter::TauriLocalSettingsStore::new(store),
             );
             let document_cache_root = app.path().app_data_dir()?.join("document-search");
+            let document_draft_root = app.path().app_data_dir()?.join("document-drafts");
             std::fs::create_dir_all(&document_cache_root)?;
+            std::fs::create_dir_all(&document_draft_root)?;
             let credentials = auth::keyring_store::KeyringCredentialStore::new()
                 .map_err(|_| std::io::Error::other("failed to initialize credential storage"))?;
             let auth_jobs = state::JobRegistry::default();
@@ -70,10 +72,12 @@ pub fn run() {
                 ),
             );
             app.manage(
-                state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs).with_documents(
-                    documents::runtime::DocumentRuntime::new(),
-                    document_cache_root,
-                ),
+                state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs)
+                    .with_document_storage(
+                        documents::runtime::DocumentRuntime::new(),
+                        document_cache_root,
+                        document_draft_root,
+                    ),
             );
             Ok(())
         })
@@ -95,6 +99,16 @@ pub fn run() {
             commands::documents::start_document_session,
             commands::documents::stop_document_session,
             commands::documents::refresh_document_session,
+            commands::documents::list_document_templates,
+            commands::documents::validate_document_creation,
+            commands::documents::create_document_draft,
+            commands::documents::edit_existing_document_draft,
+            commands::documents::duplicate_team_template,
+            commands::documents::list_local_document_drafts,
+            commands::documents::get_active_draft_recovery,
+            commands::documents::switch_local_document_draft,
+            commands::documents::close_local_document_draft,
+            commands::documents::save_document_draft,
             commands::documents::search_documents,
             commands::documents::read_document,
             commands::documents::read_document_asset,

@@ -10,5 +10,8 @@ pub mod runtime;
 pub mod search_text;
 pub mod watcher;
 
+pub mod authoring;
+pub mod drafts;
+
 #[cfg(test)]
 mod performance_tests;

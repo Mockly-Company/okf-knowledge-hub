@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::{Uuid, Variant, Version};
 
 use crate::auth::service::AuthService;
+use crate::documents::drafts::DraftManager;
 use crate::documents::runtime::{DocumentRuntime, DocumentRuntimeGeneration};
 use crate::github::GithubService;
 use crate::repository::git2_adapter::Git2RepositoryAdapter;
@@ -27,6 +28,7 @@ pub struct AppServices {
     pub local_settings: LocalSettingsService,
     pub(crate) document_runtime: DocumentRuntime,
     pub(crate) document_cache_root: PathBuf,
+    pub(crate) document_drafts: DraftManager,
     pub(crate) document_sessions: DocumentCommandSessionRegistry,
     pub(crate) auth_jobs: JobRegistry,
     pub(crate) clone_jobs: JobRegistry,
@@ -822,6 +824,7 @@ impl AppServices {
             local_settings,
             document_runtime: DocumentRuntime::new(),
             document_cache_root: std::env::temp_dir().join("okhub-document-search"),
+            document_drafts: DraftManager::new(std::env::temp_dir().join("okhub-document-drafts")),
             document_sessions: DocumentCommandSessionRegistry::default(),
             auth_jobs: JobRegistry::default(),
             clone_jobs: JobRegistry::default(),
@@ -854,6 +857,7 @@ impl AppServices {
             local_settings,
             document_runtime: DocumentRuntime::new(),
             document_cache_root: std::env::temp_dir().join("okhub-document-search"),
+            document_drafts: DraftManager::new(std::env::temp_dir().join("okhub-document-drafts")),
             document_sessions: DocumentCommandSessionRegistry::default(),
             auth_jobs,
             clone_jobs: JobRegistry::default(),
@@ -864,9 +868,24 @@ impl AppServices {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_documents(mut self, runtime: DocumentRuntime, cache_root: PathBuf) -> Self {
         self.document_runtime = runtime;
+        self.document_drafts = DraftManager::new(cache_root.join("drafts"));
         self.document_cache_root = cache_root;
+        self.document_sessions = DocumentCommandSessionRegistry::default();
+        self
+    }
+
+    pub(crate) fn with_document_storage(
+        mut self,
+        runtime: DocumentRuntime,
+        cache_root: PathBuf,
+        draft_root: PathBuf,
+    ) -> Self {
+        self.document_runtime = runtime;
+        self.document_cache_root = cache_root;
+        self.document_drafts = DraftManager::new(draft_root);
         self.document_sessions = DocumentCommandSessionRegistry::default();
         self
     }
