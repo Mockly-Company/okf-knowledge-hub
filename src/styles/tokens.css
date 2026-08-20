@@ -35,6 +35,7 @@
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --radius-full: 999px;
   --shadow-overlay: 0 12px 28px rgba(25, 30, 38, 0.13);
   --shadow-dialog: 0 18px 48px rgb(20 24 30 / 20%);
   --shadow-popover: 0 8px 18px rgb(20 24 30 / 12%);

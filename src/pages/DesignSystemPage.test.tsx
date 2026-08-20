@@ -31,6 +31,55 @@ function renderPage() {
 }
 
 describe("DesignSystemPage", () => {
+  it("catalogs the approved type, control, and status contracts", () => {
+    renderPage();
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass(
+      "font-[number:var(--font-weight-page-title)]",
+    );
+    expect(screen.getByText("승인된 크기와 굵기 위계")).toHaveClass(
+      "font-[number:var(--font-weight-description)]",
+    );
+    expect(screen.getByRole("button", { name: "Primary" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Disabled" })).toBeDisabled();
+    expect(screen.getByRole("tablist", { name: "문서 표시 모드" })).toBeVisible();
+    for (const label of [
+      "준비됨",
+      "로컬 저장됨",
+      "검토 중",
+      "결정 필요",
+      "저장 실패",
+    ]) {
+      expect(screen.getByText(label)).toBeVisible();
+    }
+  });
+
+  it("catalogs the approved 400, 500, 600, and 700 weight roles", () => {
+    renderPage();
+
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass(
+      "font-[number:var(--font-weight-page-title)]",
+    );
+    expect(screen.getByText("승인된 크기와 굵기 위계")).toHaveClass(
+      "font-[number:var(--font-weight-description)]",
+    );
+    expect(screen.getByRole("button", { name: "Primary" })).toHaveClass(
+      "font-[number:var(--font-weight-control)]",
+    );
+    expect(
+      screen.getByText(/OkHub는 Git의 Markdown을 사람이 오래 읽어도/),
+    ).toHaveClass("font-[number:var(--font-weight-body)]");
+    expect(screen.getByText("docs/features/map-search.md")).toHaveClass(
+      "font-[number:var(--font-weight-body)]",
+    );
+    expect(screen.getByText("로컬 저장됨 · 방금 전")).toHaveClass(
+      "font-[number:var(--font-weight-body)]",
+      "text-[length:var(--font-meta-size)]",
+      "leading-[var(--font-meta-line)]",
+      "text-[var(--color-text-muted)]",
+    );
+  });
+
   it("shows every approved button variant", () => {
     renderPage();
 
@@ -40,6 +89,33 @@ describe("DesignSystemPage", () => {
 
     expect(screen.getByRole("button", { name: "설정 열기" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Disabled" })).toBeDisabled();
+  });
+
+  it("shows the shared form controls and their disabled states", () => {
+    renderPage();
+
+    expect(screen.getByRole("textbox", { name: "문서 제목" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "문서 유형" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "별도 변경 만들기" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "기본 밀도" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "미리보기" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "저장할 수 없음" })).toBeDisabled();
+  });
+
+  it("catalogs the disabled state for every control primitive", () => {
+    renderPage();
+
+    expect(screen.getByRole("textbox", { name: "비활성 입력" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "비활성 선택" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "비활성 Markdown" })).toBeDisabled();
+    expect(
+      screen.getByRole("checkbox", { name: "비활성 체크박스" }),
+    ).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "비활성 라디오" })).toBeDisabled();
+    expect(screen.getByRole("tab", { name: "비활성 탭" })).toBeDisabled();
   });
 
   it("explains the icon-only button with a tooltip", async () => {

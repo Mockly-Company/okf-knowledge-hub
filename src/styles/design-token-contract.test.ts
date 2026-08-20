@@ -45,6 +45,12 @@ describe("design token contract", () => {
     expect(tokens).toContain("--control-height: 36px");
   });
 
+  it("defines the approved full radius for status pills", () => {
+    const tokens = readFileSync(tokenFile, "utf8");
+
+    expect(tokens).toContain("--radius-full: 999px");
+  });
+
   it("keeps spacing on the approved four-pixel scale", () => {
     const tokens = readFileSync(tokenFile, "utf8");
 
