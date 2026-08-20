@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { UnstyledButton } from "@/components/ui/unstyled-button";
 import type { DocumentCreationInput } from "../document-authoring-reducer";
 import type { DocumentAuthoringState } from "../document-authoring-reducer";
 import type { TeamTemplateCopyInput } from "../document-authoring-reducer";
@@ -67,7 +68,7 @@ export function NewDocumentDialog({
           {items.map((template) => {
             const selected = template.id === templateId;
             return (
-              <button
+              <UnstyledButton
                 key={template.id}
                 type="button"
                 className={selected ? "is-selected" : undefined}
@@ -80,7 +81,7 @@ export function NewDocumentDialog({
                   {template.description ? <small>{template.description}</small> : null}
                 </span>
                 {selected ? <Check aria-hidden="true" /> : null}
-              </button>
+              </UnstyledButton>
             );
           })}
         </div>

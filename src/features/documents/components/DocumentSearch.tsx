@@ -1,6 +1,7 @@
 import { FileText, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { UnstyledButton } from "@/components/ui/unstyled-button";
 import type {
   AppError,
   DocumentSummary,
@@ -88,8 +89,7 @@ export function DocumentSearch({
               const result = "matchField" in item ? item : null;
               return (
                 <li key={item.path}>
-                  <button
-                    type="button"
+                  <UnstyledButton
                     onClick={() =>
                       result
                         ? onSelectResult(result)
@@ -102,7 +102,7 @@ export function DocumentSearch({
                       <small>{item.path}</small>
                       {result?.snippet ? <span>{result.snippet}</span> : null}
                     </span>
-                  </button>
+                  </UnstyledButton>
                 </li>
               );
             })}

@@ -14,6 +14,8 @@ describe("form control primitives", () => {
     expect(screen.getByRole("textbox", { name: "제목" })).toHaveClass(
       "border-[var(--color-border)]",
       "bg-[var(--color-surface)]",
+      "font-[number:var(--font-weight-description)]",
+      "cursor-text",
     );
   });
 
@@ -21,6 +23,8 @@ describe("form control primitives", () => {
     render(<Textarea aria-label="Markdown" />);
     expect(screen.getByRole("textbox", { name: "Markdown" })).toHaveClass(
       "text-[length:var(--font-document-size)]",
+      "font-[number:var(--font-weight-description)]",
+      "cursor-text",
     );
   });
 
@@ -41,11 +45,15 @@ describe("form control primitives", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Draft" }), "draft");
     await user.click(screen.getByRole("checkbox", { name: "별도 변경" }));
     await user.click(screen.getByRole("radio", { name: "저장소" }));
+    expect(screen.getByRole("combobox", { name: "Draft" })).toHaveClass(
+      "cursor-pointer",
+      "font-[number:var(--font-weight-description)]",
+    );
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("radio", { name: "저장소" })).toBeChecked();
   });
 
-  it("expresses selected tabs with semantics and design tokens", () => {
+  it("renders tabs as a segmented control", () => {
     render(
       <TabsList aria-label="편집 모드">
         <TabsTrigger selected>문서 편집</TabsTrigger>
@@ -53,12 +61,17 @@ describe("form control primitives", () => {
       </TabsList>,
     );
 
-    expect(screen.getByRole("tab", { name: "문서 편집" })).toHaveAttribute(
+    expect(screen.getByRole("tablist")).toHaveClass(
+      "rounded-[var(--radius-md)]",
+      "bg-[var(--color-control-disabled)]",
+    );
+    const selectedTab = screen.getByRole("tab", { name: "문서 편집" });
+    expect(selectedTab).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    expect(screen.getByRole("tab", { name: "문서 편집" })).toHaveClass(
-      "bg-[var(--color-primary-soft)]",
+    expect(selectedTab).toHaveClass(
+      "bg-[var(--color-surface)]",
     );
   });
 });

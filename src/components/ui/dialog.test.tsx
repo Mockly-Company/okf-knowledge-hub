@@ -22,7 +22,9 @@ describe("Dialog", () => {
       </Dialog>,
     );
 
-    expect(screen.getByRole("dialog", { name: "새 문서" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "새 문서" })).toHaveClass(
+      "p-[var(--dialog-padding)]",
+    );
     await user.keyboard("{Escape}");
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });

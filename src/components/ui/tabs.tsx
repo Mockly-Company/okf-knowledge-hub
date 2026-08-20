@@ -8,7 +8,10 @@ export function TabsList({
   return (
     <div
       role="tablist"
-      className={cn("flex items-center gap-1", className)}
+      className={cn(
+        "flex w-fit items-center gap-1 rounded-[var(--radius-md)] bg-[var(--color-control-disabled)] p-1",
+        className,
+      )}
       {...props}
     />
   );
@@ -29,9 +32,9 @@ export const TabsTrigger = React.forwardRef<
     role="tab"
     aria-selected={selected}
     className={cn(
-      "cursor-pointer rounded-[var(--radius-sm)] border-0 bg-transparent px-3 py-2 text-[var(--color-text-muted)] hover:bg-[var(--color-canvas)] disabled:cursor-not-allowed disabled:text-[var(--color-text-disabled)]",
+      "cursor-pointer rounded-[var(--radius-md)] border-0 bg-transparent px-3 py-2 text-[var(--color-text-muted)] hover:bg-[var(--color-canvas)] disabled:cursor-not-allowed disabled:text-[var(--color-text-disabled)]",
       selected &&
-        "bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary-text)]",
+        "bg-[var(--color-surface)] font-[number:var(--font-weight-control)] text-[var(--color-primary-text)]",
       className,
     )}
     {...props}

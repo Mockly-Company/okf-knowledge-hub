@@ -13,6 +13,7 @@ import {
   type CSSProperties,
 } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
+import { UnstyledButton } from "@/components/ui/unstyled-button";
 import { cn } from "@/lib/utils";
 import type { DocumentTreeEntry } from "../model";
 
@@ -132,9 +133,9 @@ export function DocumentTree({
         <span>문서</span>
         {onNewDocument ? (
           <Tooltip content="새 문서">
-            <button type="button" aria-label="새 문서" onClick={() => onNewDocument("docs")}>
+            <UnstyledButton aria-label="새 문서" onClick={() => onNewDocument("docs")}>
               <Plus aria-hidden="true" />
-            </button>
+            </UnstyledButton>
           </Tooltip>
         ) : null}
       </div>
@@ -147,7 +148,7 @@ export function DocumentTree({
         const label = labelFor(entry);
         const isSelected = !isFolder && selectedPath === entry.summary.path;
         const item = (
-          <button
+          <UnstyledButton
             ref={(element) => {
               if (element) itemRefs.current.set(key, element);
               else itemRefs.current.delete(key);
@@ -233,7 +234,7 @@ export function DocumentTree({
               </>
             )}
             <span>{label}</span>
-          </button>
+          </UnstyledButton>
         );
 
         const treeItem = label.length > 28 ? (
@@ -247,8 +248,7 @@ export function DocumentTree({
             {treeItem}
             {isFolder && onNewDocument ? (
               <Tooltip content={`${label}에 새 문서`}>
-                <button
-                  type="button"
+                <UnstyledButton
                   className="document-tree__folder-create"
                   aria-label={`${label}에 새 문서`}
                   onClick={(event) => {
@@ -257,7 +257,7 @@ export function DocumentTree({
                   }}
                 >
                   <Plus aria-hidden="true" />
-                </button>
+                </UnstyledButton>
               </Tooltip>
             ) : null}
           </div>

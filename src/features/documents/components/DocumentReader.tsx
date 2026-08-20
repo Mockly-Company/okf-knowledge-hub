@@ -2,6 +2,7 @@ import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { UnstyledButton } from "@/components/ui/unstyled-button";
 import { useDocuments } from "../DocumentsProvider";
 import type { DocumentContent } from "../model";
 import { MarkdownDocument } from "./MarkdownDocument";
@@ -78,15 +79,15 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
           </Button>
           {menuOpen ? (
             <div className="document-reader__menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => void copyText(`[${document.summary.title}](${document.summary.path})`)}>
+              <UnstyledButton role="menuitem" onClick={() => void copyText(`[${document.summary.title}](${document.summary.path})`)}>
                 문서 링크 복사
-              </button>
-              <button type="button" role="menuitem" onClick={() => void copyText(document.summary.path)}>
+              </UnstyledButton>
+              <UnstyledButton role="menuitem" onClick={() => void copyText(document.summary.path)}>
                 Git 파일 경로 복사
-              </button>
-              <button type="button" role="menuitem" onClick={() => void openExternal(githubUrl)}>
+              </UnstyledButton>
+              <UnstyledButton role="menuitem" onClick={() => void openExternal(githubUrl)}>
                 GitHub에서 보기
-              </button>
+              </UnstyledButton>
             </div>
           ) : null}
         </div>

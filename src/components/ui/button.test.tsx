@@ -6,6 +6,17 @@ import { Button } from "./button";
 afterEach(cleanup);
 
 describe("Button", () => {
+  it("uses approved control geometry and strong action weight", () => {
+    render(<Button>새 문서</Button>);
+
+    expect(screen.getByRole("button", { name: "새 문서" })).toHaveClass(
+      "h-[var(--control-height)]",
+      "rounded-[var(--radius-md)]",
+      "font-[number:var(--font-weight-control)]",
+      "cursor-pointer",
+    );
+  });
+
   it("renders a primary action", () => {
     render(<Button>연결하기</Button>);
     const button = screen.getByRole("button", { name: "연결하기" });
@@ -15,6 +26,7 @@ describe("Button", () => {
     );
     expect(button).toHaveClass(
       "active:bg-[var(--color-primary-action-pressed)]",
+      "cursor-pointer",
     );
   });
 
@@ -25,8 +37,12 @@ describe("Button", () => {
     expect(button).toHaveClass(
       "disabled:bg-[var(--color-control-disabled)]",
       "disabled:text-[var(--color-text-disabled)]",
+      "disabled:cursor-not-allowed",
     );
-    expect(button).not.toHaveClass("disabled:opacity-45");
+    expect(button).not.toHaveClass(
+      "disabled:opacity-45",
+      "disabled:pointer-events-none",
+    );
   });
 
   it("supports a named icon action", () => {
