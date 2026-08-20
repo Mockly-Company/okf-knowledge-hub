@@ -40,12 +40,35 @@
   --shadow-popover: 0 8px 18px rgb(20 24 30 / 12%);
   --font-ui-size: 13px;
   --font-ui-line: 20px;
+  --font-weight-page-title: 700;
+  --font-weight-section-title: 700;
+  --font-weight-control: 600;
+  --font-weight-description: 500;
+  --font-weight-body: 400;
   --font-document-size: 16px;
   --font-document-line: 28px;
   --font-h1-size: 28px;
   --font-h1-line: 36px;
+  --font-section-size: 20px;
+  --font-section-line: 28px;
+  --font-group-size: 14px;
+  --font-group-line: 20px;
+  --font-meta-size: 12px;
+  --font-meta-line: 18px;
   --control-height: 36px;
   --icon-size: 16px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --page-padding-inline: 40px;
+  --panel-padding: 24px;
+  --dialog-padding: 24px;
 }
 
 :root[data-density="compact"] {
@@ -55,6 +78,15 @@
   --font-document-line: 25px;
   --font-h1-size: 24px;
   --font-h1-line: 32px;
+  --font-section-size: 18px;
+  --font-section-line: 26px;
+  --font-group-size: 13px;
+  --font-group-line: 18px;
+  --font-meta-size: 11px;
+  --font-meta-line: 17px;
   --control-height: 32px;
   --icon-size: 14px;
+  --page-padding-inline: 32px;
+  --panel-padding: 20px;
+  --dialog-padding: 20px;
 }
