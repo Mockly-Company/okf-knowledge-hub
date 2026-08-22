@@ -18,7 +18,7 @@
 - 앱 화면의 짧은 표기는 `OkHub`를 사용합니다.
 - Git 저장소와 프로젝트의 정식 이름 `okf-knowledge-hub`는 유지합니다.
 - 현재 로고 마크는 Aqua Mint 배경에 흰색 `OK`를 넣은 임시 형태입니다.
-- 흰색은 로고의 `OK`와 충분히 어두운 Primary action 배경의 버튼 label에만 사용합니다. Aqua Mint `#009E8E` 위의 일반 텍스트에는 사용하지 않습니다.
+- 순백색 `#FFFFFF`은 로고의 `OK`에만 사용합니다. Primary action의 label은 눈부심을 줄인 민트 화이트 `#F4FFFD`를 사용합니다. Aqua Mint `#009E8E` 위의 일반 텍스트에는 사용하지 않습니다.
 
 ## 3. 색상
 
@@ -34,26 +34,28 @@
 | `color.primary.text` | `#007C71` | 흰 배경의 링크와 활성 텍스트 |
 | `color.primary.soft` | `#E5F5F3` | 선택 배경, badge와 avatar 배경 |
 | `color.primary.soft.pressed` | `#D4EFEC` | Ghost button과 선택 항목 pressed 배경 |
-| `color.on-primary` | `#FFFFFF` | Primary action 배경의 버튼 텍스트 |
+| `color.on-primary` | `#F4FFFD` | Primary action 배경의 편안한 버튼 텍스트 |
 | `color.on-logo` | `#FFFFFF` | 로고 마크의 `OK`에만 사용하는 예외 |
 
-브랜드 Aqua Mint `#009E8E`와 주요 행동의 배경을 분리합니다. 주요 버튼은 `#007C71` 배경과 흰색 텍스트를 사용해 일반 크기 label에서도 충분한 대비를 확보합니다. 흰 배경의 Primary 계열 텍스트에도 `#007C71`을 사용합니다.
+브랜드 Aqua Mint `#009E8E`와 주요 행동의 배경을 분리합니다. 주요 버튼은 `#007C71` 배경과 `#F4FFFD` 텍스트를 사용해 일반 크기 label에서도 `4.99:1` 대비를 확보합니다. 흰 배경의 Primary 계열 텍스트에는 `#007C71`을 사용합니다.
 
 ### Neutral
 
 | 토큰 | 값 | 용도 |
 |---|---|---|
-| `color.text.strong` | `#16181D` | 제목과 주요 본문 |
+| `color.text.strong` | `#24272D` | 제목과 주요 본문 |
 | `color.text.default` | `#343941` | 일반 본문 |
-| `color.text.muted` | `#6B717C` | 보조 설명과 metadata |
+| `color.text.muted` | `#747B86` | 보조 설명과 metadata |
 | `color.text.disabled` | `#7D918F` | 비활성 control의 label과 icon |
-| `color.border` | `#E2E5E9` | 기본 테두리 |
+| `color.border` | `#E5E7EB` | 기본 테두리 |
 | `color.border.hover` | `#C7CDD4` | Hover된 control의 테두리 |
 | `color.border.strong` | `#AEB5BF` | Pressed·강조 control의 테두리 |
 | `color.control.disabled` | `#F1F3F5` | 비활성 control 배경 |
 | `color.surface.pressed` | `#ECEFF2` | Neutral control의 pressed 배경 |
-| `color.canvas` | `#F6F7F9` | Sidebar와 Main 내부 보조 영역 |
+| `color.canvas` | `#F7F8F9` | Sidebar와 Main 내부의 보조 영역 |
 | `color.surface` | `#FFFFFF` | Main, card, panel과 입력 표면 |
+
+기본 화면 구조는 회색 `color.canvas` Sidebar와 흰색 `color.surface` Main으로 구분합니다. Main 안에서 그룹 구분이 필요한 보조 영역에만 Canvas를 제한적으로 사용합니다.
 
 ### Semantic
 
@@ -73,7 +75,8 @@ Semantic 색상은 해당 의미에만 사용합니다. 문서 타입, 담당 �
 - 기본: `Pretendard Variable`
 - fallback: `Pretendard`, `-apple-system`, `BlinkMacSystemFont`, `Segoe UI`, `sans-serif`
 - 코드: `ui-monospace`, `SFMono-Regular`, `Menlo`, `Consolas`, `monospace`
-- 기본 weight: 본문 `400`, UI label `500`, 강조 `600`, 제목 `700`
+- 기본 weight: 본문 `400`, UI label `500`, control·강조 `600`
+- 페이지 제목과 섹션 제목은 `600`을 사용합니다. `700`을 기본 제목 weight로 사용하지 않습니다.
 
 ### 표시 모드
 
@@ -86,6 +89,8 @@ Semantic 색상은 해당 의미에만 사용합니다. 문서 타입, 담당 �
 | 코드 본문 | `13/20px` | `12/18px` |
 | 기본 control 높이 | `36px` | `32px` |
 | 기본 아이콘 | `16px` | `14px` |
+
+- 페이지 H1과 문서 H1은 `600`, 섹션 제목과 문서 H2는 `600`을 사용합니다.
 
 - 초기값은 `Default`입니다.
 - 사용자는 `Settings → 화면 → 표시 밀도`에서 `Default`와 `Compact`를 전환합니다.
@@ -110,16 +115,31 @@ Semantic 색상은 해당 의미에만 사용합니다. 문서 타입, 담당 �
 | Form field 사이 | `16px` | `12px` | label·input 단위의 반복 |
 | 관련된 component group | `24px` | `20px` | 검색과 filter, 본문과 보조 action |
 | Page section 사이 | `32px` | `24px` | 제목·요약·본문 영역 |
-| 큰 화면 영역 사이 | `48px` | `40px` | 독립된 dashboard 영역 |
+| 큰 화면 영역 사이 | `40px` | `32px` | 독립된 dashboard 영역 |
+
+### Page layout rhythm
+
+| 관계 | Default | Compact |
+|---|---:|---:|
+| Page 상단 시작점 | `32px` | `24px` |
+| Page 좌우 여백 | `32px` | `24px` |
+| 제목과 설명 | `8px` | `4px` |
+| Header와 첫 콘텐츠 | `24px` | `20px` |
+| Page section 사이 | `32px` | `24px` |
+
+- Home, Documents, Project, Settings와 문서 상세·편집 화면은 같은 Page 상단·좌우 토큰을 사용합니다.
+- selector, notice와 보조 action은 제목 위에 배치해 제목 시작점을 밀지 않습니다.
+- Main만 세로 스크롤하고 Sidebar와 하단 사용자 영역은 고정합니다.
+- Board, 표, 코드와 Diagram의 가로 스크롤은 해당 콘텐츠 영역 안에서만 발생합니다.
 
 ### Container padding
 
 | 대상 | Default | Compact |
 |---|---:|---:|
-| 작은 card·popover | `16px` | `12px` |
-| 기본 card·panel | `24px` | `20px` |
+| 작은 card·popover | `12px` | `12px` |
+| 기본 card·panel | `16px` | `16px` |
 | Dialog | `24px` | `20px` |
-| Page 좌우 여백 | `40px` | `32px` |
+| Page 좌우 여백 | `32px` | `24px` |
 | Button 좌우 | `12px` | `12px` |
 | Input 좌우 | `12px` | `12px` |
 
@@ -128,6 +148,15 @@ Semantic 색상은 해당 의미에만 사용합니다. 문서 타입, 담당 �
   - `md: 8px` — button, input, menu item
   - `lg: 12px` — card, panel, dialog
   - `full: 999px` — avatar와 상태 pill
+
+### Shape과 control sizing
+
+- 기본 control 높이는 Default `36px`, Compact `32px`입니다.
+- Button, Input, Select와 Menu item은 `8px` radius와 `1px` border를 사용합니다.
+- Card, Panel과 Dialog는 `12px` radius를 사용합니다.
+- 기본 Lucide icon은 Default `16px`, Compact `14px`, `strokeWidth 1.75`를 사용합니다.
+- Input, Select, Textarea와 Button의 Focus는 Aqua Mint `1px` border와 빈 간격 없는 바깥 `1px` ring으로 표시합니다.
+- Compact는 정보 밀도만 높이며 radius와 border 굵기를 바꾸지 않습니다.
 
 ## 6. 표면과 깊이
 
@@ -163,11 +192,7 @@ shadcn을 디자인 완성품이 아니라 접근 가능한 primitive 기반으�
 components/ui
 ├─ Button
 ├─ Input
-├─ Textarea
 ├─ Select
-├─ Checkbox
-├─ Radio
-├─ Tabs
 ├─ Dialog
 ├─ Popover
 ├─ DropdownMenu
@@ -197,32 +222,64 @@ components/patterns
 
 한 Dialog 또는 좁은 action group 안에는 Primary button을 하나만 둡니다.
 
+- Primary는 solid 배경으로 한 영역의 핵심 행동만 강조합니다.
+- Secondary는 흰 배경과 neutral border를 사용합니다.
+- Ghost는 기본 배경을 두지 않고 hover·pressed에서만 Primary soft 배경을 표시합니다.
+- Destructive는 연한 Error 배경과 Error 전경을 사용하며 Primary와 시각적으로 경쟁하지 않습니다.
+
 ### Button 상태
 
 | Variant | Default | Hover | Pressed | Disabled |
 |---|---|---|---|---|
-| Primary | `#007C71` + 흰색 | `#00665F` | `#00544F` | `#F1F3F5` + `#7D918F` |
-| Secondary | 흰색 + `#E2E5E9` border | `#F6F7F9` + `#C7CDD4` | `#ECEFF2` + `#AEB5BF` | `#F1F3F5` + `#7D918F` |
+| Primary | `#007C71` + `#F4FFFD` | `#00665F` + `#F4FFFD` | `#00544F` + `#F4FFFD` | `#DDE8E6` + `#7D918F` |
+| Secondary | 흰색 + `#E5E7EB` border | `#F7F8F9` + `#C7CDD4` | `#ECEFF2` + `#AEB5BF` | `#F1F3F5` + `#7D918F` |
 | Ghost | 투명 | `#E5F5F3` | `#D4EFEC` | 투명 + `#7D918F` |
 | Destructive | `#FFF0F1` + `#B23B4A` | `#FFE2E5` | `#F8CDD3` | `#F1F3F5` + `#7D918F` |
 
-- Focus는 variant와 관계없이 `2px #009E8E` ring과 `2px` offset을 사용합니다.
+- Button Focus는 variant와 관계없이 `#009E8E` border와 빈 간격 없는 `1px` 바깥 ring을 사용합니다. Link는 `1px` outline과 `1px` offset을 사용합니다.
 - Loading은 현재 배경을 유지하고 `LoaderCircle`을 표시하며 중복 실행을 막습니다.
 
 ### Input·Select·선택 control 상태
 
 | 상태 | 배경 | 테두리·표시 |
 |---|---|---|
-| Default | `#FFFFFF` | `#E2E5E9` |
+| Default | `#FFFFFF` | `#E5E7EB` |
 | Hover | `#FFFFFF` | `#C7CDD4` |
-| Focus | `#FFFFFF` | `#009E8E` + focus ring |
+| Focus | `#FFFFFF` | `#009E8E` border + 빈 간격 없는 `1px` ring |
 | Filled | Default와 동일 | 값이 있다는 이유로 별도 색상을 쓰지 않음 |
-| Invalid | `#FFFFFF` | `#B23B4A` + 오류 메시지 |
-| Disabled | `#F1F3F5` | `#E2E5E9`, text `#7D918F` |
+| Invalid | `#FFFFFF` | `#B23B4A` border + 오류 메시지. Focus 중에도 같은 색 `1px` ring 유지 |
+| Disabled | `#F1F3F5` | `#E5E7EB`, text `#7D918F` |
 
-- Radio와 Checkbox의 checked 색상은 `#009E8E`, check glyph는 흰색입니다.
-- 선택 가능한 row는 Hover에 `#F6F7F9`, Selected에 `#E5F5F3`와 `#009E8E` border를 사용합니다.
+- Radio와 Checkbox의 checked 색상은 `#009E8E`, check glyph는 `color.on-primary`를 사용합니다.
+- 선택 가능한 row는 Hover에 `#F7F8F9`, Selected에 `#E5F5F3`와 `#009E8E` border를 사용합니다.
 - Selected는 색상만으로 전달하지 않고 radio, check 또는 활성 표시선을 함께 사용합니다.
+
+### Select
+
+- 앱의 기본 Select는 native `<select>`가 아닌 shadcn/Radix 기반 Select를 사용합니다. 운영체제별로 열리는 native menu의 모양에 의존하지 않습니다.
+- Trigger는 Input과 같은 Default `36px`, Compact `32px`, `8px` radius와 `1px` border를 사용합니다.
+- Content는 Trigger와 같은 너비로 열고, 선택된 item을 Trigger 위치에 맞춰 정렬합니다.
+- 문서 유형과 템플릿처럼 선택 이유가 필요한 경우에는 `제목 + 설명` option을 사용합니다. 이 option은 최소 `52px`이며, 단순 filter는 설명 없는 기본 `36px` option을 사용합니다.
+- 닫힌 Trigger의 keyboard focus는 일반 control focus 규칙을 따릅니다. 열린 Content에서는 Trigger의 ring을 유지하지 않고, 선택 item의 Primary soft 배경과 check glyph로 현재 선택을 표시합니다.
+- 키보드로 이동 중인 option은 ring 대신 Canvas 배경으로 표시합니다. Enter/Space로 열기·선택, 방향키 이동, Escape 닫기를 지원합니다.
+
+### Dialog
+
+- 기본 Dialog는 새 문서 생성, 연결 변경, 일반 확인처럼 한 작업을 끝내는 흐름에 사용합니다. 기본 너비는 `560px`이며 `12px` radius, overlay shadow, Default `24px`·Compact `20px` padding을 사용합니다.
+- 구조는 `Header → scrollable body → footer action`입니다. 내용이 화면보다 길면 Header와 Footer를 고정하고 Body만 스크롤합니다.
+- Header는 제목, 필요한 짧은 설명, 닫기 icon button으로 구성합니다. Footer action은 오른쪽 정렬하고 같은 action group 간격 `8px`을 사용합니다.
+- 일반 확인 Dialog는 내용이 짧아도 같은 구조를 축소해 사용합니다. 삭제·폐기에는 대상 이름과 영향 설명을 포함하고 Destructive action을 사용합니다.
+- 디스크 충돌처럼 두 버전을 비교해야 하는 경우에만 `760px`까지 넓은 변형을 사용합니다. 일반 form이나 단순 확인에 넓은 변형을 사용하지 않습니다.
+- Dialog는 Escape와 닫기 action을 제공하고, focus trap 및 닫힌 뒤 trigger로 focus 복귀를 보장합니다. 전환은 `160–200ms`로 제한하며 `prefers-reduced-motion`에서는 불필요한 animation을 제거합니다.
+
+### Dropdown Menu, Popover, Tooltip
+
+- `DropdownMenu`는 경로 변경, 복제, GitHub에서 보기처럼 즉시 실행하는 action을 고르는 데 사용합니다. Trigger는 소비 화면이 소유하며, Menu primitive 자체에는 특정 `…` button을 포함하지 않습니다.
+- Menu panel은 `12px` radius, `1px` border, overlay shadow를 사용합니다. 기본 item은 Default `36px`·Compact `32px`, `8px` radius이며 icon과 label 간격은 `8px`입니다. Hover와 keyboard 이동은 Canvas 배경으로 표시합니다.
+- 위험 action은 separator 아래에 두고 Error 전경과 명확한 label을 사용합니다. 일반 action이 적은 메뉴에는 불필요한 group label을 추가하지 않습니다.
+- `Popover`는 담당자, label, 보기 옵션처럼 짧은 값을 확인·변경하는 작은 설정 surface입니다. action만 나열하는 용도로 사용하지 않습니다.
+- `Tooltip`은 icon-only button의 이름, 단축키 또는 짧은 추가 맥락만 표시합니다. action이나 form control을 넣지 않습니다.
+- Menu와 Popover는 Escape로 닫히고 trigger로 focus를 돌려줍니다. Menu는 방향키와 Enter로 이동·실행할 수 있어야 하며, Tooltip은 hover와 keyboard focus 모두에서 표시합니다.
 
 ### Pointer cursor
 
@@ -235,18 +292,21 @@ components/patterns
 
 ## 9. 상태와 피드백
 
-- Hover: 배경과 색상만 한 단계 변경, `120–160ms`
+- Control의 Hover·Focus·Pressed: border, ring, background와 color만 `180ms cubic-bezier(0.2, 0, 0, 1)`로 전환
 - Pressed: Hover보다 한 단계 진한 배경
 - Selected: Primary soft 배경, 활성 텍스트와 필요한 경우 왼쪽 표시선
-- Focus: `2px` Aqua Mint focus ring과 바깥 offset
+- Focus: Input·Button은 Aqua Mint border와 빈 간격 없는 `1px` ring, Link는 `1px` outline과 `1px` offset
 - Disabled: 명도와 대비를 낮추되 설명은 읽을 수 있게 유지
 - Loading:
   - 버튼 작업은 `LoaderCircle`
   - 화면 최초 로딩은 skeleton
   - 전체 화면 spinner는 사용하지 않음
-- Form 오류: 해당 field 아래에 원인과 해결 방법 표시
-- 짧은 Git·동기화 성공 결과: toast
-- 충돌, 인증, push 실패처럼 판단이 필요한 문제: 본문 또는 Dialog
+- Form 오류: 해당 field 아래에 원인과 해결 방법 표시. 별도 toast를 함께 띄우지 않음
+- 짧고 되돌릴 필요 없는 Git·동기화 성공 결과: 화면 우측 상단 toast. 자동으로 사라지며, 중요한 선택 action은 넣지 않음
+- GitHub 연결 끊김처럼 여러 화면에 영향을 주는 지속 상태: 화면 상단 banner. 상태와 영향, 재연결 action을 함께 표시
+- 충돌, 인증, push 실패처럼 판단이 필요한 문제: 본문 오류 상태 또는 Dialog. 원인·영향·다음 action을 한곳에 표시
+- 상태 아이콘은 한두 줄 메시지에서 텍스트 블록의 세로 중앙에 맞춘다. 닫기 icon button만 우측 상단에 독립시킨다.
+- 상태에 맞는 outline action은 흰 배경과 상태색 border·text를 사용한다. 예: 연결 경고는 앰버, 디스크 충돌의 `비교하기`는 Error red
 - 삭제, 연결 교체, 변경 폐기: 대상 이름이 포함된 확인 Dialog
 
 Dialog와 panel 전환은 `160–200ms` 범위로 제한합니다. `prefers-reduced-motion`에서는 기능에 필요하지 않은 애니메이션을 제거합니다.
@@ -273,6 +333,10 @@ Dialog와 panel 전환은 `160–200ms` 범위로 제한합니다. `prefers-redu
 
 Field는 `Label → 도움말 → Control → 오류 또는 상태 메시지` 순서를 사용합니다.
 
+- Field 사이 간격은 Default `16px`, Compact `12px`입니다.
+- Label과 도움말은 `4px`, 도움말과 Control은 `8px`, Control과 오류 메시지는 `8px` 간격을 사용합니다.
+- 도움말은 경로 규칙, 자동 생성 결과처럼 입력 전에 알아야 할 맥락이 있을 때만 표시합니다. 단순한 field에는 Label 다음에 Control을 바로 둡니다.
+- Label 오른쪽에는 필요한 경우에만 `필수` 또는 `선택`을 표시합니다.
 - Placeholder를 Label 대신 사용하지 않습니다.
 - 필수 항목은 `필수`, 선택 항목은 필요한 경우 `선택`으로 표기합니다.
 - 오류는 최초 입력 전에는 표시하지 않고 blur 또는 제출 이후 표시합니다.
