@@ -24,4 +24,12 @@ describe("macOS development signing", () => {
     expect(runner).toContain("--identifier com.okhub.desktop.dev");
     expect(runner).toContain("codesign --verify --strict");
   });
+
+  it("uses one stable OkHub target across moved and newly-created worktrees", () => {
+    const wrapper = read("scripts/tauri-with-macos-signing.sh");
+
+    expect(wrapper).toContain("OKHUB_CARGO_TARGET_DIR");
+    expect(wrapper).toContain("$HOME/.cargo/targets/okhub");
+    expect(wrapper).toContain("export CARGO_TARGET_DIR");
+  });
 });

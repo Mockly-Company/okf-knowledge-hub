@@ -4,6 +4,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAURI="$ROOT/node_modules/.bin/tauri"
 
+# Tauri build scripts persist absolute permission paths in Cargo output.
+# A stable project-level target keeps those paths valid when a worktree moves.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${OKHUB_CARGO_TARGET_DIR:-$HOME/.cargo/targets/okhub}}"
+
 if [[ "$(uname -s)" != "Darwin" || "${1:-}" != "dev" ]]; then
   exec "$TAURI" "$@"
 fi
