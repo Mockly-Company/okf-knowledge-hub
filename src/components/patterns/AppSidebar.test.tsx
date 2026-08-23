@@ -3,14 +3,12 @@ import axe from "axe-core";
 import { MemoryRouter } from "react-router-dom";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { AppSidebar } from "./AppSidebar";
-
-afterEach(cleanup);
 
 function renderSidebar(
   gateway: FakeWorkspaceConnectionGateway,
@@ -29,24 +27,53 @@ function renderSidebar(
 }
 
 describe("AppSidebar", () => {
-  it("shows the connected workspace and authenticated GitHub identity", async () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the authenticated GitHub identity without duplicating workspace context", async () => {
     const view = renderSidebar(FakeWorkspaceConnectionGateway.connected());
 
-    expect(await screen.findByText("Mockly")).toBeInTheDocument();
     expect(await screen.findByText("@hyeeun")).toBeInTheDocument();
+    expect(screen.queryByText("Mockly")).not.toBeInTheDocument();
+    expect(view.container.querySelector(".app-sidebar__workspace")).toBeNull();
     expect(view.container.querySelector('img[src="https://example.test/avatar.png"]'))
       .toBeInTheDocument();
   });
 
-  it("does not expose the saved workspace while reauthentication is required", async () => {
+  it("does not duplicate workspace context while reauthentication is required", async () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
     gateway.authState = { status: "signed_out" };
     renderSidebar(gateway);
 
     expect(await screen.findByText("GitHub 재로그인 필요")).toBeInTheDocument();
     expect(screen.queryByText("Mockly")).toBeNull();
-    expect(screen.getByText("워크스페이스 연결 필요")).toBeInTheDocument();
     expect(screen.getByText("Settings에서 연결")).toBeInTheDocument();
+  });
+
+  it("keeps the sidebar account area neutral while reauthentication is required", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.authState = { status: "reauthentication_required" };
+    const view = renderSidebar(gateway);
+
+    expect(await screen.findByText("GitHub 재로그인 필요")).toBeVisible();
+    expect(screen.getByText("Settings에서 연결")).toBeVisible();
+    expect(view.container.querySelector(".app-sidebar__user")).not.toHaveClass(
+      "app-sidebar__user--reauthentication-required",
+    );
+    expect(view.container.querySelector(".lucide-circle-alert")).toBeNull();
   });
 
   it("falls back to the login initial when the avatar cannot load", async () => {
@@ -61,27 +88,11 @@ describe("AppSidebar", () => {
     expect(view.container.querySelector("img")).not.toBeInTheDocument();
   });
 
-  it("keeps the full workspace name available when visual text is truncated", async () => {
-    const gateway = FakeWorkspaceConnectionGateway.connected();
-    if (gateway.currentWorkspace?.status === "connected") {
-      gateway.currentWorkspace.summary = {
-        ...gateway.currentWorkspace.summary,
-        name: "Mockly Product Knowledge Workspace",
-      };
-    }
-    renderSidebar(gateway);
-
-    expect(
-      await screen.findByTitle("Mockly Product Knowledge Workspace"),
-    ).toHaveTextContent("Mockly Product Knowledge Workspace");
-  });
-
-  it("reserves stable identity space while workspace and account state load", () => {
+  it("reserves stable identity space while account state loads", () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
     gateway.deferCurrentWorkspace();
     renderSidebar(gateway);
 
-    expect(screen.getByLabelText("워크스페이스 불러오는 중")).toBeInTheDocument();
     expect(screen.getByLabelText("GitHub 계정 불러오는 중")).toBeInTheDocument();
   });
 
@@ -159,13 +170,24 @@ describe("AppSidebar", () => {
     expect(document).toHaveAttribute("aria-selected", "false");
   });
 
+  it("allows a keyboard user to focus the current route in the primary navigation", async () => {
+    const user = userEvent.setup();
+    renderSidebar(FakeWorkspaceConnectionGateway.connected(), "/documents");
+
+    await user.tab();
+    await user.tab();
+    await user.tab();
+
+    const documents = screen.getByRole("link", { name: "Documents" });
+    expect(documents).toHaveFocus();
+    expect(documents).toHaveAttribute("aria-current", "page");
+  });
+
   it("has no automatically detectable accessibility violations", async () => {
     const { container } = renderSidebar(FakeWorkspaceConnectionGateway.connected());
     await screen.findByText("@hyeeun");
 
-    const result = await axe.run(container, {
-      rules: { "color-contrast": { enabled: false } },
-    });
+    const result = await axe.run(container);
 
     expect(result.violations).toEqual([]);
   });

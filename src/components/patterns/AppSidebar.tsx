@@ -34,10 +34,8 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
     showDocumentsHome,
     openNewDocument,
   } = useDocuments();
-  const { state, account, isCurrentWorkspaceLoading } = useWorkspaceConnection();
+  const { account } = useWorkspaceConnection();
   const [avatarFailed, setAvatarFailed] = useState(false);
-  const connectedWorkspace =
-    state.status === "connected" ? state.connectedWorkspace : null;
   const accountUser =
     account.status === "authenticated" || account.status === "logging_out"
       ? account.user
@@ -69,19 +67,6 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
           </Button>
         </Tooltip>
       </div>
-      {isCurrentWorkspaceLoading ? (
-        <div
-          className="app-sidebar__workspace app-sidebar__skeleton"
-          aria-label="워크스페이스 불러오는 중"
-        />
-      ) : (
-        <div
-          className="app-sidebar__workspace"
-          title={connectedWorkspace?.summary.name}
-        >
-          {connectedWorkspace?.summary.name ?? "워크스페이스 연결 필요"}
-        </div>
-      )}
       <div className="app-sidebar__section app-sidebar__section--primary">
         <nav aria-label="주 메뉴" className="app-sidebar__nav">
           {navigationItems.map(({ to, label, icon: Icon, end }) => (

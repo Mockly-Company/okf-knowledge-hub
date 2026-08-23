@@ -23,7 +23,7 @@ export function PageHeader({
           {title}
         </h1>
         {description ? (
-          <p className="mt-[var(--space-1)] font-[number:var(--font-weight-description)] text-[var(--color-text-muted)]">
+          <p className="mt-[var(--space-2)] font-[number:var(--font-weight-description)] text-[var(--color-text-muted)]">
             {description}
           </p>
         ) : null}

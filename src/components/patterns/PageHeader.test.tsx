@@ -24,6 +24,7 @@ describe("PageHeader", () => {
       "documents-title",
     );
     expect(screen.getByText("프로젝트 문서를 찾습니다.")).toHaveClass(
+      "mt-[var(--space-2)]",
       "font-[number:var(--font-weight-description)]",
     );
     expect(screen.getByRole("button", { name: "새 문서" })).toBeVisible();
