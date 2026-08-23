@@ -5,9 +5,16 @@ import { SectionHeader } from "@/components/patterns/SectionHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
-import { Select } from "@/components/ui/select";
+import { Select, SelectOption } from "@/components/ui/select";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -26,7 +33,10 @@ export function DesignSystemPage() {
   const { displayDensity, setDisplayDensity } = usePreferences();
 
   return (
-    <section className="p-8" aria-labelledby="design-system-title">
+    <section
+      className="min-h-full bg-[var(--color-surface)] px-[var(--page-padding-inline)] pt-[var(--page-block-start)] pb-[var(--space-10)]"
+      aria-labelledby="design-system-title"
+    >
       <PageHeader
         title="OkHub design system"
         titleId="design-system-title"
@@ -78,6 +88,32 @@ export function DesignSystemPage() {
             </Button>
           </Tooltip>
           <Button disabled>Disabled</Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="secondary">문서 작업</Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem>링크 복사</DropdownMenuItem>
+              <DropdownMenuItem>GitHub에서 보기</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </section>
+
+      <section className="mt-[var(--space-8)]" aria-labelledby="feedback-title">
+        <SectionHeader title="Feedback" titleId="feedback-title" />
+        <div className="mt-[var(--space-3)] grid max-w-3xl gap-[var(--space-3)]">
+          <StatusFeedback
+            variant="banner"
+            tone="warning"
+            action={<Button variant="secondary">다시 연결</Button>}
+          >
+            <strong>GitHub 연결이 끊어졌습니다.</strong>
+            <p className="m-0 mt-[var(--space-1)]">Issue와 저장소 동기화를 다시 시작하려면 연결을 확인하세요.</p>
+          </StatusFeedback>
+          <StatusFeedback variant="content" tone="error">
+            저장 충돌처럼 현재 작업 안에서 해결해야 하는 문제입니다.
+          </StatusFeedback>
         </div>
       </section>
 
@@ -100,8 +136,18 @@ export function DesignSystemPage() {
           <label className="grid gap-2 font-medium text-[var(--color-text-strong)]">
             문서 유형
             <Select aria-label="문서 유형" defaultValue="api-contract">
-              <option value="api-contract">API 계약</option>
-              <option value="decision">기술 결정</option>
+              <SelectOption
+                value="api-contract"
+                description="요청과 응답 계약을 정의합니다."
+              >
+                API 계약
+              </SelectOption>
+              <SelectOption
+                value="decision"
+                description="선택한 방식과 근거를 기록합니다."
+              >
+                기술 결정
+              </SelectOption>
             </Select>
           </label>
           <label className="grid gap-2 font-medium text-[var(--color-text-strong)]">

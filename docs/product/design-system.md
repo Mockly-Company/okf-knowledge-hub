@@ -45,7 +45,7 @@
 |---|---|---|
 | `color.text.strong` | `#24272D` | 제목과 주요 본문 |
 | `color.text.default` | `#343941` | 일반 본문 |
-| `color.text.muted` | `#747B86` | 보조 설명과 metadata |
+| `color.text.muted` | `#6C737D` | 보조 설명과 metadata. Canvas와 Surface 모두에서 WCAG AA 대비를 충족합니다. |
 | `color.text.disabled` | `#7D918F` | 비활성 control의 label과 icon |
 | `color.border` | `#E5E7EB` | 기본 테두리 |
 | `color.border.hover` | `#C7CDD4` | Hover된 control의 테두리 |

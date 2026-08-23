@@ -8,16 +8,16 @@
   --color-primary-text: #007c71;
   --color-primary-soft: #e5f5f3;
   --color-primary-soft-pressed: #d4efec;
-  --color-on-primary: #ffffff;
+  --color-on-primary: #f4fffd;
   --color-on-logo: #ffffff;
-  --color-text-strong: #16181d;
+  --color-text-strong: #24272d;
   --color-text-default: #343941;
-  --color-text-muted: #6b717c;
+  --color-text-muted: #6c737d;
   --color-text-disabled: #7d918f;
-  --color-border: #e2e5e9;
+  --color-border: #e5e7eb;
   --color-border-hover: #c7cdd4;
   --color-border-strong: #aeb5bf;
-  --color-canvas: #f6f7f9;
+  --color-canvas: #f7f8f9;
   --color-surface: #ffffff;
   --color-surface-pressed: #eceff2;
   --color-control-disabled: #f1f3f5;
@@ -41,8 +41,8 @@
   --shadow-popover: 0 8px 18px rgb(20 24 30 / 12%);
   --font-ui-size: 13px;
   --font-ui-line: 20px;
-  --font-weight-page-title: 700;
-  --font-weight-section-title: 700;
+  --font-weight-page-title: 600;
+  --font-weight-section-title: 600;
   --font-weight-control: 600;
   --font-weight-description: 500;
   --font-weight-body: 400;
@@ -67,7 +67,12 @@
   --space-8: 32px;
   --space-10: 40px;
   --space-12: 48px;
-  --page-padding-inline: 40px;
+  --focus-ring-width: 1px;
+  --focus-ring-offset: 0px;
+  --motion-control-duration: 180ms;
+  --motion-control-easing: cubic-bezier(0.2, 0, 0, 1);
+  --page-block-start: var(--space-8);
+  --page-padding-inline: var(--space-8);
   --panel-padding: 24px;
   --dialog-padding: 24px;
 }
@@ -87,7 +92,8 @@
   --font-meta-line: 17px;
   --control-height: 32px;
   --icon-size: 14px;
-  --page-padding-inline: 32px;
+  --page-block-start: var(--space-6);
+  --page-padding-inline: var(--space-6);
   --panel-padding: 20px;
   --dialog-padding: 20px;
 }

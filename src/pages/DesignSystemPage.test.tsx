@@ -52,6 +52,12 @@ describe("DesignSystemPage", () => {
     ]) {
       expect(screen.getByText(label)).toBeVisible();
     }
+    expect(screen.getByRole("heading", { level: 1 }).closest("section")).toHaveClass(
+      "px-[var(--page-padding-inline)]",
+      "pt-[var(--page-block-start)]",
+    );
+    expect(screen.getByText("GitHub 연결이 끊어졌습니다.").closest("section"))
+      .toHaveAttribute("data-feedback-variant", "banner");
   });
 
   it("catalogs the approved 400, 500, 600, and 700 weight roles", () => {
@@ -103,6 +109,20 @@ describe("DesignSystemPage", () => {
       "true",
     );
     expect(screen.getByRole("button", { name: "저장할 수 없음" })).toBeDisabled();
+  });
+
+  it("demonstrates the shared described Select and DropdownMenu primitives", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole("combobox", { name: "문서 유형" }));
+    expect(screen.getByRole("option", { name: /API 계약/ })).toHaveTextContent(
+      "요청과 응답 계약을 정의합니다.",
+    );
+
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "문서 작업" }));
+    expect(screen.getByRole("menuitem", { name: "링크 복사" })).toBeVisible();
   });
 
   it("catalogs the disabled state for every control primitive", () => {

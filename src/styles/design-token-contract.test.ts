@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const sourceRoot = resolve(process.cwd(), "src");
 const tokenFile = resolve(sourceRoot, "styles/tokens.css");
+const globalStyleFile = resolve(sourceRoot, "styles/globals.css");
 
 function productStyleFiles(): string[] {
   return globSync("**/*.{css,tsx}", { cwd: sourceRoot })
@@ -35,8 +36,8 @@ describe("design token contract", () => {
   it("encodes the approved default typography hierarchy", () => {
     const tokens = readFileSync(tokenFile, "utf8");
 
-    expect(tokens).toContain("--font-weight-page-title: 700");
-    expect(tokens).toContain("--font-weight-section-title: 700");
+    expect(tokens).toContain("--font-weight-page-title: 600");
+    expect(tokens).toContain("--font-weight-section-title: 600");
     expect(tokens).toContain("--font-weight-control: 600");
     expect(tokens).toContain("--font-weight-description: 500");
     expect(tokens).toContain("--font-weight-body: 400");
@@ -67,5 +68,44 @@ describe("design token contract", () => {
     ]) {
       expect(tokens).toContain(`${name}: ${value}`);
     }
+  });
+
+  it("defines one density-aware page block-start inset", () => {
+    const tokens = readFileSync(tokenFile, "utf8");
+
+    expect(tokens).toMatch(
+      /:root\s*\{[\s\S]*?--page-block-start: var\(--space-8\)/,
+    );
+    expect(tokens).toMatch(
+      /:root\[data-density="compact"\]\s*\{[\s\S]*?--page-block-start: var\(--space-6\)/,
+    );
+  });
+
+  it("uses the approved density-aware page inline inset", () => {
+    const tokens = readFileSync(tokenFile, "utf8");
+
+    expect(tokens).toMatch(
+      /:root\s*\{[\s\S]*?--page-padding-inline: var\(--space-8\)/,
+    );
+    expect(tokens).toMatch(
+      /:root\[data-density="compact"\]\s*\{[\s\S]*?--page-padding-inline: var\(--space-6\)/,
+    );
+  });
+
+  it("defines the approved control focus and motion contract", () => {
+    const tokens = readFileSync(tokenFile, "utf8");
+    const globals = readFileSync(globalStyleFile, "utf8");
+
+    expect(tokens).toContain("--focus-ring-width: 1px");
+    expect(tokens).toContain("--focus-ring-offset: 0px");
+    expect(tokens).toContain("--motion-control-duration: 180ms");
+    expect(tokens).toContain("--motion-control-easing: cubic-bezier(0.2, 0, 0, 1)");
+    expect(globals).toContain(
+      "outline: var(--focus-ring-width) solid var(--color-primary)",
+    );
+    expect(globals).toContain("outline-offset: var(--focus-ring-offset)");
+    expect(globals).toMatch(
+      /\[aria-invalid="true"\]:focus-visible\s*\{[\s\S]*?outline-color: var\(--color-error\)/,
+    );
   });
 });

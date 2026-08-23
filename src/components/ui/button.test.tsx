@@ -14,6 +14,11 @@ describe("Button", () => {
       "rounded-[var(--radius-md)]",
       "font-[number:var(--font-weight-control)]",
       "cursor-pointer",
+      "focus-visible:border-[var(--color-primary)]",
+      "duration-[var(--motion-control-duration)]",
+    );
+    expect(screen.getByRole("button", { name: "새 문서" }).className).not.toContain(
+      "focus-visible:ring",
     );
   });
 
