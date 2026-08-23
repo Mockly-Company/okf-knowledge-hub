@@ -1,8 +1,13 @@
 import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { UnstyledButton } from "@/components/ui/unstyled-button";
 import { useDocuments } from "../DocumentsProvider";
 import type { DocumentContent } from "../model";
 import { MarkdownDocument } from "./MarkdownDocument";
@@ -19,7 +24,13 @@ function lastModifiedSummary(document: DocumentContent): string {
   return `마지막 수정 · ${new Date(document.summary.modifiedAtUnixMs).toLocaleDateString("ko-KR")}`;
 }
 
-export function DocumentReader({ document }: { document: DocumentContent }) {
+export function DocumentReader({
+  document,
+  notice,
+}: {
+  document: DocumentContent;
+  notice?: string | null;
+}) {
   const {
     state,
     authoringState,
@@ -53,10 +64,12 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
         ref={headerRef}
         tabIndex={-1}
       >
-        <div>
+        <div className="document-reader__heading">
           <h1 id="document-reader-title">{document.summary.title}</h1>
-          <p>확정본 · {branch}</p>
-          <small>{lastModifiedSummary(document)}</small>
+          <div className="document-reader__meta">
+            <p>확정본 · {branch}</p>
+            <small>{lastModifiedSummary(document)}</small>
+          </div>
         </div>
         <div className="document-reader__actions">
           {state.selectedVersion === null ? (
@@ -69,29 +82,31 @@ export function DocumentReader({ document }: { document: DocumentContent }) {
                 : "편집"}
             </Button>
           ) : null}
-          <Button
-            variant="icon"
-            aria-label="더보기"
-            aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            <Ellipsis aria-hidden="true" />
-          </Button>
-          {menuOpen ? (
-            <div className="document-reader__menu" role="menu">
-              <UnstyledButton role="menuitem" onClick={() => void copyText(`[${document.summary.title}](${document.summary.path})`)}>
+          <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="icon" aria-label="더보기">
+                <Ellipsis aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => void copyText(`[${document.summary.title}](${document.summary.path})`)}>
                 문서 링크 복사
-              </UnstyledButton>
-              <UnstyledButton role="menuitem" onClick={() => void copyText(document.summary.path)}>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void copyText(document.summary.path)}>
                 Git 파일 경로 복사
-              </UnstyledButton>
-              <UnstyledButton role="menuitem" onClick={() => void openExternal(githubUrl)}>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void openExternal(githubUrl)}>
                 GitHub에서 보기
-              </UnstyledButton>
-            </div>
-          ) : null}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
+      {notice ? (
+        <div className="documents-page__notice" role="alert">
+          <span>{notice}</span>
+        </div>
+      ) : null}
       {authoringState.existingEdit.error ? (
         <div className="document-reader__warning" role="alert">
           <strong>편집을 시작하지 못했습니다.</strong>

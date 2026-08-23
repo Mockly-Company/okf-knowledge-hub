@@ -74,4 +74,34 @@ describe("DocumentSearch", () => {
     await user.click(screen.getByRole("button", { name: /지도 API/ }));
     expect(onSelectResult).toHaveBeenCalledWith(result);
   });
+
+  it("keeps retryable search failures inside the affected content region", () => {
+    render(
+      <DocumentSearch
+        query="api"
+        documents={[document]}
+        results={[]}
+        searchStatus="error"
+        searchError={{
+          code: "document_index_unavailable",
+          message: "검색할 수 없습니다.",
+          recovery: "retry",
+          details: {},
+        }}
+        indexStatus={{ status: "ready" }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+
+    const feedback = screen.getByRole("alert");
+    expect(feedback).toHaveAttribute("data-feedback-variant", "content");
+    expect(feedback).toHaveAttribute("data-feedback-tone", "error");
+    expect(feedback).toHaveTextContent("검색할 수 없습니다.");
+    expect(
+      screen.getByRole("button", { name: "검색 다시 시도" }),
+    ).toBeVisible();
+  });
 });

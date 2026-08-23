@@ -332,7 +332,9 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   ): Promise<DocumentContent> {
     this.record("readDocument", sessionId, requestId, path);
     const sequence = ++this.latestReadSequence;
-    const summary = path === apiSummary.path ? apiSummary : guideSummary;
+    const summary =
+      this.sessionSnapshot.catalog.documents.find((document) => document.path === path) ??
+      (path === apiSummary.path ? apiSummary : guideSummary);
     const content: DocumentContent = {
       summary: { ...summary, path },
       markdown: `# ${summary.title}`,

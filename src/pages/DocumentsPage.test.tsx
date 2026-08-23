@@ -29,6 +29,22 @@ function renderPage(gateway: FakeDocumentsGateway) {
 }
 
 describe("DocumentsPage", () => {
+  it("uses the shared page-title and action geometry on Documents home", async () => {
+    const gateway = new FakeDocumentsGateway();
+    renderPage(gateway);
+
+    expect(await screen.findByRole("heading", { name: "Documents" })).toHaveClass(
+      "font-[number:var(--font-weight-page-title)]",
+    );
+    expect(screen.getByRole("button", { name: "새 문서" })).toHaveClass(
+      "h-[var(--control-height)]",
+      "rounded-[var(--radius-md)]",
+    );
+    expect(screen.getByRole("combobox", { name: "문서 작업 전환" })).toHaveTextContent(
+      "확정 문서",
+    );
+  });
+
   it("renders the compact search home and opens a search result with its match", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.sessionSnapshot.indexStatus = {
@@ -97,6 +113,48 @@ describe("DocumentsPage", () => {
     expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
 
     delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+  });
+
+  it("renders a current-document notice after the reader header without displacing its title", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = "docs/guide.md";
+    render(
+      <MemoryRouter>
+        <DocumentsProvider gateway={gateway} createId={() => gateway.sessionSnapshot.sessionId}>
+          <main aria-label="OkHub"><DocumentsPage /></main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+    await screen.findByRole("region", { name: "Guide" });
+    const changedSummary = {
+      ...gateway.guideCatalog.documents[0],
+      modifiedAtUnixMs: gateway.guideCatalog.documents[0].modifiedAtUnixMs + 1,
+      size: gateway.guideCatalog.documents[0].size + 1,
+    };
+
+    act(() => {
+      gateway.emit({
+        revision: 1,
+        type: "tree_changed",
+        sessionId: gateway.sessionSnapshot.sessionId,
+        catalog: {
+          documents: [changedSummary],
+          roots: [{ kind: "document", summary: changedSummary }],
+        },
+      });
+    });
+
+    const notice = (await screen.findByText(
+      "외부 변경사항을 반영했습니다.",
+    )).closest('[role="alert"]');
+    const reader = await screen.findByRole("region", { name: "Guide" });
+    const header = reader.querySelector(".document-reader__header");
+
+    expect(notice).not.toBeNull();
+    if (!notice) throw new Error("expected the current-document notice alert");
+    expect(reader.firstElementChild).toBe(header);
+    expect(notice.parentElement).toBe(reader);
+    expect(header?.nextElementSibling).toBe(notice);
   });
 
   it("does not nest a second main landmark inside the app shell", async () => {

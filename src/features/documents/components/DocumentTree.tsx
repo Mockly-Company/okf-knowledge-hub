@@ -11,6 +11,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent,
 } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
@@ -89,7 +90,7 @@ export function DocumentTree({
   const [activeKey, setActiveKey] = useState<string | null>(
     selectedPath ?? (entries[0] ? entryKey(entries[0]) : null),
   );
-  const itemRefs = useRef(new Map<string, HTMLButtonElement>());
+  const itemRefs = useRef(new Map<string, HTMLDivElement>());
   const visible = useMemo(
     () => visibleEntries(entries, expanded),
     [entries, expanded],
@@ -127,8 +128,60 @@ export function DocumentTree({
     itemRefs.current.get(key)?.focus();
   };
 
+  const onEntryKeyDown = (
+    event: KeyboardEvent<HTMLDivElement>,
+    entry: DocumentTreeEntry,
+    index: number,
+    isExpanded: boolean,
+    parentPath: string | null,
+  ) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusEntry(visible[index + 1]?.key);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusEntry(visible[index - 1]?.key);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      focusEntry(visible[0]?.key);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      focusEntry(visible.at(-1)?.key);
+      return;
+    }
+    if (event.key === "ArrowRight" && entry.kind === "folder") {
+      event.preventDefault();
+      if (!isExpanded) toggleFolder(entry.path, true);
+      else if (entry.children.length > 0) {
+        focusEntry(entryKey(entry.children[0]));
+      }
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      if (entry.kind === "folder" && isExpanded) {
+        event.preventDefault();
+        toggleFolder(entry.path, false);
+      } else if (parentPath) {
+        event.preventDefault();
+        focusEntry(parentPath);
+      }
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (entry.kind === "folder") toggleFolder(entry.path);
+      else onSelectDocument(entry.summary.path);
+    }
+  };
+
   return (
-    <div className="document-tree" role="tree" aria-label="문서">
+    <div className="document-tree">
       <div className="document-tree__header">
         <span>문서</span>
         {onNewDocument ? (
@@ -142,127 +195,96 @@ export function DocumentTree({
       {entries.length === 0 ? (
         <p className="document-tree__empty">표시할 문서가 없습니다.</p>
       ) : null}
-      {visible.map(({ entry, key, parentPath, level }, index) => {
-        const isFolder = entry.kind === "folder";
-        const isExpanded = isFolder && expanded.has(entry.path);
-        const label = labelFor(entry);
-        const isSelected = !isFolder && selectedPath === entry.summary.path;
-        const item = (
-          <UnstyledButton
-            ref={(element) => {
-              if (element) itemRefs.current.set(key, element);
-              else itemRefs.current.delete(key);
-            }}
-            type="button"
-            role="treeitem"
-            aria-level={level}
-            aria-expanded={isFolder ? isExpanded : undefined}
-            aria-selected={isFolder ? undefined : isSelected}
-            tabIndex={key === activeKey ? 0 : -1}
-            className={cn(
-              "document-tree__item",
-              isSelected && "document-tree__item--selected",
-            )}
-            style={{
-              "--tree-indent": `${8 + (level - 1) * 14}px`,
-            } as CSSProperties}
-            title={label}
-            onFocus={() => setActiveKey(key)}
-            onClick={() => {
-              if (entry.kind === "folder") toggleFolder(entry.path);
-              else onSelectDocument(entry.summary.path);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                focusEntry(visible[index + 1]?.key);
-                return;
-              }
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                focusEntry(visible[index - 1]?.key);
-                return;
-              }
-              if (event.key === "Home") {
-                event.preventDefault();
-                focusEntry(visible[0]?.key);
-                return;
-              }
-              if (event.key === "End") {
-                event.preventDefault();
-                focusEntry(visible.at(-1)?.key);
-                return;
-              }
-              if (event.key === "ArrowRight" && entry.kind === "folder") {
-                event.preventDefault();
-                if (!isExpanded) toggleFolder(entry.path, true);
-                else if (entry.children.length > 0) {
-                  focusEntry(entryKey(entry.children[0]));
-                }
-                return;
-              }
-              if (event.key === "ArrowLeft") {
-                if (entry.kind === "folder" && isExpanded) {
-                  event.preventDefault();
-                  toggleFolder(entry.path, false);
-                } else if (parentPath) {
-                  event.preventDefault();
-                  focusEntry(parentPath);
-                }
-              }
-            }}
-          >
-            {isFolder ? (
-              <>
-                <ChevronRight
-                  aria-hidden="true"
-                  className={cn(
-                    "document-tree__chevron",
-                    isExpanded && "document-tree__chevron--expanded",
-                  )}
-                />
-                {isExpanded ? (
-                  <FolderOpen aria-hidden="true" />
-                ) : (
-                  <Folder aria-hidden="true" />
+      {entries.length > 0 ? (
+        <div className="document-tree__items" role="tree" aria-label="문서">
+          {visible.map(({ entry, key, parentPath, level }, index) => {
+            const isFolder = entry.kind === "folder";
+            const isExpanded = isFolder && expanded.has(entry.path);
+            const label = labelFor(entry);
+            const isSelected = !isFolder && selectedPath === entry.summary.path;
+            const item = (
+              <div
+                ref={(element) => {
+                  if (element) itemRefs.current.set(key, element);
+                  else itemRefs.current.delete(key);
+                }}
+                role="treeitem"
+                aria-level={level}
+                aria-expanded={isFolder ? isExpanded : undefined}
+                aria-selected={isFolder ? undefined : isSelected}
+                tabIndex={key === activeKey ? 0 : -1}
+                className={cn(
+                  "document-tree__item",
+                  "document-tree__row",
+                  isSelected && "document-tree__item--selected",
                 )}
-              </>
-            ) : (
-              <>
-                <span className="document-tree__chevron" aria-hidden="true" />
-                <FileText aria-hidden="true" />
-              </>
-            )}
-            <span>{label}</span>
-          </UnstyledButton>
-        );
+                style={{
+                  "--tree-indent": `calc(var(--space-2) + ${level - 1} * var(--space-4))`,
+                } as CSSProperties}
+                title={label}
+                onFocus={() => setActiveKey(key)}
+                onClick={() => {
+                  if (entry.kind === "folder") toggleFolder(entry.path);
+                  else onSelectDocument(entry.summary.path);
+                }}
+                onKeyDown={(event) =>
+                  onEntryKeyDown(event, entry, index, isExpanded, parentPath)
+                }
+              >
+                {isFolder ? (
+                  <>
+                    <ChevronRight
+                      aria-hidden="true"
+                      className={cn(
+                        "document-tree__chevron",
+                        isExpanded && "document-tree__chevron--expanded",
+                      )}
+                    />
+                    {isExpanded ? (
+                      <FolderOpen aria-hidden="true" />
+                    ) : (
+                      <Folder aria-hidden="true" />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="document-tree__chevron" aria-hidden="true" />
+                    <FileText aria-hidden="true" />
+                  </>
+                )}
+                <span>{label}</span>
+                {isFolder && onNewDocument ? (
+                  <Tooltip content={`${label}에 새 문서`}>
+                    <UnstyledButton
+                      className="document-tree__folder-create"
+                      aria-label={`${label}에 새 문서`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.stopPropagation();
+                        }
+                      }}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onNewDocument(entry.path);
+                      }}
+                    >
+                      <Plus aria-hidden="true" />
+                    </UnstyledButton>
+                  </Tooltip>
+                ) : null}
+              </div>
+            );
 
-        const treeItem = label.length > 28 ? (
-          <Tooltip content={label}>{item}</Tooltip>
-        ) : (
-          item
-        );
-
-        return (
-          <div key={key} className="document-tree__row">
-            {treeItem}
-            {isFolder && onNewDocument ? (
-              <Tooltip content={`${label}에 새 문서`}>
-                <UnstyledButton
-                  className="document-tree__folder-create"
-                  aria-label={`${label}에 새 문서`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onNewDocument(entry.path);
-                  }}
-                >
-                  <Plus aria-hidden="true" />
-                </UnstyledButton>
+            return label.length > 28 ? (
+              <Tooltip key={key} content={label}>
+                {item}
               </Tooltip>
-            ) : null}
-          </div>
-        );
-      })}
+            ) : (
+              <div key={key}>{item}</div>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { FilePlus2 } from "lucide-react";
 import { lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
+import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
 import { DocumentDraftSwitcher } from "@/features/documents/components/DocumentDraftSwitcher";
 import { NewDocumentDialog } from "@/features/documents/components/NewDocumentDialog";
@@ -53,12 +54,12 @@ export function DocumentsPage() {
   if (authoringState.editor) {
     return (
       <>
-        <div className="document-draft-editor__switcher">
-          <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
-        </div>
         <Suspense fallback={<p className="documents-page__loading">편집기를 준비하는 중…</p>}>
           <DocumentDraftEditor
             editor={authoringState.editor}
+            headerSecondary={
+              <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
+            }
             onMarkdownChange={updateDraftMarkdown}
             onModeChange={setDraftEditorMode}
             onAcceptDisk={acceptDiskConflict}
@@ -81,10 +82,11 @@ export function DocumentsPage() {
     const retryable = state.recoverableError?.recovery === "retry";
     return (
       <section className="documents-page" aria-labelledby="documents-title">
-        <header className="documents-page__header">
-          <h1 id="documents-title">Documents</h1>
-          <p>프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다.</p>
-        </header>
+        <PageHeader
+          titleId="documents-title"
+          title="Documents"
+          description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
+        />
         <div className="documents-page__notice" role="alert">
           <strong>{state.recoverableError?.message ?? "문서를 불러오지 못했습니다."}</strong>
           {invalidRoot ? (
@@ -103,13 +105,11 @@ export function DocumentsPage() {
     return (
       <section className="documents-page" aria-labelledby="documents-title">
         <h1 id="documents-title" className="sr-only">Documents</h1>
-        {state.documentNotice ? (
-          <div className="documents-page__notice" role="alert">
-            <span>{state.documentNotice}</span>
-          </div>
-        ) : null}
         {state.selectedDocument ? (
-          <DocumentReader document={state.selectedDocument} />
+          <DocumentReader
+            document={state.selectedDocument}
+            notice={state.documentNotice}
+          />
         ) : state.documentStatus === "error" ? (
           <div className="documents-page__notice documents-page__read-error" role="alert">
             <div>
@@ -150,13 +150,11 @@ export function DocumentsPage() {
 
   return (
     <section className="documents-page" aria-labelledby="documents-title">
-      <header className="documents-page__header">
-        <div>
-          <h1 id="documents-title">Documents</h1>
-          <p>프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다.</p>
-        </div>
-        <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
-      </header>
+      <PageHeader
+        titleId="documents-title"
+        title="Documents"
+        description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
+      />
 
       {state.documentNotice ? (
         <div className="documents-page__notice" role="alert">
@@ -179,28 +177,31 @@ export function DocumentsPage() {
         </div>
       ) : null}
 
-      <div className="documents-page__search-row">
-        <DocumentSearch
-          query={state.searchQuery}
-          documents={state.catalog.documents}
-          results={state.searchResults}
-          searchStatus={state.searchStatus}
-          searchError={state.searchError}
-          indexStatus={state.indexStatus}
-          onQueryChange={setSearchQuery}
-          onSelectDocument={selectDocument}
-          onSelectResult={(result) =>
-            selectDocument(result.path, {
-              matchField: result.matchField,
-              matchText: result.matchText,
-            })
-          }
-          onRetry={retrySearch}
-        />
-        <Button className="documents-page__new-document" onClick={() => openNewDocument("docs")}>
-          <FilePlus2 aria-hidden="true" />
-          새 문서
-        </Button>
+      <div className="documents-page__tools">
+        <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
+        <div className="documents-page__toolbar">
+          <DocumentSearch
+            query={state.searchQuery}
+            documents={state.catalog.documents}
+            results={state.searchResults}
+            searchStatus={state.searchStatus}
+            searchError={state.searchError}
+            indexStatus={state.indexStatus}
+            onQueryChange={setSearchQuery}
+            onSelectDocument={selectDocument}
+            onSelectResult={(result) =>
+              selectDocument(result.path, {
+                matchField: result.matchField,
+                matchText: result.matchText,
+              })
+            }
+            onRetry={retrySearch}
+          />
+          <Button className="documents-page__new-document" onClick={() => openNewDocument("docs")}>
+            <FilePlus2 aria-hidden="true" />
+            새 문서
+          </Button>
+        </div>
       </div>
       {creationDialog}
     </section>

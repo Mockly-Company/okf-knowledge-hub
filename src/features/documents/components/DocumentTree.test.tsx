@@ -1,6 +1,7 @@
+import axe from "axe-core";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentCatalog } from "../model";
 import { DocumentTree } from "./DocumentTree";
 
@@ -39,7 +40,21 @@ const catalog: DocumentCatalog = {
   ],
 };
 
-afterEach(cleanup);
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("DocumentTree", () => {
   it("expands folders without navigating and opens documents", async () => {
@@ -160,5 +175,57 @@ describe("DocumentTree", () => {
       "aria-expanded",
       "false",
     );
+  });
+
+  it("activates the nested create button with keyboard without toggling its folder", async () => {
+    const user = userEvent.setup();
+    const onNewDocument = vi.fn();
+    render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={onNewDocument}
+      />,
+    );
+
+    const folder = screen.getByRole("treeitem", { name: "api" });
+    const createButton = screen.getByRole("button", { name: "api에 새 문서" });
+
+    createButton.focus();
+    expect(createButton).toHaveFocus();
+    expect(folder).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{Enter}");
+
+    expect(onNewDocument).toHaveBeenCalledTimes(1);
+    expect(onNewDocument).toHaveBeenCalledWith("docs/api");
+    expect(folder).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard(" ");
+
+    expect(onNewDocument).toHaveBeenCalledTimes(2);
+    expect(onNewDocument).toHaveBeenNthCalledWith(2, "docs/api");
+    expect(folder).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps header actions outside the tree's required child semantics", async () => {
+    const { container } = render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={() => {}}
+      />,
+    );
+
+    const result = await axe.run(container, {
+      runOnly: {
+        type: "rule",
+        values: ["aria-required-children"],
+      },
+    });
+
+    expect(result.violations).toEqual([]);
   });
 });

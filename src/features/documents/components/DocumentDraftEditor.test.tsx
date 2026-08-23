@@ -1,4 +1,4 @@
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DocumentEditorState } from "../document-authoring-reducer";
@@ -98,5 +98,37 @@ describe("DocumentDraftEditor", () => {
     rerender(<DocumentDraftEditor editor={editor("# After")} {...props} />);
 
     expect(setMarkdown).toHaveBeenCalledWith("# After");
+  });
+
+  it("keeps external-change decisions in a persistent content feedback region", () => {
+    const conflicted = editor("# Hub edit");
+    conflicted.saveStatus = "conflict";
+    conflicted.conflict = {
+      status: "conflict",
+      changeId: "change",
+      documentId: "document",
+      path: "docs/guide.md",
+      diskHash: "disk-hash",
+      diskMarkdown: "# Disk edit",
+      hubMarkdown: "# Hub edit",
+    };
+
+    render(
+      <DocumentDraftEditor
+        editor={conflicted}
+        onMarkdownChange={() => {}}
+        onModeChange={() => {}}
+        onAcceptDisk={() => {}}
+        onAcceptHub={() => {}}
+        onStartMerge={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    const feedback = screen.getByRole("alert");
+    expect(feedback).toHaveAttribute("data-feedback-variant", "content");
+    expect(feedback).toHaveAttribute("data-feedback-tone", "error");
+    expect(feedback).toHaveTextContent("디스크에서 문서가 변경되었습니다.");
+    expect(screen.getByRole("button", { name: "디스크 내용 사용" })).toBeVisible();
   });
 });

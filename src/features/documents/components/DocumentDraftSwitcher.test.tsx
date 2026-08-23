@@ -6,6 +6,17 @@ import { DocumentDraftSwitcher } from "./DocumentDraftSwitcher";
 afterEach(cleanup);
 
 describe("DocumentDraftSwitcher", () => {
+  it("uses a compact confirmed-document label instead of a separate work-basis field", () => {
+    const state = createInitialAuthoringState();
+
+    render(<DocumentDraftSwitcher state={state} onSwitch={() => {}} />);
+
+    expect(screen.getByRole("combobox", { name: "문서 작업 전환" })).toHaveTextContent(
+      "확정 문서",
+    );
+    expect(screen.queryByText("작업 기준")).not.toBeInTheDocument();
+  });
+
   it("keeps a failed draft switch visible beside the selector", () => {
     const state = createInitialAuthoringState();
     state.draftSwitch = {

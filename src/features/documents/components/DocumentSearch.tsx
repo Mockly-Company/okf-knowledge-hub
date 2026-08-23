@@ -1,6 +1,7 @@
 import { FileText, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
 import type {
   AppError,
@@ -69,14 +70,18 @@ export function DocumentSearch({
       >
         <h2>{isSearching ? "검색 결과" : "모든 문서"}</h2>
         {isSearching && searchStatus === "error" && searchError ? (
-          <div className="document-search__error" role="alert">
-            <p>{searchError.message}</p>
-            {searchError.recovery === "retry" ? (
+          <StatusFeedback
+            variant="content"
+            tone="error"
+            className="document-search__error"
+            action={searchError.recovery === "retry" ? (
               <Button variant="secondary" onClick={onRetry}>
                 검색 다시 시도
               </Button>
-            ) : null}
-          </div>
+            ) : undefined}
+          >
+            <p>{searchError.message}</p>
+          </StatusFeedback>
         ) : items.length === 0 ? (
           <p className="document-search__empty">
             {isSearching && searchStatus !== "loading"

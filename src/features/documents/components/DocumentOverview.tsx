@@ -40,7 +40,12 @@ export function DocumentOverview({ document }: { document: DocumentContent }) {
         ) : (
           <ol>
             {document.tableOfContents.map((item) => (
-              <li key={item.id} style={{ paddingInlineStart: `${(item.level - 1) * 12}px` }}>
+              <li
+                key={item.id}
+                style={{
+                  paddingInlineStart: `calc(${item.level - 1} * var(--space-3))`,
+                }}
+              >
                 <a href={`#${item.id}`}>{item.title}</a>
               </li>
             ))}

@@ -25,10 +25,11 @@ import {
   toolbarPlugin,
 } from "@mdxeditor/editor";
 import "@mdxeditor/editor/style.css";
-import { AlertTriangle, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { X } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import type { DocumentEditorState } from "../document-authoring-reducer";
@@ -41,6 +42,7 @@ import {
 
 interface DocumentDraftEditorProps {
   editor: DocumentEditorState;
+  headerSecondary?: ReactNode;
   onMarkdownChange(markdown: string): void;
   onModeChange(mode: "rich" | "source"): void;
   onAcceptDisk(): void;
@@ -60,6 +62,7 @@ const statusLabel = {
 
 export function DocumentDraftEditor({
   editor,
+  headerSecondary,
   onMarkdownChange,
   onModeChange,
   onAcceptDisk,
@@ -101,40 +104,55 @@ export function DocumentDraftEditor({
           />
           <span>{editor.document.path}</span>
         </div>
-        <div className="document-draft-editor__status">
-          <span data-status={editor.saveStatus}>{statusLabel[editor.saveStatus]}</span>
-          <Button variant="icon" aria-label="편집기 닫기" onClick={onClose}>
-            <X aria-hidden="true" />
-          </Button>
+        <div className="document-draft-editor__header-secondary">
+          {headerSecondary}
+          <div className="document-draft-editor__status">
+            <span data-status={editor.saveStatus}>{statusLabel[editor.saveStatus]}</span>
+            <Button variant="icon" aria-label="편집기 닫기" onClick={onClose}>
+              <X aria-hidden="true" />
+            </Button>
+          </div>
         </div>
       </header>
 
       {!richCompatible ? (
-        <div className="document-draft-editor__warning" role="status">
-          <AlertTriangle aria-hidden="true" />
+        <StatusFeedback
+          variant="banner"
+          tone="warning"
+          className="document-draft-editor__warning"
+        >
           지원 범위 밖의 Markdown이 있어 원문 모드로 편집합니다.
-        </div>
+        </StatusFeedback>
       ) : null}
 
       {editor.error ? (
-        <div className="document-draft-editor__warning" role="alert">
-          <AlertTriangle aria-hidden="true" />
+        <StatusFeedback
+          variant="content"
+          tone="error"
+          className="document-draft-editor__warning"
+        >
           {editor.error.message}
-        </div>
+        </StatusFeedback>
       ) : null}
 
       {editor.conflict ? (
-        <div className="document-draft-editor__conflict" role="alert">
+        <StatusFeedback
+          variant="content"
+          tone="error"
+          className="document-draft-editor__conflict"
+          action={(
+            <>
+              <Button variant="secondary" onClick={onAcceptDisk}>디스크 내용 사용</Button>
+              <Button variant="secondary" onClick={onAcceptHub}>내 내용으로 덮어쓰기</Button>
+              <Button variant="secondary" onClick={onStartMerge}>직접 병합</Button>
+            </>
+          )}
+        >
           <div>
             <strong>디스크에서 문서가 변경되었습니다.</strong>
             <p>자동저장을 멈췄습니다. 어느 내용을 기준으로 계속할지 선택하세요.</p>
           </div>
-          <div className="document-draft-editor__conflict-actions">
-            <Button variant="secondary" onClick={onAcceptDisk}>디스크 내용 사용</Button>
-            <Button variant="secondary" onClick={onAcceptHub}>내 내용으로 덮어쓰기</Button>
-            <Button variant="secondary" onClick={onStartMerge}>직접 병합</Button>
-          </div>
-        </div>
+        </StatusFeedback>
       ) : null}
 
       <TabsList className="document-draft-editor__mode-tabs" aria-label="편집 모드">
