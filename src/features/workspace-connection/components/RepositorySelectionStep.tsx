@@ -1,5 +1,6 @@
 import { LoaderCircle, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Radio } from "@/components/ui/radio";
 import type { GithubRepositorySummary, RecoveryAction, RepositoryConnectionState } from "../types";
@@ -17,10 +18,13 @@ export function RepositorySelectionStep({ state, onSelect, onRefresh, onLoadNext
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = state.repositories.find((repository) => repository.id === selectedId) ?? null;
   return (
-    <section className="workspace-connection__step" aria-labelledby="repository-selection-title">
-      <p className="workspace-connection__eyebrow">2 / 3</p>
-      <h1 id="repository-selection-title">OKF 저장소 선택</h1>
-      <p>연결할 기존 OKF 지식 저장소를 선택하세요.</p>
+    <section className="workspace-connection__step grid gap-[var(--space-4)]" aria-labelledby="repository-selection-title">
+      <p className="workspace-connection__eyebrow m-0">2 / 3</p>
+      <PageHeader
+        titleId="repository-selection-title"
+        title="OKF 저장소 선택"
+        description="연결할 기존 OKF 지식 저장소를 선택하세요."
+      />
       {state.status === "error" ? <ConnectionError error={state.error} onRecover={onRecover} /> : null}
       <div className="workspace-connection__repository-list" role="radiogroup" aria-label="OKF 저장소">
         {state.repositories.map((repository) => (

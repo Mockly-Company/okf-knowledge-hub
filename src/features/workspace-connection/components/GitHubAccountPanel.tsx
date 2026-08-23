@@ -1,6 +1,7 @@
 import { CircleUserRound, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { SectionHeader } from "@/components/patterns/SectionHeader";
 import { useWorkspaceConnection } from "../WorkspaceConnectionProvider";
 import { DeviceCodeCopy } from "./DeviceCodeCopy";
 import { LogoutConfirmationDialog } from "./LogoutConfirmationDialog";
@@ -28,14 +29,10 @@ export function GitHubAccountPanel() {
 
   return (
     <div className="github-account-panel">
-      <div>
-        <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">
-          외부 연결
-        </h2>
-        <p className="mt-1 text-[var(--color-text-muted)]">
-          GitHub 계정 연결과 인증 상태를 관리합니다.
-        </p>
-      </div>
+      <SectionHeader
+        title="외부 연결"
+        description="GitHub 계정 연결과 인증 상태를 관리합니다."
+      />
 
       <section className="github-account-card" aria-labelledby="github-account-title">
         <div className="github-account-card__heading">
@@ -102,9 +99,7 @@ export function GitHubAccountPanel() {
         ) : (
           <div className="github-account-card__signed-out">
             <p>
-              {account.status === "reauthentication_required"
-                ? "GitHub 인증이 만료되었습니다. 다시 로그인해 주세요."
-                : "연결된 GitHub 계정이 없습니다."}
+              연결된 GitHub 계정이 없습니다.
             </p>
             <Button type="button" onClick={() => void startLogin()}>
               GitHub 다시 로그인

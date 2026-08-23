@@ -1,5 +1,7 @@
 import { useWorkspaceConnection } from "../WorkspaceConnectionProvider";
 import { Button } from "@/components/ui/button";
+import { SectionHeader } from "@/components/patterns/SectionHeader";
+import { StatusBadge } from "@/components/patterns/StatusBadge";
 
 export function WorkspaceSettingsPanel() {
   const {
@@ -20,13 +22,11 @@ export function WorkspaceSettingsPanel() {
 
   return (
     <div>
-      <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">
-        워크스페이스
-      </h2>
-      <p className="mt-1 text-[var(--color-text-muted)]">
-        이 기기에 연결된 OKF 지식 저장소를 확인하고 교체합니다.
-      </p>
-      <dl className="mt-6 grid gap-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
+      <SectionHeader
+        title="워크스페이스"
+        description="이 기기에 연결된 OKF 지식 저장소를 확인하고 교체합니다."
+      />
+      <dl className="mt-[var(--space-6)] grid gap-[var(--space-4)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--panel-padding)]">
         <div>
           <dt className="text-sm text-[var(--color-text-muted)]">GitHub 저장소</dt>
           <dd className="mt-1 font-medium text-[var(--color-text-strong)]">
@@ -41,15 +41,15 @@ export function WorkspaceSettingsPanel() {
         </div>
         <div>
           <dt className="text-sm text-[var(--color-text-muted)]">워크스페이스 설정</dt>
-          <dd className="mt-1 flex items-center gap-2 text-[var(--color-text-strong)]">
+          <dd className="mt-1 flex items-center gap-[var(--space-2)] text-[var(--color-text-strong)]">
             <span>.okf/workspace.yml</span>
-            <span className="rounded-full bg-[var(--color-success-soft)] px-2 py-0.5 text-sm text-[var(--color-success)]">
-              schema v{connectedWorkspace.summary.schemaVersion}
-            </span>
+            <StatusBadge tone="neutral">
+              {`schema v${connectedWorkspace.summary.schemaVersion}`}
+            </StatusBadge>
           </dd>
         </div>
       </dl>
-      <div className="mt-5 flex flex-wrap gap-2">
+      <div className="mt-[var(--space-5)] flex flex-wrap gap-[var(--space-2)]">
         <Button
           type="button"
           variant="secondary"

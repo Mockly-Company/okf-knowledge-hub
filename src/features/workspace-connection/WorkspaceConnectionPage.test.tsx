@@ -69,6 +69,20 @@ async function signInAndChooseRepository(
 }
 
 describe("WorkspaceConnectionPage", () => {
+  it("uses the semantic canvas and panel spacing for the connection boundary", () => {
+    const { container } = renderPage();
+
+    expect(screen.getByRole("main")).toHaveClass("bg-[var(--color-canvas)]");
+    expect(container.querySelector(".workspace-connection__card")).toHaveClass(
+      "p-[var(--panel-padding)]",
+      "grid",
+      "gap-[var(--space-6)]",
+    );
+    expect(
+      screen.getByRole("heading", { level: 1, name: "GitHub에 연결" }),
+    ).toHaveClass("font-[number:var(--font-weight-page-title)]");
+  });
+
   it("keeps every gateway state exposed to React outside the token boundary", async () => {
     const gateway = FakeWorkspaceConnectionGateway.disconnected();
     const exposedStates: unknown[] = [];
@@ -124,6 +138,11 @@ describe("WorkspaceConnectionPage", () => {
       },
     });
     await screen.findByRole("button", { name: "다시 시도" });
+
+    expect(screen.getByRole("alert")).toHaveAttribute(
+      "data-feedback-variant",
+      "banner",
+    );
 
     expectTokenFree(exposedStates);
   });
@@ -369,6 +388,9 @@ describe("WorkspaceConnectionPage", () => {
 
     expect(await screen.findByText("YAML 형식이 올바르지 않습니다.")).toBeInTheDocument();
     expect(screen.getByText(".okf/workspace.yml")).toBeInTheDocument();
+    expect(
+      screen.getByText("YAML 형식이 올바르지 않습니다.").closest("[data-feedback-variant]"),
+    ).toHaveAttribute("data-feedback-variant", "content");
   });
 
   it("previews initialization and cancels without writing", async () => {

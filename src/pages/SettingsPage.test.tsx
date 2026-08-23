@@ -23,6 +23,27 @@ const buildInfoGateway: BuildInfoGateway = {
 describe("SettingsPage", () => {
   afterEach(cleanup);
 
+  it("uses the approved page and section hierarchy", async () => {
+    render(
+      <PreferencesProvider repository={new FakePreferencesRepository()}>
+        <SettingsPage />
+      </PreferencesProvider>,
+    );
+
+    expect(screen.getByRole("heading", { level: 1, name: "Settings" })).toHaveClass(
+      "font-[number:var(--font-weight-page-title)]",
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "화면" })).toHaveClass(
+      "font-[number:var(--font-weight-section-title)]",
+    );
+    expect(screen.getByRole("heading", { level: 1, name: "Settings" }).closest("section"))
+      .toHaveClass(
+        "px-[var(--page-padding-inline)]",
+        "pt-[var(--page-block-start)]",
+        "pb-[var(--space-10)]",
+      );
+  });
+
   it("changes the device-only display density", async () => {
     const repository = new FakePreferencesRepository();
     render(
@@ -77,6 +98,19 @@ describe("SettingsPage", () => {
     await waitFor(() => expect(repository.writes).toEqual(["compact"]));
   });
 
+  it("keeps the selected density description legible on the primary-soft surface", async () => {
+    render(
+      <PreferencesProvider repository={new FakePreferencesRepository()}>
+        <SettingsPage />
+      </PreferencesProvider>,
+    );
+
+    const selectedDescription = await screen.findByText(
+      "문서 읽기와 작업 화면의 균형 잡힌 기본 크기",
+    );
+    expect(selectedDescription).toHaveClass("text-[var(--color-text-default)]");
+  });
+
   it("disables density choices while the initial preference read is pending", () => {
     const repository: PreferencesRepository = {
       getDisplayDensity: () => new Promise<DisplayDensity>(() => {}),
@@ -123,6 +157,11 @@ describe("SettingsPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("/work/mockly-knowledge")).toBeInTheDocument();
     expect(screen.getByText("schema v1")).toBeInTheDocument();
+    expect(screen.getByText("schema v1")).toHaveClass(
+      "bg-[var(--color-canvas)]",
+      "text-[var(--color-text-default)]",
+      "font-[number:var(--font-weight-control)]",
+    );
     expect(
       screen.getByRole("button", { name: "다시 확인" }),
     ).toBeInTheDocument();

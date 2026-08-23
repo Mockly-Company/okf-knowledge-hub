@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { FolderOpen, LoaderCircle } from "lucide-react";
+import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import type { CloneTargetPreview } from "../WorkspaceConnectionProvider";
 import type { LocalConnectionState, RecoveryAction } from "../types";
 import { ConnectionError } from "./ConnectionError";
@@ -27,15 +29,20 @@ export function LocalConnectionStep({ state, cloneTargetPreview, onConnectExisti
   const hasInitialization = state.workspaceInspection?.status === "initialization_required";
   const localPath = state.localRepository?.root ?? (state.status === "error" && state.errorContext === "pre_repository" ? state.failedOperation === "local_inspection" ? state.failedLocalInspectionRequest.path : `${state.failedCloneStartRequest.parentDirectory}/${state.selectedRepository.name}` : null);
   return (
-    <section className="workspace-connection__step" aria-labelledby="local-connection-title">
-      <p className="workspace-connection__eyebrow">3 / 3</p>
-      <h1 id="local-connection-title">로컬 연결</h1>
-      <p>{state.selectedRepository.fullName}을 이 기기의 폴더에 연결합니다.</p>
+    <section className="workspace-connection__step grid gap-[var(--space-4)]" aria-labelledby="local-connection-title">
+      <p className="workspace-connection__eyebrow m-0">3 / 3</p>
+      <PageHeader
+        titleId="local-connection-title"
+        title="로컬 연결"
+        description={`${state.selectedRepository.fullName}을 이 기기의 폴더에 연결합니다.`}
+      />
       {state.status === "validation_failed" ? (
-        <section className="connection-error" aria-label="워크스페이스 검증 오류">
-          <h2>워크스페이스 설정을 확인하세요</h2>
-          {state.workspaceInspection.status === "invalid" ? state.workspaceInspection.diagnostics.map((diagnostic) => <p key={`${diagnostic.path}-${diagnostic.code}`}><code>{diagnostic.path}</code> {diagnostic.message}</p>) : <p>지원하지 않는 워크스페이스 버전입니다.</p>}
-        </section>
+        <StatusFeedback variant="content" tone="error">
+          <div aria-label="워크스페이스 검증 오류">
+            <h2>워크스페이스 설정을 확인하세요</h2>
+            {state.workspaceInspection.status === "invalid" ? state.workspaceInspection.diagnostics.map((diagnostic) => <p key={`${diagnostic.path}-${diagnostic.code}`}><code>{diagnostic.path}</code> {diagnostic.message}</p>) : <p>지원하지 않는 워크스페이스 버전입니다.</p>}
+          </div>
+        </StatusFeedback>
       ) : null}
       {state.status === "error" && !cloneTargetPreview ? <ConnectionError error={state.error} localPath={localPath} onRecover={onRecover} /> : null}
       {hasInitialization ? <Button onClick={onPreviewInitialization}>초기화 내용 확인</Button> : null}

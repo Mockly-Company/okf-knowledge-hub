@@ -1,4 +1,5 @@
 import { ExternalLink, LoaderCircle } from "lucide-react";
+import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
 import type { AuthConnectionState, RecoveryAction } from "../types";
 import { ConnectionError } from "./ConnectionError";
@@ -17,10 +18,13 @@ export function GitHubLoginStep({ state, onStart, onCancel, onOpen, onRecover }:
   const isStarting = state.status === "login_beginning";
   const authorization = waiting ? state.authorization : null;
   return (
-    <section className="workspace-connection__step" aria-labelledby="github-login-title">
-      <p className="workspace-connection__eyebrow">1 / 3</p>
-      <h1 id="github-login-title">GitHub에 연결</h1>
-      <p>OKF 지식 저장소에 접근할 GitHub 계정을 연결합니다.</p>
+    <section className="workspace-connection__step grid gap-[var(--space-4)]" aria-labelledby="github-login-title">
+      <p className="workspace-connection__eyebrow m-0">1 / 3</p>
+      <PageHeader
+        titleId="github-login-title"
+        title="GitHub에 연결"
+        description="OKF 지식 저장소에 접근할 GitHub 계정을 연결합니다."
+      />
       {authorization ? (
         <div className="workspace-connection__device-flow">
           <p>GitHub에서 아래 코드를 입력해 인증을 계속하세요.</p>

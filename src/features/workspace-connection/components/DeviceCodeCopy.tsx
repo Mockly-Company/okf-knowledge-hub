@@ -2,6 +2,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 
 interface DeviceCodeCopyProps {
   code: string;
@@ -54,9 +55,9 @@ export function DeviceCodeCopy({
         </Button>
       </div>
       {status === "error" ? (
-        <p className="device-code-copy__error" role="alert">
+        <StatusFeedback variant="field" tone="error" className="device-code-copy__error">
           복사하지 못했습니다. 코드를 직접 선택해 주세요.
-        </p>
+        </StatusFeedback>
       ) : null}
     </div>
   );

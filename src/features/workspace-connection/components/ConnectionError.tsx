@@ -1,5 +1,5 @@
-import { CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import type { AppError, RecoveryAction } from "../types";
 
 const recoveryLabels: Record<RecoveryAction, string> = {
@@ -20,19 +20,23 @@ interface ConnectionErrorProps {
 }
 
 export function ConnectionError({ error, localPath, onRecover }: ConnectionErrorProps) {
+  const action = error.recovery ? (
+    <Button
+      variant="secondary"
+      className="border-[var(--color-error)] text-[var(--color-error)] hover:border-[var(--color-error)] hover:bg-[var(--color-error-hover)]"
+      onClick={() => onRecover(error.recovery!)}
+    >
+      {recoveryLabels[error.recovery]}
+    </Button>
+  ) : undefined;
+
   return (
-    <section className="connection-error" aria-labelledby="connection-error-title">
-      <CircleAlert aria-hidden="true" strokeWidth={1.75} />
+    <StatusFeedback variant="banner" tone="error" action={action}>
       <div>
         <h2 id="connection-error-title">연결을 완료하지 못했습니다</h2>
         <p>{error.message}</p>
         {localPath ? <code>{localPath}</code> : null}
-        {error.recovery ? (
-          <Button variant="secondary" onClick={() => onRecover(error.recovery!)}>
-            {recoveryLabels[error.recovery]}
-          </Button>
-        ) : null}
       </div>
-    </section>
+    </StatusFeedback>
   );
 }
