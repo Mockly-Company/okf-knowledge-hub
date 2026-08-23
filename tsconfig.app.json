@@ -20,5 +20,5 @@
     "paths": { "@/*": ["./src/*"] },
     "types": ["vitest/globals", "node"]
   },
-  "include": ["src"]
+  "include": ["src", ".storybook/**/*.ts", ".storybook/**/*.tsx"]
 }
