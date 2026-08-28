@@ -4,6 +4,7 @@ import type { Decorator } from "@storybook/react-vite";
 import { DocumentsProvider, type DocumentsProviderProps } from "@/features/documents/DocumentsProvider";
 import type {
   DocumentCatalog,
+  DraftSummary,
   IndexStatus,
   SearchResult,
 } from "@/features/documents/model";
@@ -34,6 +35,7 @@ interface StorybookWorkspaceOptions {
 
 interface StorybookDocumentsOptions {
   catalog?: DocumentCatalog;
+  drafts?: DraftSummary[];
   selectedPath?: string | null;
   searchResults?: SearchResult[];
   branch?: string;
@@ -114,6 +116,7 @@ function createBoundary(
     lastOpenedPath: selectedPath,
   };
   documents.searchResults = options.documents?.searchResults ?? [];
+  documents.drafts = options.documents?.drafts ?? [];
 
   let idCounter = 0;
   const createId = () => `storybook-documents-${++idCounter}`;

@@ -37,6 +37,22 @@ export default defineConfig({
             headless: true,
             provider: playwright({}),
             instances: [{ browser: "chromium" }],
+            commands: {
+              async pointerDown(context, selector: string) {
+                const frame = await context.frame();
+
+                await frame.locator(selector).hover();
+                await context.page.mouse.down();
+              },
+              async pointerUp(context) {
+                await context.page.mouse.up();
+              },
+              async setReducedMotion(context, reduced: boolean) {
+                await context.page.emulateMedia({
+                  reducedMotion: reduced ? "reduce" : "no-preference",
+                });
+              },
+            },
           },
           setupFiles: ["./.storybook/vitest.setup.ts"],
         },

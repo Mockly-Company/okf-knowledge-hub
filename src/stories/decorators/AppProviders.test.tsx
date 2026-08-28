@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
@@ -12,6 +12,19 @@ function DocumentsProbe() {
       <output aria-label="selected-path">{state.selectedPath ?? "none"}</output>
       <output aria-label="selected-title">
         {state.selectedDocument?.summary.title ?? "none"}
+      </output>
+    </div>
+  );
+}
+
+function DraftProbe() {
+  const { authoringState } = useDocuments();
+
+  return (
+    <div>
+      <output aria-label="draft-count">{authoringState.drafts.length}</output>
+      <output aria-label="active-draft">
+        {authoringState.activeChangeId ?? "none"}
       </output>
     </div>
   );
@@ -78,6 +91,36 @@ describe("StorybookAppProviders", () => {
     expect(screen.queryByText("지도 검색 API 계약")).not.toBeInTheDocument();
     expect(screen.getByLabelText("selected-path")).toHaveTextContent("none");
     expect(screen.getByLabelText("selected-title")).toHaveTextContent("none");
+  });
+
+  it("uses configured local drafts for Documents stories", async () => {
+    const draft = {
+      workspaceId: "storybook-workspace",
+      changeId: "storybook-draft-map-search",
+      authorLogin: "storybook-bot",
+      baseCommit: "a1b2c3d4",
+      branch: "draft/storybook-bot/map-search",
+      createdAtUnixMs: 1_726_000_000_000,
+      lastOpenedAtUnixMs: 1_726_000_000_000,
+    };
+
+    render(
+      <StorybookAppProviders
+        documents={{
+          branch: draft.branch,
+          drafts: [draft],
+        }}
+      >
+        <DraftProbe />
+      </StorybookAppProviders>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("draft-count")).toHaveTextContent("1"),
+    );
+    expect(screen.getByLabelText("active-draft")).toHaveTextContent(
+      draft.changeId,
+    );
   });
 
   it("respects an explicit null currentWorkspace override without surfacing a connected workspace", async () => {

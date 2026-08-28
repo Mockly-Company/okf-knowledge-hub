@@ -16,6 +16,7 @@
     "storybook": "storybook dev -p 6006",
     "test:storybook": "vitest --project storybook",
     "build-storybook": "storybook build",
+    "test:storybook:smoke": "pnpm build-storybook && node ./scripts/smoke-built-storybook.mjs",
     "dev:setup:macos": "bash scripts/setup-macos-dev-signing.sh",
     "tauri": "bash scripts/tauri-with-macos-signing.sh"
   },
