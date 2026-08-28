@@ -239,6 +239,14 @@ components/patterns
 - Button Focus는 variant와 관계없이 `#009E8E` border와 빈 간격 없는 `1px` 바깥 ring을 사용합니다. Link는 `1px` outline과 `1px` offset을 사용합니다.
 - Loading은 현재 배경을 유지하고 `LoaderCircle`을 표시하며 중복 실행을 막습니다.
 
+### Tabs
+
+- 같은 문서의 보기 모드처럼 한 맥락 안의 내용을 전환할 때 사용합니다.
+- Tab list는 전체 폭 `1px` bottom divider를 사용하며, 각 tab은 배경을 두지 않습니다.
+- 선택 tab은 `color.primary.text`와 `600` weight, 아래의 `2px` Aqua Mint indicator로 표시합니다. Hover는 배경 대신 text만 강조합니다.
+- Indicator는 선택 tab의 너비와 위치를 따라 `180ms cubic-bezier(0.2, 0, 0, 1)`로 이동합니다. `prefers-reduced-motion`에서는 즉시 전환합니다.
+- 방향키, Home, End로 enabled tab 사이를 이동하며, keyboard focus는 `1px` Aqua Mint outline과 `2px` offset을 사용합니다.
+
 ### Input·Select·선택 control 상태
 
 | 상태 | 배경 | 테두리·표시 |
@@ -258,10 +266,10 @@ components/patterns
 
 - 앱의 기본 Select는 native `<select>`가 아닌 shadcn/Radix 기반 Select를 사용합니다. 운영체제별로 열리는 native menu의 모양에 의존하지 않습니다.
 - Trigger는 Input과 같은 Default `36px`, Compact `32px`, `8px` radius와 `1px` border를 사용합니다.
-- Content는 Trigger와 같은 너비로 열고, 선택된 item을 Trigger 위치에 맞춰 정렬합니다.
+- Content는 Trigger와 같은 너비로 열고, 선택된 item을 Trigger 위치에 맞춰 정렬합니다. 아래로 열릴 때 Trigger의 하단 모서리와 Content의 상단 모서리를 제거해 `1px` 경계선으로 이어진 하나의 control처럼 보이게 하며, 이 연결형 Content에는 overlay shadow나 간격을 사용하지 않습니다.
 - 문서 유형과 템플릿처럼 선택 이유가 필요한 경우에는 `제목 + 설명` option을 사용합니다. 이 option은 최소 `52px`이며, 단순 filter는 설명 없는 기본 `36px` option을 사용합니다.
-- 닫힌 Trigger의 keyboard focus는 일반 control focus 규칙을 따릅니다. 열린 Content에서는 Trigger의 ring을 유지하지 않고, 선택 item의 Primary soft 배경과 check glyph로 현재 선택을 표시합니다.
-- 키보드로 이동 중인 option은 ring 대신 Canvas 배경으로 표시합니다. Enter/Space로 열기·선택, 방향키 이동, Escape 닫기를 지원합니다.
+- 닫힌 Trigger의 keyboard focus는 일반 control focus 규칙을 따릅니다. 열린 Content에서는 Trigger의 ring을 유지하지 않고, 선택 item의 Primary soft 배경과 check glyph로 현재 선택을 표시합니다. Invalid는 닫힌 Trigger와 오류 메시지에만 표시하며, 열린 Content에는 오류 테두리를 이어서 표시하지 않습니다.
+- Option 사이에는 `4px` 간격을 둡니다. Hover와 키보드로 이동 중인 option은 ring 없이 Selected와 같은 Primary soft 배경으로 표시하고, 현재 선택은 check glyph와 Primary text로 구분합니다. Enter/Space로 열기·선택, 방향키 이동, Escape 닫기를 지원합니다.
 
 ### Dialog
 

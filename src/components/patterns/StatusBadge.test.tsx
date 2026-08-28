@@ -20,6 +20,9 @@ describe("StatusBadge", () => {
 
     expect(screen.getByText(`상태: ${tone}`)).toHaveClass(
       "rounded-[var(--radius-full)]",
+      "text-[length:var(--font-meta-size)]",
+      "leading-[var(--font-meta-line)]",
+      "font-[number:var(--font-weight-control)]",
       background,
       foreground,
     );

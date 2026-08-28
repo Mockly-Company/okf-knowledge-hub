@@ -77,6 +77,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
     onValueChange,
   }, ref) => {
     const options = parseOptions(children);
+    const [open, setOpen] = React.useState(false);
 
     return (
       <SelectPrimitive.Root
@@ -86,32 +87,36 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
         required={required}
         name={name}
         onValueChange={onValueChange}
+        onOpenChange={setOpen}
       >
         <SelectPrimitive.Trigger
           ref={ref}
+          data-select-trigger=""
           id={id}
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
           aria-describedby={ariaDescribedBy}
           aria-invalid={ariaInvalid}
           className={cn(
-            "flex h-[var(--control-height)] min-w-0 cursor-pointer items-center justify-between gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 font-[number:var(--font-weight-description)] text-[var(--color-text-strong)] transition-[border-color,background-color,color] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] hover:border-[var(--color-border-hover)] focus-visible:border-[var(--color-primary)] aria-[invalid=true]:border-[var(--color-error)] disabled:cursor-not-allowed disabled:bg-[var(--color-control-disabled)] disabled:text-[var(--color-text-disabled)]",
+            "flex h-[var(--control-height)] w-full min-w-0 cursor-pointer items-center justify-between gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 font-[number:var(--font-weight-description)] text-[var(--color-text-strong)] transition-[border-color,background-color,color,border-radius] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] hover:border-[var(--color-border-hover)] focus-visible:border-[var(--color-primary)] aria-[invalid=true]:border-[var(--color-error)] aria-[invalid=true]:focus-visible:border-[var(--color-error)] disabled:cursor-not-allowed disabled:bg-[var(--color-control-disabled)] disabled:text-[var(--color-text-disabled)]",
+            open && "!rounded-b-none",
             className,
           )}
         >
           <SelectPrimitive.Value placeholder={placeholder} />
           <SelectPrimitive.Icon asChild>
-            <ChevronDown aria-hidden="true" className="size-[var(--icon-size)] shrink-0" strokeWidth={1.75} />
+            <ChevronDown aria-hidden="true" className={cn("size-[var(--icon-size)] shrink-0 transition-transform duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] motion-reduce:transition-none", open && "rotate-180")} strokeWidth={1.75} />
           </SelectPrimitive.Icon>
         </SelectPrimitive.Trigger>
         <SelectPrimitive.Portal>
           <SelectPrimitive.Content
             position="popper"
-            sideOffset={0}
+            side="bottom"
+            sideOffset={-1}
             align="start"
-            className="z-50 max-h-[min(320px,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-popover)]"
+            className="z-50 max-h-[min(320px,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-t-none rounded-b-[var(--radius-md)] border border-t-0 border-[var(--color-border)] bg-[var(--color-surface)] shadow-none"
           >
-            <SelectPrimitive.Viewport className="p-[var(--space-1)]">
+            <SelectPrimitive.Viewport className="grid gap-[var(--space-1)] p-[var(--space-1)]">
               {options.map((option) => (
                 <SelectPrimitive.Item
                   key={option.key}
@@ -121,7 +126,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                     typeof option.children === "string" ? option.children : undefined
                   }
                   className={cn(
-                    "relative flex min-h-[var(--control-height)] cursor-pointer select-none items-center rounded-[var(--radius-md)] py-[var(--space-2)] pr-[var(--space-10)] pl-[var(--space-3)] text-[var(--color-text-default)] outline-none transition-colors duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] data-[disabled]:cursor-not-allowed data-[disabled]:text-[var(--color-text-disabled)] data-[highlighted]:bg-[var(--color-canvas)] data-[state=checked]:bg-[var(--color-primary-soft)] data-[state=checked]:text-[var(--color-primary-text)]",
+                    "relative flex min-h-[var(--control-height)] cursor-pointer select-none items-center rounded-[var(--radius-md)] py-[var(--space-2)] pr-[var(--space-10)] pl-[var(--space-3)] text-[var(--color-text-default)] outline-none transition-colors duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] focus-visible:outline-none data-[disabled]:cursor-not-allowed data-[disabled]:text-[var(--color-text-disabled)] data-[highlighted]:bg-[var(--color-primary-soft)] data-[state=checked]:bg-[var(--color-primary-soft)] data-[state=checked]:text-[var(--color-primary-text)]",
                     option.description && "min-h-[52px]",
                   )}
                 >

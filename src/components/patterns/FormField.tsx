@@ -3,6 +3,7 @@ import * as React from "react";
 export interface FormFieldProps {
   label: React.ReactNode;
   htmlFor?: string;
+  required?: boolean;
   description?: React.ReactNode;
   error?: React.ReactNode;
   children: React.ReactNode;
@@ -10,6 +11,7 @@ export interface FormFieldProps {
 
 interface FormControlProps {
   id?: string;
+  required?: boolean;
   "aria-describedby"?: string;
   "aria-invalid"?: React.AriaAttributes["aria-invalid"];
 }
@@ -17,19 +19,22 @@ interface FormControlProps {
 export function FormField({
   label,
   htmlFor,
+  required,
   description,
   error,
   children,
 }: FormFieldProps) {
   const generatedId = React.useId();
-  const controlId = htmlFor ?? `field-${generatedId}`;
-  const descriptionId = description ? `${controlId}-description` : undefined;
-  const errorId = error ? `${controlId}-error` : undefined;
   const child = React.Children.only(children);
 
   if (!React.isValidElement<FormControlProps>(child)) {
     throw new Error("FormField requires one valid form control child.");
   }
+
+  const controlId = htmlFor ?? child.props.id ?? `field-${generatedId}`;
+  const isRequired = required || Boolean(child.props.required);
+  const descriptionId = description ? `${controlId}-description` : undefined;
+  const errorId = error ? `${controlId}-error` : undefined;
 
   const describedBy = [
     child.props["aria-describedby"],
@@ -40,6 +45,7 @@ export function FormField({
     .join(" ") || undefined;
   const control = React.cloneElement<FormControlProps>(child, {
     id: controlId,
+    required: isRequired || undefined,
     "aria-describedby": describedBy,
     "aria-invalid": error ? true : child.props["aria-invalid"],
   });
@@ -51,6 +57,11 @@ export function FormField({
         className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]"
       >
         {label}
+        {isRequired ? (
+          <span aria-hidden="true" className="ml-[var(--space-1)] text-[var(--color-error)]">
+            필수
+          </span>
+        ) : null}
       </label>
       {description ? (
         <p

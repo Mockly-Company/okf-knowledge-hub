@@ -9,7 +9,7 @@ export const Checkbox = React.forwardRef<
     ref={ref}
     type="checkbox"
     className={cn(
-      "size-4 cursor-pointer accent-[var(--color-primary)] disabled:cursor-not-allowed",
+      "size-4 cursor-pointer accent-[var(--color-primary)] transition-[accent-color,outline-color] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] disabled:cursor-not-allowed disabled:accent-[var(--color-text-disabled)]",
       className,
     )}
     {...props}

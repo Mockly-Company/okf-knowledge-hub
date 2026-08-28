@@ -19,6 +19,20 @@ const icons = {
   error: CircleAlert,
 } satisfies Record<StatusFeedbackTone, typeof CircleAlert>;
 
+const iconDiscClasses: Record<StatusFeedbackTone, string> = {
+  success: "bg-[var(--color-success-icon-surface)] text-[var(--color-success)]",
+  info: "bg-[var(--color-info-icon-surface)] text-[var(--color-info)]",
+  warning: "bg-[var(--color-warning-icon-surface)] text-[var(--color-warning)]",
+  error: "bg-[var(--color-error-icon-surface)] text-[var(--color-error)]",
+};
+
+const actionClasses: Partial<Record<StatusFeedbackTone, string>> = {
+  warning:
+    "[&_[data-variant]]:border [&_[data-variant]]:border-[var(--color-warning-action-border)] [&_[data-variant]]:bg-[var(--color-surface)] [&_[data-variant]]:text-[var(--color-warning-action-text)] [&_[data-variant]:hover]:bg-[var(--color-warning-soft)]",
+  error:
+    "[&_[data-variant]]:border [&_[data-variant]]:border-[var(--color-error-action-border)] [&_[data-variant]]:bg-[var(--color-surface)] [&_[data-variant]]:text-[var(--color-error)] [&_[data-variant]:hover]:bg-[var(--color-error-soft)]",
+};
+
 export interface StatusFeedbackProps {
   variant: StatusFeedbackVariant;
   tone: StatusFeedbackTone;
@@ -26,6 +40,36 @@ export interface StatusFeedbackProps {
   action?: ReactNode;
   actionPlacement?: "stacked" | "end";
   className?: string;
+}
+
+export function StatusFeedbackTitle({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<"strong">) {
+  return (
+    <strong
+      className={cn(
+        "block font-[number:var(--font-weight-section-title)] text-[length:var(--font-group-size)] leading-[var(--font-group-line)] text-[var(--color-text-strong)]",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
+export function StatusFeedbackDescription({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<"p">) {
+  return (
+    <p
+      className={cn(
+        "m-0 mt-[var(--space-1)] font-[number:var(--font-weight-description)] text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-default)]",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
 export function StatusFeedback({
@@ -46,48 +90,59 @@ export function StatusFeedback({
 
   const Icon = icons[tone];
   const role = variant === "toast" ? "status" : tone === "error" ? "alert" : "status";
-  const inlineBannerAction = variant === "banner" && actionPlacement === "end";
+  const inlineAction = actionPlacement === "end" && (variant === "banner" || variant === "content");
+  const usesToastDensity = variant === "toast" || Boolean(action);
+  const actionElement = action ? (
+    <div
+      data-feedback-action
+      className={cn(
+        "flex flex-wrap gap-[var(--space-2)]",
+        inlineAction && "col-span-2 row-start-2 justify-self-end sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:justify-self-auto",
+        !inlineAction && "mt-[var(--space-3)]",
+        actionClasses[tone],
+      )}
+    >
+      {action}
+    </div>
+  ) : null;
 
   return (
     <section
       role={role}
       data-feedback-variant={variant}
       data-feedback-tone={tone}
-      data-feedback-action-placement={inlineBannerAction ? "end" : undefined}
+      data-feedback-action-placement={inlineAction ? "end" : undefined}
       aria-live={variant === "toast" ? "polite" : undefined}
       aria-atomic={variant === "toast" ? "true" : undefined}
       className={cn(
-        "flex items-start gap-[var(--space-3)] border",
-        variant === "toast" && "rounded-[var(--radius-md)] p-[var(--space-3)] shadow-[var(--shadow-popover)]",
-        variant === "banner" && "rounded-[var(--radius-lg)] p-[var(--space-4)]",
-        variant === "content" && "rounded-[var(--radius-lg)] p-[var(--space-6)]",
+        inlineAction
+          ? "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-[var(--space-3)] border sm:grid-cols-[auto_minmax(0,1fr)_auto]"
+          : "flex items-center gap-[var(--space-3)] border",
+        usesToastDensity && "min-h-[68px] rounded-[var(--radius-md)] p-[var(--space-3)] shadow-[var(--shadow-popover)]",
+        variant === "banner" && !usesToastDensity && "rounded-[var(--radius-lg)] p-[var(--space-4)]",
+        variant === "content" && !usesToastDensity && "rounded-[var(--radius-lg)] p-[var(--space-6)]",
         toneClasses[tone],
         className,
       )}
     >
-      <span className="grid size-8 shrink-0 place-items-center rounded-[var(--radius-full)] bg-[var(--color-surface)]/70">
-        <Icon aria-hidden="true" className="size-[var(--icon-size)]" strokeWidth={1.75} />
+      <span
+        data-feedback-icon
+        className={cn(
+          "grid size-8 shrink-0 place-items-center rounded-[var(--radius-full)]",
+          iconDiscClasses[tone],
+        )}
+      >
+        <Icon aria-hidden="true" className="size-5" strokeWidth={1.75} />
       </span>
       <div
         className={cn(
-          "min-w-0 flex-1 gap-[var(--space-3)]",
-          inlineBannerAction
-            ? "flex flex-col md:flex-row md:items-center md:justify-between"
-            : "grid",
+          "min-w-0 flex-1",
         )}
       >
         <div className="text-[var(--color-text-default)]">{children}</div>
-        {action ? (
-          <div
-            className={cn(
-              "flex flex-wrap gap-[var(--space-2)]",
-              inlineBannerAction && "shrink-0",
-            )}
-          >
-            {action}
-          </div>
-        ) : null}
+        {!inlineAction && actionElement}
       </div>
+      {inlineAction ? actionElement : null}
     </section>
   );
 }

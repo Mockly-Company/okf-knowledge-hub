@@ -1,9 +1,9 @@
-import { Settings } from "lucide-react";
+import { MoreVertical, Settings } from "lucide-react";
 import { FormField } from "@/components/patterns/FormField";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { SectionHeader } from "@/components/patterns/SectionHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
@@ -14,10 +14,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
 import { Select, SelectOption } from "@/components/ui/select";
-import { StatusFeedback } from "@/components/ui/status-feedback";
+import {
+  StatusFeedback,
+  StatusFeedbackDescription,
+  StatusFeedbackTitle,
+} from "@/components/ui/status-feedback";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { Tooltip } from "@/components/ui/tooltip";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
 
 const swatches = [
@@ -82,17 +85,17 @@ export function DesignSystemPage() {
           <Button variant="secondary">Secondary</Button>
           <Button variant="ghost">Ghost</Button>
           <Button variant="destructive">Destructive</Button>
-          <Tooltip content="설정 열기">
-            <Button variant="icon" aria-label="설정 열기">
-              <Settings aria-hidden="true" strokeWidth={1.75} />
-            </Button>
-          </Tooltip>
+          <IconButton label="설정 열기">
+            <Settings aria-hidden="true" strokeWidth={1.75} />
+          </IconButton>
           <Button disabled>Disabled</Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="secondary">문서 작업</Button>
+              <IconButton label="문서 작업" tooltip={false}>
+                <MoreVertical aria-hidden="true" strokeWidth={1.75} />
+              </IconButton>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
+            <DropdownMenuContent align="end">
               <DropdownMenuItem>링크 복사</DropdownMenuItem>
               <DropdownMenuItem>GitHub에서 보기</DropdownMenuItem>
             </DropdownMenuContent>
@@ -108,11 +111,16 @@ export function DesignSystemPage() {
             tone="warning"
             action={<Button variant="secondary">다시 연결</Button>}
           >
-            <strong>GitHub 연결이 끊어졌습니다.</strong>
-            <p className="m-0 mt-[var(--space-1)]">Issue와 저장소 동기화를 다시 시작하려면 연결을 확인하세요.</p>
+            <StatusFeedbackTitle>GitHub 연결이 끊겼습니다</StatusFeedbackTitle>
+            <StatusFeedbackDescription>
+              Issue와 저장소 동기화를 다시 시작하려면 연결을 확인하세요.
+            </StatusFeedbackDescription>
           </StatusFeedback>
           <StatusFeedback variant="content" tone="error">
-            저장 충돌처럼 현재 작업 안에서 해결해야 하는 문제입니다.
+            <StatusFeedbackTitle>디스크의 문서가 변경되었습니다</StatusFeedbackTitle>
+            <StatusFeedbackDescription>
+              내 변경과 비교한 뒤 처리 방법을 선택하세요.
+            </StatusFeedbackDescription>
           </StatusFeedback>
         </div>
       </section>

@@ -56,7 +56,7 @@ describe("DesignSystemPage", () => {
       "px-[var(--page-padding-inline)]",
       "pt-[var(--page-block-start)]",
     );
-    expect(screen.getByText("GitHub 연결이 끊어졌습니다.").closest("section"))
+    expect(screen.getByText("GitHub 연결이 끊겼습니다").closest("section"))
       .toHaveAttribute("data-feedback-variant", "banner");
   });
 
@@ -146,7 +146,7 @@ describe("DesignSystemPage", () => {
 
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip).toHaveTextContent("설정 열기");
-    expect(tooltip).toHaveClass("text-[var(--color-canvas)]");
+    expect(tooltip).toHaveClass("text-[var(--color-text-default)]");
   });
 
   it("has no automatically detectable accessibility violations", async () => {

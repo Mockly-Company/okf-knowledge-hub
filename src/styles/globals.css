@@ -36,7 +36,91 @@ select {
 }
 
 [aria-invalid="true"]:focus-visible {
+  border-color: var(--color-error);
   outline-color: var(--color-error);
+}
+
+[data-select-trigger][data-state="open"]:focus-visible {
+  outline: none;
+}
+
+[data-select-trigger][aria-invalid="true"][data-state="open"] {
+  border-color: var(--color-border);
+  outline: none;
+}
+
+[role="option"]:focus-visible {
+  outline: none;
+}
+
+@keyframes okhub-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes okhub-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes okhub-dialog-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes okhub-dialog-out {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@keyframes okhub-popover-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes okhub-popover-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.97); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .okhub-dialog-overlay-motion[data-state="open"] {
+    animation: okhub-overlay-in var(--motion-control-duration) var(--motion-control-easing) both;
+  }
+
+  .okhub-dialog-overlay-motion[data-state="closed"] {
+    animation: okhub-overlay-out var(--motion-control-duration) var(--motion-control-easing) both;
+  }
+
+  .okhub-dialog-content-motion[data-state="open"] {
+    animation: okhub-dialog-in var(--motion-control-duration) var(--motion-control-easing) both;
+  }
+
+  .okhub-dialog-content-motion[data-state="closed"] {
+    animation: okhub-dialog-out var(--motion-control-duration) var(--motion-control-easing) both;
+  }
+
+  .okhub-popover-motion[data-state="open"],
+  .okhub-popover-motion[data-state="delayed-open"],
+  .okhub-popover-motion[data-state="instant-open"] {
+    animation: okhub-popover-in var(--motion-control-duration) var(--motion-control-easing) both;
+  }
+
+  .okhub-popover-motion[data-state="closed"] {
+    animation: okhub-popover-out var(--motion-control-duration) var(--motion-control-easing) both;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -73,4 +73,18 @@ describe("FormField", () => {
 
     expect(screen.getByLabelText("문서 제목")).toHaveAttribute("id", initialId);
   });
+
+  it("uses the child control id and marks a required field in its label", () => {
+    render(
+      <FormField label="문서 제목" required>
+        <Input id="document-title" required />
+      </FormField>,
+    );
+
+    expect(screen.getByText("필수")).toHaveAttribute("aria-hidden", "true");
+
+    const control = screen.getByRole("textbox");
+    expect(control).toHaveAttribute("id", "document-title");
+    expect(control).toBeRequired();
+  });
 });
