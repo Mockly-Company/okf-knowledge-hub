@@ -29,30 +29,6 @@ export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-export const DocumentsSelected: Story = {
-  decorators: [
-    withAppProviders({
-      documents: {
-        catalog: documentFixtures.defaultCatalog(),
-        selectedPath: "docs/api/map-search.md",
-      },
-      router: { initialEntries: ["/documents"] },
-    }),
-  ],
-  render: () => <SidebarPreview />,
-  play: async ({ canvas, userEvent }) => {
-    const menu = canvas.getByRole("navigation", { name: "주 메뉴" });
-    const documents = canvas.getByRole("link", { name: "Documents" });
-
-    await expect(menu).toBeVisible();
-    await userEvent.tab();
-    await userEvent.tab();
-    await userEvent.tab();
-    await expect(documents).toHaveFocus();
-    await expect(documents).toHaveAttribute("aria-current", "page");
-  },
-};
-
 export const TreeExpanded: Story = {
   decorators: [
     withAppProviders({
@@ -64,27 +40,39 @@ export const TreeExpanded: Story = {
     }),
   ],
   render: () => <SidebarPreview />,
+  play: async ({ canvas }) => {
+    const menu = canvas.getByRole("navigation", { name: "주 메뉴" });
+    const documents = canvas.getByRole("link", { name: "Documents" });
+    const docs = await canvas.findByRole("treeitem", { name: "docs" });
+    const api = canvas.getByRole("treeitem", { name: "api" });
+    const selected = canvas.getByRole("treeitem", { name: "지도 검색 API 계약" });
+
+    await expect(menu).toContainElement(documents);
+    await expect(documents).toHaveAttribute("aria-current", "page");
+    await expect(docs).toHaveAttribute("aria-expanded", "true");
+    await expect(api).toHaveAttribute("aria-expanded", "true");
+    await expect(selected).toHaveAttribute("aria-selected", "true");
+  },
 };
 
-export const UserAreaShown: Story = {
-  decorators: [withAppProviders({ router: { initialEntries: ["/"] } })],
-  render: () => <SidebarPreview />,
-};
-
-export const ReauthenticationRequired: Story = {
+export const TreeCollapsed: Story = {
   decorators: [
     withAppProviders({
-      workspace: {
-        authState: { status: "reauthentication_required" },
-        currentWorkspace: null,
-      },
-      router: { initialEntries: ["/"] },
+      documents: { catalog: documentFixtures.defaultCatalog() },
+      router: { initialEntries: ["/documents"] },
     }),
   ],
   render: () => <SidebarPreview />,
-  play: async ({ canvas }) => {
-    await expect(canvas.getByText("GitHub 재로그인 필요")).toBeVisible();
-    await expect(canvas.getByText("Settings에서 연결")).toBeVisible();
-    await expect(canvas.queryByRole("status")).not.toBeInTheDocument();
+  play: async ({ canvas, userEvent }) => {
+    const docs = await canvas.findByRole("treeitem", { name: "docs" });
+
+    await expect(canvas.getByText("GitHub 계정")).toBeVisible();
+    await expect(docs).toHaveAttribute("aria-expanded", "false");
+    docs.focus();
+    await expect(docs).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    await expect(docs).toHaveAttribute("aria-expanded", "true");
+    await userEvent.keyboard("{ArrowRight}");
+    await expect(canvas.getByRole("treeitem", { name: "api" })).toHaveFocus();
   },
 };

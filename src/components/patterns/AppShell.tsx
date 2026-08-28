@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, Outlet } from "react-router-dom";
 import { PanelLeftOpen } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { StatusFeedback } from "@/components/ui/status-feedback";
-import { Tooltip } from "@/components/ui/tooltip";
+import { Button, IconButton } from "@/components/ui/button";
+import {
+  StatusFeedback,
+  StatusFeedbackDescription,
+  StatusFeedbackTitle,
+} from "@/components/ui/status-feedback";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { AppSidebar } from "./AppSidebar";
 
@@ -47,16 +50,13 @@ export function AppShell() {
         />
       ) : (
         <div className="app-shell__open-sidebar">
-          <Tooltip content="사이드바 열기">
-            <Button
-              ref={openButtonRef}
-              variant="icon"
-              aria-label="사이드바 열기"
-              onClick={() => updateSidebar(true)}
-            >
-              <PanelLeftOpen aria-hidden="true" strokeWidth={1.75} />
-            </Button>
-          </Tooltip>
+          <IconButton
+            ref={openButtonRef}
+            label="사이드바 열기"
+            onClick={() => updateSidebar(true)}
+          >
+            <PanelLeftOpen aria-hidden="true" strokeWidth={1.75} />
+          </IconButton>
         </div>
       )}
       <main
@@ -77,8 +77,10 @@ export function AppShell() {
               </Button>
             }
           >
-            <strong>GitHub 재로그인 필요</strong>
-            <p>GitHub 인증이 만료되었습니다. 다시 로그인해 주세요.</p>
+            <StatusFeedbackTitle>GitHub 재로그인 필요</StatusFeedbackTitle>
+            <StatusFeedbackDescription>
+              GitHub 인증이 만료되었습니다. 다시 로그인해 주세요.
+            </StatusFeedbackDescription>
           </StatusFeedback>
         ) : null}
         <Outlet />
