@@ -9,9 +9,7 @@ type Story = StoryObj<typeof meta>;
 
 function DocumentModeTabs() { const [selected, setSelected] = useState("preview"); return <TabsList aria-label="문서 보기"><TabsTrigger selected={selected === "preview"} onClick={() => setSelected("preview")}>미리보기</TabsTrigger><TabsTrigger selected={selected === "markdown"} onClick={() => setSelected("markdown")}>Markdown</TabsTrigger><TabsTrigger selected={false} disabled>History</TabsTrigger></TabsList>; }
 
-export const States: Story = { render: () => <DocumentModeTabs /> };
-
-export const Interaction: Story = {
+export const Default: Story = {
   render: () => <DocumentModeTabs />,
   play: async ({ canvas, userEvent }) => {
     const preview = canvas.getByRole("tab", { name: "미리보기" });

@@ -118,7 +118,7 @@ export function StatusFeedback({
         inlineAction
           ? "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-[var(--space-3)] border sm:grid-cols-[auto_minmax(0,1fr)_auto]"
           : "flex items-center gap-[var(--space-3)] border",
-        usesToastDensity && "min-h-[68px] rounded-[var(--radius-md)] p-[var(--space-3)] shadow-[var(--shadow-popover)]",
+        usesToastDensity && "min-h-[68px] rounded-[var(--radius-md)] p-[var(--space-3)] shadow-[var(--shadow-feedback)]",
         variant === "banner" && !usesToastDensity && "rounded-[var(--radius-lg)] p-[var(--space-4)]",
         variant === "content" && !usesToastDensity && "rounded-[var(--radius-lg)] p-[var(--space-6)]",
         toneClasses[tone],

@@ -17,6 +17,16 @@ import {
 afterEach(cleanup);
 
 describe("Dialog", () => {
+  it("contains fullscreen content within token-sized viewport insets", () => {
+    render(<Dialog open><DialogContent size="fullscreen" aria-describedby={undefined}>
+      <DialogTitle>전체 화면</DialogTitle>
+    </DialogContent></Dialog>);
+    expect(screen.getByRole("dialog", { name: "전체 화면" })).toHaveClass(
+      "inset-[var(--space-6)]", "overflow-hidden",
+    );
+    expect(screen.getByRole("dialog")).not.toHaveClass("overflow-y-auto");
+  });
+
   it("renders an accessible modal and reports close requests", async () => {
     const onOpenChange = vi.fn();
     const user = userEvent.setup();

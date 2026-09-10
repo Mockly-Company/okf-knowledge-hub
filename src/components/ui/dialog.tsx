@@ -100,7 +100,7 @@ export function DialogFooter({
 }
 
 type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
-  size?: "default" | "wide";
+  size?: "default" | "wide" | "fullscreen";
 };
 
 export const DialogContent = React.forwardRef<
@@ -113,8 +113,13 @@ export const DialogContent = React.forwardRef<
       ref={ref}
       aria-label={ariaLabel}
       className={cn(
-        "okhub-dialog-content-motion fixed top-1/2 left-1/2 z-50 flex max-h-[calc(100dvh-3rem)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--dialog-padding)] shadow-[var(--shadow-overlay)] transition-[opacity,transform] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] motion-reduce:animate-none motion-reduce:transition-none",
-        size === "wide"
+        "okhub-dialog-content-motion fixed z-50 flex flex-col rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--dialog-padding)] shadow-[var(--shadow-overlay)] transition-[opacity,transform] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] motion-reduce:animate-none motion-reduce:transition-none",
+        size === "fullscreen"
+          ? "inset-[var(--space-6)] overflow-hidden"
+          : "top-1/2 left-1/2 max-h-[calc(100dvh-3rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto",
+        size === "fullscreen"
+          ? undefined
+          : size === "wide"
           ? "w-[min(calc(100vw-3rem),47.5rem)]"
           : "w-[min(calc(100vw-3rem),35rem)]",
         className,

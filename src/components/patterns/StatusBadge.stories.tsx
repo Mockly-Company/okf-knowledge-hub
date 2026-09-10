@@ -7,28 +7,26 @@ const meta = {
   parameters: {
     layout: "centered",
   },
+  argTypes: {
+    tone: {
+      control: "select",
+      options: ["neutral", "success", "info", "warning", "error"],
+    },
+  },
 } satisfies Meta<typeof StatusBadge>;
 
 export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-export const SemanticTones: Story = {
+export const Default: Story = {
   args: {
-    children: "상태",
+    children: "준비됨",
+    tone: "neutral",
   },
-  render: () => (
-    <div className="flex flex-wrap gap-[var(--space-2)]">
-      <StatusBadge tone="neutral">준비됨</StatusBadge>
-      <StatusBadge tone="success">로컬 저장됨</StatusBadge>
-      <StatusBadge tone="info">검토 중</StatusBadge>
-      <StatusBadge tone="warning">결정 필요</StatusBadge>
-      <StatusBadge tone="error">저장 실패</StatusBadge>
-    </div>
-  ),
 };
 
-export const CompactDensity: Story = {
+export const Compact: Story = {
   args: {
     children: "검토 중",
   },

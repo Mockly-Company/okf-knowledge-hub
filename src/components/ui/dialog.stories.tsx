@@ -45,7 +45,7 @@ function DialogPreview({ wide = false }: { wide?: boolean }) {
           <DialogCloseButton label="Dialog 닫기" />
           </DialogHeader>
           <DialogBody className="mt-[var(--space-4)]">
-            <p className="m-0 text-[var(--color-text-default)]">
+            <p className="m-0 font-[number:var(--font-weight-body)] text-[var(--color-text-muted)]">
               {wide ? "두 버전의 차이를 나란히 검토합니다." : "기본 Dialog는 한 작업을 완료하는 흐름에 사용합니다."}
             </p>
           </DialogBody>
@@ -75,6 +75,10 @@ export const Interaction: Story = {
     await userEvent.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "새 문서" });
     await waitFor(() => expect(dialog).toBeVisible());
+    await expect(screen.getByText("기본 Dialog는 한 작업을 완료하는 흐름에 사용합니다.")).toHaveClass(
+      "text-[var(--color-text-muted)]",
+      "font-[number:var(--font-weight-body)]",
+    );
     await expect(dialog).toHaveAttribute("data-state", "open");
     await expect(getComputedStyle(dialog).animationName).toBe("okhub-dialog-in");
     await expect(getComputedStyle(dialog).animationDuration).toBe("0.18s");

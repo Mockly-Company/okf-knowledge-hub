@@ -26,7 +26,10 @@ export const FieldError: Story = {
 };
 
 export const SuccessToast: Story = {
-  render: () => <StatusFeedback variant="toast" tone="success"><StatusFeedbackTitle>로컬에 저장됨</StatusFeedbackTitle><StatusFeedbackDescription>지도 검색 API 계약</StatusFeedbackDescription></StatusFeedback>,
+  render: () => <StatusFeedback className="!border-0" variant="toast" tone="success"><StatusFeedbackTitle>로컬에 저장됨</StatusFeedbackTitle><StatusFeedbackDescription>지도 검색 API 계약</StatusFeedbackDescription></StatusFeedback>,
+  play: async ({ canvas }) => {
+    await expect(canvas.getByRole("status")).toHaveClass("!border-0");
+  },
 };
 
 export const WarningToast: Story = {

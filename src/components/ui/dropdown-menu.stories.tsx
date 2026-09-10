@@ -1,12 +1,18 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Copy, ExternalLink, MoreVertical, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { expect, screen, waitFor } from "storybook/test";
 import { IconButton } from "./button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "./dropdown-menu";
 
@@ -31,6 +37,8 @@ async function getReducedMotionTestTools() {
 }
 
 function DocumentActions({ compact = false }: { compact?: boolean }) {
+  const [density, setDensity] = useState("default");
+
   return (
     <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -39,6 +47,15 @@ function DocumentActions({ compact = false }: { compact?: boolean }) {
         </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>보기 밀도</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuRadioGroup value={density} onValueChange={setDensity}>
+              <DropdownMenuRadioItem value="default">편안하게</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="compact">작게</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
         <DropdownMenuItem size={compact ? "compact" : "default"}>
           <Copy aria-hidden="true" />
           링크 복사
@@ -87,7 +104,9 @@ export const Interaction: Story = {
     await expect(getComputedStyle(menu).animationName).toBe("okhub-popover-in");
     await expect(getComputedStyle(menu).animationDuration).toBe("0.18s");
     await userEvent.keyboard("{ArrowDown}");
-    await expect(screen.getByRole("menuitem", { name: "링크 복사" })).toHaveFocus();
+    await expect(screen.getByRole("menuitem", { name: "보기 밀도" })).toHaveFocus();
+    await userEvent.keyboard("{ArrowRight}");
+    await expect(screen.getByRole("menuitemradio", { name: "편안하게" })).toHaveFocus();
     await userEvent.keyboard("{Escape}");
     await expect(menu).toHaveAttribute("data-state", "closed");
     await expect(getComputedStyle(menu).animationName).toBe("okhub-popover-out");

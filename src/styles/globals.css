@@ -40,6 +40,11 @@ select {
   outline-color: var(--color-error);
 }
 
+[data-input][aria-invalid="true"]:focus-visible {
+  border-color: var(--color-error-border);
+  outline-color: var(--color-error-border);
+}
+
 [data-select-trigger][data-state="open"]:focus-visible {
   outline: none;
 }
@@ -212,6 +217,20 @@ select {
   padding: 0 var(--space-2);
 }
 
+.app-sidebar__section--primary {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.app-sidebar__documents {
+  min-height: 0;
+  margin-top: var(--space-3);
+  overflow-y: auto;
+  padding: 0 var(--space-2) var(--space-3);
+}
+
 .app-sidebar__primary-divider {
   margin: var(--space-3) var(--space-2) 0;
   border: 0;
@@ -227,7 +246,7 @@ select {
   padding: 0 var(--space-3);
   color: var(--color-text-default);
   font-size: var(--font-ui-size);
-  font-weight: var(--font-weight-control);
+  font-weight: var(--font-weight-body);
   line-height: var(--font-ui-line);
   text-decoration: none;
 }

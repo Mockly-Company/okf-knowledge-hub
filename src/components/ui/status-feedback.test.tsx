@@ -133,7 +133,7 @@ describe("StatusFeedback", () => {
       "min-h-[68px]",
       "rounded-[var(--radius-md)]",
       "p-[var(--space-3)]",
-      "shadow-[var(--shadow-popover)]",
+      "shadow-[var(--shadow-feedback)]",
     );
   });
 

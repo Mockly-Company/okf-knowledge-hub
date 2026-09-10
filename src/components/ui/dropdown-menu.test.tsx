@@ -1,12 +1,17 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Button } from "./button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "./dropdown-menu";
 
@@ -82,5 +87,79 @@ describe("DropdownMenu", () => {
 
     await user.keyboard("{Escape}");
     expect(trigger).toHaveFocus();
+  });
+
+  it("opens a density submenu with ArrowRight and navigates its radio items", async () => {
+    const user = userEvent.setup();
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="secondary">문서 작업</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>보기 밀도</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuRadioGroup value="default">
+                <DropdownMenuRadioItem value="default">편안하게</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="compact">작게</DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "문서 작업" });
+    await user.click(trigger);
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "보기 밀도" })).toHaveFocus();
+
+    await user.keyboard("{ArrowRight}");
+    const comfortable = await screen.findByRole("menuitemradio", { name: "편안하게" });
+    const compact = screen.getByRole("menuitemradio", { name: "작게" });
+    expect(comfortable).toHaveFocus();
+    expect(comfortable).toHaveAttribute("aria-checked", "true");
+    expect(compact).toHaveAttribute("aria-checked", "false");
+
+    await user.keyboard("{ArrowDown}");
+    expect(compact).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(comfortable).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menuitemradio", { name: "편안하게" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("selects a radio item from a hovered submenu", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="secondary">문서 작업</Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent>
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>보기 밀도</DropdownMenuSubTrigger>
+            <DropdownMenuSubContent>
+              <DropdownMenuRadioGroup value="default">
+                <DropdownMenuRadioItem value="compact" onSelect={onSelect}>
+                  작게
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "문서 작업" }));
+    await user.hover(screen.getByRole("menuitem", { name: "보기 밀도" }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: "작게" }));
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 });

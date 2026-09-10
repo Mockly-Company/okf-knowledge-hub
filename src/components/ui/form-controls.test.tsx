@@ -21,8 +21,9 @@ describe("form control primitives", () => {
       "font-[number:var(--font-weight-description)]",
       "cursor-text",
       "focus-visible:border-[var(--color-primary)]",
-      "aria-[invalid=true]:border-[var(--color-error)]",
+      "aria-[invalid=true]:border-[var(--color-error-border)]",
     );
+    expect(input).not.toHaveClass("aria-[invalid=true]:border-2");
     expect(input.className).not.toContain("focus-visible:ring");
     expect(input.className).not.toContain("focus-visible:outline-none");
   });
@@ -47,8 +48,11 @@ describe("form control primitives", () => {
       </>,
     );
 
+    expect(within(view.container).getByRole("textbox", { name: "제목" })).toHaveClass(
+      "aria-[invalid=true]:focus-visible:border-[var(--color-error-border)]",
+    );
+
     for (const control of [
-      within(view.container).getByRole("textbox", { name: "제목" }),
       within(view.container).getByRole("textbox", { name: "본문" }),
       within(view.container).getByRole("combobox", { name: "유형" }),
     ]) {

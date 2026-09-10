@@ -37,7 +37,6 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {
-  globals: { viewport: { value: "desktop", isRotated: false } },
   decorators: [withAppProviders({ router: { initialEntries: ["/"] } })],
   render: () => <ShellPreview />,
   play: async ({ canvas }) => {
@@ -48,7 +47,6 @@ export const Default: Story = {
 };
 
 export const ReauthenticationRequired: Story = {
-  globals: { viewport: { value: "desktop", isRotated: false } },
   decorators: [
     withAppProviders({
       workspace: { authState: { status: "reauthentication_required" } },

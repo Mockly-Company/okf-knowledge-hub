@@ -52,6 +52,9 @@ export const TreeExpanded: Story = {
     await expect(docs).toHaveAttribute("aria-expanded", "true");
     await expect(api).toHaveAttribute("aria-expanded", "true");
     await expect(selected).toHaveAttribute("aria-selected", "true");
+    await expect(getComputedStyle(docs).display).toBe("flex");
+    await expect(getComputedStyle(documents).fontWeight).toBe("400");
+    await expect(getComputedStyle(docs).fontWeight).toBe("400");
   },
 };
 

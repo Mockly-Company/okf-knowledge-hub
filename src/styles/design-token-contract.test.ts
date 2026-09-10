@@ -92,6 +92,12 @@ describe("design token contract", () => {
     );
   });
 
+  it("uses the compact, evenly distributed feedback shadow", () => {
+    const tokens = readFileSync(tokenFile, "utf8");
+
+    expect(tokens).toContain("--shadow-feedback: 0 2px 14px rgb(20 24 30 / 10%)");
+  });
+
   it("defines the approved control focus and motion contract", () => {
     const tokens = readFileSync(tokenFile, "utf8");
     const globals = readFileSync(globalStyleFile, "utf8");
