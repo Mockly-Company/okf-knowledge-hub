@@ -13,10 +13,11 @@ import {
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
+import { IconButton } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import { UnstyledButton } from "@/components/ui/unstyled-button";
 import { cn } from "@/lib/utils";
 import type { DocumentTreeEntry } from "../model";
+import "./DocumentTree.css";
 
 interface DocumentTreeProps {
   entries: DocumentTreeEntry[];
@@ -185,11 +186,9 @@ export function DocumentTree({
       <div className="document-tree__header">
         <span>문서</span>
         {onNewDocument ? (
-          <Tooltip content="새 문서">
-            <UnstyledButton aria-label="새 문서" onClick={() => onNewDocument("docs")}>
-              <Plus aria-hidden="true" />
-            </UnstyledButton>
-          </Tooltip>
+          <IconButton label="새 문서" onClick={() => onNewDocument("docs")}>
+            <Plus aria-hidden="true" strokeWidth={1.75} />
+          </IconButton>
         ) : null}
       </div>
       {entries.length === 0 ? (
@@ -239,38 +238,37 @@ export function DocumentTree({
                         "document-tree__chevron",
                         isExpanded && "document-tree__chevron--expanded",
                       )}
+                      strokeWidth={1.75}
                     />
                     {isExpanded ? (
-                      <FolderOpen aria-hidden="true" />
+                      <FolderOpen aria-hidden="true" strokeWidth={1.75} />
                     ) : (
-                      <Folder aria-hidden="true" />
+                      <Folder aria-hidden="true" strokeWidth={1.75} />
                     )}
                   </>
                 ) : (
                   <>
                     <span className="document-tree__chevron" aria-hidden="true" />
-                    <FileText aria-hidden="true" />
+                    <FileText aria-hidden="true" strokeWidth={1.75} />
                   </>
                 )}
-                <span>{label}</span>
+                <span className="document-tree__label">{label}</span>
                 {isFolder && onNewDocument ? (
-                  <Tooltip content={`${label}에 새 문서`}>
-                    <UnstyledButton
-                      className="document-tree__folder-create"
-                      aria-label={`${label}에 새 문서`}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.stopPropagation();
-                        }
-                      }}
-                      onClick={(event) => {
+                  <IconButton
+                    className="document-tree__folder-create"
+                    label={`${label}에 새 문서`}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
                         event.stopPropagation();
-                        onNewDocument(entry.path);
-                      }}
-                    >
-                      <Plus aria-hidden="true" />
-                    </UnstyledButton>
-                  </Tooltip>
+                      }
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onNewDocument(entry.path);
+                    }}
+                  >
+                    <Plus aria-hidden="true" strokeWidth={1.75} />
+                  </IconButton>
                 ) : null}
               </div>
             );

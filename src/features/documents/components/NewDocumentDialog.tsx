@@ -1,9 +1,10 @@
-import { Check, FilePlus2, X } from "lucide-react";
+import { Check, FilePlus2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
+  DialogCloseButton,
   DialogContent,
   DialogDescription,
   DialogTitle,
@@ -98,9 +99,7 @@ export function NewDocumentDialog({
               로컬 Draft에서 작성한 뒤 나중에 검수와 PR로 확정할 수 있습니다.
             </DialogDescription>
           </div>
-          <Button variant="icon" aria-label="새 문서 창 닫기" onClick={onClose}>
-            <X aria-hidden="true" />
-          </Button>
+          <DialogCloseButton label="새 문서 창 닫기" onClick={onClose} />
         </header>
 
         <div className="new-document-dialog__fields">

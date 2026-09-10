@@ -2,7 +2,7 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderWithoutPreferences,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -11,9 +11,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
+import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 import { DocumentsPage } from "./DocumentsPage";
+import type { ReactElement } from "react";
 
 afterEach(cleanup);
+
+function render(ui: ReactElement) {
+  return renderWithoutPreferences(
+    <PreferencesProvider repository={new FakePreferencesRepository()}>
+      {ui}
+    </PreferencesProvider>,
+  );
+}
 
 function renderPage(gateway: FakeDocumentsGateway) {
   gateway.sessionSnapshot.lastOpenedPath = null;
@@ -29,7 +40,7 @@ function renderPage(gateway: FakeDocumentsGateway) {
 }
 
 describe("DocumentsPage", () => {
-  it("uses the shared page-title and action geometry on Documents home", async () => {
+  it("keeps the Documents home focused on search and creation", async () => {
     const gateway = new FakeDocumentsGateway();
     renderPage(gateway);
 
@@ -40,9 +51,34 @@ describe("DocumentsPage", () => {
       "h-[var(--control-height)]",
       "rounded-[var(--radius-md)]",
     );
-    expect(screen.getByRole("combobox", { name: "문서 작업 전환" })).toHaveTextContent(
-      "확정 문서",
-    );
+    expect(screen.queryByRole("combobox", { name: "문서 작업 전환" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "모든 문서" })).not.toBeInTheDocument();
+  });
+
+  it("opens the same new-document dialog from the Documents-home text action", async () => {
+    const gateway = new FakeDocumentsGateway();
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(await screen.findByRole("button", { name: "새 문서" }));
+
+    expect(await screen.findByRole("dialog")).toHaveTextContent("새 문서");
+  });
+
+  it("keeps the new-document action in the search toolbar while results use the full page width", async () => {
+    const gateway = new FakeDocumentsGateway();
+    const view = renderPage(gateway);
+
+    const search = await screen.findByRole("searchbox", { name: "문서 검색" });
+    const newDocument = screen.getByRole("button", { name: "새 문서" });
+    const toolbar = view.container.querySelector(".document-search__toolbar");
+    const results = view.container.querySelector<HTMLElement>(".document-search__results");
+
+    expect(toolbar).not.toBeNull();
+    expect(results).not.toBeNull();
+    expect(toolbar).toContainElement(search);
+    expect(toolbar).toContainElement(newDocument);
+    expect(toolbar).not.toContainElement(results);
   });
 
   it("renders the compact search home and opens a search result with its match", async () => {
@@ -174,7 +210,15 @@ describe("DocumentsPage", () => {
     const user = userEvent.setup();
     renderPage(gateway);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    const feedback = (await screen.findByText(
+      "검색 캐시를 사용할 수 없습니다.",
+    )).closest("[data-feedback-variant]");
+    expect(feedback).not.toBeNull();
+    if (!feedback) throw new Error("expected index feedback banner");
+    expect(feedback).toHaveAttribute("data-feedback-variant", "banner");
+    expect(feedback).toHaveAttribute("data-feedback-tone", "warning");
+    expect(feedback).toHaveAttribute("data-feedback-action-placement", "end");
+    expect(feedback).toHaveTextContent(
       "검색 캐시를 사용할 수 없습니다.",
     );
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
@@ -309,7 +353,7 @@ describe("DocumentsPage", () => {
       });
     });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    expect(await screen.findByRole("status")).toHaveTextContent(
       "선택한 문서가 삭제되었습니다.",
     );
     expect(screen.queryByRole("region", { name: "Guide" })).toBeNull();
@@ -339,7 +383,7 @@ describe("DocumentsPage", () => {
         catalog: gateway.apiCatalog,
       });
     });
-    expect(await screen.findByRole("alert")).toHaveTextContent(
+    expect(await screen.findByRole("status")).toHaveTextContent(
       "선택한 문서가 삭제되었습니다.",
     );
 

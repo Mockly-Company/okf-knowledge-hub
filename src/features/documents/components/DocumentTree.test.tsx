@@ -2,7 +2,7 @@ import axe from "axe-core";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DocumentCatalog } from "../model";
+import type { DocumentCatalog, DocumentTreeEntry } from "../model";
 import { DocumentTree } from "./DocumentTree";
 
 const mapSummary = {
@@ -16,6 +16,7 @@ const mapSummary = {
 };
 
 const longTitle = "검색 결과가 없을 때 사용자에게 보여주는 매우 긴 안내 문서";
+const longFolderName = "검색 결과가 없을 때 사용자에게 보여주는 매우 긴 문서 폴더";
 
 const catalog: DocumentCatalog = {
   documents: [mapSummary],
@@ -39,6 +40,15 @@ const catalog: DocumentCatalog = {
     },
   ],
 };
+
+const longFolderEntries: DocumentTreeEntry[] = [
+  {
+    kind: "folder",
+    name: longFolderName,
+    path: "docs/long-folder",
+    children: [{ kind: "document", summary: mapSummary }],
+  },
+];
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -175,6 +185,48 @@ describe("DocumentTree", () => {
       "aria-expanded",
       "false",
     );
+  });
+
+  it("uses named icon-button primitives for tree-level creation actions", () => {
+    render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "새 문서" })).toHaveAttribute(
+      "data-variant",
+      "icon",
+    );
+    expect(screen.getByRole("button", { name: "api에 새 문서" })).toHaveAttribute(
+      "data-variant",
+      "icon",
+    );
+  });
+
+  it("keeps a long folder label in the row that owns its create action reserve", () => {
+    render(
+      <DocumentTree
+        entries={longFolderEntries}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={() => {}}
+      />,
+    );
+
+    const row = screen.getByRole("treeitem", { name: longFolderName });
+    const create = screen.getByRole("button", {
+      name: `${longFolderName}에 새 문서`,
+    });
+    const label = screen.getByText(longFolderName);
+
+    expect(row).toHaveClass("document-tree__row");
+    expect(row).toContainElement(create);
+    expect(label).toHaveClass("document-tree__label");
+    expect(row).toHaveAttribute("title", longFolderName);
   });
 
   it("activates the nested create button with keyboard without toggling its folder", async () => {

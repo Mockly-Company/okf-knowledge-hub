@@ -27,7 +27,7 @@ import {
 import "@mdxeditor/editor/style.css";
 import { X } from "lucide-react";
 import { useEffect, useRef, type ReactNode } from "react";
-import { Button } from "@/components/ui/button";
+import { Button, IconButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusFeedback } from "@/components/ui/status-feedback";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -108,9 +108,9 @@ export function DocumentDraftEditor({
           {headerSecondary}
           <div className="document-draft-editor__status">
             <span data-status={editor.saveStatus}>{statusLabel[editor.saveStatus]}</span>
-            <Button variant="icon" aria-label="편집기 닫기" onClick={onClose}>
+            <IconButton label="편집기 닫기" onClick={onClose}>
               <X aria-hidden="true" />
-            </Button>
+            </IconButton>
           </div>
         </div>
       </header>

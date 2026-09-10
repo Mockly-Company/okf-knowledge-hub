@@ -3,6 +3,7 @@ import { lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import { DocumentDraftSwitcher } from "@/features/documents/components/DocumentDraftSwitcher";
 import { NewDocumentDialog } from "@/features/documents/components/NewDocumentDialog";
 import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
@@ -87,23 +88,32 @@ export function DocumentsPage() {
           title="Documents"
           description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
         />
-        <div className="documents-page__notice" role="alert">
+        <StatusFeedback
+          variant="banner"
+          tone="error"
+          actionPlacement="end"
+          className="documents-page__notice"
+          action={
+            invalidRoot ? (
+              <Button asChild variant="secondary">
+                <Link to="/settings">Settings에서 확인</Link>
+              </Button>
+            ) : retryable ? (
+              <Button variant="secondary" onClick={retrySession}>
+                다시 시도
+              </Button>
+            ) : undefined
+          }
+        >
           <strong>{state.recoverableError?.message ?? "문서를 불러오지 못했습니다."}</strong>
-          {invalidRoot ? (
-            <Link to="/settings">Settings에서 확인</Link>
-          ) : retryable ? (
-            <Button variant="secondary" onClick={retrySession}>
-              다시 시도
-            </Button>
-          ) : null}
-        </div>
+        </StatusFeedback>
       </section>
     );
   }
 
   if (state.selectedPath !== null) {
     return (
-      <section className="documents-page" aria-labelledby="documents-title">
+      <section className="documents-page documents-page--reader" aria-labelledby="documents-title">
         <h1 id="documents-title" className="sr-only">Documents</h1>
         {state.selectedDocument ? (
           <DocumentReader
@@ -111,7 +121,31 @@ export function DocumentsPage() {
             notice={state.documentNotice}
           />
         ) : state.documentStatus === "error" ? (
-          <div className="documents-page__notice documents-page__read-error" role="alert">
+          <StatusFeedback
+            variant="banner"
+            tone="error"
+            actionPlacement="end"
+            className="documents-page__notice documents-page__read-error"
+            action={
+              <div className="documents-page__error-actions">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (state.selectedVersion) {
+                      selectDocumentVersion(state.selectedVersion);
+                    } else {
+                      selectDocument(state.selectedPath!);
+                    }
+                  }}
+                >
+                  {state.selectedVersion ? "버전 다시 열기" : "문서 다시 열기"}
+                </Button>
+                <Button variant="secondary" onClick={showDocumentsHome}>
+                  Documents 홈
+                </Button>
+              </div>
+            }
+          >
             <div>
               <strong>
                 {state.selectedVersion
@@ -123,24 +157,7 @@ export function DocumentsPage() {
                   "문서 내용을 불러오지 못했습니다."}
               </p>
             </div>
-            <div className="documents-page__error-actions">
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  if (state.selectedVersion) {
-                    selectDocumentVersion(state.selectedVersion);
-                  } else {
-                    selectDocument(state.selectedPath!);
-                  }
-                }}
-              >
-                {state.selectedVersion ? "버전 다시 열기" : "문서 다시 열기"}
-              </Button>
-              <Button variant="secondary" onClick={showDocumentsHome}>
-                Documents 홈
-              </Button>
-            </div>
-          </div>
+          </StatusFeedback>
         ) : (
           <p className="documents-page__loading">문서를 여는 중…</p>
         )}
@@ -157,51 +174,61 @@ export function DocumentsPage() {
       />
 
       {state.documentNotice ? (
-        <div className="documents-page__notice" role="alert">
+        <StatusFeedback
+          variant="banner"
+          tone="info"
+          className="documents-page__notice"
+        >
           <span>{state.documentNotice}</span>
-        </div>
+        </StatusFeedback>
       ) : null}
 
       {state.indexStatus.status === "degraded" ? (
-        <div className="documents-page__notice" role="alert">
+        <StatusFeedback
+          variant="banner"
+          tone="warning"
+          actionPlacement="end"
+          className="documents-page__notice"
+          action={
+            <Button
+              variant="secondary"
+              onClick={() => {
+                clearRecoverableError();
+                void refresh();
+              }}
+            >
+              다시 시도
+            </Button>
+          }
+        >
           <span>{state.indexStatus.message}</span>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              clearRecoverableError();
-              void refresh();
-            }}
-          >
-            다시 시도
-          </Button>
-        </div>
+        </StatusFeedback>
       ) : null}
 
       <div className="documents-page__tools">
-        <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
-        <div className="documents-page__toolbar">
-          <DocumentSearch
-            query={state.searchQuery}
-            documents={state.catalog.documents}
-            results={state.searchResults}
-            searchStatus={state.searchStatus}
-            searchError={state.searchError}
-            indexStatus={state.indexStatus}
-            onQueryChange={setSearchQuery}
-            onSelectDocument={selectDocument}
-            onSelectResult={(result) =>
-              selectDocument(result.path, {
-                matchField: result.matchField,
-                matchText: result.matchText,
-              })
-            }
-            onRetry={retrySearch}
-          />
-          <Button className="documents-page__new-document" onClick={() => openNewDocument("docs")}>
-            <FilePlus2 aria-hidden="true" />
-            새 문서
-          </Button>
-        </div>
+        <DocumentSearch
+          query={state.searchQuery}
+          documents={state.catalog.documents}
+          results={state.searchResults}
+          searchStatus={state.searchStatus}
+          searchError={state.searchError}
+          indexStatus={state.indexStatus}
+          onQueryChange={setSearchQuery}
+          onSelectDocument={selectDocument}
+          onSelectResult={(result) =>
+            selectDocument(result.path, {
+              matchField: result.matchField,
+              matchText: result.matchText,
+            })
+          }
+          onRetry={retrySearch}
+          toolbarAction={
+            <Button className="documents-page__new-document" onClick={() => openNewDocument("docs")}>
+              <FilePlus2 aria-hidden="true" />
+              새 문서
+            </Button>
+          }
+        />
       </div>
       {creationDialog}
     </section>

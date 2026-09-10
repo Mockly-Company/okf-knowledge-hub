@@ -148,6 +148,7 @@ const DocumentsContext = createContext<DocumentsContextValue | null>(null);
 export interface DocumentsProviderProps extends PropsWithChildren {
   gateway: DocumentsGateway;
   createId?: () => string;
+  initialSearchQuery?: string;
   searchDebounceMs?: number;
   saveDebounceMs?: number;
 }
@@ -155,14 +156,18 @@ export interface DocumentsProviderProps extends PropsWithChildren {
 export function DocumentsProvider({
   gateway,
   createId = createOperationId,
+  initialSearchQuery = "",
   searchDebounceMs = DEFAULT_SEARCH_DEBOUNCE_MS,
   saveDebounceMs = DEFAULT_SAVE_DEBOUNCE_MS,
   children,
 }: DocumentsProviderProps) {
   const [state, dispatch] = useReducer(
     documentsReducer,
-    undefined,
-    createInitialDocumentsState,
+    initialSearchQuery,
+    (searchQuery) => ({
+      ...createInitialDocumentsState(),
+      searchQuery,
+    }),
   );
   const [sessionAttempt, setSessionAttempt] = useState(0);
   const [authoringState, authoringDispatch] = useReducer(
