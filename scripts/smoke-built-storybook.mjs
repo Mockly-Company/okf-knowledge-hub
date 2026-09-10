@@ -54,7 +54,7 @@ const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
   await page.goto(
-    `http://127.0.0.1:${address.port}/iframe.html?id=ui-button--primary&viewMode=story`,
+    `http://127.0.0.1:${address.port}/iframe.html?id=ui-button--default&viewMode=story`,
     { waitUntil: "networkidle" },
   );
 
@@ -64,48 +64,42 @@ try {
     await primaryButton.waitFor({ state: "visible", timeout: 10_000 });
   } catch (error) {
     const previewText = await page.locator("body").innerText();
-    throw new Error(`UI/Button Primary did not render. Preview output:\n${previewText}`, {
+    throw new Error(`UI/Button Default did not render. Preview output:\n${previewText}`, {
       cause: error,
     });
   }
 
-  console.log("Built Storybook smoke passed: UI/Button Primary rendered.");
+  console.log("Built Storybook smoke passed: UI/Button Default rendered.");
 
   await page.goto(
-    `http://127.0.0.1:${address.port}/iframe.html?id=pages-documentspage--multiline-search-result&viewMode=story`,
+    `http://127.0.0.1:${address.port}/iframe.html?id=documents-markdowndocument--code-and-table&viewMode=story`,
     { waitUntil: "networkidle" },
   );
 
-  await page.getByRole("searchbox", { name: "문서 검색" }).fill("응답 DTO");
-
-  const documentResult = page.getByRole("button", {
-    name: /여러 줄로 이어지는 지도 검색 API 계약 제목/,
-  });
-  await documentResult.waitFor({ state: "visible", timeout: 10_000 });
-
-  const copy = documentResult.locator(".document-search__result-copy");
-  const icon = documentResult.locator("svg").first();
-  const [rowBox, copyBox, iconBox] = await Promise.all([
-    documentResult.boundingBox(),
-    copy.boundingBox(),
-    icon.boundingBox(),
-  ]);
-
-  if (!rowBox || !copyBox || !iconBox) {
-    throw new Error("Multiline document result did not expose row, copy, and icon bounds");
+  await page.getByRole("table").waitFor({ state: "visible", timeout: 10_000 });
+  for (const width of [1440, 1024, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const result = await page.evaluate(() => {
+      const article = document.querySelector(".markdown-document");
+      const wrappers = [...document.querySelectorAll(".markdown-code-block__scroll, .markdown-table-scroll")];
+      return {
+        pageWidth: document.documentElement.scrollWidth,
+        articleRight: article?.getBoundingClientRect().right ?? Infinity,
+        wrappers: wrappers.map((element) => ({
+          right: element.getBoundingClientRect().right,
+          width: element.clientWidth,
+          contentWidth: element.scrollWidth,
+          overflow: getComputedStyle(element).overflowX,
+        })),
+      };
+    });
+    if (result.wrappers.length !== 2 || result.pageWidth > width || result.articleRight > width ||
+      result.wrappers.some((wrapper) => wrapper.right > result.articleRight + 1 ||
+        wrapper.contentWidth <= wrapper.width || wrapper.overflow !== "auto")) {
+      throw new Error(`Markdown code/table overflow escaped at ${width}px: ${JSON.stringify(result)}`);
+    }
+    console.log(`Built Storybook smoke passed: code/table overflow contained at ${width}px.`);
   }
-
-  if (
-    rowBox.height <= 36 ||
-    copyBox.x <= rowBox.x ||
-    copyBox.y > iconBox.y ||
-    copyBox.x + copyBox.width > rowBox.x + rowBox.width ||
-    copyBox.y + copyBox.height > rowBox.y + rowBox.height
-  ) {
-    throw new Error("Multiline document result escaped or failed to start-align within its row");
-  }
-
-  console.log("Built Storybook smoke passed: multiline document result stays contained.");
 } finally {
   await browser.close();
   await new Promise((resolveClose) => server.close(resolveClose));

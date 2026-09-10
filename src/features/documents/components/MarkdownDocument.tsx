@@ -2,25 +2,38 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react";
+import { ChevronRight } from "lucide-react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
+import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { useDocuments } from "../DocumentsProvider";
-import type { DocumentAsset, DocumentContent, TableOfContentsItem } from "../model";
+import type { DocumentContent, TableOfContentsItem } from "../model";
 import { remarkLiteralHtml } from "../remark-literal-html";
 import { remarkOkfFrontmatter } from "../remark-okf-frontmatter";
-import { MermaidBlock, sanitizeSvg } from "./MermaidBlock";
+import {
+  remarkOkhubBlocks,
+  type MarkdownAlertKind,
+} from "../remark-okhub-blocks";
+import { MarkdownAlert } from "./MarkdownAlert";
+import { MarkdownCodeBlock } from "./MarkdownCodeBlock";
+import { MarkdownImage } from "./MarkdownImage";
+import { MarkdownTable } from "./MarkdownTable";
+import { MermaidBlock } from "./MermaidBlock";
 
 const markdownSanitizeSchema = {
   ...defaultSchema,
-  tagNames: [...(defaultSchema.tagNames ?? []), "mark"],
+  tagNames: [...(defaultSchema.tagNames ?? []), "mark", "details", "summary"],
   attributes: {
     ...defaultSchema.attributes,
     mark: ["dataSearchMatch"],
+    blockquote: [...(defaultSchema.attributes?.blockquote ?? []), "dataOkhubAlert"],
+    code: [...(defaultSchema.attributes?.code ?? []), "dataOkhubBlockId"],
+    table: [...(defaultSchema.attributes?.table ?? []), "dataOkhubBlockId"],
+    input: [...(defaultSchema.attributes?.input ?? []), "ariaLabel"],
     h1: [...(defaultSchema.attributes?.h1 ?? []), "dataOkhubHeadingId"],
     h2: [...(defaultSchema.attributes?.h2 ?? []), "dataOkhubHeadingId"],
     h3: [...(defaultSchema.attributes?.h3 ?? []), "dataOkhubHeadingId"],
@@ -33,8 +46,12 @@ const markdownSanitizeSchema = {
 interface MarkdownNode {
   type?: string;
   depth?: number;
+  value?: string;
   children?: MarkdownNode[];
-  data?: { hProperties?: Record<string, string> };
+  data?: {
+    hProperties?: Record<string, string>;
+    sourceTitleSuppressed?: boolean;
+  };
 }
 
 interface RehypeNode {
@@ -69,9 +86,36 @@ function visitMarkdown(node: MarkdownNode, callback: (node: MarkdownNode) => voi
   for (const child of node.children ?? []) visitMarkdown(child, callback);
 }
 
+function markdownText(node: MarkdownNode): string {
+  return node.value ?? (node.children ?? []).map(markdownText).join("");
+}
+
+function remarkSuppressSourceTitle(title: string) {
+  return () => (tree: MarkdownNode) => {
+    let first: { heading: MarkdownNode; parent: MarkdownNode; index: number } | undefined;
+    const findFirstHeading = (parent: MarkdownNode) => {
+      for (const [index, child] of (parent.children ?? []).entries()) {
+        if (first) return;
+        if (child.type === "heading") first = { heading: child, parent, index };
+        else findFirstHeading(child);
+      }
+    };
+    findFirstHeading(tree);
+    const heading = first?.heading;
+    if (
+      heading?.depth !== 1 ||
+      markdownText(heading).trim() !== title.trim()
+    ) {
+      return;
+    }
+    first?.parent.children?.splice(first.index, 1);
+    tree.data = { ...tree.data, sourceTitleSuppressed: true };
+  };
+}
+
 function remarkHeadingIds(items: TableOfContentsItem[]) {
   return () => (tree: MarkdownNode) => {
-    let index = 0;
+    let index = tree.data?.sourceTitleSuppressed ? 1 : 0;
     visitMarkdown(tree, (node) => {
       if (node.type !== "heading") return;
       const item = items[index++];
@@ -169,12 +213,6 @@ function isMarkdownLink(path: string): boolean {
   return splitSuffix(path).path.toLocaleLowerCase().endsWith(".md");
 }
 
-function dataUrlForRaster(asset: Extract<DocumentAsset, { kind: "raster" }>): string | null {
-  return /^image\/(avif|bmp|gif|jpeg|png|webp)$/i.test(asset.mimeType)
-    ? `data:${asset.mimeType};base64,${asset.base64}`
-    : null;
-}
-
 type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
 type HeadingProps = ComponentPropsWithoutRef<"h1"> & ExtraProps;
 
@@ -195,69 +233,96 @@ function documentHeading(tag: HeadingTag) {
   };
 }
 
-function RepositoryImage({
-  src,
-  alt = "",
-  documentPath,
-  readAsset,
-}: {
-  src?: string;
-  alt?: string;
-  documentPath: string;
-  readAsset: (documentPath: string, assetPath: string) => Promise<DocumentAsset>;
-}) {
-  const assetPath =
-    src && resolveRepositoryPath(documentPath, src)
-      ? splitSuffix(src).path
-      : null;
-  const [asset, setAsset] = useState<DocumentAsset | null>(null);
-  const [failed, setFailed] = useState(false);
+function documentTableBlock({
+  id: sanitizedId,
+  node,
+  ...props
+}: ComponentPropsWithoutRef<"table"> & ExtraProps) {
+  const candidate = node?.properties?.dataOkhubBlockId;
+  const blockId = typeof candidate === "string" ? candidate : undefined;
+  return (
+    <MarkdownTable
+      {...props}
+      id={blockId ?? sanitizedId}
+      data-okhub-block-id={blockId}
+    />
+  );
+}
 
-  useEffect(() => {
-    let active = true;
-    setAsset(null);
-    setFailed(false);
-    if (!assetPath) return () => {
-      active = false;
-    };
-    void readAsset(documentPath, assetPath).then(
-      (next) => {
-        if (active) setAsset(next);
-      },
-      () => {
-        if (active) setFailed(true);
-      },
-    );
-    return () => {
-      active = false;
-    };
-  }, [assetPath, documentPath, readAsset]);
+function rehypeText(node: RehypeNode): string {
+  return node.value ?? (node.children ?? []).map(rehypeText).join("");
+}
 
-  if (!assetPath || failed) {
-    return <span className="markdown-document__asset-error">이미지를 표시할 수 없습니다.</span>;
-  }
-  if (asset === null) return <span className="markdown-document__asset-loading">이미지를 불러오는 중…</span>;
-  if (asset.kind === "svg") {
-    return (
-      <span
-        className="markdown-document__svg-asset"
-        role="img"
-        aria-label={alt}
-        dangerouslySetInnerHTML={{ __html: sanitizeSvg(asset.source) }}
-      />
-    );
-  }
-  const dataUrl = dataUrlForRaster(asset);
-  return dataUrl ? <img src={dataUrl} alt={alt} /> : <span>이미지를 표시할 수 없습니다.</span>;
+function codeSearchMatch(node: RehypeNode): { start: number; end: number } | undefined {
+  let offset = 0;
+  let match: { start: number; end: number } | undefined;
+  const visit = (child: RehypeNode) => {
+    if (child.tagName === "mark" && child.properties?.dataSearchMatch !== undefined) {
+      match = { start: offset, end: offset + rehypeText(child).length };
+    }
+    if (child.type === "text") offset += child.value?.length ?? 0;
+    else for (const descendant of child.children ?? []) visit(descendant);
+  };
+  visit(node);
+  return match;
+}
+
+function containsCaptionedImage(node: RehypeNode | undefined): boolean {
+  return Boolean(node && (
+    (node.tagName === "img" && node.properties?.title) ||
+    node.children?.some(containsCaptionedImage)
+  ));
+}
+
+function rehypeTaskListLabels() {
+  return (tree: RehypeNode) => {
+    const ownText = (node: RehypeNode): string =>
+      ["ul", "ol", "input"].includes(node.tagName ?? "")
+        ? ""
+        : node.value ?? (node.children ?? []).map(ownText).join("");
+    const labelCheckboxes = (node: RehypeNode, label: string) => {
+      if (["ul", "ol"].includes(node.tagName ?? "")) return;
+      if (node.tagName === "input" && node.properties?.type === "checkbox") {
+        node.properties.ariaLabel = label;
+      }
+      for (const child of node.children ?? []) labelCheckboxes(child, label);
+    };
+    const visit = (node: RehypeNode) => {
+      if (node.tagName === "li") {
+        labelCheckboxes(node, ownText(node).replace(/\s+/g, " ").trim() || "완료 상태");
+      }
+      for (const child of node.children ?? []) visit(child);
+    };
+    visit(tree);
+  };
+}
+
+function codeBlockNode(node: RehypeNode | undefined): RehypeNode | undefined {
+  return node?.children?.find((child) => child.tagName === "code");
+}
+
+function isMarkdownAlertKind(value: unknown): value is MarkdownAlertKind {
+  return ["note", "tip", "important", "warning", "caution"].includes(
+    String(value),
+  );
+}
+
+function documentClassName(base: string, className?: string): string {
+  return className ? `${base} ${className}` : base;
 }
 
 export interface MarkdownDocumentProps {
   document: DocumentContent;
   hideHeader?: boolean;
+  suppressSourceTitle?: boolean;
 }
 
-export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocumentProps) {
-  const { selectDocument, readAsset, openExternal, state } = useDocuments();
+export function MarkdownDocument({
+  document,
+  hideHeader = false,
+  suppressSourceTitle = false,
+}: MarkdownDocumentProps) {
+  const { selectDocument, readAsset, openExternal, copyText, state } = useDocuments();
   const articleRef = useRef<HTMLElement>(null);
   const searchMatch = state.selectedSearchMatch;
   const bodySearchQuery = searchMatch?.matchField === "body" ? searchMatch.matchText : "";
@@ -265,16 +330,32 @@ export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocum
     () => [
       remarkGfm,
       remarkOkfFrontmatter(document.markdown),
-      remarkLiteralHtml,
+      remarkLiteralHtml({ allowedTags: ["details", "summary"] }),
+      remarkOkhubBlocks({
+        markdown: document.markdown,
+        documentId: document.summary.documentId ?? document.summary.path,
+      }),
+      ...(suppressSourceTitle
+        ? [remarkSuppressSourceTitle(document.summary.title)]
+        : []),
       remarkHeadingIds(document.tableOfContents),
     ],
-    [document.markdown, document.tableOfContents],
+    [
+      document.markdown,
+      document.summary.documentId,
+      document.summary.path,
+      document.summary.title,
+      document.tableOfContents,
+      suppressSourceTitle,
+    ],
   );
   const rehypePlugins = useMemo<
     NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]>
   >(
     () => [
       ...(bodySearchQuery ? [rehypeSearchMatch(bodySearchQuery)] : []),
+      [rehypeRaw, { tagfilter: true }],
+      rehypeTaskListLabels,
       [rehypeSanitize, markdownSanitizeSchema],
     ] as NonNullable<Parameters<typeof ReactMarkdown>[0]["rehypePlugins"]>,
     [bodySearchQuery],
@@ -293,8 +374,13 @@ export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocum
 
   const components = useMemo<Components>(
     () => ({
-      a: ({ href, children, node: _node, ...props }: ComponentPropsWithoutRef<"a"> & ExtraProps & { children?: ReactNode }) => {
-        const value = href ?? "#";
+      a: ({ href, children, node, ...props }: ComponentPropsWithoutRef<"a"> & ExtraProps & { children?: ReactNode }) => {
+        const isFootnote = node?.properties?.dataFootnoteRef !== undefined ||
+          node?.properties?.dataFootnoteBackref !== undefined;
+        // Sanitization prefixes generated IDs too; keep both GFM directions in sync.
+        const value = isFootnote && href?.startsWith("#")
+          ? `#${defaultSchema.clobberPrefix}${href.slice(1)}`
+          : href ?? "#";
         const target = resolveRepositoryPath(document.summary.path, value);
         if (target) {
           if (!isMarkdownLink(value)) {
@@ -329,20 +415,55 @@ export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocum
         }
         return <a {...props} href={value}>{children}</a>;
       },
-      img: ({ src, alt }: ComponentPropsWithoutRef<"img"> & ExtraProps) => (
-        <RepositoryImage
+      img: ({ src, alt, title }: ComponentPropsWithoutRef<"img"> & ExtraProps) => (
+        <MarkdownImage
           src={src}
-          alt={alt}
+          alt={alt ?? ""}
+          title={title}
           documentPath={document.summary.path}
           readAsset={readAsset}
         />
       ),
-      code: ({ className, children, node: _node, ...props }: ComponentPropsWithoutRef<"code"> & ExtraProps & { children?: ReactNode }) => {
-        const language = /language-([^\s]+)/.exec(className ?? "")?.[1];
+      p: ({ node, children, ...props }: ComponentPropsWithoutRef<"p"> & ExtraProps) =>
+        containsCaptionedImage(node)
+          ? <div {...props} className="markdown-document__image-paragraph">{children}</div>
+          : <p {...props}>{children}</p>,
+      code: ({ id: sanitizedId, className, children, node, ...props }: ComponentPropsWithoutRef<"code"> & ExtraProps & { children?: ReactNode }) => {
+        const candidate = node?.properties?.dataOkhubBlockId;
+        const blockId = typeof candidate === "string" ? candidate : undefined;
+        return <code {...props} id={blockId ?? sanitizedId} className={className}>{children}</code>;
+      },
+      pre: ({ id: sanitizedId, node, children, ...props }: ComponentPropsWithoutRef<"pre"> & ExtraProps & { children?: ReactNode }) => {
+        const codeNode = codeBlockNode(node);
+        if (!codeNode) return <pre {...props} id={sanitizedId}>{children}</pre>;
+
+        const classNames = codeNode.properties?.className;
+        const className = Array.isArray(classNames)
+          ? classNames.join(" ")
+          : String(classNames ?? "");
+        const language = /language-([^\s]+)/.exec(className)?.[1];
+        const candidate = codeNode.properties?.dataOkhubBlockId;
+        const blockId = typeof candidate === "string" ? candidate : undefined;
+        const id = blockId ?? sanitizedId;
+        const source = rehypeText(codeNode).replace(/\n$/, "");
+
         if (language === "mermaid") {
-          return <MermaidBlock source={String(children).replace(/\n$/, "")} />;
+          return (
+            <span id={id} data-okhub-block-id={blockId}>
+              <MermaidBlock source={source} />
+            </span>
+          );
         }
-        return <code {...props} className={className}>{children}</code>;
+        return (
+          <MarkdownCodeBlock
+            id={id}
+            data-okhub-block-id={blockId}
+            language={language}
+            source={source}
+            searchMatch={codeSearchMatch(codeNode)}
+            onCopy={copyText}
+          />
+        );
       },
       h1: documentHeading("h1"),
       h2: documentHeading("h2"),
@@ -350,8 +471,37 @@ export function MarkdownDocument({ document, hideHeader = false }: MarkdownDocum
       h4: documentHeading("h4"),
       h5: documentHeading("h5"),
       h6: documentHeading("h6"),
+      table: documentTableBlock,
+      blockquote: ({ children, node, ...props }: ComponentPropsWithoutRef<"blockquote"> & ExtraProps & { children?: ReactNode }) => {
+        const kind = node?.properties?.dataOkhubAlert;
+        if (isMarkdownAlertKind(kind)) {
+          return <MarkdownAlert kind={kind}>{children}</MarkdownAlert>;
+        }
+        return <blockquote {...props}>{children}</blockquote>;
+      },
+      details: ({ className, children, node: _node, ...props }: ComponentPropsWithoutRef<"details"> & ExtraProps & { children?: ReactNode }) => (
+        <details
+          {...props}
+          className={documentClassName("markdown-document__details", className)}
+        >
+          {children}
+        </details>
+      ),
+      summary: ({ className, children, node: _node, ...props }: ComponentPropsWithoutRef<"summary"> & ExtraProps & { children?: ReactNode }) => (
+        <summary
+          {...props}
+          className={documentClassName("markdown-document__details-summary", className)}
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="markdown-document__details-chevron"
+            strokeWidth={1.75}
+          />
+          <span className="markdown-document__details-summary-text">{children}</span>
+        </summary>
+      ),
     }),
-    [document.summary.path, openExternal, readAsset, selectDocument],
+    [copyText, document.summary.path, openExternal, readAsset, selectDocument],
   );
 
   return (

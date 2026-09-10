@@ -45,6 +45,32 @@ class DeferredPreferencesRepository implements PreferencesRepository {
   }
 }
 
+class RejectingPreferencesRepository implements PreferencesRepository {
+  readonly writes: DisplayDensity[] = [];
+
+  async getDisplayDensity(): Promise<DisplayDensity> {
+    return "default";
+  }
+
+  async setDisplayDensity(value: DisplayDensity): Promise<void> {
+    this.writes.push(value);
+    throw new Error("write failed");
+  }
+}
+
+function FailureProbe() {
+  const { displayDensity, setDisplayDensity } = usePreferences();
+
+  return (
+    <div>
+      <output>{displayDensity}</output>
+      <button onClick={() => void setDisplayDensity("compact").catch(() => {})}>
+        compact
+      </button>
+    </div>
+  );
+}
+
 describe("PreferencesProvider", () => {
   afterEach(() => {
     cleanup();
@@ -128,5 +154,22 @@ describe("PreferencesProvider", () => {
 
     expect(document.documentElement).toHaveAttribute("data-density", "default");
     expect(consoleError).not.toHaveBeenCalled();
+  });
+
+  it("keeps the current density when persisting a new choice fails", async () => {
+    const repository = new RejectingPreferencesRepository();
+    const user = userEvent.setup();
+    render(
+      <PreferencesProvider repository={repository}>
+        <FailureProbe />
+      </PreferencesProvider>,
+    );
+
+    await screen.findByText("default");
+    await user.click(screen.getByRole("button", { name: "compact" }));
+
+    await waitFor(() => expect(repository.writes).toEqual(["compact"]));
+    expect(screen.getByText("default")).toBeInTheDocument();
+    expect(document.documentElement).toHaveAttribute("data-density", "default");
   });
 });

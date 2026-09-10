@@ -2,6 +2,8 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import { MarkdownDocument } from "@/features/documents/components/MarkdownDocument";
+import { documentFixtures } from "../fixtures/documents";
 import { StorybookAppProviders } from "./AppProviders";
 
 function DocumentsProbe() {
@@ -15,6 +17,15 @@ function DocumentsProbe() {
       </output>
     </div>
   );
+}
+
+function AssetProbe() {
+  const { state } = useDocuments();
+  return state.status === "ready" ? (
+    <MarkdownDocument hideHeader document={documentFixtures.content(
+      documentFixtures.mapSearchApi(), "![로컬 지도](./map.svg)",
+    )} />
+  ) : null;
 }
 
 function DraftProbe() {
@@ -55,6 +66,19 @@ function WorkspaceProbe() {
 
 describe("StorybookAppProviders", () => {
   afterEach(cleanup);
+
+  it("renders the configured local SVG through the real Markdown asset consumer", async () => {
+    render(
+      <StorybookAppProviders documents={{ asset: {
+        kind: "svg",
+        source: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 60"><text x="8" y="30">Local fixture</text></svg>',
+      } }}>
+        <AssetProbe />
+      </StorybookAppProviders>,
+    );
+
+    expect(await screen.findByRole("img", { name: "로컬 지도" })).toHaveTextContent("Local fixture");
+  });
 
   it("renders a Documents consumer with an isolated fake session", async () => {
     render(

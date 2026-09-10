@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import type { Decorator } from "@storybook/react-vite";
 import { DocumentsProvider, type DocumentsProviderProps } from "@/features/documents/DocumentsProvider";
 import type {
+  DocumentAsset,
   DocumentCatalog,
   DraftSummary,
   IndexStatus,
@@ -34,9 +35,11 @@ interface StorybookWorkspaceOptions {
 }
 
 interface StorybookDocumentsOptions {
+  asset?: DocumentAsset;
   catalog?: DocumentCatalog;
   drafts?: DraftSummary[];
   selectedPath?: string | null;
+  initialSearchQuery?: string;
   searchResults?: SearchResult[];
   branch?: string;
   repositoryFullName?: string;
@@ -93,6 +96,7 @@ function createBoundary(
     options.workspace?.selectedDirectory ?? "/workspace";
 
   const documents = new FakeDocumentsGateway();
+  if (options.documents?.asset) documents.asset = options.documents.asset;
   const catalog = options.documents?.catalog ?? documentFixtures.defaultCatalog();
   const selectedPath =
     options.documents?.selectedPath &&
@@ -137,7 +141,7 @@ export function StorybookAppProviders({
     <DocumentsProvider
       gateway={boundary.documents}
       createId={boundary.createId}
-      searchDebounceMs={0}
+      initialSearchQuery={options.documents?.initialSearchQuery}
     >
       {children}
     </DocumentsProvider>

@@ -85,7 +85,7 @@ Semantic 색상은 해당 의미에만 사용합니다. 문서 타입, 담당 �
 | UI 본문 | `13/20px` | `12/18px` |
 | 문서 본문 | `16/28px` | `15/25px` |
 | 페이지 H1 | `28/36px` | `24/32px` |
-| 문서 H2 | `20/28px` | `18/26px` |
+| 문서 H2 | `24/32px` | `22/29px` |
 | 코드 본문 | `13/20px` | `12/18px` |
 | 기본 control 높이 | `36px` | `32px` |
 | 기본 아이콘 | `16px` | `14px` |
@@ -96,6 +96,10 @@ Semantic 색상은 해당 의미에만 사용합니다. 문서 타입, 담당 �
 - 사용자는 `Settings → 화면 → 표시 밀도`에서 `Default`와 `Compact`를 전환합니다.
 - 선택값은 기기별 로컬 설정에 저장하고 Git이나 `.okf/workspace.yml`에 기록하지 않습니다.
 - 표시 모드는 Markdown 원문, Git diff, export 결과와 다른 팀원의 화면에 영향을 주지 않습니다.
+- 문서 화면에서는 사용자용 이름을 `편안하게`와 `작게`로 표시하고, 문서 오버플로 메뉴와 Settings의 기기별 표시 밀도 설정이 같은 값을 사용합니다.
+- 렌더링된 Markdown 본문은 일반 문단을 카드로 감싸지 않고 타이포그래피와 여백으로 위계를 만듭니다. 코드와 표는 기능적 경계와 내부 가로 스크롤을 사용하고, Mermaid는 기본적으로 별도 surface 없이 흰 문서 위에 표시합니다.
+- Markdown의 제목, 목록, 각주, 코드·표, 안내 블록과 접기 영역은 두 표시 밀도에서 같은 의미 구조와 원문을 유지합니다. 표의 스크롤 영역과 본문 링크·접기 summary에는 키보드 focus 표시를 제공합니다.
+- 코드 복사는 텍스트 action으로 성공 상태를 표시합니다. 다이어그램 확장·확대 제어는 접근 가능한 이름을 가진 tooltip 없는 icon-only action입니다.
 
 ## 5. 간격과 크기
 
@@ -255,7 +259,7 @@ components/patterns
 | Hover | `#FFFFFF` | `#C7CDD4` |
 | Focus | `#FFFFFF` | `#009E8E` border + 빈 간격 없는 `1px` ring |
 | Filled | Default와 동일 | 값이 있다는 이유로 별도 색상을 쓰지 않음 |
-| Invalid | `#FFFFFF` | `#B23B4A` border + 오류 메시지. Focus 중에도 같은 색 `1px` ring 유지 |
+| Invalid | `#FFFFFF` | Input은 `#C95B68` border + 오류 메시지. Focus 중에도 같은 색 `1px` ring 유지 |
 | Disabled | `#F1F3F5` | `#E5E7EB`, text `#7D918F` |
 
 - Radio와 Checkbox의 checked 색상은 `#009E8E`, check glyph는 `color.on-primary`를 사용합니다.
@@ -414,3 +418,5 @@ Field는 `Label → 도움말 → Control → 오류 또는 상태 메시지` �
 - keyboard navigation, focus 복귀, tooltip과 Dialog를 검사합니다.
 - Primary와 Semantic foreground/background 대비를 자동 검사합니다.
 - macOS와 Windows의 Pretendard fallback, control 높이와 scroll 영역을 확인합니다.
+- Markdown과 Mermaid Story는 의미별 상태로 구분하고 문서 상세는 하나의 실제 문서 조합으로 확인합니다. Desktop·layout 경계 폭·mobile은 Story를 복제하거나 viewport를 고정하지 않고 테스트 matrix로 검사합니다.
+- 모든 Story의 interaction과 global axe 접근성 검사를 통과해야 합니다. 정적 Storybook smoke는 코드·표의 내부 overflow를 확인하고, Markdown의 편안하게·작게 기준 이미지는 macOS Chromium에서 생성·비교합니다.

@@ -1,6 +1,7 @@
 import { useLayoutEffect, type PropsWithChildren } from "react";
 import type { Preview } from "@storybook/react-vite";
 import { DEFAULT_DISPLAY_DENSITY } from "@/features/preferences/display-density";
+import "pretendard/dist/web/variable/pretendardvariable.css";
 import "@/styles/globals.css";
 
 function DensityRoot({

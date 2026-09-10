@@ -6,6 +6,8 @@ import { DocumentsProvider } from "../DocumentsProvider";
 import type { HistoryPage } from "../model";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { DocumentsPage } from "@/pages/DocumentsPage";
+import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
+import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 
 const SESSION_ID = "4b20eda7-09a0-46f9-bd3b-4de83d4b0157";
 
@@ -14,9 +16,11 @@ afterEach(cleanup);
 function renderSelectedDocument(gateway: FakeDocumentsGateway) {
   render(
     <MemoryRouter>
+      <PreferencesProvider repository={new FakePreferencesRepository()}>
       <DocumentsProvider gateway={gateway} createId={() => SESSION_ID}>
         <DocumentsPage />
       </DocumentsProvider>
+      </PreferencesProvider>
     </MemoryRouter>,
   );
 }
