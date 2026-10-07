@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, type PropsWithChildren } from "react";
+import { createContext, useContext, useEffect, useMemo, type PropsWithChildren } from "react";
 import { MemoryRouter } from "react-router-dom";
 import type { Decorator } from "@storybook/react-vite";
 import { DocumentsProvider, type DocumentsProviderProps } from "@/features/documents/DocumentsProvider";
@@ -11,8 +11,9 @@ import type {
 } from "@/features/documents/model";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import type { DisplayDensity } from "@/features/preferences/display-density";
-import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import { WorkspaceConnectionProvider, useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type {
+  AppError,
   AuthState,
   CurrentWorkspaceState,
   GithubRepositorySummary,
@@ -28,9 +29,12 @@ interface StorybookPreferencesOptions {
 }
 
 interface StorybookWorkspaceOptions {
+  cloneOutcome?: "success" | "failure";
+  existingCloneError?: AppError;
   authState?: AuthState;
   currentWorkspace?: CurrentWorkspaceState;
   repositories?: GithubRepositorySummary[];
+  repositoryLoading?: boolean;
   selectedDirectory?: string | null;
 }
 
@@ -76,6 +80,9 @@ function createBoundary(
   );
 
   const workspace = FakeWorkspaceConnectionGateway.disconnected();
+  if (options.workspace?.repositoryLoading) {
+    workspace.listRepositories = () => new Promise(() => {});
+  }
   const connectedWorkspace =
     options.workspace?.currentWorkspace === undefined
       ? workspaceFixtures.connectedWorkspace()
@@ -94,6 +101,11 @@ function createBoundary(
   ];
   workspace.selectedDirectory =
     options.workspace?.selectedDirectory ?? "/workspace";
+  workspace.existingCloneError = options.workspace?.existingCloneError ?? null;
+  if (options.workspace?.cloneOutcome) {
+    workspace.workspaceInspection = { status: "ready", summary: workspaceFixtures.summary() };
+    workspace.connectedWorkspace = workspaceFixtures.connectedWorkspace();
+  }
 
   const documents = new FakeDocumentsGateway();
   if (options.documents?.asset) documents.asset = options.documents.asset;
@@ -153,11 +165,42 @@ export function StorybookAppProviders({
     <StorybookBoundaryContext.Provider value={boundary}>
       <PreferencesProvider key={optionsKey} repository={boundary.preferences}>
         <WorkspaceConnectionProvider gateway={boundary.workspace}>
-          <MemoryRouter initialEntries={initialEntries}>{appChildren}</MemoryRouter>
+          <MemoryRouter initialEntries={initialEntries}>
+            <StorybookCloneSimulation outcome={options.workspace?.cloneOutcome} />
+            {appChildren}
+          </MemoryRouter>
         </WorkspaceConnectionProvider>
       </PreferencesProvider>
     </StorybookBoundaryContext.Provider>
   );
+}
+
+function StorybookCloneSimulation({ outcome }: { outcome?: "success" | "failure" }) {
+  const boundary = useStorybookProviderBoundary();
+  const { state } = useWorkspaceConnection();
+  const job = state.step === "local" && state.status === "cloning" ? state.cloneJob : null;
+  const repository = state.step === "local" ? state.selectedRepository : null;
+  useEffect(() => {
+    if (!outcome || !job || !repository) return;
+    const progress = setTimeout(() => boundary.workspace.emitClone({
+      status: "progress", requestId: job.requestId,
+      progress: { stage: "receiving_objects", completed: 4, total: 10 },
+    }), 250);
+    const completion = setTimeout(() => {
+      if (outcome === "failure") {
+        boundary.workspace.emitClone({ status: "failed", requestId: job.requestId,
+          error: { code: "clone_failed", message: "다운로드 연결이 끊겼습니다. 다시 시도하세요.", recovery: "retry", details: {} },
+        });
+      } else {
+        boundary.workspace.emitClone({ status: "completed", requestId: job.requestId,
+          ownershipTargetPath: job.targetPath,
+          repository: { ...boundary.workspace.repositorySnapshot, root: job.targetPath, remoteUrl: `https://github.com/${repository.fullName}.git` },
+        });
+      }
+    }, 1200);
+    return () => { clearTimeout(progress); clearTimeout(completion); };
+  }, [boundary, job, repository, outcome]);
+  return null;
 }
 
 export function useStorybookProviderBoundary(): ProviderBoundary {
@@ -171,9 +214,12 @@ export function useStorybookProviderBoundary(): ProviderBoundary {
 export function withAppProviders(
   options: StorybookAppProvidersOptions = {},
 ): Decorator {
-  return function WithAppProvidersDecorator(Story: Parameters<Decorator>[0]) {
+  return function WithAppProvidersDecorator(Story, context) {
     return (
-      <StorybookAppProviders {...options}>
+      <StorybookAppProviders {...options} preferences={{
+        ...options.preferences,
+        displayDensity: options.preferences?.displayDensity ?? (context.globals.displayDensity === "compact" ? "compact" : "default"),
+      }}>
         <Story />
       </StorybookAppProviders>
     );

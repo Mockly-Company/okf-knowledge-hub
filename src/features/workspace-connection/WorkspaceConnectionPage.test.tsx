@@ -1,7 +1,8 @@
+import { submitLocalConnection } from "@/test/localConnection";
 import axe from "axe-core";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import type { AppError, WorkspaceInspection } from "./types";
 import {
@@ -69,6 +70,69 @@ async function signInAndChooseRepository(
 }
 
 describe("WorkspaceConnectionPage", () => {
+  it("explains an empty repository list without permitting the next step", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    gateway.repositories = [];
+    const { user } = renderPage(gateway);
+    await user.click(screen.getByRole("button", { name: "GitHub 로그인" }));
+    gateway.approveAuthentication();
+    expect(await screen.findByText("선택할 저장소가 없습니다.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "다음" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: /GitHub에서 새 저장소 만들기.*새 창/ })).toHaveAttribute("target", "_blank");
+    expect(screen.getByText("조회된 저장소").parentElement).toHaveTextContent(/^조회된 저장소$/);
+    expect(screen.queryByText("새 저장소가 안 보이면 새로고침")).not.toBeInTheDocument();
+    expect(screen.queryByText("저장소를 만든 뒤 이 화면으로 돌아와 새로고침하세요.")).not.toBeInTheDocument();
+  });
+
+  it("announces repository refresh and prevents advancing with stale selection", async () => {
+    const { gateway, user } = renderPage();
+    await user.click(screen.getByRole("button", { name: "GitHub 로그인" }));
+    gateway.approveAuthentication();
+    await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
+    vi.spyOn(gateway, "listRepositories").mockImplementation(() => new Promise(() => {}));
+    await user.click(screen.getByRole("button", { name: "새로고침" }));
+    expect(screen.getByRole("status")).toHaveTextContent("저장소를 불러오는 중입니다.");
+    expect(screen.getByRole("button", { name: "다음" })).toBeDisabled();
+    expect(screen.queryByRole("radio", { name: /mockly-knowledge/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("선택할 저장소가 없습니다.")).not.toBeInTheDocument();
+  });
+
+  it("shows the final download path in the form before one explicit download action", async () => {
+    const { gateway, user } = renderPage();
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("radio", { name: "새로 다운로드해서 연결" }));
+    await user.click(screen.getByRole("button", { name: "폴더 선택" }));
+    expect(screen.getByText("/work/mockly-knowledge")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "다운로드 위치 확인" })).not.toBeInTheDocument();
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
+  });
+  it("selects a local folder without connecting until the form is submitted", async () => {
+    const { gateway, user } = renderPage();
+    await signInAndChooseRepository(gateway, user);
+    expect(screen.getByRole("radio", { name: /이 기기의 저장소 연결/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "연결" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "폴더 선택" }));
+    expect(screen.getByRole("textbox", { name: "저장소 폴더" })).toHaveValue("/work");
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "연결" }));
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(1);
+  });
+
+  it("keeps independent folder choices when switching connection methods", async () => {
+    const { gateway, user } = renderPage();
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("button", { name: "폴더 선택" }));
+    await user.click(screen.getByRole("radio", { name: "새로 다운로드해서 연결" }));
+    expect(screen.getByRole("textbox", { name: "다운로드 위치" })).toHaveValue("");
+    gateway.selectedDirectory = "/new-work";
+    await user.click(screen.getByRole("button", { name: "폴더 선택" }));
+    expect(screen.getByRole("textbox", { name: "다운로드 위치" })).toHaveValue("/new-work");
+    await user.click(screen.getByRole("radio", { name: "이 기기의 저장소 연결" }));
+    expect(screen.getByRole("textbox", { name: "저장소 폴더" })).toHaveValue("/work");
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository" || call.method === "inspectExistingClone")).toHaveLength(0);
+  });
   it("uses the semantic canvas and panel spacing for the connection boundary", () => {
     const { container } = renderPage();
 
@@ -104,7 +168,7 @@ describe("WorkspaceConnectionPage", () => {
     );
 
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     await screen.findByRole("button", { name: "워크스페이스 파일 열기" });
 
     expect(exposedStates).not.toHaveLength(0);
@@ -162,7 +226,7 @@ describe("WorkspaceConnectionPage", () => {
     );
 
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     await screen.findByRole("button", { name: "다시 시도" });
 
     expectTokenFree(exposedStates);
@@ -175,10 +239,10 @@ describe("WorkspaceConnectionPage", () => {
     await signInAndChooseRepository(gateway, user);
 
     expect(screen.getByRole("heading", { name: "로컬 연결" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "기존 clone 연결" })).toHaveFocus();
+    expect(screen.getByRole("radio", { name: /이 기기의 저장소 연결/ })).toHaveFocus();
   });
 
-  it("shows the Device Flow code, expiry, cancellation, and restart", async () => {
+  it("groups the Device Flow code with expiry and offers only the primary authentication action", async () => {
     const { user } = renderPage();
     await user.click(screen.getByRole("button", { name: "GitHub 로그인" }));
 
@@ -187,8 +251,9 @@ describe("WorkspaceConnectionPage", () => {
       "href",
       "https://github.com/login/device",
     );
-    expect(screen.getByRole("button", { name: "로그인 취소" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "로그인 다시 시작" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "로그인 취소" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "로그인 다시 시작" })).not.toBeInTheDocument();
+    expect(screen.getByText("아래 코드를 GitHub에 입력해 인증을 완료하세요.")).toBeVisible();
   });
 
   it("recovers an expired Device Flow with an explicit restart action", async () => {
@@ -218,16 +283,16 @@ describe("WorkspaceConnectionPage", () => {
     const { gateway, user } = renderPage();
     gateway.cloneError = folderCollision;
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
 
-    expect(await screen.findByText("/work/mockly-knowledge")).toBeInTheDocument();
+    expect(await screen.findByRole("textbox", { name: "다운로드 위치" })).toHaveValue("/work");
     gateway.selectedDirectory = "/new-work";
-    await user.click(screen.getByRole("button", { name: "다른 위치 선택" }));
+    await user.click(screen.getByRole("button", { name: "변경" }));
     expect(screen.getByText("/new-work/mockly-knowledge")).toBeInTheDocument();
     expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
 
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
     const cloneCalls = gateway.calls.filter((call) => call.method === "cloneRepository");
     expect(cloneCalls).toHaveLength(2);
     expect(cloneCalls[1]?.args[2]).toBe("/new-work");
@@ -242,12 +307,20 @@ describe("WorkspaceConnectionPage", () => {
       details: { path: "/work" },
     };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     expect(await screen.findByText("선택한 폴더가 연결 가능한 Git 저장소가 아닙니다.")).toBeInTheDocument();
+    const path = screen.getByRole("textbox", { name: "저장소 폴더" });
+    expect(path).toHaveValue("/work");
+    expect(path).toHaveAttribute("readonly");
+    expect(path).toHaveAttribute("aria-invalid", "true");
+    expect(path).toHaveAccessibleDescription("선택한 폴더가 연결 가능한 Git 저장소가 아닙니다.");
+    expect(screen.getByRole("form", { name: "로컬 연결" })).toContainElement(path);
 
     gateway.existingCloneError = null;
     gateway.selectedDirectory = "/work/mockly-knowledge";
-    await user.click(screen.getByRole("button", { name: "다른 위치 선택" }));
+    await user.click(screen.getByRole("button", { name: "변경" }));
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "연결" }));
 
     expect(gateway.calls.filter((call) => call.method === "pickDirectory")).toHaveLength(2);
     expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(2);
@@ -257,31 +330,31 @@ describe("WorkspaceConnectionPage", () => {
     const { gateway, user } = renderPage();
     await signInAndChooseRepository(gateway, user);
 
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await submitLocalConnection(user, "download");
 
     expect(screen.getByText("/work/mockly-knowledge")).toBeInTheDocument();
     expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(0);
 
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
 
     expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
   });
 
-  it("cancels a clone target preview without writing", async () => {
+  it("switches away from the download method without writing", async () => {
     const { gateway, user } = renderPage();
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await submitLocalConnection(user, "download");
 
-    await user.click(screen.getByRole("button", { name: "취소" }));
+    await user.click(screen.getByRole("radio", { name: "이 기기의 저장소 연결" }));
 
     expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(0);
-    expect(screen.getByRole("button", { name: "새 위치에 clone" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "연결" })).toBeDisabled();
   });
 
   it("has no automatically detectable accessibility violations in clone confirmation", async () => {
     const { container, gateway, user } = renderPage();
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await submitLocalConnection(user, "download");
 
     const result = await axe.run(container, {
       rules: {
@@ -301,8 +374,8 @@ describe("WorkspaceConnectionPage", () => {
       details: {},
     };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
 
     await user.click(await screen.findByRole("button", { name: "GitHub 앱 설치 관리" }));
 
@@ -318,8 +391,8 @@ describe("WorkspaceConnectionPage", () => {
       details: {},
     };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
 
     await user.click(await screen.findByRole("button", { name: "정리 방법 보기" }));
 
@@ -341,7 +414,7 @@ describe("WorkspaceConnectionPage", () => {
       details: { path: ".okf/workspace.yml" },
     };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
 
     await user.click(await screen.findByRole("button", { name: "워크스페이스 파일 열기" }));
 
@@ -357,7 +430,7 @@ describe("WorkspaceConnectionPage", () => {
       details: { foundVersion: "2" },
     };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
 
     await user.click(await screen.findByRole("button", { name: "OkHub 업데이트 확인" }));
 
@@ -366,25 +439,28 @@ describe("WorkspaceConnectionPage", () => {
     ]);
   });
 
-  it("moves focus to clone status and progress updates do not steal it", async () => {
+  it("announces download progress without moving focus or duplicating the path", async () => {
     const { gateway, user } = renderPage();
     gateway.deferClone = true;
     await signInAndChooseRepository(gateway, user);
-    const cloneButton = screen.getByRole("button", { name: "새 위치에 clone" });
-    await user.click(cloneButton);
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
     gateway.emitCloneProgress();
 
     const status = await screen.findByRole("status");
-    expect(status).toHaveTextContent("clone 중");
-    expect(status).toHaveFocus();
+    expect(status).toHaveTextContent("다운로드 중");
+    expect(status).toHaveClass("sr-only");
+    expect(status).not.toHaveFocus();
+    expect(status).not.toHaveAttribute("tabindex");
+    expect(screen.getByRole("button", { name: "다운로드 중…" })).toBeDisabled();
+    expect(screen.getAllByText("/work/mockly-knowledge")).toHaveLength(1);
   });
 
   it("shows invalid workspace YAML diagnostics in the local step", async () => {
     const { gateway, user } = renderPage();
     gateway.workspaceInspection = invalidYaml;
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
 
     expect(await screen.findByText("YAML 형식이 올바르지 않습니다.")).toBeInTheDocument();
     expect(screen.getByText(".okf/workspace.yml")).toBeInTheDocument();
@@ -401,7 +477,7 @@ describe("WorkspaceConnectionPage", () => {
       files: [{ path: ".okf/workspace.yml", content: "name: Mockly", overwritesExisting: false }],
     };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
 
     expect(await screen.findByText("name: Mockly")).toBeInTheDocument();
@@ -423,7 +499,7 @@ describe("WorkspaceConnectionPage", () => {
       draftPullRequestUrl: null,
     };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
     await user.click(screen.getByRole("button", { name: "워크스페이스 초기화" }));
 
@@ -436,7 +512,7 @@ describe("WorkspaceConnectionPage", () => {
     const { gateway, user } = renderPage();
     gateway.workspaceInspection = { status: "initialization_required" };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
     await user.click(screen.getByRole("button", { name: "워크스페이스 초기화" }));
 
@@ -450,7 +526,7 @@ describe("WorkspaceConnectionPage", () => {
     const { gateway, user } = renderPage();
     gateway.workspaceInspection = { status: "initialization_required" };
     await signInAndChooseRepository(gateway, user);
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
     await user.click(screen.getByRole("button", { name: "워크스페이스 초기화" }));
     await screen.findByRole("heading", { name: "Draft PR을 검수해 주세요" });

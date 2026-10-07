@@ -38,7 +38,7 @@ export function DeviceCodeCopy({
 
   return (
     <div className="device-code-copy">
-      <div className="workspace-connection__code-row">
+      <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         <code>{code}</code>
         <Button
           type="button"

@@ -6,6 +6,11 @@ import { FormField } from "./FormField";
 afterEach(cleanup);
 
 describe("FormField", () => {
+  it("keeps an adjacent action separate from the labelled input and its error", () => {
+    render(<FormField label="저장소 폴더" error="다른 폴더를 선택하세요." controlAction={<button type="button">변경</button>}><Input readOnly value="/work" /></FormField>);
+    expect(screen.getByRole("textbox", { name: "저장소 폴더" })).toHaveAccessibleDescription("다른 폴더를 선택하세요.");
+    expect(screen.getByRole("button", { name: "변경" })).not.toHaveAttribute("aria-invalid");
+  });
   it("associates its label, help, and error with the control", () => {
     render(
       <FormField

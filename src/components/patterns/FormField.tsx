@@ -6,6 +6,7 @@ export interface FormFieldProps {
   required?: boolean;
   description?: React.ReactNode;
   error?: React.ReactNode;
+  controlAction?: React.ReactNode;
   children: React.ReactNode;
 }
 
@@ -22,6 +23,7 @@ export function FormField({
   required,
   description,
   error,
+  controlAction,
   children,
 }: FormFieldProps) {
   const generatedId = React.useId();
@@ -71,7 +73,7 @@ export function FormField({
           {description}
         </p>
       ) : null}
-      {control}
+      {controlAction ? <div className="flex items-center gap-[var(--space-2)] [&>input]:min-w-0 [&>input]:flex-1">{control}{controlAction}</div> : control}
       {error ? (
         <p
           id={errorId}

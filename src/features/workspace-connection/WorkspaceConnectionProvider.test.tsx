@@ -1,3 +1,4 @@
+import { submitLocalConnection } from "@/test/localConnection";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
@@ -248,12 +249,12 @@ describe("WorkspaceConnectionProvider", () => {
     gateway.approveAuthentication();
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
     const cloneCall = gateway.calls.find((call) => call.method === "cloneRepository");
     const requestId = cloneCall?.args[0];
     expect(requestId).toEqual(expect.any(String));
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
+    await submitLocalConnection(user, "download");
     expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
 
     gateway.emitClone({
@@ -312,7 +313,7 @@ describe("WorkspaceConnectionProvider", () => {
     gateway.approveAuthentication();
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
     await user.click(await screen.findByRole("button", { name: "초기화 내용 확인" }));
     await user.click(screen.getByRole("button", { name: "워크스페이스 초기화" }));
 
@@ -342,8 +343,8 @@ describe("WorkspaceConnectionProvider", () => {
     gateway.approveAuthentication();
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
     await user.click(await screen.findByRole("button", { name: "다시 시도" }));
 
     const cloneCalls = gateway.calls.filter((call) => call.method === "cloneRepository");
@@ -366,8 +367,8 @@ describe("WorkspaceConnectionProvider", () => {
     await user.click(await screen.findByRole("button", { name: "replace" }));
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
-    await user.click(screen.getByRole("button", { name: "새 위치에 clone" }));
-    await user.click(screen.getByRole("button", { name: "이 위치에 clone" }));
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
 
     expect(screen.getByLabelText("replacement cancellation")).toHaveTextContent(
       "false",
@@ -443,7 +444,7 @@ describe("WorkspaceConnectionProvider", () => {
     await user.click(await screen.findByRole("button", { name: "replace" }));
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
 
     await screen.findByText("initialize:connected");
     expect(screen.getByLabelText("workspace validation")).toHaveTextContent(
