@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { WorkspaceConnectionProvider } from "./WorkspaceConnectionProvider";
@@ -22,6 +23,27 @@ function renderGate(gateway: FakeWorkspaceConnectionGateway) {
 }
 
 describe("WorkspaceGate", () => {
+  it("restores Home on startup while preserving subsequent connected navigation", async () => {
+    render(<WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}><MemoryRouter initialEntries={["/settings"]}><Routes><Route element={<WorkspaceGate />}><Route index element={<><h1>Home restored</h1><Link to="/settings">Go settings</Link></>} /><Route path="settings" element={<h1>Settings</h1>} /></Route></Routes></MemoryRouter></WorkspaceConnectionProvider>);
+    await screen.findByRole("heading", { name: "Home restored" });
+    await userEvent.click(screen.getByRole("link", { name: "Go settings" }));
+    await screen.findByRole("heading", { name: "Settings" });
+  });
+
+  it("ends loading after a partial subscription failure and retries both listeners", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    gateway.authSubscriptionError = new Error("listener unavailable");
+    renderGate(gateway);
+    const retry = await screen.findByRole("button", { name: "다시 시도" });
+    expect(screen.queryByRole("status", { name: "워크스페이스 확인 중" })).toBeNull();
+    expect(gateway.listenerCount()).toEqual({ auth: 0, clone: 0 });
+    expect(screen.queryByRole("button", { name: "GitHub 로그인" })).toBeNull();
+    gateway.authSubscriptionError = null;
+    await userEvent.click(retry);
+    await screen.findByRole("button", { name: "GitHub 로그인" });
+    expect(gateway.listenerCount()).toEqual({ auth: 1, clone: 1 });
+  });
+
   it("shows an accessible busy state while the saved workspace is loading", () => {
     const gateway = FakeWorkspaceConnectionGateway.disconnected();
     gateway.deferCurrentWorkspace();

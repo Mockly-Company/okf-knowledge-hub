@@ -22,6 +22,7 @@ interface ConnectionErrorProps {
 export function ConnectionError({ error, localPath, onRecover }: ConnectionErrorProps) {
   const action = error.recovery ? (
     <Button
+      type="button"
       variant="secondary"
       onClick={() => onRecover(error.recovery!)}
     >

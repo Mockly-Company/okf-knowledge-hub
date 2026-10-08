@@ -709,6 +709,13 @@ pub(crate) async fn get_current_workspace_inner(
     if current.status != crate::settings::model::CurrentWorkspaceStatus::Connected {
         return Ok(Some(current));
     }
+    // This inspection is local only: filesystem/Git corruption must not be
+    // reported as an authentication error from the later remote verification.
+    let git = services.repository_git.clone();
+    let root = current.path.clone();
+    if run_blocking(move || git.inspect(&root)).await.is_err() {
+        return Ok(Some(CurrentWorkspace::recovery_required(current.path)));
+    }
     let Some(repository) = current.repository.clone() else {
         return Ok(Some(CurrentWorkspace::recovery_required(current.path)));
     };
@@ -1485,6 +1492,43 @@ mod tests {
     fn actual_initialization_rejects_account_switch_after_durable_attempt_before_remote_mutations()
     {
         assert_actual_initialization_rejects_auth_transition(AuthTransition::AccountSwitch);
+    }
+
+    #[tokio::test]
+    async fn restored_workspace_with_missing_or_bare_git_returns_local_recovery() {
+        for bare in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join(".okf")).unwrap();
+            std::fs::create_dir(root.path().join("docs")).unwrap();
+            std::fs::write(
+                root.path().join(".okf/workspace.yml"),
+                include_str!("../workspace/fixtures/valid-workspace.yml"),
+            )
+            .unwrap();
+            if bare {
+                git2::Repository::init_bare(root.path()).unwrap();
+            }
+            let settings = LocalSettingsService::new(MemorySettings::default());
+            settings
+                .set_current_for_repository(
+                    root.path(),
+                    KnowledgeRepository {
+                        id: "R_kgDOMockly".into(),
+                        full_name: "Mockly-Company/mockly-knowledge".into(),
+                    },
+                )
+                .unwrap();
+            let services = services_with_auth(settings);
+            let current = get_current_workspace_inner(&services)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                current.status,
+                crate::settings::model::CurrentWorkspaceStatus::RecoveryRequired
+            );
+            assert_eq!(current.path, root.path().canonicalize().unwrap());
+        }
     }
 
     #[tokio::test]

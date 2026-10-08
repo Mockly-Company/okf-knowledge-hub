@@ -175,7 +175,7 @@ describe("connectionReducer local and clone transitions", () => {
     });
   });
 
-  it("allows a new clone parent only for a failed clone that requests directory recovery", () => {
+  it("allows an explicitly selected new clone parent after any clone failure", () => {
     const failedRequest = cloneRequest("collision-clone", "/work/taken");
     const collisionError: AppError = {
       code: "repository_path_conflict",
@@ -219,7 +219,7 @@ describe("connectionReducer local and clone transitions", () => {
         type: "cloneAlternateDirectoryStarted",
         request: newDirectory,
       }),
-    ).toBe(retryOnlyFailure);
+    ).toMatchObject({ status: "clone_starting", activeCloneStartRequest: newDirectory });
   });
 
   it("retains the original clone input after a terminal clone failure", () => {

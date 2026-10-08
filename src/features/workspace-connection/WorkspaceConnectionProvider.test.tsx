@@ -40,6 +40,17 @@ function Probe() {
 }
 
 describe("WorkspaceConnectionProvider", () => {
+  it("retries saved-workspace verification without starting a new GitHub login", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.currentWorkspaceError = { code: "github_unavailable", message: "연결 확인 실패", recovery: "retry", details: {} };
+    render(<WorkspaceConnectionProvider gateway={gateway}><Probe /></WorkspaceConnectionProvider>);
+    await screen.findByText("auth:error");
+    gateway.currentWorkspaceError = null;
+    await userEvent.click(screen.getByRole("button", { name: "retry" }));
+    await screen.findByText("initialize:connected");
+    expect(gateway.calls.filter((call) => call.method === "beginGithubAuth")).toHaveLength(0);
+  });
+
   it("loads the GitHub account while retaining the connected workspace", async () => {
     const gateway = FakeWorkspaceConnectionGateway.connected();
     render(

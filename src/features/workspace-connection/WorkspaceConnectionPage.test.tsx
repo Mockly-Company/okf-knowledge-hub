@@ -1,6 +1,6 @@
 import { submitLocalConnection } from "@/test/localConnection";
 import axe from "axe-core";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
@@ -69,7 +69,117 @@ async function signInAndChooseRepository(
   await user.click(screen.getByRole("button", { name: "다음" }));
 }
 
+async function completeLatestClone(gateway: FakeWorkspaceConnectionGateway) {
+  const call = gateway.calls.filter((entry) => entry.method === "cloneRepository").at(-1);
+  const requestId = call?.args[0];
+  const parent = call?.args[2];
+  if (typeof requestId !== "string" || typeof parent !== "string") throw new Error("No clone request to complete");
+  const target = `${parent}/mockly-knowledge`;
+  await act(async () => gateway.emitClone({ status: "completed", requestId, ownershipTargetPath: target, repository: { ...gateway.repositorySnapshot, root: target } }));
+}
+
 describe("WorkspaceConnectionPage", () => {
+  it.each([
+    ["existing", "existing"], ["download", "download"],
+    ["existing", "download"], ["download", "existing"],
+  ] as const)("invalidates old YAML repair actions when changing %s selection to %s", async (initial, next) => {
+    const { gateway, user } = renderPage();
+    gateway.workspaceInspection = invalidYaml;
+    await signInAndChooseRepository(gateway, user);
+    await submitLocalConnection(user, initial);
+    if (initial === "download") { await user.click(screen.getByRole("button", { name: "다운로드해서 연결" })); await completeLatestClone(gateway); }
+    await screen.findByRole("button", { name: "다시 확인" });
+    const inspected = gateway.calls.filter((call) => call.method === "inspectWorkspace").length;
+    gateway.workspaceInspection = { status: "ready", summary: gateway.connectedWorkspace.summary };
+    await user.click(screen.getByRole("radio", { name: next === "existing" ? "이 기기의 저장소 연결" : "새로 다운로드해서 연결" }));
+    gateway.selectedDirectory = "/selected-b";
+    await user.click(screen.getByRole("button", { name: /^(폴더 선택|변경)$/ }));
+    expect(screen.queryByRole("button", { name: "다시 확인" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "워크스페이스 파일 열기" })).toBeNull();
+    expect(gateway.calls.filter((call) => call.method === "inspectWorkspace")).toHaveLength(inspected);
+    expect(gateway.calls.filter((call) => call.method === "connectWorkspace")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: next === "existing" ? "연결" : "다운로드해서 연결" }));
+    if (next === "download") await completeLatestClone(gateway);
+    await screen.findByText("워크스페이스가 연결되었습니다.");
+    const calls = gateway.calls.filter((call) => call.method === (next === "existing" ? "inspectExistingClone" : "cloneRepository"));
+    expect(calls.at(-1)?.args[next === "existing" ? 0 : 2]).toBe("/selected-b");
+  });
+
+  it.each(["same-parent", "different-parent", "existing-clone"] as const)("executes an explicit %s submission after a retryable clone failure", async (selection) => {
+    const { gateway, user } = renderPage();
+    gateway.cloneError = { code: "clone_failed", message: "다운로드 실패", recovery: "retry", details: {} };
+    await signInAndChooseRepository(gateway, user);
+    await submitLocalConnection(user, "download");
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
+    await screen.findByText("다운로드 실패");
+    const originalId = gateway.calls.find((call) => call.method === "cloneRepository")?.args[0];
+    gateway.cloneError = null;
+    if (selection === "existing-clone") await user.click(screen.getByRole("radio", { name: "이 기기의 저장소 연결" }));
+    gateway.selectedDirectory = selection === "same-parent" ? "/work" : "/recovery-b";
+    await user.click(screen.getByRole("button", { name: /^(폴더 선택|변경)$/ }));
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(1);
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: selection === "existing-clone" ? "연결" : "다운로드해서 연결" }));
+    if (selection !== "existing-clone") await completeLatestClone(gateway);
+    await screen.findByText("워크스페이스가 연결되었습니다.");
+    if (selection !== "existing-clone") {
+      const clones = gateway.calls.filter((call) => call.method === "cloneRepository");
+      expect(clones).toHaveLength(2);
+      expect(clones[1].args[0]).not.toBe(originalId);
+      expect(clones[1].args[2]).toBe(selection === "same-parent" ? "/work" : "/recovery-b");
+    } else expect(gateway.calls.find((call) => call.method === "inspectExistingClone")?.args[0]).toBe("/recovery-b");
+  });
+
+  it("allows explicit download after a failed existing clone inspection", async () => {
+    const { gateway, user } = renderPage();
+    gateway.existingCloneError = { code: "repository_path_conflict", message: "Git 저장소 아님", recovery: "choose_another_directory", details: {} };
+    await signInAndChooseRepository(gateway, user);
+    await submitLocalConnection(user);
+    await screen.findByText("Git 저장소 아님");
+    await user.click(screen.getByRole("radio", { name: "새로 다운로드해서 연결" }));
+    gateway.selectedDirectory = "/download-b";
+    await user.click(screen.getByRole("button", { name: "폴더 선택" }));
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "다운로드해서 연결" }));
+    await completeLatestClone(gateway);
+    await screen.findByText("워크스페이스가 연결되었습니다.");
+  });
+
+  it("opens repository creation with the native gateway", async () => {
+    const { gateway, user } = renderPage();
+    await user.click(screen.getByRole("button", { name: "GitHub 로그인" }));
+    gateway.approveAuthentication();
+    await user.click(await screen.findByRole("link", { name: /GitHub에서 새 저장소 만들기/ }));
+    expect(gateway.openedUrls).toEqual(["https://github.com/new"]);
+  });
+
+  it("recovers a rejected browser launch while preserving pending authentication", async () => {
+    const { gateway, user } = renderPage();
+    vi.spyOn(gateway, "openExternal").mockRejectedValueOnce(new Error("os refused"));
+    await user.click(screen.getByRole("button", { name: "GitHub 로그인" }));
+    await user.click(screen.getByRole("link", { name: /GitHub에서 인증 계속/ }));
+    await screen.findByRole("button", { name: "다시 시도" });
+    expect(screen.getByRole("button", { name: "사용자 코드 복사" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "다시 시도" }));
+    expect(gateway.openedUrls).toEqual(["https://github.com/login/device"]);
+    expect(gateway.calls.filter((call) => call.method === "beginGithubAuth")).toHaveLength(1);
+  });
+
+  it("recovers a failed folder picker without losing the download parent", async () => {
+    const { gateway, user } = renderPage();
+    await signInAndChooseRepository(gateway, user);
+    await user.click(screen.getByRole("radio", { name: "새로 다운로드해서 연결" }));
+    await user.click(screen.getByRole("button", { name: "폴더 선택" }));
+    vi.spyOn(gateway, "pickDirectory").mockRejectedValueOnce(new Error("picker refused"));
+    await user.click(screen.getByRole("button", { name: "변경" }));
+    await screen.findByRole("button", { name: "폴더 선택 다시 시도" });
+    expect(screen.getByRole("textbox", { name: "다운로드 위치" })).toHaveValue("/work");
+    gateway.selectedDirectory = "/another";
+    await user.click(screen.getByRole("button", { name: "폴더 선택 다시 시도" }));
+    expect(screen.getByRole("textbox", { name: "다운로드 위치" })).toHaveValue("/another");
+    expect(gateway.calls.filter((call) => call.method === "cloneRepository")).toHaveLength(0);
+  });
+
   it("explains an empty repository list without permitting the next step", async () => {
     const gateway = FakeWorkspaceConnectionGateway.disconnected();
     gateway.repositories = [];
@@ -456,6 +566,36 @@ describe("WorkspaceConnectionPage", () => {
     expect(screen.getAllByText("/work/mockly-knowledge")).toHaveLength(1);
   });
 
+  it("revalidates repaired YAML in the same form without losing the selected folder", async () => {
+    const { gateway, user } = renderPage();
+    gateway.workspaceInspection = invalidYaml;
+    await signInAndChooseRepository(gateway, user);
+    await submitLocalConnection(user);
+    await screen.findByText("YAML 형식이 올바르지 않습니다.");
+    expect(screen.getByRole("form", { name: "로컬 연결" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "저장소 폴더" })).toHaveValue("/work");
+    await user.click(screen.getByRole("button", { name: "워크스페이스 파일 열기" }));
+    expect(gateway.openedPaths).toEqual(["/work/mockly-knowledge/.okf/workspace.yml"]);
+    gateway.workspaceInspection = { status: "ready", summary: gateway.connectedWorkspace.summary };
+    await user.click(screen.getByRole("button", { name: "다시 확인" }));
+    await screen.findByText("워크스페이스가 연결되었습니다.");
+  });
+
+  it("recovery folder selection waits for the explicit connection button", async () => {
+    const { gateway, user } = renderPage();
+    gateway.existingCloneError = { code: "repository_remote_mismatch", message: "저장소가 다릅니다.", recovery: "choose_another_directory", details: {} };
+    await signInAndChooseRepository(gateway, user);
+    await submitLocalConnection(user);
+    gateway.existingCloneError = null;
+    gateway.selectedDirectory = "/another";
+    await user.click(await screen.findByRole("button", { name: "다른 위치 선택" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "저장소 폴더" })).toHaveValue("/another"));
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "연결" }));
+    await screen.findByText("워크스페이스가 연결되었습니다.");
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")[1].args[0]).toBe("/another");
+  });
+
   it("shows invalid workspace YAML diagnostics in the local step", async () => {
     const { gateway, user } = renderPage();
     gateway.workspaceInspection = invalidYaml;
@@ -538,6 +678,9 @@ describe("WorkspaceConnectionPage", () => {
     await user.click(screen.getByRole("button", { name: "병합 후 clone 선택" }));
 
     expect(gateway.calls.filter((call) => call.method === "pickDirectory")).toHaveLength(2);
+    expect(gateway.calls.filter((call) => call.method === "inspectExistingClone")).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "저장소 폴더" })).toHaveValue("/work");
+    await user.click(screen.getByRole("button", { name: "연결" }));
     expect(await screen.findByText("워크스페이스가 연결되었습니다.")).toBeInTheDocument();
   });
 

@@ -85,8 +85,15 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
     return this.chooseDirectory({ directory: true, multiple: false });
   }
 
-  openExternal(url: string): Promise<void> {
-    return this.launchExternal(url);
+  openExternal(url: string, repositoryFullName?: string): Promise<void> {
+    const fixedUrls = ["https://github.com/login/device", "https://github.com/settings/installations", "https://github.com/Mockly-Company/okf-knowledge-hub/releases", "https://github.com/new"];
+    if (fixedUrls.includes(url)) return this.launchExternal(url);
+    const prefix = repositoryFullName ? `https://github.com/${repositoryFullName}/pull/` : "";
+    const number = prefix && url.startsWith(prefix) ? url.slice(prefix.length) : "";
+    if (repositoryFullName && /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repositoryFullName) && /^\d+$/.test(number) && BigInt(number) > 0n && BigInt(number) <= 18446744073709551615n) {
+      return this.invokeCommand("open_github_pull_request", { url, repositoryFullName });
+    }
+    return Promise.reject({ code: "github_unavailable", message: "허용된 GitHub 링크를 열 수 없습니다.", recovery: "retry", details: {} });
   }
 
   openPath(path: string): Promise<void> {

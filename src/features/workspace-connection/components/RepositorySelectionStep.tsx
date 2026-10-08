@@ -8,13 +8,14 @@ import { ConnectionError } from "./ConnectionError";
 
 interface RepositorySelectionStepProps {
   state: RepositoryConnectionState;
+  onCreateRepository?(): void;
   onSelect(repository: GithubRepositorySummary): void;
   onRefresh(): void;
   onLoadNext(): void;
   onRecover(action: RecoveryAction): void;
 }
 
-export function RepositorySelectionStep({ state, onSelect, onRefresh, onLoadNext, onRecover }: RepositorySelectionStepProps) {
+export function RepositorySelectionStep({ state, onCreateRepository, onSelect, onRefresh, onLoadNext, onRecover }: RepositorySelectionStepProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = state.repositories.find((repository) => repository.id === selectedId) ?? null;
   const loading = state.status === "loading";
@@ -49,7 +50,7 @@ export function RepositorySelectionStep({ state, onSelect, onRefresh, onLoadNext
       <div className="grid gap-[var(--space-1)]">
       <div className="flex flex-wrap items-center gap-[var(--space-2)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
         <span>찾는 저장소가 없나요?</span>
-        <Button variant="ghost" asChild className="h-auto rounded-none border-0 p-0 font-[number:var(--font-weight-body)] text-[length:var(--font-meta-size)] data-[loading=false]:hover:bg-transparent data-[loading=false]:active:bg-transparent hover:underline underline-offset-4"><a href="https://github.com/new" target="_blank" rel="noreferrer">GitHub에서 새 저장소 만들기<span className="sr-only"> (새 창)</span></a></Button>
+        <Button variant="ghost" asChild className="h-auto rounded-none border-0 p-0 font-[number:var(--font-weight-body)] text-[length:var(--font-meta-size)] data-[loading=false]:hover:bg-transparent data-[loading=false]:active:bg-transparent hover:underline underline-offset-4"><a href="https://github.com/new" target="_blank" rel="noreferrer" onClick={(event) => { event.preventDefault(); onCreateRepository?.(); }}>GitHub에서 새 저장소 만들기<span className="sr-only"> (새 창)</span></a></Button>
       </div>
       </div>
       <div className="mt-[var(--space-5)] flex justify-end">

@@ -34,6 +34,10 @@ import type {
 } from "./types";
 
 export interface WorkspaceConnectionContextValue {
+  actionError: AppError | null;
+  retryActionError(): Promise<void>;
+  setupError: AppError | null;
+  retryConnectionSetup(): Promise<void>;
   state: ConnectionState;
   account: AccountSessionState;
   canCancelReplacement: boolean;
@@ -43,6 +47,8 @@ export interface WorkspaceConnectionContextValue {
     | { requestId: string | null; path: string; inspection: WorkspaceInspection; error: null }
     | { requestId: string; path: string; inspection: null; error: AppError }
     | null;
+  selectedExistingDirectory: { repositoryId: string; path: string } | null;
+  chooseExistingCloneDirectory(): Promise<void>;
   cloneTargetPreview: CloneTargetPreview | null;
   startLogin(): Promise<void>;
   cancelLogin(): Promise<void>;
@@ -72,7 +78,7 @@ export interface CloneTargetPreview {
   repositoryId: string;
   parentDirectory: string;
   targetPath: string;
-  mode: "start" | "alternate_directory";
+  mode: "start" | "retry" | "alternate_directory";
 }
 
 const WorkspaceConnectionContext =
@@ -152,6 +158,9 @@ export function WorkspaceConnectionProvider({
   gateway,
   children,
 }: WorkspaceConnectionProviderProps) {
+  const [actionFailure, setActionFailure] = useState<{ state: ConnectionState; error: AppError; retry(): Promise<void> } | null>(null);
+  const [setupError, setSetupError] = useState<AppError | null>(null);
+  const [setupVersion, setSetupVersion] = useState(0);
   const [state, dispatch] = useReducer(connectionReducer, undefined, createInitialConnectionState);
   const stateRef = useRef(state);
   const [account, dispatchAccount] = useReducer(
@@ -161,6 +170,7 @@ export function WorkspaceConnectionProvider({
   );
   const accountRef = useRef(account);
   const [isCurrentWorkspaceLoading, setCurrentWorkspaceLoading] = useState(true);
+  const [selectedExistingDirectory, setSelectedExistingDirectory] = useState<{ repositoryId: string; path: string } | null>(null);
   const [cloneTargetPreview, setCloneTargetPreview] = useState<CloneTargetPreview | null>(null);
   const [isWorkspaceValidating, setWorkspaceValidating] = useState(false);
   const [workspaceValidation, setWorkspaceValidation] = useState<
@@ -396,13 +406,27 @@ export function WorkspaceConnectionProvider({
     }
   }, [dispatchAccepted, dispatchAccountAccepted, gateway]);
 
+  const runPublicAction = useCallback(async (operation: () => Promise<void>) => {
+    const owner = stateRef.current;
+    setActionFailure(null);
+    try { await operation(); }
+    catch (error) {
+      if (stateRef.current === owner) setActionFailure({ state: owner, error: asAppError(error), retry: () => runPublicAction(operation) });
+    }
+  }, []);
+
+  const retryActionError = useCallback(async () => {
+    if (actionFailure?.state === stateRef.current) await actionFailure.retry();
+  }, [actionFailure]);
+
   const openVerificationUrl = useCallback(async (url: string) => {
-    await gateway.openExternal(url);
-  }, [gateway]);
+    const repositoryFullName = stateRef.current.selectedRepository?.fullName;
+    await runPublicAction(() => gateway.openExternal(url, repositoryFullName));
+  }, [gateway, runPublicAction]);
 
   const openLocalPath = useCallback(async (path: string) => {
-    await gateway.openPath(path);
-  }, [gateway]);
+    await runPublicAction(() => gateway.openPath(path));
+  }, [gateway, runPublicAction]);
 
   const refreshRepositories = useCallback(async () => {
     const current = stateRef.current;
@@ -425,7 +449,9 @@ export function WorkspaceConnectionProvider({
     if (current.step !== "local") return null;
     const path = await gateway.pickDirectory();
     const latest = stateRef.current;
-    return latest.step === "local" && latest.selectedRepository.id === current.selectedRepository.id ? path : null;
+    if (latest.step !== "local" || latest.selectedRepository.id !== current.selectedRepository.id) return null;
+    if (path) setActionFailure(null);
+    return path;
   }, [gateway]);
 
   const connectExistingClone = useCallback(async (selectedPath?: string) => {
@@ -433,8 +459,18 @@ export function WorkspaceConnectionProvider({
     if (current.step !== "local" || !current.selectedRepository) return;
     const path = selectedPath ?? await pickLocalDirectory();
     if (!path) return;
-    await inspectLocalClone({ id: operationId(), repositoryId: current.selectedRepository.id, path });
+    const retry = current.status === "error" && current.errorContext === "pre_repository" && current.failedOperation === "local_inspection" && path === current.failedLocalInspectionRequest.path;
+    await inspectLocalClone({ id: operationId(), repositoryId: current.selectedRepository.id, path }, retry);
   }, [pickLocalDirectory, inspectLocalClone]);
+
+  const chooseExistingCloneDirectory = useCallback(async () => {
+    const current = stateRef.current;
+    if (current.step !== "local") return;
+    await runPublicAction(async () => {
+      const path = await pickLocalDirectory();
+      if (path) setSelectedExistingDirectory({ repositoryId: current.selectedRepository.id, path });
+    });
+  }, [pickLocalDirectory, runPublicAction]);
 
   const choosePostMergeClone = useCallback(async () => {
     const current = stateRef.current;
@@ -446,14 +482,8 @@ export function WorkspaceConnectionProvider({
     ) {
       return;
     }
-    const path = await gateway.pickDirectory();
-    if (!path) return;
-    await inspectLocalClone({
-      id: operationId(),
-      repositoryId: current.selectedRepository.id,
-      path,
-    });
-  }, [dispatchAccepted, gateway, inspectLocalClone]);
+    await chooseExistingCloneDirectory();
+  }, [chooseExistingCloneDirectory, dispatchAccepted]);
 
   const selectCloneTarget = useCallback(async (
     mode: CloneTargetPreview["mode"],
@@ -468,11 +498,16 @@ export function WorkspaceConnectionProvider({
       latest.step !== "local" ||
       latest.selectedRepository.id !== current.selectedRepository.id
     ) return;
+    setActionFailure(null);
+    const failedClone = latest.status === "error" && latest.errorContext === "pre_repository" && latest.failedOperation === "clone";
+    const submissionMode = failedClone
+      ? parentDirectory === latest.failedCloneStartRequest.parentDirectory ? "retry" : "alternate_directory"
+      : mode;
     setCloneTargetPreview({
       repositoryId: latest.selectedRepository.id,
       parentDirectory,
       targetPath: cloneTargetPath(parentDirectory, latest.selectedRepository.name),
-      mode,
+      mode: submissionMode,
     });
   }, [gateway]);
 
@@ -503,6 +538,7 @@ export function WorkspaceConnectionProvider({
   }, [clone, cloneTargetPreview]);
 
   const cancelCloneTarget = useCallback(() => {
+    setActionFailure(null);
     setCloneTargetPreview(null);
   }, []);
 
@@ -515,11 +551,11 @@ export function WorkspaceConnectionProvider({
       current.error.recovery !== "choose_another_directory"
     ) return;
     if (current.failedOperation === "local_inspection") {
-      await connectExistingClone();
+      await chooseExistingCloneDirectory();
       return;
     }
-    await selectCloneTarget("alternate_directory");
-  }, [connectExistingClone, selectCloneTarget]);
+    await runPublicAction(() => selectCloneTarget("alternate_directory"));
+  }, [chooseExistingCloneDirectory, runPublicAction, selectCloneTarget]);
 
   const previewInitialization = useCallback(async () => {
     const current = stateRef.current;
@@ -596,11 +632,20 @@ export function WorkspaceConnectionProvider({
   const retryLastAction = useCallback(async () => {
     const current = stateRef.current;
     if (current.step === "auth") {
+      const currentAccount = accountRef.current;
+      if (currentAccount.status === "authenticated") {
+        await restoreAuthenticatedWorkspace({ status: "authenticated", user: currentAccount.user });
+        return;
+      }
       await startLogin();
       return;
     }
     if (current.step === "repository") {
       await loadRepositories(null, false);
+      return;
+    }
+    if (current.step === "local" && current.status === "validation_failed") {
+      await inspectWorkspace(current.localRepository.root);
       return;
     }
     if (current.step === "local" && current.status === "error") {
@@ -634,7 +679,7 @@ export function WorkspaceConnectionProvider({
         await connectInitializedWorkspace({ ...current.failedWorkspaceConnectionRequest, id: operationId() });
       }
     }
-  }, [clone, connectInitializedWorkspace, dispatchAccepted, gateway, inspectLocalClone, inspectWorkspace, loadRepositories, previewInitialization, startLogin]);
+  }, [clone, connectInitializedWorkspace, dispatchAccepted, gateway, inspectLocalClone, inspectWorkspace, loadRepositories, previewInitialization, restoreAuthenticatedWorkspace, startLogin]);
 
   const startReplacement = useCallback(async () => {
     if (!dispatchAccepted({ type: "replacementStarted" })) return;
@@ -710,6 +755,12 @@ export function WorkspaceConnectionProvider({
     }
   }, [gateway]);
 
+  const retryConnectionSetup = useCallback(async () => {
+    setSetupError(null);
+    setCurrentWorkspaceLoading(true);
+    setSetupVersion((version) => version + 1);
+  }, []);
+
   useEffect(() => {
     let active = true;
     let unlistenAuth: (() => void) | undefined;
@@ -749,6 +800,10 @@ export function WorkspaceConnectionProvider({
         unlistenClone?.();
         unlistenAuth = undefined;
         unlistenClone = undefined;
+        if (active) {
+          setSetupError({ code: "desktop_only", message: "연결 상태를 확인할 수 없습니다. 다시 시도해 주세요.", recovery: "retry", details: {} });
+          setCurrentWorkspaceLoading(false);
+        }
         return;
       }
       if (!active) {
@@ -765,7 +820,7 @@ export function WorkspaceConnectionProvider({
       unlistenAuth?.();
       unlistenClone?.();
     };
-  }, [dispatchAccepted, dispatchAccountAccepted, gateway, loadAuth, restoreAuthenticatedWorkspace]);
+  }, [dispatchAccepted, dispatchAccountAccepted, gateway, loadAuth, restoreAuthenticatedWorkspace, setupVersion]);
 
   useEffect(() => {
     if (
@@ -821,6 +876,10 @@ export function WorkspaceConnectionProvider({
 
   const value = useMemo<WorkspaceConnectionContextValue>(
     () => ({
+      actionError: actionFailure?.state === stateRef.current ? actionFailure.error : null,
+      retryActionError,
+      setupError,
+      retryConnectionSetup,
       state,
       account,
       canCancelReplacement: canCancelReplacement(state),
@@ -828,6 +887,8 @@ export function WorkspaceConnectionProvider({
       isWorkspaceValidating,
       workspaceValidation,
       cloneTargetPreview,
+      selectedExistingDirectory,
+      chooseExistingCloneDirectory,
       startLogin,
       cancelLogin,
       logoutGithub,
@@ -851,7 +912,7 @@ export function WorkspaceConnectionProvider({
       startReplacement,
       cancelReplacement,
     }),
-    [account, cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, choosePostMergeClone, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, logoutGithub, openLocalPath, openVerificationUrl, pickLocalDirectory, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
+    [actionFailure, retryActionError, selectedExistingDirectory, chooseExistingCloneDirectory, setupError, retryConnectionSetup, account, cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, choosePostMergeClone, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, logoutGithub, openLocalPath, openVerificationUrl, pickLocalDirectory, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
   );
 
   return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;

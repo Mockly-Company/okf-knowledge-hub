@@ -96,6 +96,7 @@ pub fn run() {
             commands::workspace::preview_workspace_initialization,
             commands::workspace::initialize_workspace,
             commands::workspace::get_current_workspace,
+            commands::external::open_github_pull_request,
             commands::documents::start_document_session,
             commands::documents::stop_document_session,
             commands::documents::refresh_document_session,

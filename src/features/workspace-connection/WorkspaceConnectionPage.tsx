@@ -53,7 +53,7 @@ export function WorkspaceConnectionPage() {
     } else if (action === "choose_another_directory") {
       void connection.chooseAnotherCloneDirectory();
     } else if (action === "connect_existing_clone") {
-      void connection.connectExistingClone();
+      void connection.chooseExistingCloneDirectory();
     } else if (action === "clean_working_tree") {
       setShowCleanupGuidance(true);
     } else if (action === "open_workspace_file") {
@@ -65,6 +65,9 @@ export function WorkspaceConnectionPage() {
       void connection.retryLastAction();
     }
   };
+  if (connection.setupError) {
+    return <main className="workspace-connection bg-[var(--color-canvas)]"><div className="workspace-connection__card grid gap-[var(--space-6)] p-[var(--panel-padding)]"><PageHeader title="GitHub에 연결" /><ConnectionError error={connection.setupError} onRecover={() => void connection.retryConnectionSetup()} /></div></main>;
+  }
   return (
     <main
       className="workspace-connection bg-[var(--color-canvas)]"
@@ -94,8 +97,8 @@ export function WorkspaceConnectionPage() {
           </div>
         ) : null}
         {state.step === "auth" ? <GitHubLoginStep state={state} onStart={() => void connection.startLogin()} onCancel={() => void connection.cancelLogin()} onOpen={(url) => void connection.openVerificationUrl(url)} onRecover={recover} /> : null}
-        {state.step === "repository" ? <RepositorySelectionStep state={state} onSelect={connection.selectRepository} onRefresh={() => void connection.refreshRepositories()} onLoadNext={() => void connection.loadNextRepositories()} onRecover={recover} /> : null}
-        {state.step === "local" ? <LocalConnectionStep key={state.selectedRepository.id} state={state} cloneTargetPreview={connection.cloneTargetPreview} onPickDirectory={connection.pickLocalDirectory} onConnectExisting={(path) => void connection.connectExistingClone(path)} onClone={(path) => void connection.cloneIntoSelectedParent(path)} onConfirmClone={() => void connection.confirmCloneTarget()} onCancelClone={connection.cancelCloneTarget} onPreviewInitialization={() => void connection.previewInitialization()} onRecover={recover} /> : null}
+        {state.step === "repository" ? <RepositorySelectionStep state={state} onCreateRepository={() => void connection.openVerificationUrl("https://github.com/new")} onSelect={connection.selectRepository} onRefresh={() => void connection.refreshRepositories()} onLoadNext={() => void connection.loadNextRepositories()} onRecover={recover} /> : null}
+        {state.step === "local" ? <LocalConnectionStep key={state.selectedRepository.id} selectedExistingDirectory={connection.selectedExistingDirectory} state={state} cloneTargetPreview={connection.cloneTargetPreview} onPickDirectory={connection.pickLocalDirectory} onConnectExisting={(path) => void connection.connectExistingClone(path)} onClone={(path) => void connection.cloneIntoSelectedParent(path)} onConfirmClone={() => void connection.confirmCloneTarget()} onCancelClone={connection.cancelCloneTarget} onPreviewInitialization={() => void connection.previewInitialization()} onRecover={recover} /> : null}
         {state.step === "initialize" && state.status !== "connected" ? (
           state.status === "preview" || state.status === "initializing" ? <InitializationPreview preview={state.initializationPreview} isInitializing={state.status === "initializing"} onCancel={connection.cancelInitializationPreview} onConfirm={() => void connection.confirmInitialization()} /> : state.status === "error" ? <section className="workspace-connection__step"><PageHeader title="로컬 연결" /><ConnectionError error={state.error} localPath={state.localRepository.root} onRecover={recover} /></section> : state.status === "ready_to_connect" && state.initializationResult.draftPullRequestUrl ? <section className="workspace-connection__step" role="status"><PageHeader title="Draft PR을 검수해 주세요" description="워크스페이스 파일은 기본 브랜치에 아직 반영되지 않았습니다. Draft PR을 검수하고 병합한 뒤 다시 연결해 주세요." /><div className="workspace-connection__actions"><Button onClick={() => void connection.openVerificationUrl(state.initializationResult.draftPullRequestUrl!)}>Draft PR 열기</Button></div></section> : <section className="workspace-connection__step" role="status"><PageHeader title="로컬 연결" description="워크스페이스를 연결하는 중입니다." /></section>
         ) : null}
@@ -114,6 +117,7 @@ export function WorkspaceConnectionPage() {
             </div>
           </section>
         ) : null}
+        {connection.actionError ? <ConnectionError error={connection.actionError} onRecover={() => void connection.retryActionError()} /> : null}
       </div>
     </main>
   );

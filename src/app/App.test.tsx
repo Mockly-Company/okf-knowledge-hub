@@ -18,11 +18,26 @@ vi.mock("mermaid", () => ({
 
 afterEach(() => {
   cleanup();
+  window.location.hash = "";
   initializeMermaid.mockReset();
   renderMermaid.mockReset();
 });
 
 describe("App", () => {
+  it("returns to the real Home after relogin from Settings", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    const user = userEvent.setup();
+    render(<App workspaceGateway={gateway} documentsGateway={new FakeDocumentsGateway()} preferencesRepository={new FakePreferencesRepository()} />);
+    await user.click(await screen.findByRole("link", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "외부 연결" }));
+    await user.click(screen.getByRole("button", { name: "로그아웃" }));
+    await user.click(screen.getByRole("button", { name: "GitHub에서 로그아웃" }));
+    await user.click(await screen.findByRole("button", { name: "GitHub 로그인" }));
+    gateway.approveAuthentication();
+    await screen.findByRole("heading", { name: "프로젝트 진행 상황" });
+    expect(window.location.hash).toBe("#/");
+  });
+
   it("renders the OkHub application landmark", async () => {
     render(
       <App
