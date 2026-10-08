@@ -13,7 +13,7 @@ function ShellPreview() {
           element={(
             <div className="p-[var(--page-padding-inline)]">
               <section aria-label="Shell content" className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-5)]">
-                <h2 className="m-0 text-[length:var(--font-page-size)] leading-[var(--font-page-line)] text-[var(--color-text-strong)]">Main content</h2>
+                <h2 className="m-0 text-[length:var(--font-h1-size)] leading-[var(--font-h1-line)] text-[var(--color-text-strong)]">Main content</h2>
                 <p className="mb-0 mt-[var(--space-2)] text-[var(--color-text-muted)]">페이지 조합 없이 Shell의 main 영역만 검수합니다.</p>
               </section>
             </div>
