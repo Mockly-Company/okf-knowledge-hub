@@ -158,7 +158,7 @@ describe("SettingsPage", () => {
     expect(screen.getByText("/work/mockly-knowledge")).toBeInTheDocument();
     expect(screen.getByText("schema v1")).toBeInTheDocument();
     expect(screen.getByText("schema v1")).toHaveClass(
-      "bg-[var(--color-canvas)]",
+      "bg-[var(--color-surface-pressed)]",
       "text-[var(--color-text-default)]",
       "font-[number:var(--font-weight-control)]",
     );

@@ -6,6 +6,17 @@ import { FormField } from "./FormField";
 afterEach(cleanup);
 
 describe("FormField", () => {
+  it("keeps a visually hidden validation message associated with the invalid control", () => {
+    render(
+      <FormField label="문서 제목" required error="문서 제목을 입력해 주세요." errorVisuallyHidden>
+        <Input placeholder="문서 제목을 입력하세요" />
+      </FormField>,
+    );
+    const control = screen.getByRole("textbox", { name: /문서 제목/ });
+    expect(control).toHaveAttribute("aria-invalid", "true");
+    expect(control).toHaveAccessibleDescription("문서 제목을 입력해 주세요.");
+    expect(screen.getByRole("alert")).toHaveClass("sr-only");
+  });
   it("keeps an adjacent action separate from the labelled input and its error", () => {
     render(<FormField label="저장소 폴더" error="다른 폴더를 선택하세요." controlAction={<button type="button">변경</button>}><Input readOnly value="/work" /></FormField>);
     expect(screen.getByRole("textbox", { name: "저장소 폴더" })).toHaveAccessibleDescription("다른 폴더를 선택하세요.");

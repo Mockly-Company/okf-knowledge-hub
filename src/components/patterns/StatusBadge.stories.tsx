@@ -21,15 +21,22 @@ type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {
   args: {
-    children: "준비됨",
+    children: "대기중",
     tone: "neutral",
+  },
+};
+
+export const Success: Story = {
+  args: {
+    children: "준비됨",
+    tone: "success",
   },
 };
 
 export const Compact: Story = {
   args: {
-    children: "검토 중",
+    children: "검토중",
   },
   globals: { displayDensity: "compact" },
-  render: () => <StatusBadge tone="info">검토 중</StatusBadge>,
+  render: () => <StatusBadge tone="info">검토중</StatusBadge>,
 };

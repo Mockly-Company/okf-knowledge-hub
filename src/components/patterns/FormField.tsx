@@ -6,6 +6,8 @@ export interface FormFieldProps {
   required?: boolean;
   description?: React.ReactNode;
   error?: React.ReactNode;
+  /** Keep validation available to assistive technology without a visible message. */
+  errorVisuallyHidden?: boolean;
   controlAction?: React.ReactNode;
   children: React.ReactNode;
 }
@@ -23,6 +25,7 @@ export function FormField({
   required,
   description,
   error,
+  errorVisuallyHidden = false,
   controlAction,
   children,
 }: FormFieldProps) {
@@ -60,7 +63,7 @@ export function FormField({
       >
         {label}
         {isRequired ? (
-          <span aria-hidden="true" className="ml-[var(--space-1)] text-[var(--color-error)]">
+          <span aria-hidden="true" className="ml-[var(--space-2)] font-[number:var(--font-weight-body)] text-[var(--color-text-muted)]">
             필수
           </span>
         ) : null}
@@ -78,7 +81,7 @@ export function FormField({
         <p
           id={errorId}
           role="alert"
-          className="m-0 font-[number:var(--font-weight-description)] text-[var(--color-error)]"
+          className={errorVisuallyHidden ? "sr-only" : "m-0 text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] font-[number:var(--font-weight-body)] text-[var(--color-error)]"}
         >
           {error}
         </p>

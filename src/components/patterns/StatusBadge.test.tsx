@@ -10,7 +10,7 @@ void iconOnlyStatus;
 
 describe("StatusBadge", () => {
   it.each<[StatusTone, string, string]>([
-    ["neutral", "bg-[var(--color-canvas)]", "text-[var(--color-text-default)]"],
+    ["neutral", "bg-[var(--color-surface-pressed)]", "text-[var(--color-text-default)]"],
     ["success", "bg-[var(--color-success-soft)]", "text-[var(--color-success)]"],
     ["info", "bg-[var(--color-info-soft)]", "text-[var(--color-info)]"],
     ["warning", "bg-[var(--color-warning-soft)]", "text-[var(--color-warning)]"],

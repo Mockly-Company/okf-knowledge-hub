@@ -24,7 +24,7 @@ describe("Storybook catalog", () => {
     ]);
     expect(namedStories(InputStories)).toEqual(["Default", "Disabled", "Invalid"]);
     expect(namedStories(TabsStories)).toEqual(["Default"]);
-    expect(namedStories(StatusBadgeStories)).toEqual(["Compact", "Default"]);
+    expect(namedStories(StatusBadgeStories)).toEqual(["Compact", "Default", "Success"]);
     expect(namedStories(DocumentStories)).toEqual([
       "EmptySearch",
       "Home",
