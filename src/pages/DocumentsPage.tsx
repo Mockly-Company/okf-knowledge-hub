@@ -45,6 +45,7 @@ export function DocumentsPage() {
   const creationDialog = (
     <NewDocumentDialog
       state={authoringState}
+      folderRoots={state.catalog.roots}
       onClose={closeNewDocument}
       onCreate={createNewDocument}
       onUseSuggestion={useSuggestedFileName}

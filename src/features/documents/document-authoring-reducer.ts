@@ -306,10 +306,17 @@ export function documentAuthoringReducer(
             ...state,
             creation: {
               ...state.creation,
-              status: action.validation.hasCollision
+              status: action.validation.hasCollision && !action.validation.suggestedFileName
                 ? "collision"
                 : "creation_queued",
-              validation: action.validation,
+              validation: action.validation.hasCollision && action.validation.suggestedFileName
+                ? {
+                    ...action.validation,
+                    normalizedFileName: action.validation.suggestedFileName,
+                    relativePath: `${state.creation.input!.folder}/${action.validation.suggestedFileName}`,
+                    hasCollision: false,
+                  }
+                : action.validation,
             },
           }
         : state;

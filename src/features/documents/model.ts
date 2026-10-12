@@ -168,6 +168,7 @@ export interface NewDocumentTemplate {
   description: string | null;
   typeKey: string | null;
   defaults: DocumentTemplateDefaults;
+  body: string;
   richEditorCompatible: boolean;
 }
 

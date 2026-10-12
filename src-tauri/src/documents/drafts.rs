@@ -353,12 +353,18 @@ impl DraftManager {
         let _mutation = self.mutations.lock().map_err(|_| draft_storage_error())?;
         require_v4(document_id)?;
         let mut record = self.load_record(workspace_id, change_id)?;
-        let validation = validate_document_target(
+        let mut validation = validate_document_target(
             &record.worktree_path,
             &record.document_roots,
             folder,
             file_name,
         )?;
+        // Re-check at mutation time: a preview may have become stale. Never overwrite.
+        for _ in 0..64 {
+            if !validation.has_collision { break; }
+            let suggested = validation.suggested_file_name.as_deref().ok_or_else(draft_conflict_error)?;
+            validation = validate_document_target(&record.worktree_path, &record.document_roots, folder, suggested)?;
+        }
         if validation.has_collision {
             return Err(draft_conflict_error());
         }
@@ -1402,6 +1408,26 @@ mod tests {
         assert!(source.contains(&format!("okf_hub_id: {document_id}")));
         assert!(source.contains("title: 지도 검색 API"));
         assert!(!worktree.join("docs/.gitkeep").exists());
+    }
+
+    #[test]
+    fn repeated_titles_get_numbered_paths_without_overwriting_and_create_nested_folders_only_on_save() {
+        let fixture = Fixture::new();
+        let manager = fixture.manager();
+        let change_id = Uuid::new_v4();
+        manager.create_change(fixture.repository.path(), fixture.workspace_id, "hyeeun", "문서", change_id, vec!["docs".to_owned()]).unwrap();
+        let worktree = manager.active_worktree(fixture.workspace_id).unwrap();
+        assert!(!worktree.join("docs/api/v2/contracts").exists());
+        let template = built_in_templates().into_iter().find(|item| item.id == "builtin:blank").unwrap();
+        let first = manager.add_document(fixture.workspace_id, change_id, "docs/api/v2/contracts", "지도 검색", "지도 검색", &template, Uuid::new_v4()).unwrap();
+        let second = manager.add_document(fixture.workspace_id, change_id, "docs/api/v2/contracts", "지도 검색", "지도 검색", &template, Uuid::new_v4()).unwrap();
+        let third = manager.add_document(fixture.workspace_id, change_id, "docs/api/v2/contracts", "지도 검색", "지도 검색", &template, Uuid::new_v4()).unwrap();
+        assert_eq!(first.path, "docs/api/v2/contracts/지도-검색.md");
+        assert_eq!(second.path, "docs/api/v2/contracts/지도-검색-2.md");
+        assert_eq!(third.path, "docs/api/v2/contracts/지도-검색-3.md");
+        assert_eq!(fs::read_to_string(worktree.join(&first.path)).unwrap(), first.markdown);
+        assert_eq!(fs::read_to_string(worktree.join(&second.path)).unwrap(), second.markdown);
+        assert_eq!(fs::read_to_string(worktree.join(&third.path)).unwrap(), third.markdown);
     }
 
     #[cfg(unix)]

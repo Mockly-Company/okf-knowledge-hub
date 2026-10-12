@@ -39,7 +39,7 @@ describe("documentAuthoringReducer", () => {
     expect(validated.creation.status).toBe("creation_queued");
   });
 
-  it("keeps a collision for explicit confirmation and never queues creation", () => {
+  it("automatically chooses the available numbered name and queues creation", () => {
     const state = documentAuthoringReducer(
       documentAuthoringReducer(
         documentAuthoringReducer(createInitialAuthoringState(), {
@@ -61,7 +61,9 @@ describe("documentAuthoringReducer", () => {
       },
     );
 
-    expect(state.creation.status).toBe("collision");
+    expect(state.creation.status).toBe("creation_queued");
+    expect(state.creation.validation?.normalizedFileName).toBe("지도-api-2.md");
+    expect(state.creation.validation?.relativePath).toBe("docs/api/지도-api-2.md");
     expect(state.creation.validation?.suggestedFileName).toBe("지도-api-2.md");
   });
 

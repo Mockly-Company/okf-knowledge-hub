@@ -1,22 +1,28 @@
-import { Check, FilePlus2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
+import { FormField } from "@/components/patterns/FormField";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
+  DialogBody,
   DialogCloseButton,
   DialogContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { UnstyledButton } from "@/components/ui/unstyled-button";
+import { Select, SelectOption } from "@/components/ui/select";
+import { MarkdownDocument } from "./MarkdownDocument";
+import { DocumentFolderField } from "./DocumentFolderField";
+import type { DocumentContent, DocumentTreeEntry } from "../model";
+import { getDocumentTemplateExample } from "../document-template-examples";
+import { documentFileName } from "../document-file-name";
 import type { DocumentCreationInput } from "../document-authoring-reducer";
 import type { DocumentAuthoringState } from "../document-authoring-reducer";
 import type { TeamTemplateCopyInput } from "../document-authoring-reducer";
 
 interface NewDocumentDialogProps {
   state: DocumentAuthoringState;
+  folderRoots?: DocumentTreeEntry[];
   onClose(): void;
   onCreate(input: DocumentCreationInput): void;
   onUseSuggestion(): void;
@@ -25,73 +31,50 @@ interface NewDocumentDialogProps {
 
 export function NewDocumentDialog({
   state,
+  folderRoots = [],
   onClose,
   onCreate,
-  onUseSuggestion,
-  onDuplicateTemplate,
 }: NewDocumentDialogProps) {
   const [title, setTitle] = useState("");
-  const [fileName, setFileName] = useState("");
-  const [fileNameTouched, setFileNameTouched] = useState(false);
   const [folder, setFolder] = useState(state.defaultFolder);
   const [templateId, setTemplateId] = useState("builtin:blank");
-  const [separateChange, setSeparateChange] = useState(false);
-  const [copyingTemplate, setCopyingTemplate] = useState(false);
-  const [teamLabel, setTeamLabel] = useState("");
-  const [teamFileName, setTeamFileName] = useState("");
 
   useEffect(() => setFolder(state.defaultFolder), [state.defaultFolder]);
+  useEffect(() => { if (!state.dialogOpen) { setTitle(""); setTemplateId("builtin:blank"); setFolder(state.defaultFolder); } }, [state.dialogOpen, state.defaultFolder]);
+  const fileName = documentFileName(title);
 
-  const templates = useMemo(
-    () => ({
-      builtIn: state.templateCatalog.templates.filter(
-        (template) => template.source === "built_in",
-      ),
-      team: state.templateCatalog.templates.filter(
-        (template) => template.source === "team",
-      ),
-    }),
-    [state.templateCatalog.templates],
-  );
+  const templates = state.templateCatalog.templates;
+  const selectedTemplate = templates.find((template) => template.id === templateId);
+  const example = getDocumentTemplateExample(templateId);
+  const previewTitle = example?.title ?? (title.trim() || "문서 제목");
+  const previewMarkdown = example?.markdown ?? selectedTemplate?.body.replaceAll("{{title}}", previewTitle) ?? "";
+  const preview: DocumentContent = {
+    summary: {
+      path: selectedTemplate?.source === "team"
+        ? `.okf/templates/${selectedTemplate.id.replace(/^team:/, "")}`
+        : `${folder}/${fileName || "document.md"}`,
+      fileName: fileName || "document.md",
+      title: previewTitle,
+      documentId: null,
+      frontmatterStatus: { status: "missing" },
+      modifiedAtUnixMs: 0,
+      size: previewMarkdown.length,
+    },
+    markdown: previewMarkdown,
+    properties: {},
+    tableOfContents: [],
+    lastCommit: null,
+  };
 
   if (!state.dialogOpen) return null;
   const busy = ["validating", "creating"].includes(state.creation.status);
   const canCreate = title.trim() !== "" && fileName.trim() !== "" && !busy;
 
-  const templateGroup = (
-    label: string,
-    items: typeof templates.builtIn,
-  ) =>
-    items.length > 0 ? (
-      <section className="new-document-dialog__templates" aria-label={label}>
-        <h3>{label}</h3>
-        <div className="new-document-dialog__template-grid">
-          {items.map((template) => {
-            const selected = template.id === templateId;
-            return (
-              <UnstyledButton
-                key={template.id}
-                type="button"
-                className={selected ? "is-selected" : undefined}
-                aria-pressed={selected}
-                onClick={() => setTemplateId(template.id)}
-              >
-                <FilePlus2 aria-hidden="true" />
-                <span>
-                  <strong>{template.label}</strong>
-                  {template.description ? <small>{template.description}</small> : null}
-                </span>
-                {selected ? <Check aria-hidden="true" /> : null}
-              </UnstyledButton>
-            );
-          })}
-        </div>
-      </section>
-    ) : null;
-
   return (
     <Dialog open={state.dialogOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="new-document-dialog">
+      <DialogContent className="new-document-dialog w-[min(calc(100vw-3rem),64rem)]" onEscapeKeyDown={event => {
+        if (event.target instanceof Element && event.target.closest(".document-folder-field__creation")) event.preventDefault();
+      }}>
         <header>
           <div>
             <DialogTitle id="new-document-title">새 문서</DialogTitle>
@@ -102,44 +85,49 @@ export function NewDocumentDialog({
           <DialogCloseButton label="새 문서 창 닫기" onClick={onClose} />
         </header>
 
+        <DialogBody className="new-document-dialog__body">
+        <div className="new-document-dialog__columns">
+        <div className="new-document-dialog__form-column">
         <div className="new-document-dialog__fields">
-          <label>
-            <span>제목</span>
+          <div className="new-document-dialog__title-field"><FormField label="제목" description="파일명은 제목으로 자동 생성되며, 중복 시 숫자가 붙습니다.">
             <Input
               autoFocus
               value={title}
-              onChange={(event) => {
-                const value = event.target.value;
-                setTitle(value);
-                if (!fileNameTouched) setFileName(value);
-              }}
-              placeholder="예: 지도 검색 API 계약"
+              disabled={busy}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="제목을 입력해주세요"
             />
-          </label>
-          <label>
-            <span>파일명</span>
-            <Input
-              value={fileName}
-              onChange={(event) => {
-                setFileNameTouched(true);
-                setFileName(event.target.value);
-              }}
-              placeholder="map-search-api.md"
-            />
-          </label>
-          <label>
-            <span>폴더</span>
-            <Input
-              value={folder}
-              onChange={(event) => setFolder(event.target.value)}
-              placeholder="docs/api"
-            />
-          </label>
+          </FormField></div>
+          <DocumentFolderField roots={folderRoots} value={folder} onValueChange={setFolder} disabled={busy} />
         </div>
 
-        <div className="new-document-dialog__template-list">
-          {templateGroup("기본 템플릿", templates.builtIn)}
-          {templateGroup("팀 템플릿", templates.team)}
+        <FormField label="템플릿" description={selectedTemplate?.description}>
+          <Select value={templateId} onValueChange={setTemplateId}>
+            {templates.map((template) => (
+              <SelectOption
+                key={template.id}
+                value={template.id}
+                description={template.source === "team" ? "팀 템플릿" : "기본 템플릿"}
+              >
+                {template.label}
+              </SelectOption>
+            ))}
+          </Select>
+        </FormField>
+        </div>
+        <section aria-label="템플릿 미리보기" className="new-document-dialog__preview">
+          <h3>{example ? "작성 예시" : "템플릿 구조"}</h3>
+          <p className="new-document-dialog__preview-note">
+            {example ? "가상 작성 예시입니다. 예시 내용은 생성되는 문서에 포함되지 않습니다." : "등록된 작성 예시가 없어 실제 템플릿 구조를 보여줍니다."}
+          </p>
+          <div className="new-document-dialog__preview-frame" role="group" aria-label="템플릿 본문 미리보기" tabIndex={0}>
+          {selectedTemplate ? (
+            <MarkdownDocument document={preview} hideHeader />
+          ) : (
+            <p className="text-[var(--color-text-muted)]">템플릿을 선택하면 미리보기가 표시됩니다.</p>
+          )}
+          </div>
+        </section>
         </div>
 
         {state.templateCatalog.diagnostics.length > 0 ? (
@@ -155,70 +143,14 @@ export function NewDocumentDialog({
           </div>
         ) : null}
 
-        {copyingTemplate ? (
-          <section className="new-document-dialog__team-copy" aria-label="팀 템플릿 만들기">
-            <h3>선택한 템플릿을 팀 템플릿으로 복제</h3>
-            <p>생성된 파일은 <code>.okf/templates/</code>에서 Git으로 공유됩니다.</p>
-            <div>
-              <label>
-                <span>표시 이름</span>
-                <Input value={teamLabel} onChange={(event) => setTeamLabel(event.target.value)} />
-              </label>
-              <label>
-                <span>파일명</span>
-                <Input value={teamFileName} onChange={(event) => setTeamFileName(event.target.value)} />
-              </label>
-            </div>
-            <div className="new-document-dialog__team-copy-actions">
-              <Button variant="secondary" onClick={() => setCopyingTemplate(false)}>닫기</Button>
-              <Button
-                disabled={teamLabel.trim() === "" || teamFileName.trim() === "" || state.templateCopy.status === "copying"}
-                onClick={() =>
-                  onDuplicateTemplate({
-                    sourceTemplateId: templateId,
-                    label: teamLabel.trim(),
-                    fileName: teamFileName.trim(),
-                    description: null,
-                    separateChange,
-                  })
-                }
-              >
-                {state.templateCopy.status === "copying" ? "복제 중…" : "팀 템플릿 만들기"}
-              </Button>
-            </div>
-            {state.templateCopy.path ? <p role="status">{state.templateCopy.path}에 만들었습니다.</p> : null}
-            {state.templateCopy.error ? <p role="alert">{state.templateCopy.error.message}</p> : null}
-          </section>
-        ) : (
-          <Button variant="secondary" onClick={() => setCopyingTemplate(true)}>
-            선택한 템플릿을 팀 템플릿으로 복제
-          </Button>
-        )}
-
-        {state.creation.status === "collision" ? (
-          <div className="new-document-dialog__notice" role="alert">
-            <span>같은 경로에 문서가 있습니다.</span>
-            {state.creation.validation?.suggestedFileName ? (
-              <Button variant="secondary" onClick={onUseSuggestion}>
-                {state.creation.validation.suggestedFileName} 사용
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
         {state.creation.error ? (
           <p className="new-document-dialog__error" role="alert">
             {state.creation.error.message}
           </p>
         ) : null}
 
+        </DialogBody>
         <footer>
-          <label className="new-document-dialog__separate-change">
-            <Checkbox
-              checked={separateChange}
-              onChange={(event) => setSeparateChange(event.target.checked)}
-            />
-            <span>별도 변경으로 만들기</span>
-          </label>
           <div>
             <Button variant="secondary" onClick={onClose}>취소</Button>
             <Button
@@ -229,7 +161,7 @@ export function NewDocumentDialog({
                   fileName: fileName.trim(),
                   folder: folder.trim(),
                   templateId,
-                  separateChange,
+                  separateChange: false,
                 })
               }
             >

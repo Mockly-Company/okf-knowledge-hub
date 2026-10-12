@@ -389,6 +389,21 @@ describe("DocumentsProvider", () => {
     expect(await screen.findByText("New")).toBeInTheDocument();
   });
 
+  it("uses a numbered collision suggestion without asking the user to confirm", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    vi.spyOn(gateway, "validateDocumentCreation").mockResolvedValue({
+      normalizedFileName: "지도-api.md", relativePath: "docs/api/지도-api.md",
+      hasCollision: true, suggestedFileName: "지도-api-2.md",
+    });
+    const user = userEvent.setup();
+    renderProvider(gateway, [SESSION_ID, SEARCH_ONE_ID, SEARCH_TWO_ID]);
+    await waitFor(() => expect(screen.getByTestId("templates")).toHaveTextContent("9"));
+    await user.click(screen.getByRole("button", {name: "new-document"}));
+    await user.click(screen.getByRole("button", {name: "create-document"}));
+    expect(await screen.findByTestId("editor-path")).toHaveTextContent("docs/api/지도-api-2.md");
+  });
+
   it("validates before creation, restarts on the draft worktree, and autosaves with owned ids", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.sessionSnapshot.lastOpenedPath = null;
@@ -399,7 +414,7 @@ describe("DocumentsProvider", () => {
     renderProvider(gateway, [SESSION_ID, createRequest, restartedSession, saveRequest]);
 
     await waitFor(() =>
-      expect(screen.getByTestId("templates")).toHaveTextContent("2"),
+      expect(screen.getByTestId("templates")).toHaveTextContent("9"),
     );
     await user.click(screen.getByRole("button", { name: "new-document" }));
     await user.click(screen.getByRole("button", { name: "create-document" }));
@@ -451,7 +466,7 @@ describe("DocumentsProvider", () => {
       60_000,
     );
     await waitFor(() =>
-      expect(screen.getByTestId("templates")).toHaveTextContent("2"),
+      expect(screen.getByTestId("templates")).toHaveTextContent("9"),
     );
     await user.click(screen.getByRole("button", { name: "create-document" }));
     await screen.findByTestId("editor-path");

@@ -45,6 +45,19 @@ const apiSummary = {
 };
 
 export class FakeDocumentsGateway implements DocumentsGateway {
+  private readonly createdPaths = new Set<string>();
+  private documentTarget(folder: string, fileName: string): DocumentTargetValidation {
+    const normalizedFileName = fileName.replace(/\.md$/i, "").trim().normalize("NFC")
+      .replace(/[A-Z]/g, letter => letter.toLowerCase()).replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") + ".md";
+    const occupied = new Set([...this.sessionSnapshot.catalog.documents.map(document => document.path), ...this.createdPaths]);
+    const path = `${folder}/${normalizedFileName}`;
+    let suggestedFileName: string | null = null;
+    if (occupied.has(path)) {
+      let suffix = 2;
+      do { suggestedFileName = `${normalizedFileName.slice(0, -3)}-${suffix++}.md`; } while (occupied.has(`${folder}/${suggestedFileName}`));
+    }
+    return { normalizedFileName, relativePath: path, hasCollision: occupied.has(path), suggestedFileName };
+  }
   templateCatalog: DocumentTemplateCatalog = {
     templates: [
       {
@@ -54,6 +67,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
         description: null,
         typeKey: null,
         defaults: { tags: [] },
+        body: "# {{title}}\n",
         richEditorCompatible: true,
       },
       {
@@ -63,8 +77,23 @@ export class FakeDocumentsGateway implements DocumentsGateway {
         description: null,
         typeKey: "api_contract",
         defaults: { tags: [] },
+        body: "# {{title}}\n\n## 요약\n\n## 범위\n\n### 포함\n\n### 제외\n\n## 처리 흐름\n\n## 공통 계약\n\n## Endpoint\n\n### `METHOD /path`\n\n#### 목적\n\n#### 요청\n\n#### 성공 응답\n\n#### 오류 응답\n\n#### 처리 케이스\n\n## 공통 데이터 모델\n",
         richEditorCompatible: true,
       },
+      ...[
+        { key: "feature_design", label: "기능 설계", sections: ["요약", "목표", "범위", "사용자 시나리오", "공통 동작 규칙", "제약 사항"] },
+        { key: "architecture", label: "시스템·아키텍처 설계", sections: ["요약", "목표와 품질 목표", "범위와 컨텍스트", "제약 사항", "현재 구조", "제안 구조와 해결 전략", "구성 요소와 책임", "주요 실행 흐름", "배포 구조", "공통 설계 원칙", "위험과 기술 부채"] },
+        { key: "decision", label: "기술 결정", sections: ["맥락과 문제", "결정 기준", "검토한 선택지", "결정 결과", "결과와 영향", "선택지 비교"] },
+        { key: "research", label: "기술 조사", sections: ["조사 질문", "배경", "범위", "평가 기준", "조사 결과", "비교", "결론과 추천", "한계와 미확인 사항", "참고 자료"] },
+        { key: "analysis", label: "분석·실험", sections: ["목적과 가설", "대상과 범위", "환경과 전제 조건", "방법", "측정 지표와 성공 기준", "결과", "해석", "한계", "후속 작업", "실행 자료"] },
+        { key: "test", label: "테스트 계획·결과", sections: ["목적", "범위", "대상 버전과 환경", "시작 조건과 완료 기준", "테스트 케이스", "실행 결과", "결론"] },
+        { key: "incident_review", label: "장애 회고", sections: ["요약", "영향", "탐지", "타임라인", "대응과 복구", "원인과 기여 요인", "배운 점", "재발 방지와 영향 완화 조치"] },
+      ].map(({ key, label, sections }) => ({
+        id: `builtin:${key}`, source: "built_in" as const, label,
+        description: null, typeKey: key, defaults: { tags: [] },
+        body: `# {{title}}\n\n${sections.map((section) => `## ${section}\n`).join("\n")}`,
+        richEditorCompatible: true,
+      })),
     ],
     diagnostics: [],
   };
@@ -178,23 +207,16 @@ export class FakeDocumentsGateway implements DocumentsGateway {
     fileName: string,
   ): Promise<DocumentTargetValidation> {
     this.record("validateDocumentCreation", sessionId, folder, fileName);
-    const normalizedFileName = fileName
-      .replace(/\.md$/i, "")
-      .trim()
-      .toLocaleLowerCase()
-      .replace(/[\s_]+/g, "-") + ".md";
-    return {
-      normalizedFileName,
-      relativePath: `${folder}/${normalizedFileName}`,
-      hasCollision: false,
-      suggestedFileName: null,
-    };
+    return this.documentTarget(folder, fileName);
   }
 
   async createDocumentDraft(
     request: CreateDocumentDraftRequest,
   ): Promise<CreateDocumentDraftResponse> {
     this.record("createDocumentDraft", request);
+    const target = this.documentTarget(request.folder, request.fileName);
+    const path = `${request.folder}/${target.suggestedFileName ?? target.normalizedFileName}`;
+    this.createdPaths.add(path);
     const draft: DraftSummary = {
       workspaceId: this.sessionSnapshot.workspaceId,
       changeId: "269482aa-2c25-4a64-9006-c64ff075b9e5",
@@ -210,7 +232,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
       document: {
         changeId: draft.changeId,
         documentId: "80a44162-92c6-4f2c-9b77-ef5c42a52e5a",
-        path: `${request.folder}/${request.fileName.replace(/\s+/g, "-").toLocaleLowerCase()}`,
+        path,
         markdown: `---\nokf_hub_id: 80a44162-92c6-4f2c-9b77-ef5c42a52e5a\ntitle: ${request.title}\n---\n# ${request.title}\n`,
         contentHash: "created-hash",
         draft,

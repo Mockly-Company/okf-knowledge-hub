@@ -33,7 +33,6 @@ pub struct NewDocumentTemplate {
     pub description: Option<String>,
     pub type_key: Option<String>,
     pub defaults: DocumentTemplateDefaults,
-    #[serde(skip_serializing)]
     pub body: String,
     pub rich_editor_compatible: bool,
 }
@@ -169,7 +168,12 @@ pub fn validate_document_target(
     let suggested_file_name = has_collision.then(|| {
         let stem = normalized_file_name.trim_end_matches(".md");
         (2..)
-            .map(|suffix| format!("{stem}-{suffix}.md"))
+            .map(|suffix| {
+                let suffix = format!("-{suffix}");
+                let mut end = stem.len().min(MAX_FILE_STEM_BYTES - suffix.len());
+                while !stem.is_char_boundary(end) { end -= 1; }
+                format!("{}{suffix}.md", stem[..end].trim_end_matches('-'))
+            })
             .find(|candidate| {
                 let key = comparison_key(candidate);
                 !existing_names
@@ -467,6 +471,14 @@ mod tests {
     };
 
     #[test]
+    fn template_catalog_serializes_markdown_body_for_preview() {
+        let templates = built_in_templates();
+        let json = serde_json::to_value(&templates).unwrap();
+        assert_eq!(json[0]["body"], "# {{title}}\n");
+        assert_eq!(json[1]["body"], templates[1].body);
+    }
+
+    #[test]
     fn filename_normalization_preserves_korean_and_normalizes_ascii_and_separators() {
         assert_eq!(
             normalize_document_file_name("지도 Search_API 계약!!.md").unwrap(),
@@ -507,6 +519,18 @@ mod tests {
         assert_eq!(result.relative_path, "docs/api/café.md");
         assert!(result.has_collision);
         assert_eq!(result.suggested_file_name.as_deref(), Some("café-2.md"));
+    }
+
+    #[test]
+    fn numbered_collision_suffix_remains_valid_for_maximum_length_names() {
+        let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join("docs")).unwrap();
+        let name = format!("{}.md", "a".repeat(200));
+        fs::write(root.path().join("docs").join(&name), "existing").unwrap();
+        let result = validate_document_target(root.path(), &["docs".to_owned()], "docs", &name).unwrap();
+        let suggestion = result.suggested_file_name.unwrap();
+        assert_eq!(suggestion, format!("{}-2.md", "a".repeat(198)));
+        assert!(normalize_document_file_name(&suggestion).is_ok());
     }
 
     #[test]
