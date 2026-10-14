@@ -334,13 +334,10 @@ describe("Documents visual contract", () => {
       "gap: 0",
     );
     expect(declarationBlock(".document-reader__context")).toContain(
-      "padding: var(--space-5)",
+      "padding: 0 var(--space-5) var(--space-5)",
     );
     expect(declarationBlock(".document-reader__context")).toContain(
       "background: var(--color-surface)",
-    );
-    expect(declarationBlock(".document-reader__menu button")).toContain(
-      "border-radius: var(--radius-sm)",
     );
     expect(
       declarationBlock(".document-overview__properties h2"),

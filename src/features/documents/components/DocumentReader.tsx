@@ -1,5 +1,6 @@
-import { Ellipsis, PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { EllipsisVertical, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Dialog, DialogBody, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button, IconButton } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -22,6 +23,14 @@ import { DocumentHistory } from "./DocumentHistory";
 import { DocumentOverview } from "./DocumentOverview";
 
 type ContextTab = "overview" | "history";
+
+const narrowQuery = "(max-width: 760px)";
+function subscribeNarrow(onChange: () => void) {
+  const media = window.matchMedia?.(narrowQuery);
+  media?.addEventListener("change", onChange);
+  return () => media?.removeEventListener("change", onChange);
+}
+function isNarrowScreen() { return window.matchMedia?.(narrowQuery).matches ?? false; }
 
 function lastModifiedSummary(document: DocumentContent): string {
   const commit = document.lastCommit;
@@ -50,7 +59,20 @@ export function DocumentReader({
   const [tab, setTab] = useState<ContextTab>("overview");
   const [menuOpen, setMenuOpen] = useState(false);
   const [contextCollapsed, setContextCollapsed] = useState(false);
+  const isNarrow = useSyncExternalStore(subscribeNarrow, isNarrowScreen, () => false);
+  const [mobileContextOpen, setMobileContextOpen] = useState(false);
+  const readerRef = useRef<HTMLElement>(null);
+  const mobileTriggerRef = useRef<HTMLButtonElement>(null);
+  const navigationTargetRef = useRef<string | null>(null);
+  useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
   const headerRef = useRef<HTMLElement>(null);
+  const contextToggleRef = useRef<HTMLButtonElement>(null);
+  const contextCloseRef = useRef<HTMLButtonElement>(null);
+  const previousCollapsed = useRef(contextCollapsed);
+  useEffect(() => {
+    if (previousCollapsed.current !== contextCollapsed) (contextCollapsed ? contextToggleRef : contextCloseRef).current?.focus({preventScroll: true});
+    previousCollapsed.current = contextCollapsed;
+  }, [contextCollapsed]);
   const branch = state.branch ?? "main";
   const githubUrl = `https://github.com/${state.repositoryFullName}/blob/${branch}/${encodeURIComponent(document.summary.path)}`;
   const firstTocEntry = document.tableOfContents[0];
@@ -76,8 +98,23 @@ export function DocumentReader({
     return () => window.cancelAnimationFrame(frame);
   }, [document.summary.path, state.selectedSearchMatch]);
 
+  const contextContents = <>
+    <div className="document-reader__context-header">
+      <TabsList className="document-reader__tabs" aria-label="문서 문맥 탭">
+        <TabsTrigger selected={tab === "overview"} onClick={() => setTab("overview")}>개요</TabsTrigger>
+        <TabsTrigger selected={tab === "history"} onClick={() => setTab("history")}>History</TabsTrigger>
+      </TabsList>
+      <IconButton ref={contextCloseRef} label={isNarrow ? "문서 문맥 닫기" : "문서 문맥 접기"} tooltip={false} aria-controls="document-reader-context" aria-expanded onClick={() => isNarrow ? setMobileContextOpen(false) : setContextCollapsed(true)}><PanelRightClose aria-hidden="true" /></IconButton>
+    </div>
+    {tab === "overview" ? <DocumentOverview document={document} readerRef={readerRef} onNavigate={isNarrow ? id => { navigationTargetRef.current = id; setMobileContextOpen(false); } : undefined} /> : <DocumentHistory />}
+  </>;
+
   return (
-    <section className="document-reader" aria-labelledby={readerTitleId}>
+    <section ref={readerRef} className="document-reader" aria-labelledby={readerTitleId}>
+      <div
+        className={`document-reader__layout${contextCollapsed || isNarrow ? " document-reader__layout--context-collapsed" : ""}${isNarrow ? " document-reader__layout--narrow" : ""}`}
+      >
+        <div className="document-reader__canvas" tabIndex={0} role="region" aria-label="문서 읽기 영역">
       <header
         className="document-reader__header"
         ref={headerRef}
@@ -104,7 +141,7 @@ export function DocumentReader({
           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger asChild>
               <IconButton label="더보기" tooltip={false}>
-                <Ellipsis aria-hidden="true" />
+                <EllipsisVertical aria-hidden="true" strokeWidth={1.75} />
               </IconButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -142,6 +179,7 @@ export function DocumentReader({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          {isNarrow ? <IconButton ref={mobileTriggerRef} label="문서 문맥 펼치기" tooltip={false} aria-haspopup="dialog" aria-expanded={mobileContextOpen} onClick={() => { navigationTargetRef.current = null; setMobileContextOpen(true); }}><PanelRightOpen aria-hidden="true" /></IconButton> : null}
         </div>
       </header>
       {notice ? (
@@ -169,13 +207,11 @@ export function DocumentReader({
           <span>본문은 계속 표시됩니다</span>
         </div>
       ) : null}
-      <div
-        className={`document-reader__layout${contextCollapsed ? " document-reader__layout--context-collapsed" : ""}`}
-      >
-        <div className="document-reader__canvas">
           <MarkdownDocument document={document} hideHeader suppressSourceTitle />
         </div>
-        <IconButton
+        {contextCollapsed && !isNarrow ? <IconButton
+          ref={contextToggleRef}
+          tooltip={false}
           className="document-reader__context-toggle"
           label={contextCollapsed ? "문서 문맥 펼치기" : "문서 문맥 접기"}
           aria-controls="document-reader-context"
@@ -183,24 +219,28 @@ export function DocumentReader({
           onClick={() => setContextCollapsed((collapsed) => !collapsed)}
         >
           {contextCollapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
-        </IconButton>
-        <aside
+        </IconButton> : null}
+        {!isNarrow ? <aside
           id="document-reader-context"
           className="document-reader__context"
           aria-label="문서 문맥"
           hidden={contextCollapsed}
         >
-          <TabsList className="document-reader__tabs" aria-label="문서 문맥 탭">
-            <TabsTrigger selected={tab === "overview"} onClick={() => setTab("overview")}>개요</TabsTrigger>
-            <TabsTrigger selected={tab === "history"} onClick={() => setTab("history")}>History</TabsTrigger>
-          </TabsList>
-          {tab === "overview" ? (
-            <DocumentOverview document={document} />
-          ) : (
-            <DocumentHistory />
-          )}
-        </aside>
+          {contextContents}
+        </aside> : null}
       </div>
+      {isNarrow ? <Dialog open={mobileContextOpen} onOpenChange={setMobileContextOpen}>
+        <DialogContent className="document-reader__context-dialog" aria-label="문서 문맥" aria-describedby={undefined} onCloseAutoFocus={event => {
+          event.preventDefault();
+          const target = navigationTargetRef.current ? readerRef.current?.ownerDocument.getElementById(navigationTargetRef.current) : null;
+          navigationTargetRef.current = null;
+          if (target) { target.setAttribute("tabindex", "-1"); target.focus({preventScroll: true}); }
+          else mobileTriggerRef.current?.focus({preventScroll: true});
+        }}>
+          <DialogTitle className="sr-only">문서 문맥</DialogTitle>
+          <DialogBody id="document-reader-context" className="document-reader__context-scroll">{contextContents}</DialogBody>
+        </DialogContent>
+      </Dialog> : null}
     </section>
   );
 }

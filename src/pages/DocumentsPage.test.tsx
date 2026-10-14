@@ -188,8 +188,9 @@ describe("DocumentsPage", () => {
 
     expect(notice).not.toBeNull();
     if (!notice) throw new Error("expected the current-document notice alert");
-    expect(reader.firstElementChild).toBe(header);
-    expect(notice.parentElement).toBe(reader);
+    const canvas = reader.querySelector(".document-reader__canvas");
+    expect(canvas?.firstElementChild).toBe(header);
+    expect(notice.parentElement).toBe(canvas);
     expect(header?.nextElementSibling).toBe(notice);
   });
 

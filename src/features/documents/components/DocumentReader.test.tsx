@@ -24,7 +24,7 @@ function declarationBlock(selector: string): string {
   return match?.[1] ?? "";
 }
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 class DelayedPreferencesRepository implements PreferencesRepository {
   readonly writes: DisplayDensity[] = [];
@@ -94,6 +94,23 @@ function renderSelectedDocument(document = invalidFrontmatterDocument()) {
 }
 
 describe("DocumentReader", () => {
+  it("hides narrow-screen context until requested and closes it on Escape or TOC selection", async () => {
+    vi.stubGlobal("matchMedia", () => ({matches: true, addEventListener() {}, removeEventListener() {}}));
+    const user = userEvent.setup();
+    renderSelectedDocument();
+    await screen.findByRole("heading", {name: "읽을 수 있는 문서"});
+    expect(screen.queryByRole("complementary", {name: "문서 문맥"})).not.toBeInTheDocument();
+    const open = screen.getByRole("button", {name: "문서 문맥 펼치기"});
+    await user.click(open);
+    expect(await screen.findByRole("dialog", {name: "문서 문맥"})).toBeVisible();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog", {name: "문서 문맥"})).not.toBeInTheDocument());
+    expect(open).toHaveFocus();
+    await user.click(open);
+    await user.click(await screen.findByRole("link", {name: "본문"}));
+    await waitFor(() => expect(screen.queryByRole("dialog", {name: "문서 문맥"})).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", {name: "본문"})).toHaveFocus();
+  });
   it("keeps the reader header as the only H1 when the source title matches", async () => {
     const document = invalidFrontmatterDocument();
     document.summary.title = "본문";
@@ -415,7 +432,7 @@ describe("DocumentReader", () => {
     const context = declarationBlock(".document-reader__context");
     expect(context).toContain("border-left: 1px solid var(--color-border)");
     expect(context).toContain("background: var(--color-surface)");
-    expect(context).toContain("padding: var(--space-5)");
+    expect(context).toContain("padding: 0 var(--space-5) var(--space-5)");
   });
 
   it("fills the selected-document page surface without exposing the canvas behind its inset", async () => {
@@ -429,7 +446,7 @@ describe("DocumentReader", () => {
       "background: var(--color-surface)",
     );
     expect(declarationBlock(".documents-page--reader")).toContain(
-      "min-height: 100%",
+      "height: 100%",
     );
   });
 });
