@@ -41,6 +41,8 @@ export function DocumentsPage() {
     closeDraftEditor,
     duplicateTeamTemplate,
     switchDraft,
+    readAsset,
+    copyText,
   } = useDocuments();
   const creationDialog = (
     <NewDocumentDialog
@@ -59,6 +61,8 @@ export function DocumentsPage() {
         <Suspense fallback={<p className="documents-page__loading">편집기를 준비하는 중…</p>}>
           <DocumentDraftEditor
             editor={authoringState.editor}
+            readAsset={readAsset}
+            copyText={copyText}
             headerSecondary={
               <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
             }

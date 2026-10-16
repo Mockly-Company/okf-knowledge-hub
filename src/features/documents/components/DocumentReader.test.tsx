@@ -250,7 +250,7 @@ describe("DocumentReader", () => {
 
     await user.click(await screen.findByRole("button", { name: "편집" }));
 
-    expect(await screen.findByRole("region", { name: "새 문서 편집" })).toBeVisible();
+    expect(await screen.findByRole("region", { name: "문서 편집기" })).toBeVisible();
     expect(
       gateway.calls.filter((call) => call.method === "editExistingDocumentDraft"),
     ).toHaveLength(1);
@@ -262,7 +262,7 @@ describe("DocumentReader", () => {
 
     await user.click(await screen.findByRole("button", { name: "편집" }));
 
-    const editor = await screen.findByRole("region", { name: "새 문서 편집" });
+    const editor = await screen.findByRole("region", { name: "문서 편집기" });
     const title = within(editor).getByRole("textbox", { name: "문서 제목" });
     const header = title.closest(".document-draft-editor__header");
     const switcher = screen.getByRole("combobox", { name: "문서 작업 전환" });
@@ -272,8 +272,8 @@ describe("DocumentReader", () => {
     expect(
       title.compareDocumentPosition(switcher) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(within(editor).getByText("로컬 저장됨")).toBeVisible();
-    expect(within(editor).getByRole("button", { name: "편집기 닫기" })).toBeVisible();
+    expect(within(editor).getByRole("status")).toHaveTextContent("로컬에 자동 저장 완료");
+    expect(within(editor).getByRole("button", { name: "편집 종료" })).toBeVisible();
   });
 
   it("shows properties before the table of contents and keeps invalid documents readable", async () => {

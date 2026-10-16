@@ -26,6 +26,22 @@ describe("document Markdown authoring", () => {
     expect(isDocumentTitleLinked(markdown)).toBe(false);
   });
 
+  it("keeps the first H1 linked after clearing and retyping the title", () => {
+    const original = '---\ntitle: "이전 제목"\n---\n\n# 이전 제목\n\n본문';
+    const cleared = updateDocumentTitle(original, "");
+    expect(isDocumentTitleLinked(cleared)).toBe(true);
+    const renamed = updateDocumentTitle(cleared, "새 제목");
+    expect(renamed).toContain("# 새 제목\n\n본문");
+    expect(isDocumentTitleLinked(renamed)).toBe(true);
+  });
+
+  it("keeps the first H1 linked while typing a space in the title", () => {
+    const markdown = '---\ntitle: "지도"\n---\n\n# 지도\n\n본문';
+    const withSpace = updateDocumentTitle(markdown, "지도 ");
+    expect(isDocumentTitleLinked(withSpace)).toBe(true);
+    expect(updateDocumentTitle(withSpace, "지도 검색")).toContain("# 지도 검색\n\n본문");
+  });
+
   it("routes unsupported MDX and HTML syntax to source mode", () => {
     expect(isRichEditorCompatibleMarkdown("# 문서\n\n```mermaid\ngraph TD\n```"))
       .toBe(true);

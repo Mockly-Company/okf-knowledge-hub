@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { forwardRef, useImperativeHandle } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import type { DocumentEditorState } from "../document-authoring-reducer";
 import { DocumentDraftEditor } from "./DocumentDraftEditor";
 
@@ -29,6 +30,13 @@ vi.mock("@mdxeditor/editor", () => {
     InsertTable: Empty,
     ListsToggle: Empty,
     UndoRedo: Empty,
+    CodeMirrorEditor: Empty,
+    realmPlugin: () => plugin,
+    addComposerChild$: "addComposerChild",
+    addTableCellEditorChild$: "addTableCellEditorChild",
+    addImportVisitor$: "addImportVisitor",
+    openEditImageDialog$: "openEditImageDialog",
+    useCodeBlockEditorContext: () => ({}),
     codeBlockPlugin: plugin,
     codeMirrorPlugin: plugin,
     frontmatterPlugin: plugin,
@@ -82,6 +90,18 @@ function editor(markdown: string): DocumentEditorState {
 }
 
 describe("DocumentDraftEditor", () => {
+  it("opens publication confirmation without changing the draft", async () => {
+    const user = userEvent.setup(), change = vi.fn();
+    render(<DocumentDraftEditor editor={editor("# 작성 중")} onMarkdownChange={change} onModeChange={() => {}} onAcceptDisk={() => {}} onAcceptHub={() => {}} onStartMerge={() => {}} onClose={() => {}} />);
+    await user.click(screen.getByRole("button", { name: "발행" }));
+    expect(screen.getByRole("dialog", { name: "발행" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "발행하기" })).toBeDisabled();
+    expect(change).not.toHaveBeenCalled();
+    await user.type(screen.getByRole("textbox", { name: /변경 설명/ }), "작성 내용 설명");
+    await user.click(screen.getByRole("button", { name: "작성으로 돌아가기" }));
+    await user.click(screen.getByRole("button", { name: "발행" }));
+    expect(screen.getByRole("textbox", { name: /변경 설명/ })).toHaveValue("작성 내용 설명");
+  });
   it("synchronizes rich editor content when the same document changes externally", () => {
     const props = {
       onMarkdownChange: vi.fn(),

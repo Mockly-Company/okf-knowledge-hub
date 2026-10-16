@@ -48,6 +48,7 @@ export function TabsList({
     updateIndicator();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateIndicator);
     observer?.observe(list);
+    list.querySelectorAll('[role="tab"]').forEach((tab) => observer?.observe(tab));
     window.addEventListener("resize", updateIndicator);
 
     return () => {

@@ -19,7 +19,7 @@ function splitSuffix(value: string): { path: string; suffix: string } {
   return { path: match?.[1] ?? value, suffix: match?.[2] ?? "" };
 }
 
-function resolveRepositoryPath(documentPath: string, value: string): string | null {
+export function resolveRepositoryPath(documentPath: string, value: string): string | null {
   const { path } = splitSuffix(value.trim());
   if (!path || isAbsoluteUrl(path) || path.startsWith("/") || path.includes("\\")) {
     return null;
@@ -38,7 +38,7 @@ function resolveRepositoryPath(documentPath: string, value: string): string | nu
   return segments.join("/") || null;
 }
 
-function dataUrlForRaster(asset: Extract<DocumentAsset, { kind: "raster" }>): string | null {
+export function dataUrlForRaster(asset: Extract<DocumentAsset, { kind: "raster" }>): string | null {
   return /^image\/(avif|bmp|gif|jpeg|png|webp)$/i.test(asset.mimeType)
     ? `data:${asset.mimeType};base64,${asset.base64}`
     : null;

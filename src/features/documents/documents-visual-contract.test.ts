@@ -389,32 +389,24 @@ describe("Documents visual contract", () => {
 
   it("defines responsive document heading and prose spacing tokens", () => {
     for (const [name, value] of [
-      ["--font-document-h2-size", "24px"],
-      ["--font-document-h2-line", "32px"],
-      ["--font-document-h3-size", "20px"],
-      ["--font-document-h3-line", "28px"],
-      ["--font-document-h4-size", "18px"],
-      ["--font-document-h4-line", "26px"],
-      ["--font-document-h5-size", "16px"],
-      ["--font-document-h5-line", "24px"],
-      ["--font-document-h6-size", "14px"],
-      ["--font-document-h6-line", "20px"],
+      ["--font-document-h1-size", "32px"],
+      ["--font-document-h1-line", "40px"],
+      ["--font-document-h2-size", "28px"],
+      ["--font-document-h2-line", "36px"],
+      ["--font-document-h3-size", "24px"],
+      ["--font-document-h3-line", "32px"],
+      ["--font-document-h4-size", "20px"],
+      ["--font-document-h4-line", "28px"],
+      ["--font-document-h5-size", "18px"],
+      ["--font-document-h5-line", "26px"],
+      ["--font-document-h6-size", "16px"],
+      ["--font-document-h6-line", "24px"],
       ["--document-prose-max-width", "720px"],
       ["--document-prose-paragraph-gap", "var(--space-4)"],
     ]) {
       expect(blocksFor(tokensCss, ":root")).toContain(`${name}: ${value}`);
     }
     for (const [name, value] of [
-      ["--font-document-h2-size", "22px"],
-      ["--font-document-h2-line", "29px"],
-      ["--font-document-h3-size", "18px"],
-      ["--font-document-h3-line", "26px"],
-      ["--font-document-h4-size", "16px"],
-      ["--font-document-h4-line", "24px"],
-      ["--font-document-h5-size", "14px"],
-      ["--font-document-h5-line", "20px"],
-      ["--font-document-h6-size", "13px"],
-      ["--font-document-h6-line", "18px"],
       ["--document-prose-max-width", "840px"],
       ["--document-prose-paragraph-gap", "var(--space-3)"],
     ]) {
@@ -442,6 +434,11 @@ describe("Documents visual contract", () => {
       ".markdown-document h4",
       ".markdown-document h5",
       ".markdown-document h6",
+      ".document-draft-editor__mdx .mdxeditor-root-contenteditable h2",
+      ".document-draft-editor__mdx .mdxeditor-root-contenteditable h3",
+      ".document-draft-editor__mdx .mdxeditor-root-contenteditable h4",
+      ".document-draft-editor__mdx .mdxeditor-root-contenteditable h5",
+      ".document-draft-editor__mdx .mdxeditor-root-contenteditable h6",
     ]) {
       expect(declarationBlock(selector)).toContain("font-size: var(--font-document-");
       expect(declarationBlock(selector)).toContain("line-height: var(--font-document-");
@@ -451,43 +448,16 @@ describe("Documents visual contract", () => {
       ".document-draft-editor__mdx .mdxeditor-root-contenteditable h1",
     ]) {
       expect(declarationBlock(selector)).toContain(
-        "font-size: var(--font-h1-size)",
+        "font-size: var(--font-document-h1-size)",
       );
       expect(declarationBlock(selector)).toContain(
-        "line-height: var(--font-h1-line)",
+        "line-height: var(--font-document-h1-line)",
       );
       expect(declarationBlock(selector)).toContain(
         "font-weight: var(--font-weight-page-title)",
       );
     }
 
-    for (const selector of [
-      ".document-draft-editor__mdx .mdxeditor-root-contenteditable h2",
-    ]) {
-      expect(declarationBlock(selector)).toContain(
-        "font-size: var(--font-section-size)",
-      );
-      expect(declarationBlock(selector)).toContain(
-        "line-height: var(--font-section-line)",
-      );
-      expect(declarationBlock(selector)).toContain(
-        "font-weight: var(--font-weight-section-title)",
-      );
-    }
-
-    for (const selector of [
-      ".document-draft-editor__mdx .mdxeditor-root-contenteditable h3",
-    ]) {
-      expect(declarationBlock(selector)).toContain(
-        "font-size: var(--font-group-size)",
-      );
-      expect(declarationBlock(selector)).toContain(
-        "line-height: var(--font-group-line)",
-      );
-      expect(declarationBlock(selector)).toContain(
-        "font-weight: var(--font-weight-control)",
-      );
-    }
   });
 
   it("restores Markdown list markers, task state, links, quotes, code, and rules", () => {
@@ -519,7 +489,7 @@ describe("Documents visual contract", () => {
     );
     expect(
       declarationBlock(
-        ".document-draft-editor__mdx .mdxeditor-root-contenteditable :is(h1, h2, h3, h4)",
+        ".document-draft-editor__mdx .mdxeditor-root-contenteditable :is(h1, h2, h3, h4, h5, h6)",
       ),
     ).toContain("margin-top: var(--documents-heading-flow)");
   });

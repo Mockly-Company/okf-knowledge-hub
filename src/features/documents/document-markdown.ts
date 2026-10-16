@@ -19,7 +19,7 @@ export function documentTitle(markdown: string): string {
   const frontmatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   const title = frontmatter?.[1]?.match(/^title:\s*(.+)$/m)?.[1];
   if (title) return unquotedYaml(title);
-  return markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? "제목 없음";
+  return markdown.match(/^#[\t ]+([^\r\n]*)$/m)?.[1]?.trim() ?? "제목 없음";
 }
 
 export function updateDocumentTitle(markdown: string, nextTitle: string): string {
@@ -29,16 +29,16 @@ export function updateDocumentTitle(markdown: string, nextTitle: string): string
     /^(---\r?\n[\s\S]*?^title:)\s*.+$/m,
     `$1 ${quotedYaml(normalized)}`,
   );
-  const firstHeading = updated.match(/^#\s+(.+)$/m);
-  if (firstHeading?.[1]?.trim() === previousTitle) {
-    updated = updated.replace(/^#\s+.+$/m, `# ${normalized}`);
+  const firstHeading = updated.match(/^#[\t ]+([^\r\n]*)$/m);
+  if (firstHeading?.[1]?.trim() === previousTitle.trim()) {
+    updated = updated.replace(/^#[\t ]+[^\r\n]*$/m, `# ${normalized}`);
   }
   return updated;
 }
 
 export function isDocumentTitleLinked(markdown: string): boolean {
-  const heading = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim();
-  return heading !== undefined && heading === documentTitle(markdown);
+  const heading = markdown.match(/^#[\t ]+([^\r\n]*)$/m)?.[1]?.trim();
+  return heading !== undefined && heading === documentTitle(markdown).trim();
 }
 
 export function isRichEditorCompatibleMarkdown(markdown: string): boolean {

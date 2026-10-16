@@ -401,7 +401,9 @@ describe("DocumentsProvider", () => {
     await waitFor(() => expect(screen.getByTestId("templates")).toHaveTextContent("9"));
     await user.click(screen.getByRole("button", {name: "new-document"}));
     await user.click(screen.getByRole("button", {name: "create-document"}));
-    expect(await screen.findByTestId("editor-path")).toHaveTextContent("docs/api/지도-api-2.md");
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-path")).toHaveTextContent("docs/api/지도-api-2.md"),
+    );
   });
 
   it("validates before creation, restarts on the draft worktree, and autosaves with owned ids", async () => {

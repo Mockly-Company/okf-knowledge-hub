@@ -25,9 +25,9 @@ import {
   toolbarPlugin,
 } from "@mdxeditor/editor";
 import "@mdxeditor/editor/style.css";
-import { X } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
-import { Button, IconButton } from "@/components/ui/button";
+import { ArrowLeft } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusFeedback } from "@/components/ui/status-feedback";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -39,10 +39,21 @@ import {
   isDocumentTitleLinked,
   updateDocumentTitle,
 } from "../document-markdown";
+import { DocumentPublicationDialog, type DocumentPublicationRequest } from "./DocumentPublicationDialog";
+import type { DocumentAsset } from "../model";
+import { createEditorImagePreview } from "./editor-image-preview";
+import { accessibleListItemNodes } from "./AccessibleListItemNode";
+import { DocumentCodeEditor, DocumentImageTools, RichEditorServices, codeEditorLayout, codeEditorLabel, codeEditorHighlight, editorCodeLanguages, editorSemanticsPlugin } from "./RichEditorEnhancements";
 
 interface DocumentDraftEditorProps {
   editor: DocumentEditorState;
   headerSecondary?: ReactNode;
+  readAsset?(documentPath: string, assetPath: string): Promise<DocumentAsset>;
+  copyText?(value: string): Promise<void>;
+  publication?: {
+    baselineMarkdown?: string | null;
+    onSubmit?(request: DocumentPublicationRequest): Promise<void>;
+  };
   onMarkdownChange(markdown: string): void;
   onModeChange(mode: "rich" | "source"): void;
   onAcceptDisk(): void;
@@ -52,17 +63,47 @@ interface DocumentDraftEditorProps {
 }
 
 const statusLabel = {
-  saved: "로컬 저장됨",
-  dirty: "저장 대기 중",
-  queued: "저장 중",
-  saving: "저장 중",
+  saved: "로컬에 자동 저장 완료",
+  dirty: "자동 저장 대기중",
+  queued: "로컬에 저장중",
+  saving: "로컬에 저장중",
   conflict: "외부 변경 감지",
-  error: "저장 실패",
+  error: "로컬 저장 실패",
 } as const;
+
+const editorTranslations: Record<string, string> = {
+  "toolbar.blockTypeSelect.selectBlockTypeTooltip": "문단 서식",
+  "toolbar.blockTypeSelect.placeholder": "본문",
+  "toolbar.blockTypes.paragraph": "본문",
+  "toolbar.blockTypes.quote": "인용",
+  "toolbar.blockTypes.heading": "제목 {{level}}",
+  "toolbar.undo": "실행 취소 {{shortcut}}",
+  "toolbar.redo": "다시 실행 {{shortcut}}",
+  "toolbar.bold": "굵게",
+  "toolbar.removeBold": "굵게 해제",
+  "toolbar.italic": "기울임",
+  "toolbar.removeItalic": "기울임 해제",
+  "toolbar.underline": "밑줄",
+  "toolbar.removeUnderline": "밑줄 해제",
+  "toolbar.inlineCode": "인라인 코드",
+  "toolbar.removeInlineCode": "인라인 코드 해제",
+  "toolbar.bulletedList": "글머리 목록",
+  "toolbar.numberedList": "번호 목록",
+  "toolbar.checkList": "체크 목록",
+  "toolbar.link": "링크 추가",
+  "toolbar.image": "이미지 추가",
+  "toolbar.table": "표 추가",
+  "toolbar.codeBlock": "코드 블록 추가",
+  "imageEditor.deleteImage": "이미지 삭제",
+  "imageEditor.editImage": "이미지 편집",
+};
 
 export function DocumentDraftEditor({
   editor,
   headerSecondary,
+  readAsset,
+  copyText,
+  publication,
   onMarkdownChange,
   onModeChange,
   onAcceptDisk,
@@ -73,7 +114,14 @@ export function DocumentDraftEditor({
   const richCompatible = isRichEditorCompatibleMarkdown(editor.markdown);
   const mode = richCompatible ? editor.mode : "source";
   const richEditorRef = useRef<MDXEditorMethods>(null);
+  const imagePreviewHandler = useMemo(() => createEditorImagePreview(editor.document.path, readAsset), [editor.document.path, readAsset]);
   const lastRichMarkdown = useRef(editor.markdown);
+  const [publicationOpen, setPublicationOpen] = useState(false);
+  const [publicationSnapshot, setPublicationSnapshot] = useState<{ intent: "publish" | "review"; markdown: string; baselineMarkdown?: string | null } | null>(null);
+  const openPublication = (intent: "publish" | "review") => {
+    setPublicationSnapshot({ intent, markdown: editor.markdown, baselineMarkdown: publication?.baselineMarkdown });
+    setPublicationOpen(true);
+  };
 
   useEffect(() => {
     if (
@@ -92,7 +140,11 @@ export function DocumentDraftEditor({
   };
 
   return (
-    <section className="document-draft-editor" aria-label="새 문서 편집">
+    <section className="document-draft-editor" aria-label="문서 편집기">
+      <div className="document-draft-editor__back-row">
+        <Button variant="ghost" onClick={onClose}><ArrowLeft aria-hidden="true" strokeWidth={1.75} />편집 종료</Button>
+        <div className="document-draft-editor__status"><span role="status" aria-live="polite" data-status={editor.saveStatus}>{statusLabel[editor.saveStatus]}</span></div>
+      </div>
       <header className="document-draft-editor__header">
         <div className="document-draft-editor__heading">
           <Input
@@ -106,11 +158,9 @@ export function DocumentDraftEditor({
         </div>
         <div className="document-draft-editor__header-secondary">
           {headerSecondary}
-          <div className="document-draft-editor__status">
-            <span data-status={editor.saveStatus}>{statusLabel[editor.saveStatus]}</span>
-            <IconButton label="편집기 닫기" onClick={onClose}>
-              <X aria-hidden="true" />
-            </IconButton>
+          <div className="document-draft-editor__publish-actions">
+            <Button variant="secondary" onClick={() => openPublication("review")} disabled={Boolean(editor.conflict)}>검토 요청</Button>
+            <Button onClick={() => openPublication("publish")} disabled={Boolean(editor.conflict)}>발행</Button>
           </div>
         </div>
       </header>
@@ -180,13 +230,17 @@ export function DocumentDraftEditor({
           onChange={(event) => onMarkdownChange(event.target.value)}
         />
       ) : (
-        <MDXEditor
+        <RichEditorServices.Provider value={{ copyText: copyText ?? ((value) => navigator.clipboard.writeText(value)) }}><MDXEditor
           ref={richEditorRef}
           key={editor.document.documentId}
           className={`document-draft-editor__mdx${
             isDocumentTitleLinked(editor.markdown) ? " is-title-linked" : ""
           }`}
           markdown={editor.markdown}
+          additionalLexicalNodes={accessibleListItemNodes}
+          translation={(key, fallback, values) =>
+            (editorTranslations[key] ?? fallback).replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? ""))
+          }
           onChange={handleRichMarkdownChange}
           plugins={[
             frontmatterPlugin(),
@@ -196,38 +250,30 @@ export function DocumentDraftEditor({
             thematicBreakPlugin(),
             linkPlugin(),
             linkDialogPlugin(),
-            imagePlugin(),
+            imagePlugin({ imagePreviewHandler, EditImageToolbar: DocumentImageTools as React.FC, disableImageResize: true }),
             tablePlugin(),
-            codeBlockPlugin({ defaultCodeBlockLanguage: "text" }),
+            editorSemanticsPlugin(),
+            codeBlockPlugin({ defaultCodeBlockLanguage: "text", codeBlockEditorDescriptors: [{ priority: 100, match: () => true, Editor: DocumentCodeEditor }] }),
             codeMirrorPlugin({
-              codeBlockLanguages: {
-                text: "Text",
-                typescript: "TypeScript",
-                javascript: "JavaScript",
-                json: "JSON",
-                yaml: "YAML",
-                mermaid: "Mermaid",
-              },
+              codeBlockLanguages: editorCodeLanguages,
+              codeMirrorExtensions: [codeEditorLayout, codeEditorLabel, codeEditorHighlight],
             }),
             markdownShortcutPlugin(),
             toolbarPlugin({
               toolbarContents: () => (
                 <>
-                  <UndoRedo />
-                  <BlockTypeSelect />
-                  <BoldItalicUnderlineToggles />
-                  <CodeToggle />
-                  <ListsToggle />
-                  <CreateLink />
-                  <InsertImage />
-                  <InsertTable />
-                  <InsertCodeBlock />
+                  <div className="document-editor-toolbar__group" role="group" aria-label="편집 기록"><UndoRedo /></div>
+                  <div className="document-editor-toolbar__group" role="group" aria-label="글자 서식"><BlockTypeSelect /><BoldItalicUnderlineToggles /><CodeToggle /></div>
+                  <div className="document-editor-toolbar__group" role="group" aria-label="목록"><ListsToggle /></div>
+                  <div className="document-editor-toolbar__group" role="group" aria-label="삽입"><CreateLink /><InsertImage /><InsertTable /><InsertCodeBlock /></div>
                 </>
               ),
             }),
           ]}
-        />
+        /></RichEditorServices.Provider>
       )}
+      <p className="document-draft-editor__local-note">다른 화면으로 이동해도 초안은 유지됩니다. 발행 전까지 확정본은 바뀌지 않습니다.</p>
+      <DocumentPublicationDialog key={`publication-${editor.document.documentId}`} open={publicationOpen} onOpenChange={setPublicationOpen} intent={publicationSnapshot?.intent ?? "publish"} path={editor.document.path} markdown={publicationSnapshot?.markdown ?? editor.markdown} baselineMarkdown={publicationSnapshot?.baselineMarkdown} onSubmit={publication?.onSubmit} />
     </section>
   );
 }
