@@ -90,14 +90,14 @@ export function StatusFeedback({
 
   const Icon = icons[tone];
   const role = variant === "toast" ? "status" : tone === "error" ? "alert" : "status";
-  const inlineAction = actionPlacement === "end" && (variant === "banner" || variant === "content");
+  const inlineAction = variant === "toast" || actionPlacement === "end" && (variant === "banner" || variant === "content");
   const usesToastDensity = variant === "toast" || Boolean(action);
   const actionElement = action ? (
     <div
       data-feedback-action
       className={cn(
         "flex flex-wrap gap-[var(--space-2)]",
-        inlineAction && "col-span-2 row-start-2 justify-self-end sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:justify-self-auto",
+        inlineAction && "status-feedback__action col-span-2 row-start-2 justify-self-end",
         !inlineAction && "mt-[var(--space-3)]",
         actionClasses[tone],
       )}
@@ -115,16 +115,20 @@ export function StatusFeedback({
       aria-live={variant === "toast" ? "polite" : undefined}
       aria-atomic={variant === "toast" ? "true" : undefined}
       className={cn(
-        inlineAction
-          ? "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-[var(--space-3)] border sm:grid-cols-[auto_minmax(0,1fr)_auto]"
-          : "flex items-center gap-[var(--space-3)] border",
-        usesToastDensity && "min-h-[68px] rounded-[var(--radius-md)] p-[var(--space-3)] shadow-[var(--shadow-feedback)]",
+        "status-feedback",
+        "border",
+        usesToastDensity && "rounded-[var(--radius-md)] p-[var(--space-3)] shadow-[var(--shadow-feedback)]",
+        usesToastDensity && (variant === "toast" ? "min-h-[48px]" : "min-h-[68px]"),
         variant === "banner" && !usesToastDensity && "rounded-[var(--radius-lg)] p-[var(--space-4)]",
         variant === "content" && !usesToastDensity && "rounded-[var(--radius-lg)] p-[var(--space-6)]",
         toneClasses[tone],
         className,
       )}
     >
+      <div className={cn(
+        "status-feedback__layout items-center gap-[var(--space-3)]",
+        inlineAction ? "grid grid-cols-[auto_minmax(0,1fr)]" : "flex",
+      )}>
       <span
         data-feedback-icon
         className={cn(
@@ -143,6 +147,7 @@ export function StatusFeedback({
         {!inlineAction && actionElement}
       </div>
       {inlineAction ? actionElement : null}
+      </div>
     </section>
   );
 }

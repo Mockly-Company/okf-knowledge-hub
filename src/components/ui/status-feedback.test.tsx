@@ -10,6 +10,11 @@ import {
 afterEach(cleanup);
 
 describe("StatusFeedback", () => {
+  it("places toast actions beside the message without changing banner defaults", () => {
+    render(<StatusFeedback variant="toast" tone="success" action={<Button>실행 취소</Button>}>변경을 취소했습니다.</StatusFeedback>);
+    expect(screen.getByRole("status")).toHaveAttribute("data-feedback-action-placement", "end");
+    expect(screen.getByRole("button", { name: "실행 취소" }).parentElement?.parentElement).toHaveClass("status-feedback__layout");
+  });
   it("uses a title and description hierarchy that matches the approved feedback surfaces", () => {
     render(
       <StatusFeedback variant="content" tone="error">
@@ -47,9 +52,8 @@ describe("StatusFeedback", () => {
     const toast = screen.getByRole("status");
     expect(toast).toHaveTextContent("로컬 저장됨");
     expect(toast).toHaveClass(
-      "min-h-[68px]",
+      "min-h-[48px]",
       "p-[var(--space-3)]",
-      "gap-[var(--space-3)]",
     );
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -103,14 +107,10 @@ describe("StatusFeedback", () => {
 
     const feedback = screen.getByText("디스크의 문서가 변경되었습니다.").closest("section");
     expect(feedback).toHaveAttribute("data-feedback-action-placement", "end");
-    expect(feedback).toHaveClass("sm:grid-cols-[auto_minmax(0,1fr)_auto]");
     expect(screen.getByRole("button", { name: "비교하기" }).parentElement).toHaveClass(
       "col-span-2",
       "row-start-2",
       "justify-self-end",
-      "sm:col-span-1",
-      "sm:col-start-3",
-      "sm:row-start-1",
     );
   });
 
@@ -193,7 +193,7 @@ describe("StatusFeedback", () => {
       </StatusFeedback>,
     );
 
-    expect(screen.getByText("GitHub 연결이 끊어졌습니다").closest("section")).toHaveClass(
+    expect(screen.getByText("GitHub 연결이 끊어졌습니다").closest(".status-feedback__layout")).toHaveClass(
       "items-center",
     );
   });

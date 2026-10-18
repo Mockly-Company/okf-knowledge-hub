@@ -26,9 +26,22 @@ export const FieldError: Story = {
 };
 
 export const SuccessToast: Story = {
-  render: () => <StatusFeedback className="!border-0" variant="toast" tone="success"><StatusFeedbackTitle>로컬에 저장됨</StatusFeedbackTitle><StatusFeedbackDescription>지도 검색 API 계약</StatusFeedbackDescription></StatusFeedback>,
+  render: () => <StatusFeedback variant="toast" tone="success"><StatusFeedbackTitle>로컬에 저장됨</StatusFeedbackTitle><StatusFeedbackDescription>지도 검색 API 계약</StatusFeedbackDescription></StatusFeedback>,
   play: async ({ canvas }) => {
-    await expect(canvas.getByRole("status")).toHaveClass("!border-0");
+    await expect(getComputedStyle(canvas.getByRole("status")).borderTopWidth).toBe("1px");
+  },
+};
+
+export const ToastWithAction: Story = {
+  render: () => <StatusFeedback variant="toast" tone="success" action={<Button variant="secondary">실행 취소</Button>}>변경을 취소했습니다.</StatusFeedback>,
+  play: async ({ canvas }) => {
+    const toast = canvas.getByRole("status");
+    const action = canvas.getByRole("button", { name: "실행 취소" });
+    await expect(getComputedStyle(action).borderTopWidth).toBe("0px");
+    await expect(toast.querySelector("[data-feedback-icon]")!.getBoundingClientRect().width).toBe(20);
+    const messageBox = canvas.getByText("변경을 취소했습니다.").getBoundingClientRect();
+    const actionBox = action.getBoundingClientRect();
+    await expect(Math.abs(messageBox.top + messageBox.height / 2 - actionBox.top - actionBox.height / 2)).toBeLessThan(2);
   },
 };
 

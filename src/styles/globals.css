@@ -58,6 +58,78 @@ select {
   outline: none;
 }
 
+.status-feedback {
+  container: feedback / inline-size;
+}
+
+.status-feedback__action {
+  max-width: 100%;
+}
+
+@container feedback (min-width: 40rem) {
+  [data-feedback-action-placement="end"] > .status-feedback__layout {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .status-feedback__action {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+
+.status-feedback[data-feedback-variant="toast"] {
+  container-type: normal;
+  border-color: var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-default);
+}
+
+[data-feedback-variant="toast"] > .status-feedback__layout {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}
+
+[data-feedback-variant="toast"] [data-feedback-icon] {
+  width: 20px;
+  height: 20px;
+  background: transparent;
+}
+
+[data-feedback-variant="toast"] [data-feedback-action] {
+  grid-column: 3;
+  grid-row: 1;
+  margin: 0 0 0 var(--space-2);
+}
+
+[data-feedback-variant="toast"] [data-feedback-action] :is(button, a) {
+  min-height: 32px;
+  height: auto;
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--color-primary-text);
+  font-weight: var(--font-weight-section-title);
+  white-space: nowrap;
+}
+
+[data-feedback-variant="toast"] [data-feedback-action] :is(button, a):hover {
+  background: var(--color-canvas);
+}
+
+@media (max-width: 360px) {
+  [data-feedback-variant="toast"] > .status-feedback__layout {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  [data-feedback-variant="toast"] [data-feedback-action] {
+    grid-column: 2;
+    grid-row: 2;
+    margin: 0;
+    justify-self: start;
+  }
+}
+
 @keyframes okhub-overlay-in {
   from { opacity: 0; }
   to { opacity: 1; }
