@@ -19,6 +19,12 @@
 .document-publication-dialog__tabs { gap: 0; flex-shrink: 0; }
 .document-publication-dialog__tabs button { padding-inline: var(--space-4); }
 .document-publication-dialog__preview-tabs { display: none; }
+.document-publication-dialog__intent { margin: 0; padding: 0; border: 0; }
+.document-publication-dialog__intent legend { margin-bottom: var(--space-2); color: var(--color-text-strong); font-weight: var(--font-weight-control); }
+.document-publication-dialog__intent > div { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.document-publication-dialog__intent label { display: inline-flex; align-items: center; gap: var(--space-2); min-height: var(--control-height); padding-right: var(--space-3); cursor: pointer; }
+.document-publication-dialog__intent input { width: 16px; height: 16px; accent-color: var(--color-primary-action); }
+.document-publication-dialog__intent input:focus-visible { outline: var(--focus-ring-width) solid var(--color-primary); outline-offset: 3px; }
 .document-publication-dialog__field { display: grid; gap: var(--space-2); }
 .document-publication-dialog__field label { color: var(--color-text-strong); font-weight: var(--font-weight-control); }
 .document-publication-dialog__field label span { color: var(--color-text-muted); font-weight: var(--font-weight-body); }

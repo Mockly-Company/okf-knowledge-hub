@@ -90,6 +90,11 @@ function editor(markdown: string): DocumentEditorState {
 }
 
 describe("DocumentDraftEditor", () => {
+  it("keeps publication entry available so review can be chosen inside", () => {
+    render(<DocumentDraftEditor editor={editor("# 작성 중")} publication={{ publishDisabledReason: "수정 내용을 먼저 검토 요청으로 공유해주세요." }} onMarkdownChange={() => {}} onModeChange={() => {}} onAcceptDisk={() => {}} onAcceptHub={() => {}} onStartMerge={() => {}} onClose={() => {}} />);
+    expect(screen.getByRole("button", { name: "발행" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "검토 요청" })).not.toBeInTheDocument();
+  });
   it("opens publication confirmation without changing the draft", async () => {
     const user = userEvent.setup(), change = vi.fn();
     render(<DocumentDraftEditor editor={editor("# 작성 중")} onMarkdownChange={change} onModeChange={() => {}} onAcceptDisk={() => {}} onAcceptHub={() => {}} onStartMerge={() => {}} onClose={() => {}} />);

@@ -26,6 +26,10 @@ export interface DocumentPublicationDialogProps {
   markdown: string;
   /** undefined = not loaded; null = a new document with no confirmed version. */
   baselineMarkdown?: string | null;
+  publishDisabledReason?: string;
+  reviewDisabledReason?: string;
+  reviewNotice?: string;
+  requiresCommitMessage?: boolean;
   onOpenChange(open: boolean): void;
   onSubmit?(request: DocumentPublicationRequest): Promise<void>;
 }
@@ -43,8 +47,9 @@ function SourceCell({ line, side, otherNumber }: { line: DocumentDiffLine | null
   </div>;
 }
 
-export function DocumentPublicationDialog({ open, intent, path, markdown, baselineMarkdown, onOpenChange, onSubmit }: DocumentPublicationDialogProps) {
+export function DocumentPublicationDialog({ open, intent: initialIntent, path, markdown, baselineMarkdown, publishDisabledReason, reviewDisabledReason, reviewNotice, requiresCommitMessage = true, onOpenChange, onSubmit }: DocumentPublicationDialogProps) {
   const id = useId();
+  const [intent, setIntent] = useState(initialIntent);
   const [view, setView] = useState<"source" | "preview">("source");
   const [previewSide, setPreviewSide] = useState<"before" | "after">("after");
   const [expanded, setExpanded] = useState(true);
@@ -56,19 +61,20 @@ export function DocumentPublicationDialog({ open, intent, path, markdown, baseli
   const added = rows.filter(row => row.after?.kind === "added").length;
   const removed = rows.filter(row => row.before?.kind === "removed").length;
   const available = Boolean(onSubmit) && baselineMarkdown !== undefined;
-  const canSubmit = available && !busy && Boolean(message.trim()) && added + removed > 0;
-  useEffect(() => { if (open) { setView("source"); setPreviewSide("after"); setExpanded(true); setError(false); } }, [open]);
+  const disabledReason = intent === "publish" ? publishDisabledReason : reviewDisabledReason;
+  const canSubmit = available && !busy && (!requiresCommitMessage || Boolean(message.trim())) && added + removed > 0 && !disabledReason;
+  useEffect(() => { if (open) { setIntent(initialIntent); setView("source"); setPreviewSide("after"); setExpanded(true); setError(false); } }, [open, initialIntent]);
 
   return <Dialog open={open} onOpenChange={next => { if (!busy) onOpenChange(next); }}>
     <DialogContent className="document-publication-dialog" aria-label={intent === "review" ? "검토 요청" : "발행"} onEscapeKeyDown={event => { if (busy) event.preventDefault(); }} onPointerDownOutside={event => { if (busy) event.preventDefault(); }}>
       <form className="document-publication-dialog__form" onSubmit={async event => {
         event.preventDefault(); if (!canSubmit || !onSubmit) return;
         setBusy(true); setError(false);
-        try { await onSubmit({ intent, path, markdown, message: message.trim(), reviewNote: intent === "review" ? reviewNote.trim() : "" }); onOpenChange(false); }
+        try { await onSubmit({ intent, path, markdown, message: requiresCommitMessage ? message.trim() : "", reviewNote: intent === "review" ? reviewNote.trim() : "" }); onOpenChange(false); }
         catch { setError(true); }
         finally { setBusy(false); }
       }}>
-        <DialogHeader><div><DialogTitle>{intent === "review" ? "검토 요청" : "발행"}</DialogTitle><DialogDescription>{intent === "review" ? "현재 문서를 GitHub PR로 공유합니다. 요청만으로 확정본이 바뀌지는 않습니다." : "변경 내용을 확인하고 변경 설명(커밋 메시지)을 작성해주세요."}</DialogDescription></div><DialogCloseButton label="변경 확인 닫기" disabled={busy} /></DialogHeader>
+        <DialogHeader><div><DialogTitle>{intent === "review" ? "검토 요청" : "발행"}</DialogTitle><DialogDescription>{intent === "review" ? "현재 문서를 GitHub PR로 공유합니다. 요청만으로 확정본이 바뀌지는 않습니다." : requiresCommitMessage ? "변경 내용을 확인하고 변경 설명(커밋 메시지)을 작성해주세요." : "공유된 변경 내용을 확인하고 발행해주세요."}</DialogDescription></div><DialogCloseButton label="변경 확인 닫기" disabled={busy} /></DialogHeader>
         <DialogBody className="document-publication-dialog__body">
           <TabsList className="document-publication-dialog__tabs" aria-label="변경 확인 방식"><TabsTrigger id={`${id}-source-tab`} aria-controls={`${id}-comparison`} selected={view === "source"} onClick={() => setView("source")}>원문 비교</TabsTrigger><TabsTrigger id={`${id}-preview-tab`} aria-controls={`${id}-comparison`} selected={view === "preview"} onClick={() => setView("preview")}>문서 미리보기</TabsTrigger></TabsList>
           <div id={`${id}-comparison`} role="tabpanel" aria-labelledby={`${id}-${view}-tab`}>
@@ -90,7 +96,13 @@ export function DocumentPublicationDialog({ open, intent, path, markdown, baseli
             </section>
           </div>
           {!available ? <p className="document-publication-dialog__notice">발행 기능이 아직 연결되지 않았습니다. 초안은 로컬에 유지됩니다.</p> : added + removed === 0 ? <p className="document-publication-dialog__notice">확정본과 다른 변경 내용이 없습니다.</p> : null}
-          <div className="document-publication-dialog__field"><label htmlFor={`${id}-message`}>변경 설명 <span>(필수)</span></label><Input id={`${id}-message`} value={message} onChange={event => setMessage(event.target.value)} placeholder="어떤 내용을 변경했나요?" required maxLength={120} disabled={busy} /></div>
+          <fieldset className="document-publication-dialog__intent" disabled={busy}>
+            <legend>진행 방식</legend>
+            <div><label><input type="radio" name={`${id}-intent`} checked={intent === "publish"} onChange={() => { setIntent("publish"); setError(false); }} />바로 발행</label><label><input type="radio" name={`${id}-intent`} checked={intent === "review"} onChange={() => { setIntent("review"); setError(false); }} />검토 요청</label></div>
+          </fieldset>
+          {disabledReason ? <StatusFeedback variant="content" tone="info">{disabledReason}</StatusFeedback> : null}
+          {intent === "review" && reviewNotice && !disabledReason ? <StatusFeedback variant="content" tone="info">{reviewNotice}</StatusFeedback> : null}
+          {requiresCommitMessage ? <div className="document-publication-dialog__field"><label htmlFor={`${id}-message`}>변경 설명 <span>(필수)</span></label><Input id={`${id}-message`} value={message} onChange={event => setMessage(event.target.value)} placeholder="어떤 내용을 변경했나요?" required maxLength={120} disabled={busy} /></div> : null}
           {intent === "review" ? <div className="document-publication-dialog__field"><label htmlFor={`${id}-note`}>검토 요청 메모 <span>(선택)</span></label><Textarea id={`${id}-note`} value={reviewNote} onChange={event => setReviewNote(event.target.value)} disabled={busy} placeholder="검토자가 확인할 내용을 적어주세요." /></div> : null}
           {error ? <StatusFeedback variant="content" tone="error">{intent === "review" ? "검토 요청" : "발행"} 결과를 확인하지 못했습니다. 초안과 변경 설명은 유지됩니다. 원격 상태를 확인한 뒤 다시 시도해주세요.</StatusFeedback> : null}
         </DialogBody>

@@ -48,10 +48,15 @@ import { DocumentCodeEditor, DocumentImageTools, RichEditorServices, codeEditorL
 interface DocumentDraftEditorProps {
   editor: DocumentEditorState;
   headerSecondary?: ReactNode;
+  headerMetadata?: ReactNode;
   readAsset?(documentPath: string, assetPath: string): Promise<DocumentAsset>;
   copyText?(value: string): Promise<void>;
   publication?: {
     baselineMarkdown?: string | null;
+    publishDisabledReason?: string;
+    reviewDisabledReason?: string;
+    reviewNotice?: string;
+    requiresCommitMessage?: boolean;
     onSubmit?(request: DocumentPublicationRequest): Promise<void>;
   };
   onMarkdownChange(markdown: string): void;
@@ -101,6 +106,7 @@ const editorTranslations: Record<string, string> = {
 export function DocumentDraftEditor({
   editor,
   headerSecondary,
+  headerMetadata,
   readAsset,
   copyText,
   publication,
@@ -154,12 +160,14 @@ export function DocumentDraftEditor({
               onMarkdownChange(updateDocumentTitle(editor.markdown, event.target.value))
             }
           />
-          <span>{editor.document.path}</span>
+          <div className="document-draft-editor__metadata" role="group" aria-label="문서 정보">
+            <span>{editor.document.path}</span>
+            {headerMetadata}
+          </div>
         </div>
         <div className="document-draft-editor__header-secondary">
           {headerSecondary}
           <div className="document-draft-editor__publish-actions">
-            <Button variant="secondary" onClick={() => openPublication("review")} disabled={Boolean(editor.conflict)}>검토 요청</Button>
             <Button onClick={() => openPublication("publish")} disabled={Boolean(editor.conflict)}>발행</Button>
           </div>
         </div>
@@ -272,8 +280,7 @@ export function DocumentDraftEditor({
           ]}
         /></RichEditorServices.Provider>
       )}
-      <p className="document-draft-editor__local-note">다른 화면으로 이동해도 초안은 유지됩니다. 발행 전까지 확정본은 바뀌지 않습니다.</p>
-      <DocumentPublicationDialog key={`publication-${editor.document.documentId}`} open={publicationOpen} onOpenChange={setPublicationOpen} intent={publicationSnapshot?.intent ?? "publish"} path={editor.document.path} markdown={publicationSnapshot?.markdown ?? editor.markdown} baselineMarkdown={publicationSnapshot?.baselineMarkdown} onSubmit={publication?.onSubmit} />
+      <DocumentPublicationDialog key={`publication-${editor.document.documentId}`} open={publicationOpen} onOpenChange={setPublicationOpen} intent={publicationSnapshot?.intent ?? "publish"} path={editor.document.path} markdown={publicationSnapshot?.markdown ?? editor.markdown} baselineMarkdown={publicationSnapshot?.baselineMarkdown} publishDisabledReason={publication?.publishDisabledReason} reviewDisabledReason={publication?.reviewDisabledReason} reviewNotice={publication?.reviewNotice} requiresCommitMessage={publication?.requiresCommitMessage} onSubmit={publication?.onSubmit} />
     </section>
   );
 }

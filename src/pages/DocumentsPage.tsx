@@ -1,5 +1,5 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ const DocumentDraftEditor = lazy(() =>
   ),
 );
 
-export function DocumentsPage() {
+export function DocumentsPage({ headerActions }: { headerActions?: ReactNode }) {
   const {
     state,
     authoringState,
@@ -176,6 +176,7 @@ export function DocumentsPage() {
         titleId="documents-title"
         title="Documents"
         description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
+        actions={headerActions}
       />
 
       {state.documentNotice ? (

@@ -11,6 +11,41 @@ function show(props: Partial<DocumentPublicationDialogProps> = {}) {
   return render(<DocumentsProvider gateway={new FakeDocumentsGateway()}><DocumentPublicationDialog {...defaults} {...props} /></DocumentsProvider>);
 }
 describe("DocumentPublicationDialog", () => {
+  it("does not require a new commit message when publishing an already shared snapshot", async () => {
+    const user = userEvent.setup(), submit = vi.fn().mockResolvedValue(undefined);
+    show({ requiresCommitMessage: false, onSubmit: submit });
+    expect(screen.queryByRole("textbox", { name: /변경 설명/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "발행하기" }));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ intent: "publish", message: "" }));
+  });
+  it("does not let an ended PR be reused as a successful review submission", async () => {
+    const user = userEvent.setup(), submit = vi.fn().mockResolvedValue(undefined);
+    show({ intent: "review", reviewDisabledReason: "종료된 PR은 갱신할 수 없습니다.", onSubmit: submit });
+    await user.type(screen.getByRole("textbox", { name: /변경 설명/ }), "새 변경");
+    expect(screen.getByRole("button", { name: "검토 요청 보내기" })).toBeDisabled();
+    expect(screen.getByText("종료된 PR은 갱신할 수 없습니다.")).toBeVisible();
+    expect(submit).not.toHaveBeenCalled();
+  });
+  it("blocks direct publication without blocking the review path", async () => {
+    const user = userEvent.setup(), submit = vi.fn().mockResolvedValue(undefined);
+    show({ onSubmit: submit, publishDisabledReason: "수정본을 먼저 검토 요청으로 공유해주세요." });
+    await user.type(screen.getByRole("textbox", { name: /변경 설명/ }), "수정본 공유");
+    expect(screen.getByRole("button", { name: "발행하기" })).toBeDisabled();
+    expect(screen.getByText("수정본을 먼저 검토 요청으로 공유해주세요.")).toBeVisible();
+    await user.click(screen.getByRole("radio", { name: "검토 요청" }));
+    expect(screen.queryByText("수정본을 먼저 검토 요청으로 공유해주세요.")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "검토 요청 보내기" }));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ intent: "review" }));
+  });
+  it("chooses review inside publication without losing the message", async () => {
+    const user = userEvent.setup(), submit = vi.fn().mockResolvedValue(undefined);
+    show({ onSubmit: submit });
+    await user.type(screen.getByRole("textbox", { name: /변경 설명/ }), "검토할 변경");
+    await user.click(screen.getByRole("radio", { name: "검토 요청" }));
+    expect(screen.getByRole("textbox", { name: /변경 설명/ })).toHaveValue("검토할 변경");
+    await user.click(screen.getByRole("button", { name: "검토 요청 보내기" }));
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({ intent: "review", message: "검토할 변경" }));
+  });
   it("keeps document identity visible when comparison is collapsed and preserves expansion across modes", async () => {
     const user = userEvent.setup(); show();
     const toggle = screen.getByRole("button", { name: /지도 API.*docs\/api.md/ });

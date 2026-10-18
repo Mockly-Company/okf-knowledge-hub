@@ -430,9 +430,19 @@
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: flex-end;
-  gap: var(--documents-space-component);
+  gap: var(--space-2);
   margin-inline-start: auto;
 }
+
+.document-draft-editor__metadata {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.document-draft-editor__metadata > span:first-child { overflow-wrap: anywhere; }
 
 .document-draft-editor__heading input {
   width: min(680px, 100%);
@@ -648,7 +658,7 @@
   }
 
   .document-draft-editor__header-secondary {
-    justify-content: space-between;
+    justify-content: flex-end;
   }
 }
 
