@@ -2,7 +2,7 @@ import { useLayoutEffect, type CSSProperties, type PropsWithChildren } from "rea
 import type { Meta, StoryObj } from "@storybook/react-vite";
 
 const meta = {
-  title: "Foundations/Typography",
+  id: "foundations-typography", title: "기초 스타일/타이포그래피",
   parameters: {
     layout: "fullscreen",
   },

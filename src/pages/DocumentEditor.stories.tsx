@@ -15,14 +15,15 @@ import { allEditorMarkdown, richEditorMarkdown } from "@/stories/fixtures/editor
 import { markdownFixtures } from "@/stories/fixtures/markdown";
 import { DocumentPublicationFlowPreview } from "@/stories/fixtures/DocumentPublicationFlowPreview";
 import type { PublicationReviewState, PublicationBlocker } from "@/stories/fixtures/document-publication-flow";
+import { documentCollaborationExample } from "@/stories/fixtures/document-collaboration-example";
 import "@/features/documents/documents.css";
 
-const markdown = "---\ntitle: 지도 검색 API 계약\n---\n\n# 지도 검색 API 계약\n\n검색어와 좌표를 전달해 장소 후보를 찾습니다.\n\n## 요청\n\n- 검색어\n- 위도와 경도\n\n## 응답\n\n장소 후보와 오류 정보를 반환합니다.";
+const markdown = documentCollaborationExample.proposal;
 const editor: DocumentEditorState = {
   document: { changeId: "change", documentId: "document", path: "docs/api/map-search.md", markdown, contentHash: "hash", draft: { workspaceId: "workspace", changeId: "change", authorLogin: "storybook-bot", baseCommit: "base", branch: "draft/storybook/map-search", createdAtUnixMs: 1, lastOpenedAtUnixMs: 1 } },
   markdown, savedMarkdown: markdown, contentHash: "hash", saveStatus: "saved", saveRequestId: null, saveSnapshot: null, conflict: null, error: null, mode: "rich", closeAfterSave: false,
 };
-const baselineMarkdown = markdown.replace("- 검색어", "- 검색어 (제한 없음)").replace("- 위도와 경도", "- 위도와 경도 (필수)");
+const baselineMarkdown = documentCollaborationExample.baseline;
 const newDocumentMarkdown = markdown.replaceAll("지도 검색 API 계약", "새 API 문서");
 const newDocumentEditor: DocumentEditorState = { ...editor, document: { ...editor.document, documentId: "new-document", path: "docs/api/new-api.md", markdown: newDocumentMarkdown }, markdown: newDocumentMarkdown, savedMarkdown: newDocumentMarkdown };
 
@@ -60,7 +61,7 @@ const reviewArgTypes = {
   reviewState: { name: "검토 상태", control: { type: "select", labels: { none: "없음 · 로컬 초안", pending: "검토 대기 중", changes_requested: "수정 요청됨", approved: "승인됨", merged: "발행 완료", closed: "검토 종료" } }, options: ["none", "pending", "changes_requested", "approved", "merged", "closed"], table: { disable: false } },
   unpublishedChanges: { name: "미공유 변경", control: "boolean", table: { disable: false } },
 } satisfies Story["argTypes"];
-const meta = { title: "Pages/DocumentEditor", component: EditorPreview,
+const meta = { id: "pages-documenteditor", title: "화면/문서/작성·편집", component: EditorPreview,
   argTypes: {
     mode: { table: { disable: true } }, error: { table: { disable: true } }, initialMarkdown: { table: { disable: true } },
     reviewState: { table: { disable: true } }, unpublishedChanges: { table: { disable: true } }, recoveryState: { table: { disable: true } }, newDocument: { table: { disable: true } }, publicationFailure: { table: { disable: true } }, publicationBlocker: { table: { disable: true } },
@@ -85,7 +86,7 @@ export const RichInteractionTest: Story = { ...Rich, tags: ["!dev", "!autodocs"]
   }
   await userEvent.clear(title);
   await userEvent.type(title, "지도 검색 API 계약 수정");
-  await expect(canvas.getByRole("status")).toHaveTextContent("자동 저장 대기중");
+  await expect(canvas.getByText("자동 저장 대기중", { exact: true })).toHaveAttribute("role", "status");
   await expect(await canvas.findByText("로컬에 자동 저장 완료")).toBeVisible();
   await userEvent.clear(title);
   await userEvent.type(title, "지도 검색 API 계약");

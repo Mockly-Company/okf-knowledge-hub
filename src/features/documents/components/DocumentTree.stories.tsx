@@ -19,7 +19,7 @@ function TreePreview({ selectedPath = null }: { selectedPath?: string | null }) 
 }
 
 const meta = {
-  title: "Documents/DocumentTree",
+  id: "documents-documenttree", title: "문서 컴포넌트/DocumentTree",
   component: TreePreview,
   parameters: { layout: "padded" },
 } satisfies Meta<typeof TreePreview>;

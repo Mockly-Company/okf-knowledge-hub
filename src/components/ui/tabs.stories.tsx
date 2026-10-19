@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect } from "storybook/test";
 import { TabsList, TabsTrigger } from "./tabs";
 
-const meta = { title: "UI/Tabs", component: TabsList, parameters: { layout: "centered" } } satisfies Meta<typeof TabsList>;
+const meta = { id: "ui-tabs", title: "UI 컴포넌트/Tabs", component: TabsList, parameters: { layout: "centered" } } satisfies Meta<typeof TabsList>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 

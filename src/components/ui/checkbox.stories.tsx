@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Checkbox } from "./checkbox";
 
-const meta = { title: "UI/Checkbox", component: Checkbox, parameters: { layout: "centered" } } satisfies Meta<typeof Checkbox>;
+const meta = { id: "ui-checkbox", title: "UI 컴포넌트/Checkbox", component: Checkbox, parameters: { layout: "centered" } } satisfies Meta<typeof Checkbox>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 

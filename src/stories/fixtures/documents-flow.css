@@ -1,0 +1,8 @@
+.documents-flow { height: 100%; min-height: 0; overflow: hidden; }
+.documents-flow > .documents-page { height: 100%; }
+.documents-flow__navigation { margin-bottom: var(--space-4); }
+.documents-flow__review { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-4); }
+.documents-flow__review > a { color: var(--color-primary); text-decoration: underline; text-underline-offset: 3px; font-size: var(--font-meta-size); }
+.documents-flow__draft { margin: 0 0 var(--space-4); color: var(--color-text-muted); font-size: var(--font-meta-size); }
+.documents-flow__recovery { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4); }
+.documents-flow__recovery p { margin: var(--space-2) 0 0; overflow-wrap: anywhere; color: var(--color-text-muted); }

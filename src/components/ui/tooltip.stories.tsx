@@ -5,7 +5,7 @@ import { IconButton } from "./button";
 import { Tooltip } from "./tooltip";
 
 const meta = {
-  title: "UI/Tooltip",
+  id: "ui-tooltip", title: "UI 컴포넌트/Tooltip",
   component: Tooltip,
   parameters: {
     layout: "centered",

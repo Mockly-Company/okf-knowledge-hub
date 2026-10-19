@@ -10,6 +10,7 @@ import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import "@/features/documents/documents.css";
+import type { DocumentSummary } from "@/features/documents/model";
 
 const DocumentDraftEditor = lazy(() =>
   import("@/features/documents/components/DocumentDraftEditor").then(
@@ -17,7 +18,7 @@ const DocumentDraftEditor = lazy(() =>
   ),
 );
 
-export function DocumentsPage({ headerActions }: { headerActions?: ReactNode }) {
+export function DocumentsPage({ headerActions, additionalDocuments = [] }: { headerActions?: ReactNode; additionalDocuments?: DocumentSummary[] }) {
   const {
     state,
     authoringState,
@@ -214,7 +215,7 @@ export function DocumentsPage({ headerActions }: { headerActions?: ReactNode }) 
       <div className="documents-page__tools">
         <DocumentSearch
           query={state.searchQuery}
-          documents={state.catalog.documents}
+          documents={[...state.catalog.documents.filter(document => !additionalDocuments.some(extra => extra.path === document.path)), ...additionalDocuments]}
           results={state.searchResults}
           searchStatus={state.searchStatus}
           searchError={state.searchError}

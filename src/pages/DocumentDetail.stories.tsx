@@ -10,7 +10,7 @@ const summary = documentFixtures.mapSearchApi();
 const document = markdownFixtures.referenceDocument();
 
 const meta = {
-  title: "Pages/DocumentDetail",
+  id: "pages-documentdetail", title: "화면/문서/상세",
   component: DocumentReader,
   parameters: {
     layout: "fullscreen",

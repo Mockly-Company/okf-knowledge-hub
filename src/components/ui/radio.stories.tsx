@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Radio } from "./radio";
 
-const meta = { title: "UI/Radio", component: Radio, parameters: { layout: "centered" } } satisfies Meta<typeof Radio>;
+const meta = { id: "ui-radio", title: "UI 컴포넌트/Radio", component: Radio, parameters: { layout: "centered" } } satisfies Meta<typeof Radio>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 

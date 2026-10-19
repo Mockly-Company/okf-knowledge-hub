@@ -15,7 +15,7 @@ function DemoRoutes() {
 }
 
 const disconnected = withAppProviders({ workspace: { currentWorkspace: null }, includeDocumentsProvider: false });
-const meta = { title: "Pages/WorkspaceConnection", component: WorkspaceConnectionPage, parameters: { layout: "fullscreen" } } satisfies Meta<StoryArgs>;
+const meta = { id: "pages-workspaceconnection", title: "화면/시작·연결", component: WorkspaceConnectionPage, parameters: { layout: "fullscreen" } } satisfies Meta<StoryArgs>;
 export default meta;
 type Story = StoryObj<StoryArgs>;
 export const Login: Story = { decorators: [withAppProviders({ workspace: { currentWorkspace: null, authState: { status: "signed_out" } }, includeDocumentsProvider: false })], play: async ({ canvas }) => { await expect(await canvas.findByRole("heading", { name: "GitHub에 연결" })).toBeVisible(); } };

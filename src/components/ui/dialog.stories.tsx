@@ -16,7 +16,7 @@ import {
 } from "./dialog";
 
 const meta = {
-  title: "UI/Dialog",
+  id: "ui-dialog", title: "UI 컴포넌트/Dialog",
   component: DialogContent,
   parameters: {
     layout: "centered",

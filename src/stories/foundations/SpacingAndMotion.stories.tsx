@@ -4,7 +4,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { Button } from "@/components/ui/button";
 
 const meta = {
-  title: "Foundations/Spacing & Motion",
+  id: "foundations-spacing-motion", title: "기초 스타일/간격·모션",
   parameters: {
     layout: "fullscreen",
   },

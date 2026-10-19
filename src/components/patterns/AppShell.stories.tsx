@@ -25,7 +25,7 @@ function ShellPreview() {
 }
 
 const meta = {
-  title: "Patterns/AppShell",
+  id: "patterns-appshell", title: "UI 컴포넌트/패턴/AppShell",
   component: AppShell,
   parameters: {
     layout: "fullscreen",

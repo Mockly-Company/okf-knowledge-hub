@@ -6,7 +6,7 @@ import { MermaidBlock } from "./MermaidBlock";
 import "../documents.css";
 
 const meta = {
-  title: "Documents/MermaidBlock",
+  id: "documents-mermaidblock", title: "문서 컴포넌트/MermaidBlock",
   component: MermaidBlock,
   parameters: { layout: "padded" },
   args: { source: mermaidFixtures.default },

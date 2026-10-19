@@ -1,5 +1,5 @@
 import { EllipsisVertical, PanelRightClose, PanelRightOpen } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button, IconButton } from "@/components/ui/button";
 import {
@@ -43,9 +43,17 @@ function lastModifiedSummary(document: DocumentContent): string {
 export function DocumentReader({
   document,
   notice,
+  headerMetadata,
+  navigation,
+  onEdit,
+  versionLabel,
 }: {
   document: DocumentContent;
   notice?: string | null;
+  headerMetadata?: ReactNode;
+  navigation?: ReactNode;
+  onEdit?(): void;
+  versionLabel?: string;
 }) {
   const {
     state,
@@ -115,6 +123,7 @@ export function DocumentReader({
         className={`document-reader__layout${contextCollapsed || isNarrow ? " document-reader__layout--context-collapsed" : ""}${isNarrow ? " document-reader__layout--narrow" : ""}`}
       >
         <div className="document-reader__canvas" tabIndex={0} role="region" aria-label="문서 읽기 영역">
+      {navigation}
       <header
         className="document-reader__header"
         ref={headerRef}
@@ -123,7 +132,7 @@ export function DocumentReader({
         <div className="document-reader__heading">
           <h1 id={readerTitleId}>{document.summary.title}</h1>
           <div className="document-reader__meta">
-            <p>확정본 · {branch}</p>
+            <p>{versionLabel ?? `확정본 · ${branch}`}</p>
             <small>{lastModifiedSummary(document)}</small>
           </div>
         </div>
@@ -131,7 +140,7 @@ export function DocumentReader({
           {state.selectedVersion === null ? (
             <Button
               disabled={authoringState.existingEdit.status === "opening"}
-              onClick={editSelectedDocument}
+              onClick={onEdit ?? editSelectedDocument}
             >
               {authoringState.existingEdit.status === "opening"
                 ? "편집 준비 중…"
@@ -182,6 +191,7 @@ export function DocumentReader({
           {isNarrow ? <IconButton ref={mobileTriggerRef} label="문서 문맥 펼치기" tooltip={false} aria-haspopup="dialog" aria-expanded={mobileContextOpen} onClick={() => { navigationTargetRef.current = null; setMobileContextOpen(true); }}><PanelRightOpen aria-hidden="true" /></IconButton> : null}
         </div>
       </header>
+      {headerMetadata}
       {notice ? (
         <div className="documents-page__notice" role="alert">
           <span>{notice}</span>

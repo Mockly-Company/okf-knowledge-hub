@@ -3,7 +3,7 @@ import { PagePlaceholder } from "./PagePlaceholder";
 import { withAppProviders } from "@/stories/decorators/AppProviders";
 
 const meta = {
-  title: "Patterns/PagePlaceholder",
+  id: "patterns-pageplaceholder", title: "UI 컴포넌트/패턴/PagePlaceholder",
   component: PagePlaceholder,
   decorators: [withAppProviders()],
   parameters: {

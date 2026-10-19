@@ -212,27 +212,7 @@
 
 .new-document-dialog__preview .markdown-document {
   padding: 0;
-  --font-h1-size: var(--font-section-size);
-  --font-h1-line: var(--font-section-line);
-  --font-document-h2-size: calc(var(--font-section-size) - 2px);
-  --font-document-h2-line: var(--font-group-line);
-  --font-document-h3-size: var(--font-group-size);
-  --font-document-h3-line: var(--font-group-line);
-  --font-document-h4-size: var(--font-group-size);
-  --font-document-h4-line: var(--font-group-line);
-  --font-document-h5-size: var(--font-meta-size);
-  --font-document-h5-line: var(--font-meta-line);
-  --font-document-h6-size: var(--font-meta-size);
-  --font-document-h6-line: var(--font-meta-line);
-  --font-document-size: var(--font-ui-size);
-  --font-document-line: var(--font-ui-line);
-  --documents-heading-flow: var(--space-4);
-  --documents-space-component: var(--space-3);
-  --document-prose-paragraph-gap: var(--space-3);
-}
-
-.new-document-dialog__preview .markdown-document :is(h2, h3, h4, h5, h6) {
-  margin-bottom: var(--space-2);
+  zoom: 0.8;
 }
 
 .new-document-dialog__preview-frame {
@@ -1232,6 +1212,7 @@
 .markdown-alert--note {
   --markdown-alert-color: var(--color-info);
   --markdown-alert-surface: var(--color-info-soft);
+  border-radius: var(--radius-lg);
 }
 
 .markdown-alert--tip {

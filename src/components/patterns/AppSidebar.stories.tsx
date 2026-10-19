@@ -14,7 +14,7 @@ function SidebarPreview() {
 }
 
 const meta = {
-  title: "Patterns/AppSidebar",
+  id: "patterns-appsidebar", title: "UI 컴포넌트/패턴/AppSidebar",
   component: AppSidebar,
   parameters: {
     layout: "fullscreen",

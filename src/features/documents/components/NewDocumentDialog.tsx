@@ -118,7 +118,7 @@ export function NewDocumentDialog({
         <section aria-label="템플릿 미리보기" className="new-document-dialog__preview">
           <h3>{example ? "작성 예시" : "템플릿 구조"}</h3>
           <p className="new-document-dialog__preview-note">
-            {example ? "가상 작성 예시입니다. 예시 내용은 생성되는 문서에 포함되지 않습니다." : "등록된 작성 예시가 없어 실제 템플릿 구조를 보여줍니다."}
+            {templateId === "builtin:blank" ? "제목만 포함된 빈 문서로 시작합니다." : example ? "가상 작성 예시입니다. 예시 내용은 생성되는 문서에 포함되지 않습니다." : "등록된 작성 예시가 없어 실제 템플릿 구조를 보여줍니다."}
           </p>
           <div className="new-document-dialog__preview-frame" role="group" aria-label="템플릿 본문 미리보기" tabIndex={0}>
           {selectedTemplate ? (

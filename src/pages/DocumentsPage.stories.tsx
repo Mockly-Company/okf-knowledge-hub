@@ -4,7 +4,7 @@ import { withAppProviders } from "@/stories/decorators/AppProviders";
 import { DocumentsPage } from "./DocumentsPage";
 
 const meta = {
-  title: "Pages/DocumentsPage",
+  id: "pages-documentspage", title: "화면/문서/목록",
   component: DocumentsPage,
   parameters: {
     layout: "fullscreen",

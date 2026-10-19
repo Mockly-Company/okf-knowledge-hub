@@ -3,7 +3,7 @@ import { expect, screen } from "storybook/test";
 import { Select, SelectOption } from "./select";
 
 const meta = {
-  title: "UI/Select",
+  id: "ui-select", title: "UI 컴포넌트/Select",
   component: Select,
   parameters: { layout: "centered" },
   args: { children: null },

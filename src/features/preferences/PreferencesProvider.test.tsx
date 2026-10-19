@@ -83,7 +83,7 @@ describe("PreferencesProvider", () => {
         <Probe />
       </PreferencesProvider>,
     );
-    expect(await screen.findByText("compact")).toBeInTheDocument();
+    expect(await screen.findByText("compact", { selector: "output" })).toBeInTheDocument();
     expect(document.documentElement).toHaveAttribute("data-density", "compact");
   });
 

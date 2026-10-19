@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { FormField } from "./FormField";
 
 const meta = {
-  title: "Patterns/FormField",
+  id: "patterns-formfield", title: "UI 컴포넌트/패턴/FormField",
   component: FormField,
   parameters: {
     layout: "centered",

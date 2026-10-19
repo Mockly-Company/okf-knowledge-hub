@@ -28,7 +28,7 @@ describe("MarkdownCodeBlock", () => {
     await user.tab();
     expect(screen.getByRole("button", { name: "코드 복사" })).toHaveFocus();
     await user.tab();
-    expect(screen.getByRole("region", { name: "코드 가로 스크롤" })).toHaveFocus();
+    expect(screen.getByRole("group", { name: "코드 가로 스크롤" })).toHaveFocus();
   });
 
   it("highlights a registered language and copies the unmodified source", async () => {

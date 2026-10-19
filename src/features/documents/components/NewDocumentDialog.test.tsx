@@ -51,6 +51,17 @@ function dialogState(): DocumentAuthoringState {
 }
 
 describe("NewDocumentDialog", () => {
+  it("previews only the entered title for a blank document", async () => {
+    const user = userEvent.setup();
+    render(<NewDocumentDialog state={dialogState()} onClose={() => undefined} onCreate={() => undefined} onUseSuggestion={() => undefined} onDuplicateTemplate={() => undefined} />);
+    const preview = within(screen.getByRole("region", { name: "템플릿 미리보기" }));
+    expect(preview.queryByRole("heading", { name: "작성 예시" })).not.toBeInTheDocument();
+    expect(preview.getByRole("heading", { name: "문서 제목" })).toBeVisible();
+    expect(preview.queryByRole("note")).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("제목"), "팀 운영 규칙");
+    expect(preview.getByRole("heading", { name: "팀 운영 규칙" })).toBeVisible();
+    expect(preview.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+  });
   it("derives a valid filename from dotted titles without altering the document title", async () => {
     const user = userEvent.setup(); const create = vi.fn();
     render(<NewDocumentDialog state={dialogState()} onClose={() => undefined} onCreate={create} onUseSuggestion={() => undefined} onDuplicateTemplate={() => undefined} />);
@@ -83,9 +94,10 @@ describe("NewDocumentDialog", () => {
     await user.click(screen.getByRole("combobox", { name: "템플릿" }));
     await user.click(await screen.findByRole("option", { name: /API 계약/ }));
     const preview = within(screen.getByRole("region", { name: "템플릿 미리보기" }));
-    expect(preview.getByRole("heading", { name: "지도 검색 API 계약" })).toBeVisible();
+    expect(preview.getByRole("heading", { name: "작업 생성 API 계약" })).toBeVisible();
     expect(preview.getByText(/예시 내용은 생성되는 문서에 포함되지 않습니다/)).toBeVisible();
-    expect(preview.getByRole("heading", { name: "GET /api/places" })).toBeVisible();
+    expect(preview.getByRole("heading", { name: "POST /api/tasks" })).toBeVisible();
+    expect(preview.getByRole("columnheader", { name: "필드" })).toBeVisible();
     await user.type(screen.getByLabelText("제목"), "내 API 문서");
     await user.click(screen.getByRole("button", { name: "문서 만들기" }));
     expect(create).toHaveBeenCalledWith({title: "내 API 문서", fileName: "내-api-문서.md",

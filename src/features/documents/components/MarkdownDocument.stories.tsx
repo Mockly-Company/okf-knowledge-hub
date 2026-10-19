@@ -24,7 +24,7 @@ function ReadyMarkdown(props: MarkdownDocumentProps) {
 }
 
 const meta = {
-  title: "Documents/MarkdownDocument",
+  id: "documents-markdowndocument", title: "문서 컴포넌트/MarkdownDocument",
   component: MarkdownDocument,
   parameters: { layout: "padded" },
   decorators: [(Story, context) => (
@@ -104,7 +104,7 @@ export const CodeAndTable: Story = {
     await expect(canvas.getByRole("button", { name: "복사됨" })).toBeVisible();
     const tableScroll = canvas.getByLabelText("표 가로 스크롤");
     await userEvent.tab();
-    await expect(canvas.getByRole("region", { name: "코드 가로 스크롤" })).toHaveFocus();
+    await expect(canvas.getByRole("group", { name: "코드 가로 스크롤" })).toHaveFocus();
     await userEvent.tab();
     await expect(tableScroll).toHaveFocus();
     await expect(getComputedStyle(tableScroll).outlineStyle).not.toBe("none");

@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 
 const meta = {
-  title: "Foundations/Color",
+  id: "foundations-color", title: "기초 스타일/색상",
   parameters: {
     layout: "fullscreen",
   },

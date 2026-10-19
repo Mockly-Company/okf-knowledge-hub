@@ -8,7 +8,7 @@ import {
 } from "./status-feedback";
 
 const meta = {
-  title: "UI/StatusFeedback",
+  id: "ui-statusfeedback", title: "UI 컴포넌트/StatusFeedback",
   component: StatusFeedback,
   parameters: { layout: "padded" },
   args: {

@@ -105,7 +105,7 @@ export function MarkdownCodeBlock({
           {copied ? "복사됨" : "코드 복사"}
         </Button>
       </header>
-      <div className="markdown-code-block__scroll" tabIndex={0} role="region" aria-label="코드 가로 스크롤">
+      <div className="markdown-code-block__scroll" tabIndex={0} role="group" aria-label="코드 가로 스크롤">
         <pre><code className="markdown-code-block__code">{highlightedSource(source, language, searchMatch)}</code></pre>
       </div>
     </section>

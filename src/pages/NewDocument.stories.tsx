@@ -4,7 +4,7 @@ import { DocumentsPage } from "./DocumentsPage";
 import { withAppProviders } from "@/stories/decorators/AppProviders";
 import { PageStoryFrame } from "@/stories/decorators/PageStoryFrame";
 
-const meta = { title: "Pages/NewDocument", component: DocumentsPage, parameters: { layout: "fullscreen" }, decorators: [withAppProviders({ router: { initialEntries: ["/documents"] } })], render: () => <PageStoryFrame><DocumentsPage /></PageStoryFrame> } satisfies Meta<typeof DocumentsPage>;
+const meta = { id: "pages-newdocument", title: "화면/문서/새 문서", component: DocumentsPage, parameters: { layout: "fullscreen" }, decorators: [withAppProviders({ router: { initialEntries: ["/documents"] } })], render: () => <PageStoryFrame><DocumentsPage /></PageStoryFrame> } satisfies Meta<typeof DocumentsPage>;
 export default meta;
 export const Default: StoryObj<typeof meta> = { play: async ({ canvas, userEvent }) => {
   const buttons = await canvas.findAllByRole("button", { name: "새 문서" });
@@ -24,13 +24,17 @@ export const Default: StoryObj<typeof meta> = { play: async ({ canvas, userEvent
   await userEvent.click(dialog.getByRole("combobox", { name: "템플릿" }));
   await userEvent.click(await screen.findByRole("option", { name: /API 계약/ }));
   const preview = dialog.getByRole("region", { name: "템플릿 미리보기" });
-  await expect(within(preview).getByRole("heading", { name: "지도 검색 API 계약" })).toBeVisible();
+  await expect(within(preview).getByRole("heading", { name: "작업 생성 API 계약" })).toBeVisible();
   await expect(within(preview).getByRole("heading", { name: "공통 계약" })).toBeVisible();
   const frame = dialog.getByRole("group", { name: "템플릿 본문 미리보기" });
   await expect(getComputedStyle(frame).overflowY).toBe("auto");
   await expect(parseFloat(getComputedStyle(frame).borderTopWidth)).toBe(1);
   await expect(frame).toHaveAttribute("tabindex", "0");
-  await expect(parseFloat(getComputedStyle(within(preview).getByRole("heading", { name: "지도 검색 API 계약" })).fontSize)).toBeLessThan(28);
+  const commonH2Size = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--font-document-h2-size"));
+  await expect(parseFloat(getComputedStyle(within(preview).getByRole("heading", { name: "공통 계약" })).fontSize)).toBe(commonH2Size);
+  const previewHeading = within(preview).getByRole("heading", { name: "공통 계약" });
+  const renderedLineHeight = previewHeading.getBoundingClientRect().height;
+  await expect(Math.abs(renderedLineHeight - parseFloat(getComputedStyle(previewHeading).lineHeight) * 0.8)).toBeLessThan(1);
   const left = title.getBoundingClientRect();
   const right = preview.getBoundingClientRect();
   if (window.innerWidth > 800) {
@@ -40,6 +44,8 @@ export const Default: StoryObj<typeof meta> = { play: async ({ canvas, userEvent
   }
   await userEvent.click(dialog.getByRole("combobox", { name: "템플릿" }));
   await userEvent.click(await screen.findByRole("option", { name: /빈 문서/ }));
+  await expect(within(preview).queryByRole("note")).not.toBeInTheDocument();
+  await expect(within(preview).getByRole("heading", { name: "지도 API" })).toBeVisible();
   await userEvent.clear(title);
   await userEvent.click(folder);
   await userEvent.click(await screen.findByRole("menuitemradio", {name: "api"}));

@@ -18,7 +18,7 @@ activeDraftState.drafts = [
 activeDraftState.activeChangeId = "storybook-draft-map-search";
 
 const meta = {
-  title: "Documents/DocumentDraftSwitcher",
+  id: "documents-documentdraftswitcher", title: "문서 컴포넌트/DocumentDraftSwitcher",
   component: DocumentDraftSwitcher,
   parameters: { layout: "padded" },
 } satisfies Meta<typeof DocumentDraftSwitcher>;

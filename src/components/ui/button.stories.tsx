@@ -4,7 +4,7 @@ import { Settings } from "lucide-react";
 import { expect, screen, waitFor } from "storybook/test";
 import { Button, IconButton } from "./button";
 
-const meta = { title: "UI/Button", component: Button, parameters: { layout: "centered" } } satisfies Meta<typeof Button>;
+const meta = { id: "ui-button", title: "UI 컴포넌트/Button", component: Button, parameters: { layout: "centered" } } satisfies Meta<typeof Button>;
 export default meta;
 type Story = StoryObj<typeof meta>;
 

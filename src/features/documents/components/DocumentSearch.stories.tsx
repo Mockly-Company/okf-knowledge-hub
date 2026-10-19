@@ -14,7 +14,7 @@ const document: DocumentSummary = {
 };
 
 const meta = {
-  title: "Documents/DocumentSearch",
+  id: "documents-documentsearch", title: "문서 컴포넌트/DocumentSearch",
   component: DocumentSearch,
   parameters: { layout: "padded" },
   args: {

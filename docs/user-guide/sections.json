@@ -1,0 +1,5 @@
+[
+  { "id": "start", "label": "시작하기", "file": "getting-started.md" },
+  { "id": "documents", "label": "문서", "file": "documents.md" },
+  { "id": "projects", "label": "프로젝트", "file": "projects.md" }
+]
