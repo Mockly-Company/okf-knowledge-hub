@@ -1,4 +1,8 @@
 import "@testing-library/jest-dom/vitest";
+import { configure } from "@testing-library/react";
+
+// Cold lazy editor imports can exceed the default one-second query window on CI.
+configure({ asyncUtilTimeout: 5_000 });
 
 if (!globalThis.ResizeObserver) {
   globalThis.ResizeObserver = class ResizeObserver {

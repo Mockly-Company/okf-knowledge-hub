@@ -95,7 +95,7 @@ describe("Storybook app frame", () => {
     await user.click(within(screen.getByRole("navigation", { name: "앱 탐색" })).getByRole("button", { name: "Home" }));
     await user.click(within(screen.getByRole("navigation", { name: "앱 탐색" })).getByRole("button", { name: "Documents" }));
     await user.click(within(screen.getByRole("main")).getByRole("button", { name: /유지할 문서/ }));
-    await user.click(screen.getByRole("button", { name: "편집" }));
-    expect(screen.getByRole("textbox", { name: "Markdown 원문" })).toHaveValue("# 유지할 문서\n\n작성 중인 내용");
+    await user.click(await screen.findByRole("button", { name: "편집" }));
+    expect(await screen.findByRole("textbox", { name: "Markdown 원문" })).toHaveValue("# 유지할 문서\n\n작성 중인 내용");
   });
 });

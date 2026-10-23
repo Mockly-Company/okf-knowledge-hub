@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const globalsCss = readFileSync(
   resolve(process.cwd(), "src/styles/globals.css"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 function declarationBlock(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

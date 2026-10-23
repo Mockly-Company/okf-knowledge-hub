@@ -8,6 +8,7 @@ const sourceRoot = resolve(process.cwd(), "src");
 describe("component contract", () => {
   it("routes product buttons through shared UI primitives", () => {
     const violations = globSync("**/*.tsx", { cwd: sourceRoot })
+      .map((path) => path.replace(/\\/g, "/"))
       .filter((path) => !path.startsWith("components/ui/") && !path.endsWith(".test.tsx"))
       .filter((path) => readFileSync(resolve(sourceRoot, path), "utf8").includes("<button"));
 

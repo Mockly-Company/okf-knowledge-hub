@@ -17,7 +17,7 @@ describe("connected document Storybook flow", () => {
   it("switches between the confirmed document and the same retained change above the title", async () => {
     const user = userEvent.setup(); show();
     await user.click(await screen.findByRole("button", { name: /지도 검색 API 계약/ }));
-    const picker = screen.getByRole("combobox", { name: "문서 작업 전환" });
+    const picker = await screen.findByRole("combobox", { name: "문서 작업 전환" });
     const title = screen.getByRole("heading", { level: 1, name: "지도 검색 API 계약" });
     expect(picker.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await user.click(picker);

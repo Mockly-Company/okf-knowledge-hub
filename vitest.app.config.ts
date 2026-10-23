@@ -19,5 +19,8 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     css: true,
+    // Rich-editor journeys compete for CPU and module transforms in small CI runners.
+    fileParallelism: false,
+    testTimeout: 15_000,
   },
 });
