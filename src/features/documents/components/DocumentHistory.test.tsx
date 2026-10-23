@@ -99,6 +99,8 @@ describe("DocumentHistory", () => {
       ),
     );
     expect(await screen.findByText(/과거 버전/)).toBeVisible();
+    expect(screen.getByText("커밋 · aabbccd")).toBeVisible();
+    expect(screen.queryByText("확정본 · main")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "현재 문서로 돌아가기" }));
     await waitFor(() =>
       expect(gateway.calls.filter((call) => call.method === "readDocument")).toHaveLength(2),

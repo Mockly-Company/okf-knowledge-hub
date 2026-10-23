@@ -73,8 +73,16 @@ function invalidFrontmatterDocument(): DocumentContent {
   };
 }
 
-function renderSelectedDocument(document = invalidFrontmatterDocument()) {
+function renderSelectedDocument(document = invalidFrontmatterDocument(), localDraft = false) {
   const gateway = new FakeDocumentsGateway();
+  if (localDraft) {
+    gateway.sessionSnapshot.branch = "draft/hyeeun/local-guide";
+    gateway.drafts = [{
+      workspaceId: gateway.sessionSnapshot.workspaceId,
+      changeId: "local-guide", authorLogin: "hyeeun", baseCommit: "abc123",
+      branch: gateway.sessionSnapshot.branch, createdAtUnixMs: 1, lastOpenedAtUnixMs: 2,
+    }];
+  }
   gateway.sessionSnapshot.lastOpenedPath = document.summary.path;
   gateway.sessionSnapshot.catalog = {
     documents: [document.summary],
@@ -94,6 +102,10 @@ function renderSelectedDocument(document = invalidFrontmatterDocument()) {
 }
 
 describe("DocumentReader", () => {
+  it.each([false, true])("labels the active document source accurately (local draft: %s)", async (localDraft) => {
+    renderSelectedDocument(invalidFrontmatterDocument(), localDraft);
+    expect(await screen.findByText(localDraft ? "로컬 초안 · draft/hyeeun/local-guide" : "확정본 · main")).toBeVisible();
+  });
   it("hides narrow-screen context until requested and closes it on Escape or TOC selection", async () => {
     vi.stubGlobal("matchMedia", () => ({matches: true, addEventListener() {}, removeEventListener() {}}));
     const user = userEvent.setup();

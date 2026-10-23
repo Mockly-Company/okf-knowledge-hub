@@ -496,6 +496,38 @@ describe("DocumentsProvider", () => {
     });
   });
 
+  it.each([false, true])("preserves dirty edits when selecting another document (save fails: %s)", async (saveFails) => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const user = userEvent.setup();
+    renderProvider(gateway, [SESSION_ID, SEARCH_ONE_ID, SEARCH_TWO_ID,
+      "5b0df17a-c57d-4e5c-a945-a88f9dbfd6a4",
+      "632af6ac-8034-4d83-ac65-8dc43cc306c2"], 60_000);
+    await waitFor(() => expect(screen.getByTestId("templates")).toHaveTextContent("9"));
+    await user.click(screen.getByRole("button", { name: "new-document" }));
+    await user.click(screen.getByRole("button", { name: "create-document" }));
+    await waitFor(() => expect(screen.getByTestId("editor-path")).not.toHaveTextContent("none"));
+    const editorPath = screen.getByTestId("editor-path").textContent;
+    const selectedPath = screen.getByTestId("selected").textContent;
+    await user.click(screen.getByRole("button", { name: "edit-document" }));
+    if (saveFails) vi.spyOn(gateway, "saveDocumentDraft").mockRejectedValue(new Error("disk full"));
+    gateway.calls.length = 0;
+    await user.click(screen.getByRole("button", { name: "open-api" }));
+    if (saveFails) {
+      await waitFor(() => expect(screen.getByTestId("save-status")).toHaveTextContent("error"));
+      expect(screen.getByTestId("editor-path")).toHaveTextContent(editorPath!);
+      expect(screen.getByTestId("selected")).toHaveTextContent(selectedPath!);
+    } else {
+      await waitFor(() => expect(screen.getByTestId("editor-path")).toHaveTextContent("none"));
+      expect(screen.getByTestId("selected")).toHaveTextContent("docs/api.md");
+      const saveIndex = gateway.calls.findIndex(call => call.method === "saveDocumentDraft");
+      const readIndex = gateway.calls.findIndex(call => call.method === "readDocument");
+      expect(saveIndex).toBeGreaterThanOrEqual(0);
+      expect(readIndex).toBeGreaterThan(saveIndex);
+      expect(gateway.calls[saveIndex]?.args[0]).toMatchObject({ markdown: "# changed" });
+    }
+  });
+
   it("flushes and closes the current editor before showing Documents home", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.sessionSnapshot.lastOpenedPath = "docs/guide.md";

@@ -838,15 +838,19 @@ export function DocumentsProvider({
     ) => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null) return;
-      dispatchAccepted({
-        type: "documentSelectionRequested",
-        sessionId,
-        requestId: createId(),
-        path,
-        searchMatch,
-      });
+      void (async () => {
+        if (!(await flushCurrentEditor()) || stateRef.current.activeSessionId !== sessionId) return;
+        dispatchAuthoringAccepted({ type: "editorCloseRequested" });
+        dispatchAccepted({
+          type: "documentSelectionRequested",
+          sessionId,
+          requestId: createId(),
+          path,
+          searchMatch,
+        });
+      })();
     },
-    [createId, dispatchAccepted],
+    [createId, dispatchAccepted, dispatchAuthoringAccepted, flushCurrentEditor],
   );
 
   const retrySession = useCallback(() => {

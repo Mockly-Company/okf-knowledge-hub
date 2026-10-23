@@ -7,6 +7,12 @@ import {
 } from "./document-markdown";
 
 describe("document Markdown authoring", () => {
+  it.each(["cost $&", "cost $1", "cost $$", "cost $`", "cost $'"])("preserves replacement tokens literally in title %s", (title) => {
+    const markdown = '---\ntitle: "Before"\n---\n\n# Before\n\nBody';
+    const updated = updateDocumentTitle(markdown, title);
+    expect(updated).toBe(`---\ntitle: ${JSON.stringify(title)}\n---\n\n# ${title}\n\nBody`);
+    expect(documentTitle(updated)).toBe(title);
+  });
   it("keeps frontmatter title and the first H1 linked while they match", () => {
     const markdown = '---\nokf_hub_id: "id"\ntitle: "이전 제목"\n---\n\n# 이전 제목\n\n본문';
     expect(updateDocumentTitle(markdown, "새 제목")).toContain(

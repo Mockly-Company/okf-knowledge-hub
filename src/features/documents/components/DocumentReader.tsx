@@ -82,6 +82,9 @@ export function DocumentReader({
     previousCollapsed.current = contextCollapsed;
   }, [contextCollapsed]);
   const branch = state.branch ?? "main";
+  const sourceLabel = state.selectedVersion
+    ? `커밋 · ${state.selectedVersion.commitOid.slice(0, 7)}`
+    : `${authoringState.activeChangeId === null ? "확정본" : "로컬 초안"} · ${branch}`;
   const githubUrl = `https://github.com/${state.repositoryFullName}/blob/${branch}/${encodeURIComponent(document.summary.path)}`;
   const firstTocEntry = document.tableOfContents[0];
   const readerTitleId =
@@ -132,7 +135,7 @@ export function DocumentReader({
         <div className="document-reader__heading">
           <h1 id={readerTitleId}>{document.summary.title}</h1>
           <div className="document-reader__meta">
-            <p>{versionLabel ?? `확정본 · ${branch}`}</p>
+            <p>{versionLabel ?? sourceLabel}</p>
             <small>{lastModifiedSummary(document)}</small>
           </div>
         </div>

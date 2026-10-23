@@ -162,9 +162,13 @@ test("sidebar changes from reserved column to overlay at 1023px", async ({ page 
   await expect(sidebar).toBeVisible();
   for (const width of [1440, 1024, 1023, 768, 720]) {
     await page.setViewportSize({ width, height: 768 });
-    const main = await page.getByRole('main', { name: '작업 공간' }).boundingBox();
+    // The modal drawer intentionally hides the background from accessibility queries.
+    const mainRegion = page.getByRole('main', { name: '작업 공간', includeHidden: true });
     if (width >= 1024) {
+      await expect(sidebar).toBeVisible();
       const navigation = await sidebar.boundingBox();
+      await expect.poll(async () => (await mainRegion.boundingBox())?.x).toBe(navigation!.width);
+      const main = await mainRegion.boundingBox();
       expect(navigation!.width).toBe(264);
       expect(main!.x).toBe(navigation!.width);
     } else {
@@ -172,6 +176,8 @@ test("sidebar changes from reserved column to overlay at 1023px", async ({ page 
       await page.getByRole('button', { name: '탐색 메뉴 열기' }).click();
       const drawer = page.getByRole('dialog', { name: '탐색 메뉴' });
       await expect(drawer).toHaveCSS('position', 'fixed');
+      await expect.poll(async () => (await mainRegion.boundingBox())?.x).toBe(0);
+      const main = await mainRegion.boundingBox();
       expect(main!.x).toBe(0);
       expect(main!.width).toBe(width);
       await page.keyboard.press('Escape');

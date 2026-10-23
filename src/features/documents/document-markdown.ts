@@ -27,11 +27,11 @@ export function updateDocumentTitle(markdown: string, nextTitle: string): string
   const normalized = nextTitle.normalize("NFC");
   let updated = markdown.replace(
     /^(---\r?\n[\s\S]*?^title:)\s*.+$/m,
-    `$1 ${quotedYaml(normalized)}`,
+    (_match, prefix: string) => `${prefix} ${quotedYaml(normalized)}`,
   );
   const firstHeading = updated.match(/^#[\t ]+([^\r\n]*)$/m);
   if (firstHeading?.[1]?.trim() === previousTitle.trim()) {
-    updated = updated.replace(/^#[\t ]+[^\r\n]*$/m, `# ${normalized}`);
+    updated = updated.replace(/^#[\t ]+[^\r\n]*$/m, () => `# ${normalized}`);
   }
   return updated;
 }
