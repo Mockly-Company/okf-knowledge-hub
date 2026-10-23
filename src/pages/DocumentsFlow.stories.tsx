@@ -64,8 +64,8 @@ export const DiscardJourneyTest: Story = {
   tags: ["!dev", "!autodocs"],
   play: async ({ canvas, canvasElement, userEvent }) => {
     await userEvent.click(await canvas.findByRole("button", { name: /지도 검색 API 계약/ }));
-    await userEvent.click(canvas.getByRole("button", { name: "편집" }));
-    await userEvent.click(canvas.getByRole("button", { name: "변경 취소" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "편집" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "변경 취소" }));
     const page = within(canvasElement.ownerDocument.body);
     const confirmation = within(await page.findByRole("dialog", { name: "변경 내용을 버릴까요?" }));
     await userEvent.click(confirmation.getByRole("button", { name: "변경 버리기" }));
