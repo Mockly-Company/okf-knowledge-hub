@@ -23,7 +23,7 @@ async function startDownload(outcome: "success" | "failure") {
 describe("Storybook download simulation", () => {
   it("finishes the download through workspace validation and the real Home route", async () => {
     await startDownload("success");
-    expect(await screen.findByRole("heading", { name: "프로젝트 진행 상황", level: 1 }, { timeout: 3000 })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "내 작업", level: 1 }, { timeout: 3000 })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "로컬 연결" })).not.toBeInTheDocument();
   });
   it("shows a recoverable failure and permits another download attempt", async () => {

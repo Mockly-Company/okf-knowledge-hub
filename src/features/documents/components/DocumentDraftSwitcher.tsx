@@ -21,7 +21,11 @@ export function DocumentDraftSwitcher({ state, onSwitch }: DocumentDraftSwitcher
           <SelectOption
             key={draft.changeId}
             value={draft.changeId}
-            description={draft.branch}
+            description={
+              <span className="document-draft-switcher__branch" title={draft.branch}>
+                {draft.branch}
+              </span>
+            }
           >
             변경 작업
           </SelectOption>

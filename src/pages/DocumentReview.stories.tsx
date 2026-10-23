@@ -28,6 +28,53 @@ type Story = StoryObj<typeof meta>;
 
 export const Default: Story = { name: "문서 리뷰" };
 
+export const ReviewToastPlacementTest: Story = {
+  name: "리뷰 완료 알림이 제출 버튼을 가리지 않는지 테스트", tags: ["!dev", "!autodocs"],
+  play: async ({ canvas, canvasElement }) => {
+    const trigger = canvas.queryByRole("button", { name: "리뷰 열기" });
+    if (trigger) await userEvent.click(trigger);
+    const page = within(canvasElement.ownerDocument.body);
+    await userEvent.click(page.getByRole("radio", { name: "승인" }));
+    const submit = page.getByRole("button", { name: "리뷰 제출" });
+    await userEvent.click(submit);
+    const toast = await page.findByRole("status");
+    submit.scrollIntoView({ block: "end" });
+    const toastBox = toast.getBoundingClientRect();
+    const submitBox = submit.getBoundingClientRect();
+    await expect(toastBox.top).toBeLessThan(window.innerHeight / 2);
+    if (!trigger) {
+      const panelBox = canvas.getByRole("complementary", { name: "리뷰 패널" }).getBoundingClientRect();
+      await expect(Math.abs(toastBox.right - panelBox.right)).toBeLessThanOrEqual(1);
+      await expect(Math.abs(toastBox.top - panelBox.top)).toBeLessThanOrEqual(1);
+    }
+    await expect(toastBox.bottom <= submitBox.top || toastBox.top >= submitBox.bottom || toastBox.right <= submitBox.left || toastBox.left >= submitBox.right).toBe(true);
+  },
+};
+
+export const ScrollbarLayoutTest: Story = {
+  name: "리뷰 스크롤바 여백·자동 숨김 테스트", tags: ["!dev", "!autodocs"],
+  play: async ({ canvas, canvasElement }) => {
+    const trigger = canvas.queryByRole("button", { name: "리뷰 열기" });
+    if (trigger) await userEvent.click(trigger);
+    const regions = trigger
+      ? [canvasElement.ownerDocument.querySelector<HTMLElement>(".document-review__drawer-scroll")!]
+      : [...canvasElement.querySelectorAll<HTMLElement>(".document-review__canvas, .document-review__panel-scroll")];
+    for (const region of regions) {
+      const documentPane = region.classList.contains("document-review__canvas");
+      if (documentPane) await expect(parseFloat(getComputedStyle(region).paddingRight)).toBeGreaterThanOrEqual(12);
+      else await expect(parseFloat(getComputedStyle(region).paddingRight)).toBe(0);
+      const content = region.querySelector<HTMLElement>(".document-review__panel-content, .document-review__body")!;
+      await expect(region.getBoundingClientRect().right - content.getBoundingClientRect().right).toBeGreaterThanOrEqual(documentPane ? 12 : region.offsetWidth - region.clientWidth);
+      const width = region.clientWidth;
+      const idleColor = getComputedStyle(region).scrollbarColor;
+      region.dispatchEvent(new Event("scroll"));
+      await waitFor(() => expect(getComputedStyle(region).scrollbarColor).not.toBe(idleColor));
+      await expect(region.clientWidth).toBe(width);
+      await waitFor(() => expect(getComputedStyle(region).scrollbarColor).toBe(idleColor));
+    }
+  },
+};
+
 export const ReviewInteractionTest: Story = {
   name: "리뷰 보기 전환과 수정 요청 자동 테스트", tags: ["!dev", "!autodocs"],
   play: async ({ canvas, canvasElement }) => {

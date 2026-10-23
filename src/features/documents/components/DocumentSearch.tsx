@@ -47,13 +47,11 @@ function HighlightedSnippet({ snippet, matchText }: Pick<SearchResult, "snippet"
   );
 }
 
-function IndexNotice({ status }: { status: IndexStatus }) {
-  if (status.status !== "preparing") return null;
-  const progress = status.total > 0 ? ` ${status.indexed}/${status.total}` : "";
+function matchesTitleOrPath(document: DocumentSummary, query: string) {
+  const normalizedQuery = query.toLocaleLowerCase();
   return (
-    <p className="document-search__index-status" role="status">
-      본문 검색을 준비하는 중…{progress}
-    </p>
+    document.title.toLocaleLowerCase().includes(normalizedQuery) ||
+    document.path.toLocaleLowerCase().includes(normalizedQuery)
   );
 }
 
@@ -63,7 +61,6 @@ export function DocumentSearch({
   results,
   searchStatus,
   searchError,
-  indexStatus,
   onQueryChange,
   onSelectDocument,
   onSelectResult,
@@ -73,7 +70,21 @@ export function DocumentSearch({
   const isSearching = query.trim().length > 0;
   const isAwaitingSearch =
     isSearching && searchStatus !== "ready" && searchStatus !== "error";
-  const items = isSearching ? results : documents;
+  const bodySearchUnavailable =
+    isSearching &&
+    searchStatus === "error" &&
+    searchError?.code === "document_index_unavailable";
+  const searchFailed =
+    isSearching && searchStatus === "error" && searchError !== null && !bodySearchUnavailable;
+  const titleAndPathMatches = isSearching
+    ? documents.filter((document) => matchesTitleOrPath(document, query))
+    : documents;
+  const items =
+    !isSearching || searchStatus === "ready"
+      ? isSearching ? results : documents
+      : searchFailed
+        ? []
+        : titleAndPathMatches;
 
   return (
     <section
@@ -95,10 +106,8 @@ export function DocumentSearch({
         {toolbarAction}
       </div>
 
-      <IndexNotice status={indexStatus} />
-
       <div className="document-search__results">
-        {isSearching && searchStatus === "error" && searchError ? (
+        {searchFailed ? (
           <StatusFeedback
             variant="content"
             tone="error"
@@ -109,7 +118,7 @@ export function DocumentSearch({
             </Button>
           ) : undefined}
           >
-            <p>{searchError.message}</p>
+            <p>검색 결과를 불러오지 못했습니다.</p>
           </StatusFeedback>
         ) : isAwaitingSearch && items.length === 0 ? null : items.length === 0 ? (
           <p className="document-search__empty">

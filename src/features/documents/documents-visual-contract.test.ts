@@ -47,7 +47,9 @@ describe("Documents visual contract", () => {
     expect(edges).toContain("fill: none");
     expect(edges).toContain("stroke: var(--color-border-strong)");
     expect(edges).toContain("stroke-width: 1px");
-    expect(declarationBlock(".mermaid-theme marker .arrowMarkerPath")).toContain("fill: var(--color-primary)");
+    expect(declarationBlock(".mermaid-theme marker .arrowMarkerPath")).toContain("fill: var(--color-text-muted)");
+    expect(declarationBlock(".mermaid-theme .node .label text")).toContain("text-anchor: middle");
+    expect(declarationBlock(".mermaid-theme .node.emphasis .label-container")).toContain("fill: var(--color-primary-soft)");
     expect(declarationBlock(".mermaid-theme text")).toContain("fill: var(--color-text-default)");
     expect(documentsCss).not.toMatch(/\.mermaid-theme\s+\.actor\s*[,\{]/);
   });

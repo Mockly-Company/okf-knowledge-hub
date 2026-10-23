@@ -77,9 +77,11 @@ export const Default: Story = {
       const open = canvas.getByRole("button", {name: "문서 문맥 펼치기"});
       await userEvent.click(open);
       const drawer = await screen.findByRole("dialog", {name: "문서 문맥"});
-      await expect(drawer).toBeVisible();
-      await expect(Math.abs(drawer.getBoundingClientRect().top)).toBeLessThanOrEqual(1);
-      await expect(Math.abs(drawer.getBoundingClientRect().right - window.innerWidth)).toBeLessThanOrEqual(1);
+      await waitFor(() => expect(drawer).toBeVisible());
+      await waitFor(() => {
+        expect(Math.abs(drawer.getBoundingClientRect().top)).toBeLessThanOrEqual(1);
+        expect(Math.abs(drawer.getBoundingClientRect().right - window.innerWidth)).toBeLessThanOrEqual(1);
+      });
       await userEvent.keyboard("{Escape}");
       await waitFor(() => expect(open).toHaveFocus());
       await userEvent.click(open);

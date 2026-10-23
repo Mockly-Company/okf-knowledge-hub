@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { MoreHorizontal, Settings } from "lucide-react";
+import { MoreVertical, Settings } from "lucide-react";
 import { expect, waitFor, screen } from "storybook/test";
 import { IconButton } from "./button";
 import { Tooltip } from "./tooltip";
@@ -21,7 +21,7 @@ type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {
   render: () => (
-    <IconButton label="문서 설정 열기">
+    <IconButton label="문서 설정 열기" tooltip>
       <Settings aria-hidden="true" strokeWidth={1.75} />
     </IconButton>
   ),
@@ -39,8 +39,8 @@ export const Default: Story = {
 
 export const Interaction: Story = {
   render: () => (
-    <IconButton label="문서 더보기 열기">
-      <MoreHorizontal aria-hidden="true" strokeWidth={1.75} />
+    <IconButton label="문서 더보기 열기" tooltip>
+      <MoreVertical aria-hidden="true" strokeWidth={1.75} />
     </IconButton>
   ),
   play: async ({ canvas, userEvent }) => {

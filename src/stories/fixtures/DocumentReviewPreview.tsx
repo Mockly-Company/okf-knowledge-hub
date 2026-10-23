@@ -41,6 +41,21 @@ const tones: Record<ReviewState, StatusTone> = { pending: "info", changes_reques
 const intentLabels: Record<ReviewIntent, string> = { comment: "의견 남기기", approve: "승인", request_changes: "수정 요청" };
 const recordLabels: Record<ReviewIntent, string> = { comment: "의견", approve: "승인", request_changes: "수정 요청" };
 
+/** Keep each review pane's scrollbar visible only while that pane is moving. */
+function useReviewScrollActivity() {
+  const [scrolling, setScrolling] = useState(false);
+  const timeout = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timeout.current), []);
+  return {
+    "data-scrolling": scrolling,
+    onScroll: () => {
+      setScrolling(true);
+      window.clearTimeout(timeout.current);
+      timeout.current = window.setTimeout(() => setScrolling(false), 700);
+    },
+  };
+}
+
 function ReviewRecord({ name, role, time, intent, body }: { name: string; role?: string; time: string; intent: ReviewIntent; body?: string }) {
   const Icon = intent === "comment" ? MessageSquare : intent === "approve" ? CircleCheck : CircleAlert;
   return <article aria-label={`${name}의 ${recordLabels[intent]}`}>
@@ -80,6 +95,9 @@ export function DocumentReviewPreview({ document = proposal, baselineMarkdown = 
   const [notice, setNotice] = useState("");
   const [panelOpen, setPanelOpen] = useState(false);
   const panelTrigger = useRef<HTMLButtonElement>(null);
+  const canvasScroll = useReviewScrollActivity();
+  const panelScroll = useReviewScrollActivity();
+  const drawerScroll = useReviewScrollActivity();
   const [narrow, setNarrow] = useState(() => typeof window.matchMedia === "function" && window.matchMedia("(max-width: 960px)").matches);
   const [retried, setRetried] = useState(false);
   const host = useRef<HTMLElement>(null);
@@ -98,6 +116,7 @@ export function DocumentReviewPreview({ document = proposal, baselineMarkdown = 
   const terminal = state === "closed" || state === "merged";
   const canSubmit = !busy && !terminal && viewer !== "read_only" && !versionChanged && (intent === "comment" || viewer === "reviewer") && (intent === "approve" || Boolean(opinion.trim()));
   const rows = compareDocumentLines(baselineMarkdown, document.markdown);
+  const successToast = <PublicationSuccessToast message={notice} className="document-review__toast" />;
   const added = rows.filter(row => row.after?.kind === "added").length;
   const removed = rows.filter(row => row.before?.kind === "removed").length;
   const panel = <div className="document-review__panel-content">
@@ -135,7 +154,7 @@ export function DocumentReviewPreview({ document = proposal, baselineMarkdown = 
   if (loadState === "loading" && !retried) return <section className="document-review__loading" role="status">리뷰 문서를 불러오는 중…</section>;
   if (loadState === "error" && !retried) return <section className="document-review__loading"><StatusFeedback variant="content" tone="error" action={<Button variant="secondary" onClick={() => setRetried(true)}>다시 시도</Button>}>리뷰 문서를 불러오지 못했습니다.</StatusFeedback></section>;
   return <section ref={host} className="document-review" aria-label="문서 리뷰" style={narrow ? undefined : { gridTemplateColumns: `minmax(0, 1fr) ${panelSize.width}px` }}>
-    <div className="document-review__canvas">
+    <div className="document-review__canvas" {...canvasScroll}>
       {navigation}
       <header className="document-review__header">
         <div className="document-review__eyebrow">문서 리뷰</div>
@@ -151,7 +170,7 @@ export function DocumentReviewPreview({ document = proposal, baselineMarkdown = 
         </>}
       </div>
     </div>
-    {!narrow ? <aside className="document-review__panel" aria-label="리뷰 패널">{panelSize.handle}<div className="document-review__panel-scroll">{panel}</div></aside> : <Dialog open={panelOpen} onOpenChange={setPanelOpen}><DialogContent className="document-review__drawer" style={{ width: panelSize.width }} aria-label="리뷰 패널" aria-describedby={undefined} onCloseAutoFocus={event => { event.preventDefault(); panelTrigger.current?.focus({ preventScroll: true }); }}><DialogHeader role="presentation"><DialogTitle>리뷰</DialogTitle><DialogCloseButton label="리뷰 패널 닫기" /></DialogHeader><DialogBody>{panel}</DialogBody>{panelSize.handle}</DialogContent></Dialog>}
-    <PublicationSuccessToast message={notice} />
+    {!narrow ? <aside className="document-review__panel" aria-label="리뷰 패널">{panelSize.handle}<div className="document-review__panel-scroll" {...panelScroll}>{panel}</div></aside> : <Dialog open={panelOpen} onOpenChange={setPanelOpen}><DialogContent className="document-review__drawer" style={{ width: panelSize.width }} aria-label="리뷰 패널" aria-describedby={undefined} onCloseAutoFocus={event => { event.preventDefault(); panelTrigger.current?.focus({ preventScroll: true }); }}><DialogHeader role="presentation"><DialogTitle>리뷰</DialogTitle><DialogCloseButton label="리뷰 패널 닫기" /></DialogHeader><DialogBody className="document-review__drawer-scroll" {...drawerScroll}>{panel}</DialogBody>{successToast}{panelSize.handle}</DialogContent></Dialog>}
+    {(!narrow || !panelOpen) && successToast}
   </section>;
 }

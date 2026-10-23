@@ -178,7 +178,7 @@ const response = await searchPlaces(request);
 };
 
 export const mermaidFixtures = {
-  default: "flowchart LR\n  A[검색 요청] --> B[입력 검증]\n  B --> C[장소 조회]\n  C --> D[응답 반환]",
+  default: "flowchart LR\n  A[검색 요청] --> B[입력 검증]:::emphasis\n  B --> C[장소 조회]\n  C --> D[응답 반환]",
   loading: "flowchart LR\n  Pending[결정적으로 대기 중]",
   invalid: `flowchart LR\n  A[끝나지 않은 노드 ${"long-invalid-source-".repeat(30)}`,
   wide: "flowchart LR\n  A[클라이언트 요청] --> B[인증 확인] --> C[검색어 정규화] --> D[위치 정보 검증] --> E[캐시 조회] --> F[공급자 검색] --> G[중복 제거] --> H[거리순 정렬] --> I[페이지 구성] --> J[응답 반환]",

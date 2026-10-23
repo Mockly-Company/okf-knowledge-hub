@@ -22,35 +22,22 @@ describe("HomePage", () => {
     renderHome();
 
     expect(
-      screen.getByRole("heading", { level: 1, name: "프로젝트 진행 상황" }),
+      screen.getByRole("heading", { level: 1, name: "내 작업" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("안녕하세요, @hyeeun님")).toBeInTheDocument();
-    expect(screen.getByRole("time")).toHaveAttribute(
-      "dateTime",
-      expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
-    );
+    expect(screen.queryByRole("time")).not.toBeInTheDocument();
 
-    const summaries = screen.getByRole("region", { name: "Issue 요약" });
-    for (const label of ["열린 Issue", "진행 중인 Issue", "이번 주 완료 Issue"]) {
-      expect(within(summaries).getByText(label)).toBeInTheDocument();
-    }
-    expect(within(summaries).getAllByText("Project 데이터 없음")).toHaveLength(3);
-
-    expect(screen.getByRole("heading", { name: "기능 진행 상황" })).toBeInTheDocument();
-    const requests = screen.getByRole("region", { name: "내가 확인할 항목" });
-    for (const category of ["검토 필요", "결정 필요", "작업 시작 가능", "응답 필요"]) {
-      expect(
-        within(requests).getByRole("listitem", { name: `${category}: 0개` }),
-      ).toBeInTheDocument();
-    }
-    expect(screen.getByRole("heading", { name: "최근 활동" })).toBeInTheDocument();
-    expect(screen.getByText("연결된 기능별 Issue가 아직 없습니다.")).toBeInTheDocument();
-    expect(within(requests).getByText("연결된 확인 항목 없음")).toBeInTheDocument();
-    expect(screen.getByText("표시할 활동 기록이 아직 없습니다.")).toBeInTheDocument();
+    const summaries = screen.getByRole("region", { name: "프로젝트 요약" });
+    expect(within(summaries).getByText("GitHub 분석이 아직 연결되지 않았습니다.")).toBeInTheDocument();
+    const requests = screen.getByRole("region", { name: "나에게 요청된 리뷰" });
+    expect(screen.getByRole("region", { name: "내 담당 Issue" })).toBeInTheDocument();
+    expect(summaries.compareDocumentPosition(requests) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "최근 활동" })).not.toBeInTheDocument();
+    expect(within(requests).getByText("GitHub 목록이 아직 연결되지 않았습니다.")).toBeInTheDocument();
 
     expect(
       screen
-        .getByRole("heading", { level: 1, name: "프로젝트 진행 상황" })
+        .getByRole("heading", { level: 1, name: "내 작업" })
         .closest("section"),
     ).toHaveClass(
       "pt-[var(--page-block-start)]",

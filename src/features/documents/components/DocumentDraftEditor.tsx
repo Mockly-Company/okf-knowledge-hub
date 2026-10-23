@@ -48,6 +48,7 @@ import { DocumentCodeEditor, DocumentImageTools, RichEditorServices, codeEditorL
 interface DocumentDraftEditorProps {
   editor: DocumentEditorState;
   headerSecondary?: ReactNode;
+  headerNavigation?: ReactNode;
   headerMetadata?: ReactNode;
   readAsset?(documentPath: string, assetPath: string): Promise<DocumentAsset>;
   copyText?(value: string): Promise<void>;
@@ -106,6 +107,7 @@ const editorTranslations: Record<string, string> = {
 export function DocumentDraftEditor({
   editor,
   headerSecondary,
+  headerNavigation,
   headerMetadata,
   readAsset,
   copyText,
@@ -151,6 +153,7 @@ export function DocumentDraftEditor({
         <Button variant="ghost" onClick={onClose}><ArrowLeft aria-hidden="true" strokeWidth={1.75} />편집 종료</Button>
         <div className="document-draft-editor__status"><span role="status" aria-live="polite" data-status={editor.saveStatus}>{statusLabel[editor.saveStatus]}</span></div>
       </div>
+      {headerNavigation}
       <header className="document-draft-editor__header">
         <div className="document-draft-editor__heading">
           <Input

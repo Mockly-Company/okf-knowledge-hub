@@ -294,7 +294,7 @@ describe("DocumentsPage", () => {
     expect(await screen.findByRole("searchbox", { name: "문서 검색" })).toBeVisible();
   });
 
-  it("shows a search failure instead of an empty-result message and retries the same query", async () => {
+  it("keeps matching title and path results available when body search is unavailable", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.deferSearch = true;
     const user = userEvent.setup();
@@ -302,7 +302,7 @@ describe("DocumentsPage", () => {
 
     fireEvent.change(
       await screen.findByRole("searchbox", { name: "문서 검색" }),
-      { target: { value: "실패" } },
+      { target: { value: "Guide" } },
     );
     await waitFor(() =>
       expect(
@@ -315,22 +315,15 @@ describe("DocumentsPage", () => {
     act(() => {
       gateway.rejectSearch(firstSearch.args[1] as string, {
         code: "document_index_unavailable",
-        message: "검색 서비스를 사용할 수 없습니다.",
+        message: "본문 검색을 사용할 수 없습니다.",
         recovery: "retry",
         details: {},
       });
     });
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "검색 서비스를 사용할 수 없습니다.",
-    );
-    expect(screen.queryByText("검색 결과가 없습니다.")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "검색 다시 시도" }));
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "searchDocuments"),
-      ).toHaveLength(2),
-    );
+    expect(await screen.findByRole("button", { name: /Guide/ })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "검색 다시 시도" })).toBeNull();
   });
 
   it("returns to Documents home with a notice when a tree update removes the selected document", async () => {

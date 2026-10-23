@@ -106,6 +106,7 @@ Semantic 색상은 해당 의미에만 사용합니다. 문서 타입, 담당 �
 - 표시 모드는 Markdown 원문, Git diff, export 결과와 다른 팀원의 화면에 영향을 주지 않습니다.
 - 문서 화면에서는 사용자용 이름을 `편안하게`와 `작게`로 표시하고, 문서 오버플로 메뉴와 Settings의 기기별 표시 밀도 설정이 같은 값을 사용합니다.
 - 렌더링된 Markdown 본문은 일반 문단을 카드로 감싸지 않고 타이포그래피와 여백으로 위계를 만듭니다. 코드와 표는 기능적 경계와 내부 가로 스크롤을 사용하고, Mermaid는 기본적으로 별도 surface 없이 흰 문서 위에 표시합니다.
+- Mermaid 기본 노드는 흰색, `:::emphasis` 노드는 연한 teal 배경을 사용합니다. 라벨은 중앙 정렬하고 연결선·화살촉은 neutral 색을 사용합니다. 화살촉 좌표는 렌더러가 계산한 노드 경계를 유지하며 임의 SVG·CSS는 정화합니다.
 - Markdown의 제목, 목록, 각주, 코드·표, 안내 블록과 접기 영역은 두 표시 밀도에서 같은 의미 구조와 원문을 유지합니다. 표의 스크롤 영역과 본문 링크·접기 summary에는 키보드 focus 표시를 제공합니다.
 - 코드 복사는 텍스트 action으로 성공 상태를 표시합니다. 다이어그램 확장·확대 제어는 접근 가능한 이름을 가진 tooltip 없는 icon-only action입니다.
 
@@ -191,7 +192,7 @@ Border-first Hybrid 방식을 사용합니다.
 - 기본 `strokeWidth`: `1.75`
 - 선택 상태에서 선 굵기를 바꾸지 않고 색상과 배경을 바꿉니다.
 - 아이콘 단독 버튼은 사이드바 접기, 닫기, 검색, 더보기처럼 의미가 보편적인 경우에만 사용합니다.
-- 아이콘 단독 버튼에는 tooltip과 `aria-label`이 필요합니다.
+- 아이콘 단독 버튼은 접근 가능한 이름(`aria-label`)을 제공합니다. 보편적인 행동에는 기본 tooltip을 붙이지 않으며, 추가 맥락이 필요한 소비 화면만 명시적으로 활성화합니다.
 - 삭제, 복제, 경로 변경처럼 오해할 수 있는 작업은 아이콘과 텍스트를 함께 표시합니다.
 - Emoji와 문자 기호를 제품 아이콘으로 사용하지 않습니다.
 - Loading은 `LoaderCircle`, 성공은 `CircleCheck`, 오류는 `CircleAlert`처럼 역할별 아이콘을 고정합니다.
@@ -230,7 +231,7 @@ components/patterns
 - `secondary`: 보조 행동
 - `ghost`: toolbar와 낮은 우선순위 행동
 - `destructive`: 삭제, 폐기, 연결 해제처럼 파괴적인 행동
-- `icon`: 의미가 보편적이고 tooltip이 있는 단독 아이콘 행동
+- `icon`: 접근 가능한 이름을 가진 보편적인 단독 아이콘 행동. 흰색 surface에서 시작해 hover 시 옅은 neutral 배경으로 바뀝니다.
 
 한 Dialog 또는 좁은 action group 안에는 Primary button을 하나만 둡니다.
 
@@ -267,7 +268,7 @@ components/patterns
 | Hover | `#FFFFFF` | `#C7CDD4` |
 | Focus | `#FFFFFF` | `#009E8E` border + 빈 간격 없는 `1px` ring |
 | Filled | Default와 동일 | 값이 있다는 이유로 별도 색상을 쓰지 않음 |
-| Invalid | `#FFFFFF` | Input은 `#C95B68` border + 오류 메시지. Focus 중에도 같은 색 `1px` ring 유지 |
+| Invalid | `#FFFFFF` | Input·Textarea·Select는 `#C95B68` border + 오류 메시지. Focus 중에도 같은 색 `1px` ring 유지. 열린 Select trigger는 강조 ring 없이 중립 경계로 연결 |
 | Disabled | `#F1F3F5` | `#E5E7EB`, text `#7D918F` |
 
 - Radio와 Checkbox의 checked 색상은 `#009E8E`, check glyph는 `color.on-primary`를 사용합니다.
@@ -327,6 +328,8 @@ components/patterns
 - 충돌, 인증, push 실패처럼 판단이 필요한 문제: 본문 오류 상태 또는 Dialog. 원인·영향·다음 action을 한곳에 표시
 - 상태 아이콘은 한두 줄 메시지에서 텍스트 블록의 세로 중앙에 맞춘다. 닫기 icon button만 우측 상단에 독립시킨다.
 - 상태에 맞는 outline action은 흰 배경과 상태색 border·text를 사용한다. 예: 연결 경고는 앰버, 디스크 충돌의 `비교하기`는 Error red
+- Success·Warning·Error toast는 테두리 없이 동일한 밀도와 `0 2px 14px rgb(20 24 30 / 10%)` 그림자를 사용합니다.
+- Action을 포함한 banner/content도 toast와 같은 밀도를 사용합니다. 컨테이너가 넓으면 본문과 같은 행 우측, 좁으면 다음 행 우측에 action을 배치합니다. 지속적인 경고·오류에는 닫기 버튼을 두지 않습니다.
 - 삭제, 연결 교체, 변경 폐기: 대상 이름이 포함된 확인 Dialog
 
 Dialog와 panel 전환은 `160–200ms` 범위로 제한합니다. `prefers-reduced-motion`에서는 기능에 필요하지 않은 애니메이션을 제거합니다.

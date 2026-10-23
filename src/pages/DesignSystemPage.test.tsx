@@ -138,15 +138,14 @@ describe("DesignSystemPage", () => {
     expect(screen.getByRole("tab", { name: "비활성 탭" })).toBeDisabled();
   });
 
-  it("explains the icon-only button with a tooltip", async () => {
+  it("names the icon-only button without a hover tooltip", async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.hover(screen.getByRole("button", { name: "설정 열기" }));
 
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip).toHaveTextContent("설정 열기");
-    expect(tooltip).toHaveClass("text-[var(--color-text-default)]");
+    expect(screen.getByRole("button", { name: "설정 열기" })).toHaveAccessibleName("설정 열기");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
   it("has no automatically detectable accessibility violations", async () => {

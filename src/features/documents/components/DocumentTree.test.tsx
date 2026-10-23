@@ -197,14 +197,19 @@ describe("DocumentTree", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "새 문서" })).toHaveAttribute(
+    const headerCreate = screen.getByRole("button", { name: "새 문서" });
+    const folderCreate = screen.getByRole("button", { name: "api에 새 문서" });
+
+    expect(headerCreate).toHaveAttribute(
       "data-variant",
       "icon",
     );
-    expect(screen.getByRole("button", { name: "api에 새 문서" })).toHaveAttribute(
+    expect(folderCreate).toHaveAttribute(
       "data-variant",
       "icon",
     );
+    expect(headerCreate.querySelector(".lucide-file-plus-corner")).not.toBeNull();
+    expect(folderCreate.querySelector(".lucide-file-plus-corner")).not.toBeNull();
   });
 
   it("keeps a long folder label in the row that owns its create action reserve", () => {

@@ -57,7 +57,7 @@ describe("form control primitives", () => {
       within(view.container).getByRole("combobox", { name: "유형" }),
     ]) {
       expect(control).toHaveClass(
-        "aria-[invalid=true]:focus-visible:border-[var(--color-error)]",
+        "aria-[invalid=true]:focus-visible:border-[var(--color-error-border)]",
       );
     }
   });

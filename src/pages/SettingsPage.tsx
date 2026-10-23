@@ -118,7 +118,7 @@ export function SettingsPage({
                     <label
                       htmlFor={id}
                       className={cn(
-                        "block cursor-pointer rounded-[var(--radius-lg)] border bg-[var(--color-surface)] p-[var(--space-4)] peer-disabled:cursor-not-allowed peer-disabled:opacity-60 peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--color-primary)] peer-focus-visible:outline-offset-2",
+                        "block cursor-pointer rounded-[var(--radius-lg)] border bg-[var(--color-surface)] p-[var(--space-4)] peer-disabled:cursor-not-allowed peer-disabled:opacity-60 peer-focus-visible:outline-[length:var(--focus-ring-width)] peer-focus-visible:outline-solid peer-focus-visible:outline-[var(--color-primary)] peer-focus-visible:outline-offset-[var(--focus-ring-offset)]",
                         selected
                           ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)]"
                           : "border-[var(--color-border)]",
@@ -127,7 +127,7 @@ export function SettingsPage({
                       <span className="flex items-center justify-between font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
                         {option.label}
                         {selected && (
-                          <Check aria-hidden="true" size={16} strokeWidth={1.75} />
+                          <Check aria-hidden="true" className="size-[var(--icon-size)]" strokeWidth={1.75} />
                         )}
                       </span>
                       <span

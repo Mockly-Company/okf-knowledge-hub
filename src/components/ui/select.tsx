@@ -92,13 +92,14 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
         <SelectPrimitive.Trigger
           ref={ref}
           data-select-trigger=""
+          data-input=""
           id={id}
           aria-label={ariaLabel}
           aria-labelledby={ariaLabelledBy}
           aria-describedby={ariaDescribedBy}
           aria-invalid={ariaInvalid}
           className={cn(
-            "flex h-[var(--control-height)] w-full min-w-0 cursor-pointer items-center justify-between gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 font-[number:var(--font-weight-description)] text-[var(--color-text-strong)] transition-[border-color,background-color,color,border-radius] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] hover:border-[var(--color-border-hover)] focus-visible:border-[var(--color-primary)] aria-[invalid=true]:border-[var(--color-error)] aria-[invalid=true]:focus-visible:border-[var(--color-error)] disabled:cursor-not-allowed disabled:bg-[var(--color-control-disabled)] disabled:text-[var(--color-text-disabled)]",
+            "flex h-[var(--control-height)] w-full min-w-0 cursor-pointer items-center justify-between gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 font-[number:var(--font-weight-description)] text-[var(--color-text-strong)] transition-[border-color,background-color,color,border-radius] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] hover:border-[var(--color-border-hover)] focus-visible:border-[var(--color-primary)] aria-[invalid=true]:border-[var(--color-error-border)] aria-[invalid=true]:focus-visible:border-[var(--color-error-border)] disabled:cursor-not-allowed disabled:bg-[var(--color-control-disabled)] disabled:text-[var(--color-text-disabled)]",
             open && "!rounded-b-none",
             className,
           )}
@@ -116,7 +117,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             align="start"
             className="z-50 max-h-[min(320px,var(--radix-select-content-available-height))] w-[var(--radix-select-trigger-width)] overflow-hidden rounded-t-none rounded-b-[var(--radius-md)] border border-t-0 border-[var(--color-border)] bg-[var(--color-surface)] shadow-none"
           >
-            <SelectPrimitive.Viewport className="grid gap-[var(--space-1)] p-[var(--space-1)]">
+            <SelectPrimitive.Viewport className="grid min-w-0 gap-[var(--space-1)] p-[var(--space-1)]">
               {options.map((option) => (
                 <SelectPrimitive.Item
                   key={option.key}
@@ -126,14 +127,14 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
                     typeof option.children === "string" ? option.children : undefined
                   }
                   className={cn(
-                    "relative flex min-h-[var(--control-height)] cursor-pointer select-none items-center rounded-[var(--radius-md)] py-[var(--space-2)] pr-[var(--space-10)] pl-[var(--space-3)] text-[var(--color-text-default)] outline-none transition-colors duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] focus-visible:outline-none data-[disabled]:cursor-not-allowed data-[disabled]:text-[var(--color-text-disabled)] data-[highlighted]:bg-[var(--color-primary-soft)] data-[state=checked]:bg-[var(--color-primary-soft)] data-[state=checked]:text-[var(--color-primary-text)]",
+                    "group relative flex w-full min-w-0 max-w-full min-h-[var(--control-height)] cursor-pointer select-none items-center rounded-[var(--radius-md)] py-[var(--space-2)] pr-[var(--space-10)] pl-[var(--space-3)] text-[var(--color-text-default)] outline-none transition-colors duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] focus-visible:outline-none data-[disabled]:cursor-not-allowed data-[disabled]:text-[var(--color-text-disabled)] data-[highlighted]:bg-[var(--color-primary-soft)] data-[state=checked]:bg-[var(--color-primary-soft)] data-[state=checked]:text-[var(--color-primary-text)]",
                     option.description && "min-h-[52px]",
                   )}
                 >
-                  <span className="grid min-w-0 gap-[var(--space-1)]">
+                  <span className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] gap-[var(--space-1)]">
                     <SelectPrimitive.ItemText>{option.children}</SelectPrimitive.ItemText>
                     {option.description ? (
-                      <span className="text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]">
+                      <span className="min-w-0 text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)] group-data-[state=checked]:text-[var(--color-text-default)]">
                         {option.description}
                       </span>
                     ) : null}

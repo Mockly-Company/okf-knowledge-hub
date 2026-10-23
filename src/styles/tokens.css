@@ -52,6 +52,9 @@
   --color-error-hover: #ffe2e5;
   --color-error-pressed: #f8cdd3;
   --color-overlay: rgb(20 24 30 / 42%);
+  --color-window-close: #ff5f57;
+  --color-window-minimize: #febc2e;
+  --color-window-zoom: #28c840;
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;

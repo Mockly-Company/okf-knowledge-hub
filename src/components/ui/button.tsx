@@ -94,7 +94,7 @@ export interface IconButtonProps
 }
 
 export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
-  ({ className, label, tooltip = true, children, ...props }, ref) => {
+  ({ className, label, tooltip = false, children, ...props }, ref) => {
     if (!label.trim()) {
       throw new Error("IconButton requires a nonempty label");
     }

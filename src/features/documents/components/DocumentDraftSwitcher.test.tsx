@@ -63,4 +63,30 @@ describe("DocumentDraftSwitcher", () => {
 
     expect(onSwitch).toHaveBeenCalledWith("draft-map-search");
   });
+
+  it("keeps a long Draft branch in one line and exposes its full name on hover", async () => {
+    const user = userEvent.setup();
+    const state = createInitialAuthoringState();
+    const branch = "draft/storybook-bot/a-very-long-map-search-change-name";
+    state.drafts = [
+      {
+        workspaceId: "workspace-id",
+        changeId: "draft-long-branch",
+        authorLogin: "storybook-bot",
+        baseCommit: "a1b2c3d4",
+        branch,
+        createdAtUnixMs: 1,
+        lastOpenedAtUnixMs: 1,
+      },
+    ];
+
+    render(<DocumentDraftSwitcher state={state} onSwitch={() => {}} />);
+
+    await user.click(screen.getByRole("combobox", { name: "문서 작업 전환" }));
+
+    const branchLabel = screen.getByText(branch);
+    expect(branchLabel).toHaveAttribute("title", branch);
+    expect(branchLabel).toHaveClass("document-draft-switcher__branch");
+    expect(branchLabel.parentElement?.parentElement).toHaveClass("flex-1");
+  });
 });

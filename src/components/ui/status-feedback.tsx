@@ -116,7 +116,7 @@ export function StatusFeedback({
       aria-atomic={variant === "toast" ? "true" : undefined}
       className={cn(
         "status-feedback",
-        "border",
+        variant === "toast" ? "border-0" : "border",
         usesToastDensity && "rounded-[var(--radius-md)] p-[var(--space-3)] shadow-[var(--shadow-feedback)]",
         usesToastDensity && (variant === "toast" ? "min-h-[48px]" : "min-h-[68px]"),
         variant === "banner" && !usesToastDensity && "rounded-[var(--radius-lg)] p-[var(--space-4)]",

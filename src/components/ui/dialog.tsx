@@ -3,6 +3,7 @@ import * as React from "react";
 import { X } from "lucide-react";
 import { IconButton, type IconButtonProps } from "./button";
 import { cn } from "@/lib/utils";
+import { dialogOverlayClassName, dialogSurfaceClassName, dialogPositionClassName, dialogDefaultWidthClassName, dialogTitleClassName, dialogDescriptionClassName } from "./dialog-styles";
 
 export const Dialog = DialogPrimitive.Root;
 export const DialogTrigger = DialogPrimitive.Trigger;
@@ -39,7 +40,7 @@ export const DialogTitle = React.forwardRef<
   <DialogPrimitive.Title
     ref={ref}
     className={cn(
-      "m-0 font-[number:var(--font-weight-section-title)] text-[length:var(--font-section-size)] leading-[var(--font-section-line)] text-[var(--color-text-strong)]",
+      dialogTitleClassName,
       className,
     )}
     {...props}
@@ -54,7 +55,7 @@ export const DialogDescription = React.forwardRef<
   <DialogPrimitive.Description
     ref={ref}
     className={cn(
-      "m-0 mt-[var(--space-1)] font-[number:var(--font-weight-description)] text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]",
+      dialogDescriptionClassName,
       className,
     )}
     {...props}
@@ -108,20 +109,20 @@ export const DialogContent = React.forwardRef<
   DialogContentProps
 >(({ className, children, size = "default", "aria-label": ariaLabel = "Dialog", ...props }, ref) => (
   <DialogPrimitive.Portal>
-    <DialogPrimitive.Overlay className="okhub-dialog-overlay-motion fixed inset-0 z-50 bg-[var(--color-overlay)] transition-opacity duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] motion-reduce:animate-none motion-reduce:transition-none" />
+    <DialogPrimitive.Overlay className={dialogOverlayClassName} />
     <DialogPrimitive.Content
       ref={ref}
       aria-label={ariaLabel}
       className={cn(
-        "okhub-dialog-content-motion fixed z-50 flex flex-col rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--dialog-padding)] shadow-[var(--shadow-overlay)] transition-[opacity,transform] duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] motion-reduce:animate-none motion-reduce:transition-none",
+        dialogSurfaceClassName,
         size === "fullscreen"
           ? "inset-[var(--space-6)] overflow-hidden"
-          : "top-1/2 left-1/2 max-h-[calc(100dvh-3rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto",
+          : dialogPositionClassName,
         size === "fullscreen"
           ? undefined
           : size === "wide"
           ? "w-[min(calc(100vw-3rem),47.5rem)]"
-          : "w-[min(calc(100vw-3rem),35rem)]",
+          : dialogDefaultWidthClassName,
         className,
       )}
       {...props}

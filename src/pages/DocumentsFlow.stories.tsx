@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
 import { withAppProviders } from "@/stories/decorators/AppProviders";
-import { PageStoryFrame } from "@/stories/decorators/PageStoryFrame";
+import { AppFramePreview } from "@/stories/fixtures/AppFramePreview";
 import { DocumentsFlowPreview } from "@/stories/fixtures/DocumentsFlowPreview";
 
 const meta = {
@@ -11,7 +11,7 @@ const meta = {
   decorators: [withAppProviders({ router: { initialEntries: ["/documents"] } })],
   args: { reviewState: "pending" },
   argTypes: { reviewState: { control: "select", options: ["none", "pending", "changes_requested", "approved", "closed", "merged"], description: "목록에 있는 예시 문서의 최초 검토 상태. 바꾸면 흐름을 처음부터 시작합니다." } },
-  render: args => <PageStoryFrame><DocumentsFlowPreview key={args.reviewState} {...args} /></PageStoryFrame>,
+  render: args => <AppFramePreview key={args.reviewState} screen="documents" documentReviewState={args.reviewState} />,
 } satisfies Meta<typeof DocumentsFlowPreview>;
 export default meta;
 type Story = StoryObj<typeof meta>;
@@ -53,8 +53,26 @@ export const NewDocumentJourneyTest: Story = {
     const publication = within(await page.findByRole("dialog", { name: "발행" }));
     await userEvent.type(publication.getByRole("textbox", { name: /변경 설명/ }), "운영 가이드 추가");
     await userEvent.click(publication.getByRole("button", { name: "발행하기" }));
+    await expect(await canvas.findByText("문서를 발행했습니다.")).toBeVisible();
     await userEvent.click(await canvas.findByRole("button", { name: "문서 목록" }));
     await userEvent.click(await canvas.findByRole("button", { name: /새 운영 가이드/ }));
     await expect(await canvas.findByRole("heading", { name: "새 운영 가이드", level: 1 })).toBeVisible();
+  },
+};
+
+export const DiscardJourneyTest: Story = {
+  tags: ["!dev", "!autodocs"],
+  play: async ({ canvas, canvasElement, userEvent }) => {
+    await userEvent.click(await canvas.findByRole("button", { name: /지도 검색 API 계약/ }));
+    await userEvent.click(canvas.getByRole("button", { name: "편집" }));
+    await userEvent.click(canvas.getByRole("button", { name: "변경 취소" }));
+    const page = within(canvasElement.ownerDocument.body);
+    const confirmation = within(await page.findByRole("dialog", { name: "변경 내용을 버릴까요?" }));
+    await userEvent.click(confirmation.getByRole("button", { name: "변경 버리기" }));
+    await expect(await canvas.findByText("변경을 취소했습니다.")).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "편집" })).toBeVisible();
+    await userEvent.click(canvas.getByRole("button", { name: "실행 취소" }));
+    await expect(canvas.getByRole("region", { name: "문서 편집기" })).toBeVisible();
+    await expect(canvas.getByRole("combobox", { name: "문서 작업 전환" })).toHaveTextContent("변경 작업");
   },
 };

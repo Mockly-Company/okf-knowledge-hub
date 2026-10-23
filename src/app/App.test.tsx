@@ -61,7 +61,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "다음" }));
     await submitLocalConnection(user);
 
-    expect(await screen.findByRole("heading", { name: "프로젝트 진행 상황" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "내 작업" })).toBeInTheDocument();
   });
 
   it("keeps the current workspace when repository replacement is cancelled", async () => {

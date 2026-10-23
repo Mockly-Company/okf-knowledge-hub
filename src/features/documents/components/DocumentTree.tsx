@@ -1,9 +1,9 @@
 import {
   ChevronRight,
+  FilePlus2,
   FileText,
   Folder,
   FolderOpen,
-  Plus,
 } from "lucide-react";
 import {
   useEffect,
@@ -187,7 +187,7 @@ export function DocumentTree({
         <span>문서</span>
         {onNewDocument ? (
           <IconButton label="새 문서" onClick={() => onNewDocument("docs")}>
-            <Plus aria-hidden="true" strokeWidth={1.75} />
+            <FilePlus2 aria-hidden="true" strokeWidth={1.75} />
           </IconButton>
         ) : null}
       </div>
@@ -267,7 +267,7 @@ export function DocumentTree({
                       onNewDocument(entry.path);
                     }}
                   >
-                    <Plus aria-hidden="true" strokeWidth={1.75} />
+                    <FilePlus2 aria-hidden="true" strokeWidth={1.75} />
                   </IconButton>
                 ) : null}
               </div>

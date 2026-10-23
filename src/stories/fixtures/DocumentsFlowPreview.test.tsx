@@ -1,15 +1,38 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { StorybookAppProviders } from "../decorators/AppProviders";
 import { documentFixtures } from "./documents";
 import { DocumentsFlowPreview } from "./DocumentsFlowPreview";
 
 afterEach(cleanup);
+// jsdom lacks text layout; actual geometry is verified by the browser journey.
+const rangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+beforeAll(() => Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] }));
+afterAll(() => { if (rangeRects) Object.defineProperty(Range.prototype, "getClientRects", rangeRects); else delete (Range.prototype as Partial<Range>).getClientRects; });
 function show(reviewState: "pending" | "none" = "pending") {
   return render(<StorybookAppProviders documents={{ catalog: documentFixtures.catalog(documentFixtures.mapSearchApi()) }} router={{ initialEntries: ["/documents"] }}><DocumentsFlowPreview reviewState={reviewState} /></StorybookAppProviders>);
 }
 describe("connected document Storybook flow", () => {
+  it("switches between the confirmed document and the same retained change above the title", async () => {
+    const user = userEvent.setup(); show();
+    await user.click(await screen.findByRole("button", { name: /지도 검색 API 계약/ }));
+    const picker = screen.getByRole("combobox", { name: "문서 작업 전환" });
+    const title = screen.getByRole("heading", { level: 1, name: "지도 검색 API 계약" });
+    expect(picker.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(picker);
+    await user.click(screen.getByRole("option", { name: /변경 작업/ }));
+    expect(screen.getByText("로컬 초안", { exact: true })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "편집" }));
+    const editPicker = screen.getByRole("combobox", { name: "문서 작업 전환" });
+    expect(editPicker.compareDocumentPosition(screen.getByRole("textbox", { name: "문서 제목" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await user.click(editPicker);
+    await user.click(screen.getByRole("option", { name: "확정 문서" }));
+    expect(screen.getByText("확정본 · main")).toBeVisible();
+    await user.click(screen.getByRole("combobox", { name: "문서 작업 전환" }));
+    await user.click(screen.getByRole("option", { name: /변경 작업/ }));
+    expect(screen.getByText("로컬 초안", { exact: true })).toBeVisible();
+  });
   it("opens review from the selected document and returns to that document", async () => {
     const user = userEvent.setup(); show();
     await user.click(await screen.findByRole("button", { name: /지도 검색 API 계약/ }));

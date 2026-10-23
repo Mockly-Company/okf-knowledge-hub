@@ -17,7 +17,10 @@ type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {
   play: async ({ canvas, canvasElement, userEvent }) => {
-    const expand = await canvas.findByRole("button", { name: "다이어그램 크게 보기" });
+    // The first Mermaid layout is asynchronous; wait for its real ready state
+    // before checking the controls rather than assuming the first render is warm.
+    await waitFor(() => expect(canvasElement.querySelector(".mermaid-block")).toHaveAttribute("aria-busy", "false"), { timeout: 5000 });
+    const expand = canvas.getByRole("button", { name: "다이어그램 크게 보기" });
     await userEvent.tab();
     await expect(expand).toHaveFocus();
     await expect(expand).not.toHaveAttribute("title");

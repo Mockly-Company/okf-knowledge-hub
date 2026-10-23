@@ -1,15 +1,37 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { DocumentReviewPreview, type DocumentReviewPreviewProps } from "./DocumentReviewPreview";
 
-afterEach(() => { cleanup(); localStorage.removeItem("okhub.review-panel-width"); });
+afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.removeItem("okhub.review-panel-width"); });
 function show(props: DocumentReviewPreviewProps = {}) {
   return render(<DocumentsProvider gateway={new FakeDocumentsGateway()}><DocumentReviewPreview {...props} /></DocumentsProvider>);
 }
 describe("Storybook document review", () => {
+  it("reveals only the scrolled region scrollbar and hides it after scrolling stops", () => {
+    vi.useFakeTimers();
+    const rendered = show();
+    const canvas = rendered.container.querySelector(".document-review__canvas")!;
+    const panel = rendered.container.querySelector(".document-review__panel-scroll")!;
+    expect(canvas).toHaveAttribute("data-scrolling", "false");
+    expect(panel).toHaveAttribute("data-scrolling", "false");
+    fireEvent.scroll(panel);
+    expect(panel).toHaveAttribute("data-scrolling", "true");
+    expect(canvas).toHaveAttribute("data-scrolling", "false");
+    act(() => vi.advanceTimersByTime(500));
+    fireEvent.scroll(panel);
+    act(() => vi.advanceTimersByTime(500));
+    expect(panel).toHaveAttribute("data-scrolling", "true");
+    fireEvent.scroll(canvas);
+    act(() => vi.advanceTimersByTime(700));
+    expect(panel).toHaveAttribute("data-scrolling", "false");
+    expect(canvas).toHaveAttribute("data-scrolling", "false");
+    fireEvent.scroll(panel);
+    rendered.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
   it("resizes with the keyboard and remembers the width after reopening", async () => {
     const user = userEvent.setup();
     const first = show();

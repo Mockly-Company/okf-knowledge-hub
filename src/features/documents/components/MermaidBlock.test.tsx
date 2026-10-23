@@ -69,7 +69,7 @@ describe("MermaidBlock", () => {
         expect(getComputedStyle(surface.querySelector(node)!).stroke).toBe("var(--color-border-strong)");
         expect(getComputedStyle(surface.querySelector(line)!).stroke).toBe("var(--color-border-strong)");
         expect(getComputedStyle(surface.querySelector(line)!).strokeWidth).toBe("1px");
-        expect(getComputedStyle(surface.querySelector(marker)!).fill).toBe("var(--color-primary)");
+        expect(getComputedStyle(surface.querySelector(marker)!).fill).toBe("var(--color-text-muted)");
         expect(getComputedStyle(surface.querySelector(label)!).fill).toBe("var(--color-text-default)");
       };
       assertTheme(inline);

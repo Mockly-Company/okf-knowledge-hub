@@ -21,7 +21,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-// @ts-expect-error Icon-only actions must use IconButton so a Tooltip cannot be skipped.
+// @ts-expect-error Icon-only actions must use IconButton so an accessible label cannot be skipped.
 const unsafeIconButton = <Button variant="icon" aria-label="설정 열기"><Settings aria-hidden="true" /></Button>;
 void unsafeIconButton;
 
@@ -142,9 +142,9 @@ describe("Button", () => {
     expect(childActivation).not.toHaveBeenCalled();
   });
 
-  it("exports an icon action that owns its accessible name and tooltip", async () => {
+  it("shows a tooltip only when an icon action explicitly requests one", async () => {
     const iconButtonModule = await import("./button") as typeof import("./button") & {
-      IconButton?: ComponentType<{ label: string; children: ReactNode }>;
+      IconButton?: ComponentType<{ label: string; tooltip?: boolean; children: ReactNode }>;
     };
     const { IconButton } = iconButtonModule;
 
@@ -153,7 +153,7 @@ describe("Button", () => {
 
     const user = userEvent.setup();
     render(
-      <IconButton label="설정 열기">
+      <IconButton label="설정 열기" tooltip>
         <Settings aria-hidden="true" />
       </IconButton>,
     );
@@ -174,7 +174,7 @@ describe("Button", () => {
 
     const user = userEvent.setup();
     render(
-      <IconButton label="Dialog 닫기" tooltip={false}>
+      <IconButton label="Dialog 닫기">
         <Settings aria-hidden="true" />
       </IconButton>,
     );

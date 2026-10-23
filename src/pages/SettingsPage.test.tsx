@@ -86,11 +86,11 @@ describe("SettingsPage", () => {
     defaultRadio.focus();
 
     expect(defaultRadio).toHaveFocus();
-    expect(defaultLabel).toHaveClass("peer-focus-visible:outline-2");
+    expect(defaultLabel).toHaveClass("peer-focus-visible:outline-[length:var(--focus-ring-width)]");
     expect(defaultLabel).toHaveClass(
       "peer-focus-visible:outline-[var(--color-primary)]",
     );
-    expect(defaultLabel).toHaveClass("peer-focus-visible:outline-offset-2");
+    expect(defaultLabel).toHaveClass("peer-focus-visible:outline-offset-[var(--focus-ring-offset)]");
 
     await user.keyboard("{ArrowRight}");
 

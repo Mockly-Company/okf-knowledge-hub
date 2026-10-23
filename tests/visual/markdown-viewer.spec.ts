@@ -136,7 +136,7 @@ for (const viewport of [
     await expect(tableScroll).toBeFocused();
     await tableScroll.press("ArrowRight");
     await expect.poll(() => tableScroll.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
-    const codeScroll = page.getByRole("region", { name: "코드 가로 스크롤" });
+    const codeScroll = page.getByRole("group", { name: "코드 가로 스크롤" });
     await codeScroll.focus();
     await codeScroll.press("ArrowRight");
     await expect.poll(() => codeScroll.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);

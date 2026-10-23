@@ -48,18 +48,19 @@ function KeyboardSearchHarness({ onQueryChange }: { onQueryChange(query: string)
 afterEach(cleanup);
 
 describe("DocumentSearch", () => {
-  it("shows title and path results while body indexing is preparing", async () => {
+  it("keeps title and path results available while body indexing is preparing", async () => {
     const user = userEvent.setup();
     const onQueryChange = vi.fn();
     render(<KeyboardSearchHarness onQueryChange={onQueryChange} />);
 
-    expect(screen.getByText("본문 검색을 준비하는 중… 3/100")).toBeVisible();
+    expect(screen.queryByText("본문 검색을 준비하는 중… 3/100")).not.toBeInTheDocument();
     expect(screen.getByText("지도 API")).toBeVisible();
     expect(screen.getByText("docs/api/map.md")).toBeVisible();
 
     await user.type(screen.getByRole("searchbox", { name: "문서 검색" }), "api");
     expect(screen.getByRole("searchbox", { name: "문서 검색" })).toHaveValue("api");
     expect(onQueryChange).toHaveBeenCalledWith("api");
+    expect(screen.getByRole("button", { name: /지도 API/ })).toBeVisible();
   });
 
   it("shows result context and forwards the selected match", async () => {
@@ -179,7 +180,7 @@ describe("DocumentSearch", () => {
     expect(row).not.toHaveAttribute("data-variant");
   });
 
-  it("keeps retryable search failures inside the affected content region", () => {
+  it("falls back to title and path results when body search is unavailable", () => {
     render(
       <DocumentSearch
         query="api"
@@ -200,12 +201,32 @@ describe("DocumentSearch", () => {
       />,
     );
 
-    const feedback = screen.getByRole("alert");
-    expect(feedback).toHaveAttribute("data-feedback-variant", "content");
-    expect(feedback).toHaveAttribute("data-feedback-tone", "error");
-    expect(feedback).toHaveTextContent("검색할 수 없습니다.");
-    expect(
-      screen.getByRole("button", { name: "검색 다시 시도" }),
-    ).toBeVisible();
+    expect(screen.getByRole("button", { name: /지도 API/ })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a generic retryable message only when the entire search fails", () => {
+    render(
+      <DocumentSearch
+        query="api"
+        documents={[document]}
+        results={[]}
+        searchStatus="error"
+        searchError={{
+          code: "github_unavailable",
+          message: "internal gateway details",
+          recovery: "retry",
+          details: {},
+        }}
+        indexStatus={{ status: "ready" }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("검색 결과를 불러오지 못했습니다.");
+    expect(screen.getByRole("button", { name: "검색 다시 시도" })).toBeVisible();
   });
 });

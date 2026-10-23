@@ -24,7 +24,7 @@ describe("Tooltip", () => {
   it("describes an accessible icon-only button on keyboard focus", async () => {
     const user = userEvent.setup();
     render(
-      <IconButton label="설정 열기">
+      <IconButton label="설정 열기" tooltip>
         <Settings aria-hidden="true" />
       </IconButton>,
     );

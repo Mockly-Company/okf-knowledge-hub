@@ -31,10 +31,7 @@ describe("Storybook catalog", () => {
       "SearchResults",
     ]);
     expect(namedStories(DocumentDetailStories)).toEqual(["Default"]);
-    expect(namedStories(DocumentSearchStories)).toEqual([
-      "IndexPreparing",
-      "SearchUnavailable",
-    ]);
+    expect(namedStories(DocumentSearchStories)).toEqual(["Default"]);
     expect(namedStories(DocumentDraftSwitcherStories)).toEqual(["ActiveDraft"]);
   });
 

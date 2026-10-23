@@ -17,7 +17,7 @@
     "test:storybook": "vitest --project storybook",
     "build-storybook": "storybook build",
     "test:storybook:smoke": "pnpm build-storybook && node ./scripts/smoke-built-storybook.mjs",
-    "test:visual": "playwright test tests/visual/markdown-viewer.spec.ts",
+    "test:visual": "playwright test",
     "dev:setup:macos": "bash scripts/setup-macos-dev-signing.sh",
     "tauri": "bash scripts/tauri-with-macos-signing.sh"
   },

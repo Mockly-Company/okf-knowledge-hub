@@ -124,7 +124,7 @@ describe("AppSidebar", () => {
     );
 
     const action = await screen.findByRole("button", { name: "새 문서" });
-    expect(action.querySelector("svg.lucide-plus")).not.toBeNull();
+    expect(action.querySelector("svg.lucide-file-plus-corner")).not.toBeNull();
     expect(view.container.querySelector(".document-tree__header")).toContainElement(
       action,
     );

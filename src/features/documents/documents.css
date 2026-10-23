@@ -363,11 +363,18 @@
 }
 
 .document-draft-switcher {
-  width: min(100%, 220px);
+  width: min(100%, 280px);
   color: var(--color-text-default);
   font-size: var(--font-ui-size);
   font-weight: var(--font-weight-control);
   line-height: var(--font-ui-line);
+}
+
+.document-draft-switcher__branch {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .document-draft-switcher-container {
@@ -446,7 +453,7 @@
   outline-offset: var(--focus-ring-offset);
 }
 
-.document-draft-editor__heading span {
+.document-draft-editor__metadata > span {
   overflow-wrap: anywhere;
   color: var(--color-text-muted);
   font-size: var(--font-meta-size);
@@ -545,7 +552,7 @@
   line-height: var(--font-document-line);
 }
 
-.document-draft-editor__mdx [data-placeholder] > span:first-child {
+.document-draft-editor__mdx button[data-placeholder] > span:first-child {
   color: var(--color-text-muted);
 }
 
@@ -1205,6 +1212,7 @@
   gap: var(--space-3);
   margin: 0 0 var(--document-prose-paragraph-gap);
   background: var(--markdown-alert-surface);
+  border-radius: var(--radius-lg);
   padding: var(--space-3);
   color: var(--color-text-default);
 }
@@ -1212,7 +1220,6 @@
 .markdown-alert--note {
   --markdown-alert-color: var(--color-info);
   --markdown-alert-surface: var(--color-info-soft);
-  border-radius: var(--radius-lg);
 }
 
 .markdown-alert--tip {
@@ -1731,9 +1738,27 @@
 .mermaid-theme .arrowheadPath,
 .mermaid-theme marker path,
 .mermaid-theme marker .arrowMarkerPath {
-  fill: var(--color-primary);
-  stroke: var(--color-primary);
+  fill: var(--color-text-muted);
+  stroke: var(--color-text-muted);
   stroke-width: 1px;
+}
+
+.mermaid-theme .node rect.label-container {
+  rx: var(--radius-md);
+  ry: var(--radius-md);
+}
+
+.mermaid-theme .node.emphasis .label-container {
+  fill: var(--color-primary-soft);
+  stroke: var(--color-primary);
+}
+
+.mermaid-theme .node .label text {
+  text-anchor: middle;
+}
+
+.mermaid-theme .node.emphasis text {
+  fill: var(--color-primary-text);
 }
 
 .mermaid-theme .edgeLabel rect {

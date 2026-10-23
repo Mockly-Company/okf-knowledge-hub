@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, waitFor, within } from "storybook/test";
 import { withAppProviders } from "@/stories/decorators/AppProviders";
 import { DocumentsPage } from "./DocumentsPage";
 
@@ -45,6 +45,8 @@ export const Home: Story = {
       }),
     ).toHaveTextContent("새 문서");
     await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(within(canvasElement.ownerDocument.body).queryByRole("dialog")).not.toBeInTheDocument());
+    canvasElement.setAttribute("data-review-ready", "true");
   },
 };
 
