@@ -361,9 +361,19 @@ impl DraftManager {
         )?;
         // Re-check at mutation time: a preview may have become stale. Never overwrite.
         for _ in 0..64 {
-            if !validation.has_collision { break; }
-            let suggested = validation.suggested_file_name.as_deref().ok_or_else(draft_conflict_error)?;
-            validation = validate_document_target(&record.worktree_path, &record.document_roots, folder, suggested)?;
+            if !validation.has_collision {
+                break;
+            }
+            let suggested = validation
+                .suggested_file_name
+                .as_deref()
+                .ok_or_else(draft_conflict_error)?;
+            validation = validate_document_target(
+                &record.worktree_path,
+                &record.document_roots,
+                folder,
+                suggested,
+            )?;
         }
         if validation.has_collision {
             return Err(draft_conflict_error());
@@ -1411,23 +1421,75 @@ mod tests {
     }
 
     #[test]
-    fn repeated_titles_get_numbered_paths_without_overwriting_and_create_nested_folders_only_on_save() {
+    fn repeated_titles_get_numbered_paths_without_overwriting_and_create_nested_folders_only_on_save(
+    ) {
         let fixture = Fixture::new();
         let manager = fixture.manager();
         let change_id = Uuid::new_v4();
-        manager.create_change(fixture.repository.path(), fixture.workspace_id, "hyeeun", "문서", change_id, vec!["docs".to_owned()]).unwrap();
+        manager
+            .create_change(
+                fixture.repository.path(),
+                fixture.workspace_id,
+                "hyeeun",
+                "문서",
+                change_id,
+                vec!["docs".to_owned()],
+            )
+            .unwrap();
         let worktree = manager.active_worktree(fixture.workspace_id).unwrap();
         assert!(!worktree.join("docs/api/v2/contracts").exists());
-        let template = built_in_templates().into_iter().find(|item| item.id == "builtin:blank").unwrap();
-        let first = manager.add_document(fixture.workspace_id, change_id, "docs/api/v2/contracts", "지도 검색", "지도 검색", &template, Uuid::new_v4()).unwrap();
-        let second = manager.add_document(fixture.workspace_id, change_id, "docs/api/v2/contracts", "지도 검색", "지도 검색", &template, Uuid::new_v4()).unwrap();
-        let third = manager.add_document(fixture.workspace_id, change_id, "docs/api/v2/contracts", "지도 검색", "지도 검색", &template, Uuid::new_v4()).unwrap();
+        let template = built_in_templates()
+            .into_iter()
+            .find(|item| item.id == "builtin:blank")
+            .unwrap();
+        let first = manager
+            .add_document(
+                fixture.workspace_id,
+                change_id,
+                "docs/api/v2/contracts",
+                "지도 검색",
+                "지도 검색",
+                &template,
+                Uuid::new_v4(),
+            )
+            .unwrap();
+        let second = manager
+            .add_document(
+                fixture.workspace_id,
+                change_id,
+                "docs/api/v2/contracts",
+                "지도 검색",
+                "지도 검색",
+                &template,
+                Uuid::new_v4(),
+            )
+            .unwrap();
+        let third = manager
+            .add_document(
+                fixture.workspace_id,
+                change_id,
+                "docs/api/v2/contracts",
+                "지도 검색",
+                "지도 검색",
+                &template,
+                Uuid::new_v4(),
+            )
+            .unwrap();
         assert_eq!(first.path, "docs/api/v2/contracts/지도-검색.md");
         assert_eq!(second.path, "docs/api/v2/contracts/지도-검색-2.md");
         assert_eq!(third.path, "docs/api/v2/contracts/지도-검색-3.md");
-        assert_eq!(fs::read_to_string(worktree.join(&first.path)).unwrap(), first.markdown);
-        assert_eq!(fs::read_to_string(worktree.join(&second.path)).unwrap(), second.markdown);
-        assert_eq!(fs::read_to_string(worktree.join(&third.path)).unwrap(), third.markdown);
+        assert_eq!(
+            fs::read_to_string(worktree.join(&first.path)).unwrap(),
+            first.markdown
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.join(&second.path)).unwrap(),
+            second.markdown
+        );
+        assert_eq!(
+            fs::read_to_string(worktree.join(&third.path)).unwrap(),
+            third.markdown
+        );
     }
 
     #[cfg(unix)]

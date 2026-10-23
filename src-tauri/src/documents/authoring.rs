@@ -171,7 +171,9 @@ pub fn validate_document_target(
             .map(|suffix| {
                 let suffix = format!("-{suffix}");
                 let mut end = stem.len().min(MAX_FILE_STEM_BYTES - suffix.len());
-                while !stem.is_char_boundary(end) { end -= 1; }
+                while !stem.is_char_boundary(end) {
+                    end -= 1;
+                }
                 format!("{}{suffix}.md", stem[..end].trim_end_matches('-'))
             })
             .find(|candidate| {
@@ -527,7 +529,8 @@ mod tests {
         fs::create_dir_all(root.path().join("docs")).unwrap();
         let name = format!("{}.md", "a".repeat(200));
         fs::write(root.path().join("docs").join(&name), "existing").unwrap();
-        let result = validate_document_target(root.path(), &["docs".to_owned()], "docs", &name).unwrap();
+        let result =
+            validate_document_target(root.path(), &["docs".to_owned()], "docs", &name).unwrap();
         let suggestion = result.suggested_file_name.unwrap();
         assert_eq!(suggestion, format!("{}-2.md", "a".repeat(198)));
         assert!(normalize_document_file_name(&suggestion).is_ok());
