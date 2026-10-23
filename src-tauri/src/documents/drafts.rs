@@ -1285,6 +1285,13 @@ mod tests {
             )
             .unwrap();
 
+        let original_markdown = fs::read_to_string(
+            manager
+                .active_worktree(fixture.workspace_id)
+                .unwrap()
+                .join("docs/README.md"),
+        )
+        .unwrap();
         let opened = manager
             .add_existing_document(
                 fixture.workspace_id,
@@ -1299,7 +1306,7 @@ mod tests {
         assert_eq!(opened.path, "docs/README.md");
         assert_eq!(
             opened.markdown,
-            format!("---\nokf_hub_id: {document_id}\ntitle: Existing\n---\n# Existing\n")
+            format!("---\nokf_hub_id: {document_id}\ntitle: Existing\n---\n{original_markdown}")
         );
         assert_eq!(
             fs::read_to_string(
