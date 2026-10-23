@@ -1,4 +1,6 @@
-use std::fs::{self, File};
+use std::fs;
+#[cfg(not(target_os = "windows"))]
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};

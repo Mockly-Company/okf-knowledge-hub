@@ -273,6 +273,10 @@ fn invalid_cursor_error() -> AppError {
 }
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 trait AccessTokenProvider: Send + Sync {
     async fn valid_access_token(&self) -> Result<AccessToken, AppError>;
 }
@@ -353,6 +357,10 @@ impl TransportError {
 }
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 trait HttpTransport: Send + Sync {
     async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError>;
 }

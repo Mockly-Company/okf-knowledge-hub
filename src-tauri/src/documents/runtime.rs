@@ -28,6 +28,10 @@ pub struct DocumentWorkspace {
 }
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 pub trait DocumentSource: Send + Sync {
     fn discover(&self, workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError>;
 
