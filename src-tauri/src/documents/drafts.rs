@@ -216,6 +216,9 @@ impl AnchoredWorktree {
             self.root
                 .rename(&temp, &self.root, path)
                 .map_err(|_| invalid_document_error())?;
+            // Windows cannot flush a directory handle this way, matching
+            // sync_parent_directory's platform policy for metadata writes.
+            #[cfg(not(target_os = "windows"))]
             self.root
                 .open_dir(parent)
                 .and_then(|directory| directory.into_std_file().sync_all())
@@ -1992,6 +1995,32 @@ mod tests {
         assert_eq!(
             fs::read_to_string(outside.path().join("existing.md")).unwrap(),
             "outside\n"
+        );
+    }
+
+    #[test]
+    fn anchored_replace_updates_existing_content_and_removes_its_temp_file() {
+        let worktree = tempfile::tempdir().unwrap();
+        fs::create_dir(worktree.path().join("docs")).unwrap();
+        let path = Path::new("docs/existing.md");
+        fs::write(worktree.path().join(path), "original\n").unwrap();
+        let anchored = super::AnchoredWorktree::open(worktree.path()).unwrap();
+        let result = anchored
+            .atomic_replace_if_hash(
+                path,
+                b"saved\n",
+                Uuid::new_v4(),
+                &super::content_hash(b"original\n"),
+            )
+            .unwrap();
+        assert!(matches!(result, super::AnchoredReplace::Replaced));
+        assert_eq!(
+            fs::read_to_string(worktree.path().join(path)).unwrap(),
+            "saved\n"
+        );
+        assert_eq!(
+            fs::read_dir(worktree.path().join("docs")).unwrap().count(),
+            1
         );
     }
 
