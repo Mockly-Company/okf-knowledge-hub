@@ -1,6 +1,6 @@
 # GitHub 인증 정보 저장과 macOS Keychain
 
-이 문서는 OkHub가 GitHub Access Token과 Refresh Token을 운영체제 보안 저장소에 보관할 때 필요한 개념, 2026년 8월에 확인한 macOS 개발 환경 오류, 그리고 후속 구현 판단 기준을 기록한다.
+이 문서는 OkHub가 GitHub Access Token과 Refresh Token을 다룰 때 필요한 개념, 2026년 8월에 확인한 macOS 개발 환경 오류, 그리고 개발·배포 저장 정책을 기록한다.
 
 토큰은 Rust 계층에서만 다룬다. React 상태, Tauri command 응답, Tauri event, 일반 설정 파일과 로그에는 토큰을 넣지 않는다. 앱 실행 중에는 Rust 프로세스의 메모리 인증 세션을 사용하여 매 요청마다 보안 저장소를 다시 읽지 않는다.
 
@@ -13,7 +13,7 @@
 코드 서명은 단순히 “앱 파일에 이름을 붙이는 것”이 아니다. 서명에는 앱 식별자, 개발 팀 식별자, entitlement 같은 보안 정보가 결합될 수 있다.
 
 - 정식 배포 앱: 개발자가 Apple Developer 인증서와 배포 설정으로 서명한다.
-- 로컬 `tauri dev`: 일반적으로 `cargo run`으로 생성된 개발 바이너리를 실행한다. 이 바이너리는 정식 배포 서명이 아니라 ad-hoc 또는 linker signature만 가질 수 있다.
+- 로컬 `tauri dev`: OkHub는 개발자 기기에 한 번 만든 `OkHub Local Development` identity로 매 재빌드 결과를 같은 식별자(`com.okhub.desktop.dev`)로 서명한다.
 - 일반 사용자: 개발자가 서명한 앱을 설치하므로 사용자 각자가 인증서를 만들 필요가 없다.
 - 소스를 내려받아 직접 개발하는 사람: 정식 서명 설정 없이 `tauri dev`를 실행할 수 있어야 한다면 별도의 개발 호환 전략이 필요하다.
 
@@ -165,9 +165,9 @@ pnpm tauri dev
 
 ### 로컬 개발과 직접 빌드
 
-오픈소스 기여자가 저장소를 clone하여 `pnpm tauri dev`를 실행하는 경우, 정식 Apple signing과 provisioning이 없을 수 있다. 이 환경에서 Data Protection Keychain만 강제하면 개발자마다 Apple Developer 설정을 요구하게 된다.
+오픈소스 기여자가 저장소를 clone하여 `pnpm tauri dev`를 실행하는 경우, 정식 Apple signing과 provisioning이 없을 수 있다. 이 환경에서는 Apple Developer 인증서가 아니라 기기별 self-signed 개발 identity와 파일 Keychain을 사용한다.
 
-OkHub의 재사용 가능한 오픈소스 도구라는 목표를 유지하려면 로컬 개발 환경도 별도의 Apple 인증서 준비 없이 실행할 수 있어야 한다.
+최초 한 번 `pnpm dev:setup:macos`를 실행하면 identity를 생성하거나 기존 identity를 검증한다. 이후 `pnpm tauri dev`의 Cargo runner가 Rust 재빌드 결과를 실행하기 직전에 같은 identity로 서명한다. identity가 없거나 서명이 유효하지 않으면 ad-hoc 상태로 실행하지 않고 설정 명령을 안내하며 중단한다.
 
 ## 확정한 개발·배포 저장 전략
 
@@ -179,8 +179,8 @@ macOS release 빌드
    └─ com.okhub.desktop.github
 
 macOS debug 빌드와 tauri dev
-└─ SecItem 기반 파일 Keychain
-   └─ com.okhub.desktop.github.dev
+└─ 서명된 파일 Keychain
+   └─ com.okhub.desktop.github.dev.signed
 
 Windows
 └─ Windows Credential Manager
@@ -192,16 +192,15 @@ Windows
 이 정책의 의도는 다음과 같다.
 
 - 공식 앱은 Apple이 권장하는 Data Protection Keychain을 사용한다.
-- 로컬 개발자는 각자 Apple 인증서를 만들지 않아도 된다.
-- 개발 호환 경로도 오래된 `SecKeychain` 래퍼 대신 가능하면 `SecItem` API를 사용한다.
+- 로컬 개발자는 Apple Developer 계정이나 공식 배포 인증서가 필요하지 않지만, 기기별 개발 identity를 최초 한 번 준비한다.
+- `tauri dev`의 실행 파일은 재빌드되어도 같은 identity와 identifier로 서명되므로 파일 Keychain ACL이 매번 다른 ad-hoc 앱으로 판단하지 않는다.
 - 실행 중 오류를 보고 다른 backend로 자동 fallback하지 않는다. 어떤 저장소를 쓰는지는 빌드 종류로 결정한다.
 - release 빌드에 필요한 signing·provisioning·entitlement가 없으면 Data Protection Keychain 작업은 안전한 공개 오류로 실패한다.
 - 토큰은 어느 경로에서도 React, event, command 결과와 일반 설정 파일에 포함하지 않는다.
-- 한 번 불러온 토큰은 Rust 메모리 인증 세션에서 사용하여 같은 실행 중 Keychain 반복 조회를 피한다.
+- 개발 중 토큰의 영구 사본은 파일 Keychain에만 두고, 실행 중 사본은 Rust 프로세스 안에서만 사용하며 React, event, command 결과에 반환하지 않는다.
+- 공식 앱에서 한 번 불러온 토큰은 Rust 메모리 인증 세션에서 사용하여 같은 실행 중 Keychain 반복 조회를 피한다.
 
-개발용과 공식 앱의 service namespace가 다르므로 기존 항목의 ACL이나 손상 상태가 서로 영향을 주지 않는다. 자동 마이그레이션은 하지 않으며, 각 환경에서 최초 한 번 로그인한다.
-
-파일 기반 Keychain은 개발 바이너리가 다시 빌드될 때 새 실행 파일로 판단되어 암호를 다시 물을 가능성이 있다. 따라서 이 경로는 공식 배포의 대체물이 아니라 로컬 개발 호환 경로다.
+개발 앱을 완전히 종료하거나 Rust 코드 변경으로 프로세스가 재시작되면 새 프로세스는 개발 전용 파일 Keychain에서 인증을 한 번 복원한다. 같은 실행 중에는 Rust 메모리 인증 세션을 사용하므로 요청마다 Keychain을 다시 읽지 않는다. 공식 release의 자격 증명은 별도 namespace의 Data Protection Keychain에 남는다.
 
 현재 release 빌드가 Data Protection Keychain을 사용한다는 사실만으로 배포 준비가 끝나는 것은 아니다. 공식 Apple signing·provisioning 구성과 unsigned release 직접 배포 지원은 별도 배포 작업으로 남긴다.
 
@@ -211,19 +210,19 @@ Windows
 2. 소스에서 직접 만든 unsigned release를 지원할지
 3. CI에서 실제 build entitlement와 토큰 비노출 계약을 어떻게 검증할지
 
-## 별도 조사: 파일 Keychain 암호 창 중복 표시
+## 파일 Keychain 암호 창 중복 표시: 확정 원인과 조치
 
-파일 Keychain에서 한 번의 인증 과정 중 암호 창이 2회, 일부 실행에서는 4~5회 나타난 현상은 Data Protection Keychain의 `-34018`과 다른 문제다. 현재 원인은 확정하지 않았다.
+암호 창이 6회 나타난 실행에서 앱 로그에는 credential `load` 1회와 `save` 1회만 있었다. AuthService 또는 React가 같은 요청을 반복한 것이 아니었다.
 
-개발 로그로 프로세스 ID, credential operation ID, AuthService 요청 횟수, `load/save/delete`, `SecItemAdd`와 duplicate 이후 update 결과를 연결하고 다음 순서로 재현한다.
+같은 시점의 macOS `securityd` 로그에는 Tauri의 Rust watcher가 만든 서로 다른 GUI 프로세스 PID가 연속으로 기록됐고, 각 프로세스에서 다음 오류가 확인됐다.
 
-1. 개발용 credential 항목이 없는 상태에서 최초 로그인
-2. 같은 실행에서 기능 사용
-3. 같은 실행에서 로그아웃 후 재로그인
-4. 재빌드 없이 앱 종료·재실행
-5. 바이너리 재빌드 후 재실행
+```text
+code signing check failed rc=-67065
+```
 
-프롬프트 시점과 로그를 대조하여 중복 AuthService 호출, 하나의 save 내부 add/update, 복수 프로세스, 재빌드에 따른 ACL 신원 변경, 기존 항목의 ACL·손상 중 실제 원인을 구분한다. 원인을 코드·macOS 로그·재현 순서로 먼저 보고한 뒤 별도 승인을 받아 수정한다.
+실행 파일은 `Signature=adhoc`, `TeamIdentifier=not set` 상태였다. Rust 파일이 변경될 때마다 `tauri dev`가 바이너리를 다시 만들었고, 내용에 종속된 ad-hoc 서명과 CDHash도 달라졌다. 파일 Keychain의 기존 ACL은 새 바이너리를 이전에 허용한 앱과 같은 주체로 검증하지 못해 프로세스마다 암호 창을 표시했다. 저장 시 기존 항목을 발견한 `SecItemAdd → duplicate → SecItemUpdate`도 별도의 접근 승인을 요구할 수 있었다.
+
+일시적으로 프로세스 메모리 저장소를 사용해 프롬프트를 피했지만 앱 재실행마다 로그인이 풀리는 회귀가 생겼다. 최종 조치는 개발 전용 namespace와 안정적인 로컬 서명을 함께 사용하는 것이다. 기존 ad-hoc 항목의 ACL은 새 항목에 영향을 주지 않으며, Rust rebuild 뒤에도 같은 identity로 접근한다. 공식 release의 Data Protection Keychain 정책은 변경하지 않는다.
 
 ## 오류 코드와 진단 체크리스트
 
@@ -239,7 +238,7 @@ Windows
 1. 실행 중인 OkHub 개발 세션을 모두 종료한다.
 2. `pnpm tauri dev`를 한 번만 실행한다.
 3. 실제 GUI 프로세스가 한 개인지 확인한다.
-4. `OKHUB_GITHUB_CLIENT_ID`가 현재 실행 환경에 전달됐는지 확인한다.
+4. 자체 GitHub App을 사용하는 경우에만 `OKHUB_GITHUB_CLIENT_ID`가 현재 실행 환경에 전달됐는지 확인한다. 공식 App은 코드에 포함된 공개 Client ID를 사용한다.
 
 ### 서명과 entitlement 확인
 

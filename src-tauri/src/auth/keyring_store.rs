@@ -13,7 +13,7 @@ use crate::error::{AppError, ErrorCode, RecoveryAction};
 
 pub const SERVICE_NAME: &str = "com.okhub.desktop.github";
 #[cfg(target_os = "macos")]
-pub const DEVELOPMENT_SERVICE_NAME: &str = "com.okhub.desktop.github.dev";
+pub const DEVELOPMENT_SERVICE_NAME: &str = "com.okhub.desktop.github.dev.signed";
 pub const ACCOUNT_NAME: &str = "current-user";
 
 #[cfg(target_os = "macos")]

@@ -1,6 +1,9 @@
 import { useEffect, useId, useState } from "react";
 import DOMPurify from "dompurify";
 import mermaid from "mermaid";
+import { Expand } from "lucide-react";
+import { IconButton } from "@/components/ui/button";
+import { DiagramDialog } from "./DiagramDialog";
 
 let mermaidInitialized = false;
 
@@ -10,6 +13,7 @@ function initializeMermaid(): void {
     startOnLoad: false,
     securityLevel: "strict",
     theme: "neutral",
+    htmlLabels: false,
   });
   mermaidInitialized = true;
 }
@@ -84,11 +88,13 @@ export function MermaidBlock({ source }: MermaidBlockProps) {
   const id = `okhub-mermaid-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
     setSvg(null);
     setFailed(false);
+    setOpen(false);
     initializeMermaid();
 
     void mermaid.render(id, source).then(
@@ -108,7 +114,7 @@ export function MermaidBlock({ source }: MermaidBlockProps) {
   if (failed) {
     return (
       <div className="mermaid-block mermaid-block--failed">
-        <pre>
+        <pre className="mermaid-block__source" tabIndex={0} role="region" aria-label="다이어그램 원문 가로 스크롤">
           <code>{source}</code>
         </pre>
         <p role="alert">다이어그램을 표시할 수 없습니다.</p>
@@ -120,10 +126,21 @@ export function MermaidBlock({ source }: MermaidBlockProps) {
     <div className="mermaid-block" aria-busy={svg === null}>
       {svg === null ? <p>다이어그램을 렌더링하는 중…</p> : null}
       {svg !== null ? (
-        <div
-          className="mermaid-block__svg"
-          dangerouslySetInnerHTML={{ __html: svg }}
-        />
+        <>
+          <div
+            className="mermaid-block__svg mermaid-theme"
+            dangerouslySetInnerHTML={{ __html: svg }}
+          />
+          <IconButton
+            className="mermaid-block__expand"
+            label="다이어그램 크게 보기"
+            tooltip={false}
+            onClick={() => setOpen(true)}
+          >
+            <Expand aria-hidden="true" strokeWidth={1.75} />
+          </IconButton>
+          <DiagramDialog svg={svg} open={open} onOpenChange={setOpen} />
+        </>
       ) : null}
     </div>
   );

@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { UnstyledButton } from "@/components/ui/unstyled-button";
 import { useDocuments } from "../DocumentsProvider";
 
 export function DocumentHistory() {
@@ -18,10 +19,10 @@ export function DocumentHistory() {
       <ol>
         {state.historyItems.map((item) => (
           <li key={item.commitOid}>
-            <button type="button" onClick={() => selectDocumentVersion(item)}>
+            <UnstyledButton onClick={() => selectDocumentVersion(item)}>
               <strong>{item.message}</strong>
               <span>{item.shortOid} · {item.authorName}</span>
-            </button>
+            </UnstyledButton>
           </li>
         ))}
       </ol>

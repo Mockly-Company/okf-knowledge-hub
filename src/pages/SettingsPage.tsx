@@ -1,10 +1,17 @@
 import { useState } from "react";
 import { Check } from "lucide-react";
+import { PageHeader } from "@/components/patterns/PageHeader";
+import { SectionHeader } from "@/components/patterns/SectionHeader";
+import { Radio } from "@/components/ui/radio";
+import { Button } from "@/components/ui/button";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
 import { WorkspaceSettingsPanel } from "@/features/workspace-connection/components/WorkspaceSettingsPanel";
 import { GitHubAccountPanel } from "@/features/workspace-connection/components/GitHubAccountPanel";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { cn } from "@/lib/utils";
+import { BuildInfoPanel } from "@/features/build-info/BuildInfoPanel";
+import type { BuildInfoGateway } from "@/features/build-info/BuildInfoGateway";
+import { createBuildInfoGateway } from "@/infrastructure/build-info/createBuildInfoGateway";
 
 const settingsCategories = [
   "워크스페이스",
@@ -13,6 +20,7 @@ const settingsCategories = [
   "작업 방식",
   "화면",
   "AI 연동",
+  "앱 정보",
 ];
 
 const options: Array<{
@@ -32,19 +40,27 @@ const options: Array<{
   },
 ];
 
-export function SettingsPage() {
+const defaultBuildInfoGateway = createBuildInfoGateway();
+
+export function SettingsPage({
+  buildInfoGateway = defaultBuildInfoGateway,
+}: {
+  buildInfoGateway?: BuildInfoGateway;
+}) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [activeCategory, setActiveCategory] = useState("화면");
 
   return (
-    <section className="p-8" aria-labelledby="settings-title">
-      <h1
-        id="settings-title"
-        className="m-0 text-[length:var(--font-h1-size)] leading-[var(--font-h1-line)] font-bold text-[var(--color-text-strong)]"
-      >
-        Settings
-      </h1>
-      <div className="mt-8 grid max-w-4xl gap-8 md:grid-cols-[180px_1fr]">
+    <section
+      className="min-h-full bg-[var(--color-surface)] px-[var(--page-padding-inline)] pt-[var(--page-block-start)] pb-[var(--space-10)]"
+      aria-labelledby="settings-title"
+    >
+      <PageHeader
+        titleId="settings-title"
+        title="Settings"
+        description="워크스페이스와 앱 환경을 관리합니다."
+      />
+      <div className="mt-[var(--space-8)] grid max-w-[1120px] gap-[var(--space-8)] md:grid-cols-[180px_1fr]">
         <aside aria-labelledby="settings-categories-title">
           <h2 id="settings-categories-title" className="sr-only">
             설정 카테고리
@@ -52,18 +68,19 @@ export function SettingsPage() {
           <ul className="m-0 grid list-none content-start gap-1 p-0">
             {settingsCategories.map((item) => (
               <li key={item}>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => setActiveCategory(item)}
                   aria-current={item === activeCategory ? "page" : undefined}
                   className={cn(
-                    "block w-full rounded-[var(--radius-md)] px-3 py-2 text-left",
+                    "w-full justify-start",
                     item === activeCategory &&
-                      "bg-[var(--color-primary-soft)] font-semibold text-[var(--color-primary-text)]",
+                      "bg-[var(--color-primary-soft)] font-[number:var(--font-weight-control)] text-[var(--color-primary-text)]",
                   )}
                 >
                   {item}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
@@ -74,26 +91,23 @@ export function SettingsPage() {
           <GitHubAccountPanel />
         ) : activeCategory === "화면" ? (
         <div>
-          <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">
-            화면
-          </h2>
-          <p className="mt-1 text-[var(--color-text-muted)]">
-            이 기기의 화면 표시만 변경하며 Git으로 공유하지 않습니다.
-          </p>
-          <fieldset className="mt-6 border-0 p-0" disabled={isLoading}>
-            <legend className="mb-3 font-semibold text-[var(--color-text-strong)]">
+          <SectionHeader
+            title="화면"
+            description="이 기기의 화면 표시만 변경하며 Git으로 공유하지 않습니다."
+          />
+          <fieldset className="mt-[var(--space-6)] border-0 p-0" disabled={isLoading}>
+            <legend className="mb-[var(--space-3)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
               표시 밀도
             </legend>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-[var(--space-3)] md:grid-cols-2">
               {options.map((option) => {
                 const selected = displayDensity === option.value;
                 const id = `display-density-${option.value}`;
 
                 return (
                   <div key={option.value}>
-                    <input
+                    <Radio
                       id={id}
-                      type="radio"
                       name="display-density"
                       aria-label={option.label}
                       value={option.value}
@@ -104,19 +118,26 @@ export function SettingsPage() {
                     <label
                       htmlFor={id}
                       className={cn(
-                        "block cursor-pointer rounded-[var(--radius-lg)] border bg-[var(--color-surface)] p-4 peer-disabled:cursor-not-allowed peer-disabled:opacity-60 peer-focus-visible:outline-2 peer-focus-visible:outline-[var(--color-primary)] peer-focus-visible:outline-offset-2",
+                        "block cursor-pointer rounded-[var(--radius-lg)] border bg-[var(--color-surface)] p-[var(--space-4)] peer-disabled:cursor-not-allowed peer-disabled:opacity-60 peer-focus-visible:outline-[length:var(--focus-ring-width)] peer-focus-visible:outline-solid peer-focus-visible:outline-[var(--color-primary)] peer-focus-visible:outline-offset-[var(--focus-ring-offset)]",
                         selected
                           ? "border-[var(--color-primary)] bg-[var(--color-primary-soft)]"
                           : "border-[var(--color-border)]",
                       )}
                     >
-                      <span className="flex items-center justify-between font-semibold text-[var(--color-text-strong)]">
+                      <span className="flex items-center justify-between font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
                         {option.label}
                         {selected && (
-                          <Check aria-hidden="true" size={16} strokeWidth={1.75} />
+                          <Check aria-hidden="true" className="size-[var(--icon-size)]" strokeWidth={1.75} />
                         )}
                       </span>
-                      <span className="mt-1 block text-[var(--color-text-muted)]">
+                      <span
+                        className={cn(
+                          "mt-[var(--space-1)] block font-[number:var(--font-weight-description)]",
+                          selected
+                            ? "text-[var(--color-text-default)]"
+                            : "text-[var(--color-text-muted)]",
+                        )}
+                      >
                         {option.description}
                       </span>
                     </label>
@@ -126,14 +147,14 @@ export function SettingsPage() {
             </div>
           </fieldset>
         </div>
+        ) : activeCategory === "앱 정보" ? (
+          <BuildInfoPanel gateway={buildInfoGateway} />
         ) : (
           <div>
-            <h2 className="m-0 text-xl font-semibold text-[var(--color-text-strong)]">
-              {activeCategory}
-            </h2>
-            <p className="mt-1 text-[var(--color-text-muted)]">
-              이 설정은 이후 작업에서 연결합니다.
-            </p>
+            <SectionHeader
+              title={activeCategory}
+              description="이 설정은 이후 작업에서 연결합니다."
+            />
           </div>
         )}
       </div>

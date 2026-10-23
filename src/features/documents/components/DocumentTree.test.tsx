@@ -1,7 +1,8 @@
+import axe from "axe-core";
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { DocumentCatalog } from "../model";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DocumentCatalog, DocumentTreeEntry } from "../model";
 import { DocumentTree } from "./DocumentTree";
 
 const mapSummary = {
@@ -15,6 +16,7 @@ const mapSummary = {
 };
 
 const longTitle = "검색 결과가 없을 때 사용자에게 보여주는 매우 긴 안내 문서";
+const longFolderName = "검색 결과가 없을 때 사용자에게 보여주는 매우 긴 문서 폴더";
 
 const catalog: DocumentCatalog = {
   documents: [mapSummary],
@@ -39,7 +41,30 @@ const catalog: DocumentCatalog = {
   ],
 };
 
-afterEach(cleanup);
+const longFolderEntries: DocumentTreeEntry[] = [
+  {
+    kind: "folder",
+    name: longFolderName,
+    path: "docs/long-folder",
+    children: [{ kind: "document", summary: mapSummary }],
+  },
+];
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("DocumentTree", () => {
   it("expands folders without navigating and opens documents", async () => {
@@ -139,5 +164,125 @@ describe("DocumentTree", () => {
 
     expect(screen.getByText("표시할 문서가 없습니다.")).toBeVisible();
     expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("opens document creation with the selected tree folder", async () => {
+    const user = userEvent.setup();
+    const onNewDocument = vi.fn();
+    render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={onNewDocument}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "api에 새 문서" }));
+
+    expect(onNewDocument).toHaveBeenCalledWith("docs/api");
+    expect(screen.getByRole("treeitem", { name: "api" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("uses named icon-button primitives for tree-level creation actions", () => {
+    render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={() => {}}
+      />,
+    );
+
+    const headerCreate = screen.getByRole("button", { name: "새 문서" });
+    const folderCreate = screen.getByRole("button", { name: "api에 새 문서" });
+
+    expect(headerCreate).toHaveAttribute(
+      "data-variant",
+      "icon",
+    );
+    expect(folderCreate).toHaveAttribute(
+      "data-variant",
+      "icon",
+    );
+    expect(headerCreate.querySelector(".lucide-file-plus-corner")).not.toBeNull();
+    expect(folderCreate.querySelector(".lucide-file-plus-corner")).not.toBeNull();
+  });
+
+  it("keeps a long folder label in the row that owns its create action reserve", () => {
+    render(
+      <DocumentTree
+        entries={longFolderEntries}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={() => {}}
+      />,
+    );
+
+    const row = screen.getByRole("treeitem", { name: longFolderName });
+    const create = screen.getByRole("button", {
+      name: `${longFolderName}에 새 문서`,
+    });
+    const label = screen.getByText(longFolderName);
+
+    expect(row).toHaveClass("document-tree__row");
+    expect(row).toContainElement(create);
+    expect(label).toHaveClass("document-tree__label");
+    expect(row).toHaveAttribute("title", longFolderName);
+  });
+
+  it("activates the nested create button with keyboard without toggling its folder", async () => {
+    const user = userEvent.setup();
+    const onNewDocument = vi.fn();
+    render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={onNewDocument}
+      />,
+    );
+
+    const folder = screen.getByRole("treeitem", { name: "api" });
+    const createButton = screen.getByRole("button", { name: "api에 새 문서" });
+
+    createButton.focus();
+    expect(createButton).toHaveFocus();
+    expect(folder).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard("{Enter}");
+
+    expect(onNewDocument).toHaveBeenCalledTimes(1);
+    expect(onNewDocument).toHaveBeenCalledWith("docs/api");
+    expect(folder).toHaveAttribute("aria-expanded", "false");
+
+    await user.keyboard(" ");
+
+    expect(onNewDocument).toHaveBeenCalledTimes(2);
+    expect(onNewDocument).toHaveBeenNthCalledWith(2, "docs/api");
+    expect(folder).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps header actions outside the tree's required child semantics", async () => {
+    const { container } = render(
+      <DocumentTree
+        entries={catalog.roots}
+        selectedPath={null}
+        onSelectDocument={() => {}}
+        onNewDocument={() => {}}
+      />,
+    );
+
+    const result = await axe.run(container, {
+      runOnly: {
+        type: "rule",
+        values: ["aria-required-children"],
+      },
+    });
+
+    expect(result.violations).toEqual([]);
   });
 });

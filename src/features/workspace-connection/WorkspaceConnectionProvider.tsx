@@ -52,8 +52,9 @@ export interface WorkspaceConnectionContextValue {
   refreshRepositories(): Promise<void>;
   loadNextRepositories(): Promise<void>;
   selectRepository(repository: GithubRepositorySummary): void;
-  connectExistingClone(): Promise<void>;
-  cloneIntoSelectedParent(): Promise<void>;
+  pickLocalDirectory(): Promise<string | null>;
+  connectExistingClone(path?: string): Promise<void>;
+  cloneIntoSelectedParent(parentDirectory?: string): Promise<void>;
   confirmCloneTarget(): Promise<void>;
   cancelCloneTarget(): void;
   chooseAnotherCloneDirectory(): Promise<void>;
@@ -419,13 +420,21 @@ export function WorkspaceConnectionProvider({
     dispatchAccepted({ type: "repositorySelected", repository });
   }, [dispatchAccepted]);
 
-  const connectExistingClone = useCallback(async () => {
+  const pickLocalDirectory = useCallback(async () => {
+    const current = stateRef.current;
+    if (current.step !== "local") return null;
+    const path = await gateway.pickDirectory();
+    const latest = stateRef.current;
+    return latest.step === "local" && latest.selectedRepository.id === current.selectedRepository.id ? path : null;
+  }, [gateway]);
+
+  const connectExistingClone = useCallback(async (selectedPath?: string) => {
     const current = stateRef.current;
     if (current.step !== "local" || !current.selectedRepository) return;
-    const path = await gateway.pickDirectory();
+    const path = selectedPath ?? await pickLocalDirectory();
     if (!path) return;
     await inspectLocalClone({ id: operationId(), repositoryId: current.selectedRepository.id, path });
-  }, [gateway, inspectLocalClone]);
+  }, [pickLocalDirectory, inspectLocalClone]);
 
   const choosePostMergeClone = useCallback(async () => {
     const current = stateRef.current;
@@ -448,10 +457,11 @@ export function WorkspaceConnectionProvider({
 
   const selectCloneTarget = useCallback(async (
     mode: CloneTargetPreview["mode"],
+    selectedParent?: string,
   ) => {
     const current = stateRef.current;
     if (current.step !== "local" || !current.selectedRepository) return;
-    const parentDirectory = await gateway.pickDirectory();
+    const parentDirectory = selectedParent ?? await gateway.pickDirectory();
     if (!parentDirectory) return;
     const latest = stateRef.current;
     if (
@@ -466,8 +476,10 @@ export function WorkspaceConnectionProvider({
     });
   }, [gateway]);
 
-  const cloneIntoSelectedParent = useCallback(async () => {
-    await selectCloneTarget("start");
+  const cloneIntoSelectedParent = useCallback(async (parentDirectory?: string) => {
+    const current = stateRef.current;
+    const alternate = current.step === "local" && current.status === "error" && current.errorContext === "pre_repository" && current.failedOperation === "clone";
+    await selectCloneTarget(alternate ? "alternate_directory" : "start", parentDirectory);
   }, [selectCloneTarget]);
 
   const confirmCloneTarget = useCallback(async () => {
@@ -824,6 +836,7 @@ export function WorkspaceConnectionProvider({
       refreshRepositories,
       loadNextRepositories,
       selectRepository,
+      pickLocalDirectory,
       connectExistingClone,
       cloneIntoSelectedParent,
       confirmCloneTarget,
@@ -838,7 +851,7 @@ export function WorkspaceConnectionProvider({
       startReplacement,
       cancelReplacement,
     }),
-    [account, cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, choosePostMergeClone, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, logoutGithub, openLocalPath, openVerificationUrl, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
+    [account, cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, choosePostMergeClone, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, logoutGithub, openLocalPath, openVerificationUrl, pickLocalDirectory, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
   );
 
   return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;

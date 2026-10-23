@@ -1,3 +1,4 @@
+import { submitLocalConnection } from "@/test/localConnection";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -58,9 +59,9 @@ describe("App", () => {
     gateway.approveAuthentication();
     await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
     await user.click(screen.getByRole("button", { name: "다음" }));
-    await user.click(screen.getByRole("button", { name: "기존 clone 연결" }));
+    await submitLocalConnection(user);
 
-    expect(await screen.findByRole("heading", { name: "프로젝트 진행 상황" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "내 작업" })).toBeInTheDocument();
   });
 
   it("keeps the current workspace when repository replacement is cancelled", async () => {

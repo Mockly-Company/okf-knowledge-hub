@@ -123,6 +123,16 @@ describe("GitHubAccountPanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps reauthentication details in the shell banner instead of duplicating them in Settings", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.authState = { status: "reauthentication_required" };
+    renderPanel(gateway);
+
+    expect(await screen.findByText("연결된 GitHub 계정이 없습니다.")).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "GitHub 다시 로그인" })).toBeVisible();
+  });
+
   it("has no automatically detectable accessibility violations", async () => {
     const { container } = renderPanel();
     await screen.findByText("@hyeeun");

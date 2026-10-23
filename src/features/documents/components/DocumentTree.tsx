@@ -1,5 +1,6 @@
 import {
   ChevronRight,
+  FilePlus2,
   FileText,
   Folder,
   FolderOpen,
@@ -10,15 +11,19 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent,
 } from "react";
+import { IconButton } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { DocumentTreeEntry } from "../model";
+import "./DocumentTree.css";
 
 interface DocumentTreeProps {
   entries: DocumentTreeEntry[];
   selectedPath: string | null;
   onSelectDocument(path: string): void;
+  onNewDocument?(folder: string): void;
 }
 
 interface VisibleTreeEntry {
@@ -78,6 +83,7 @@ export function DocumentTree({
   entries,
   selectedPath,
   onSelectDocument,
+  onNewDocument,
 }: DocumentTreeProps) {
   const [expanded, setExpanded] = useState<Set<string>>(
     () => new Set(ancestorPaths(entries, selectedPath)),
@@ -85,7 +91,7 @@ export function DocumentTree({
   const [activeKey, setActiveKey] = useState<string | null>(
     selectedPath ?? (entries[0] ? entryKey(entries[0]) : null),
   );
-  const itemRefs = useRef(new Map<string, HTMLButtonElement>());
+  const itemRefs = useRef(new Map<string, HTMLDivElement>());
   const visible = useMemo(
     () => visibleEntries(entries, expanded),
     [entries, expanded],
@@ -106,10 +112,6 @@ export function DocumentTree({
     setActiveKey(visible[0]?.key ?? null);
   }, [activeKey, visible]);
 
-  if (entries.length === 0) {
-    return <p className="document-tree__empty">표시할 문서가 없습니다.</p>;
-  }
-
   const toggleFolder = (path: string, shouldExpand?: boolean) => {
     const expand = shouldExpand ?? !expanded.has(path);
     if (!expand && activeKey?.startsWith(`${path}/`)) setActiveKey(path);
@@ -127,112 +129,160 @@ export function DocumentTree({
     itemRefs.current.get(key)?.focus();
   };
 
-  return (
-    <div className="document-tree" role="tree" aria-label="문서">
-      {visible.map(({ entry, key, parentPath, level }, index) => {
-        const isFolder = entry.kind === "folder";
-        const isExpanded = isFolder && expanded.has(entry.path);
-        const label = labelFor(entry);
-        const isSelected = !isFolder && selectedPath === entry.summary.path;
-        const item = (
-          <button
-            key={key}
-            ref={(element) => {
-              if (element) itemRefs.current.set(key, element);
-              else itemRefs.current.delete(key);
-            }}
-            type="button"
-            role="treeitem"
-            aria-level={level}
-            aria-expanded={isFolder ? isExpanded : undefined}
-            aria-selected={isFolder ? undefined : isSelected}
-            tabIndex={key === activeKey ? 0 : -1}
-            className={cn(
-              "document-tree__item",
-              isSelected && "document-tree__item--selected",
-            )}
-            style={{
-              "--tree-indent": `${8 + (level - 1) * 14}px`,
-            } as CSSProperties}
-            title={label}
-            onFocus={() => setActiveKey(key)}
-            onClick={() => {
-              if (entry.kind === "folder") toggleFolder(entry.path);
-              else onSelectDocument(entry.summary.path);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "ArrowDown") {
-                event.preventDefault();
-                focusEntry(visible[index + 1]?.key);
-                return;
-              }
-              if (event.key === "ArrowUp") {
-                event.preventDefault();
-                focusEntry(visible[index - 1]?.key);
-                return;
-              }
-              if (event.key === "Home") {
-                event.preventDefault();
-                focusEntry(visible[0]?.key);
-                return;
-              }
-              if (event.key === "End") {
-                event.preventDefault();
-                focusEntry(visible.at(-1)?.key);
-                return;
-              }
-              if (event.key === "ArrowRight" && entry.kind === "folder") {
-                event.preventDefault();
-                if (!isExpanded) toggleFolder(entry.path, true);
-                else if (entry.children.length > 0) {
-                  focusEntry(entryKey(entry.children[0]));
-                }
-                return;
-              }
-              if (event.key === "ArrowLeft") {
-                if (entry.kind === "folder" && isExpanded) {
-                  event.preventDefault();
-                  toggleFolder(entry.path, false);
-                } else if (parentPath) {
-                  event.preventDefault();
-                  focusEntry(parentPath);
-                }
-              }
-            }}
-          >
-            {isFolder ? (
-              <>
-                <ChevronRight
-                  aria-hidden="true"
-                  className={cn(
-                    "document-tree__chevron",
-                    isExpanded && "document-tree__chevron--expanded",
-                  )}
-                />
-                {isExpanded ? (
-                  <FolderOpen aria-hidden="true" />
-                ) : (
-                  <Folder aria-hidden="true" />
-                )}
-              </>
-            ) : (
-              <>
-                <span className="document-tree__chevron" aria-hidden="true" />
-                <FileText aria-hidden="true" />
-              </>
-            )}
-            <span>{label}</span>
-          </button>
-        );
+  const onEntryKeyDown = (
+    event: KeyboardEvent<HTMLDivElement>,
+    entry: DocumentTreeEntry,
+    index: number,
+    isExpanded: boolean,
+    parentPath: string | null,
+  ) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      focusEntry(visible[index + 1]?.key);
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      focusEntry(visible[index - 1]?.key);
+      return;
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      focusEntry(visible[0]?.key);
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      focusEntry(visible.at(-1)?.key);
+      return;
+    }
+    if (event.key === "ArrowRight" && entry.kind === "folder") {
+      event.preventDefault();
+      if (!isExpanded) toggleFolder(entry.path, true);
+      else if (entry.children.length > 0) {
+        focusEntry(entryKey(entry.children[0]));
+      }
+      return;
+    }
+    if (event.key === "ArrowLeft") {
+      if (entry.kind === "folder" && isExpanded) {
+        event.preventDefault();
+        toggleFolder(entry.path, false);
+      } else if (parentPath) {
+        event.preventDefault();
+        focusEntry(parentPath);
+      }
+      return;
+    }
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (entry.kind === "folder") toggleFolder(entry.path);
+      else onSelectDocument(entry.summary.path);
+    }
+  };
 
-        return label.length > 28 ? (
-          <Tooltip key={key} content={label}>
-            {item}
-          </Tooltip>
-        ) : (
-          item
-        );
-      })}
+  return (
+    <div className="document-tree">
+      <div className="document-tree__header">
+        <span>문서</span>
+        {onNewDocument ? (
+          <IconButton label="새 문서" onClick={() => onNewDocument("docs")}>
+            <FilePlus2 aria-hidden="true" strokeWidth={1.75} />
+          </IconButton>
+        ) : null}
+      </div>
+      {entries.length === 0 ? (
+        <p className="document-tree__empty">표시할 문서가 없습니다.</p>
+      ) : null}
+      {entries.length > 0 ? (
+        <div className="document-tree__items" role="tree" aria-label="문서">
+          {visible.map(({ entry, key, parentPath, level }, index) => {
+            const isFolder = entry.kind === "folder";
+            const isExpanded = isFolder && expanded.has(entry.path);
+            const label = labelFor(entry);
+            const isSelected = !isFolder && selectedPath === entry.summary.path;
+            const item = (
+              <div
+                ref={(element) => {
+                  if (element) itemRefs.current.set(key, element);
+                  else itemRefs.current.delete(key);
+                }}
+                role="treeitem"
+                aria-level={level}
+                aria-expanded={isFolder ? isExpanded : undefined}
+                aria-selected={isFolder ? undefined : isSelected}
+                tabIndex={key === activeKey ? 0 : -1}
+                className={cn(
+                  "document-tree__item",
+                  "document-tree__row",
+                  isSelected && "document-tree__item--selected",
+                )}
+                style={{
+                  "--tree-indent": `calc(var(--space-2) + ${level - 1} * var(--space-4))`,
+                } as CSSProperties}
+                title={label}
+                onFocus={() => setActiveKey(key)}
+                onClick={() => {
+                  if (entry.kind === "folder") toggleFolder(entry.path);
+                  else onSelectDocument(entry.summary.path);
+                }}
+                onKeyDown={(event) =>
+                  onEntryKeyDown(event, entry, index, isExpanded, parentPath)
+                }
+              >
+                {isFolder ? (
+                  <>
+                    <ChevronRight
+                      aria-hidden="true"
+                      className={cn(
+                        "document-tree__chevron",
+                        isExpanded && "document-tree__chevron--expanded",
+                      )}
+                      strokeWidth={1.75}
+                    />
+                    {isExpanded ? (
+                      <FolderOpen aria-hidden="true" strokeWidth={1.75} />
+                    ) : (
+                      <Folder aria-hidden="true" strokeWidth={1.75} />
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="document-tree__chevron" aria-hidden="true" />
+                    <FileText aria-hidden="true" strokeWidth={1.75} />
+                  </>
+                )}
+                <span className="document-tree__label">{label}</span>
+                {isFolder && onNewDocument ? (
+                  <IconButton
+                    className="document-tree__folder-create"
+                    label={`${label}에 새 문서`}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.stopPropagation();
+                      }
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onNewDocument(entry.path);
+                    }}
+                  >
+                    <FilePlus2 aria-hidden="true" strokeWidth={1.75} />
+                  </IconButton>
+                ) : null}
+              </div>
+            );
+
+            return label.length > 28 ? (
+              <Tooltip key={key} content={label}>
+                {item}
+              </Tooltip>
+            ) : (
+              <div key={key}>{item}</div>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

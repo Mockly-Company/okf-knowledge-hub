@@ -11,7 +11,7 @@ const SESSION_ID = "4b20eda7-09a0-46f9-bd3b-4de83d4b0157";
 const REQUEST_ID = "34e1764e-4278-41f8-bcf8-9f74ff6f66e0";
 
 describe("TauriDocumentsGateway", () => {
-  it("maps all eight commands to their exact camelCase argument shapes", async () => {
+  it("maps read and authoring commands to their exact camelCase argument shapes", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const invoke = async (command: string, args?: Record<string, unknown>) => {
       calls.push({ command, args });
@@ -49,6 +49,49 @@ describe("TauriDocumentsGateway", () => {
       "0123456789abcdef",
       "legacy/guide.md",
     );
+    await gateway.listDocumentTemplates(SESSION_ID);
+    await gateway.validateDocumentCreation(SESSION_ID, "docs/api", "지도 API.md");
+    await gateway.createDocumentDraft({
+      sessionId: SESSION_ID,
+      requestId: REQUEST_ID,
+      title: "지도 API",
+      folder: "docs/api",
+      fileName: "지도 API.md",
+      templateId: "builtin:api_contract",
+      separateChange: true,
+    });
+    await gateway.editExistingDocumentDraft({
+      sessionId: SESSION_ID,
+      requestId: REQUEST_ID,
+      path: "docs/guide.md",
+      title: "Guide",
+    });
+    await gateway.duplicateTeamTemplate({
+      sessionId: SESSION_ID,
+      requestId: REQUEST_ID,
+      sourceTemplateId: "builtin:api_contract",
+      fileName: "mockly-api.md",
+      label: "Mockly API",
+      description: null,
+      separateChange: false,
+    });
+    await gateway.listLocalDocumentDrafts(SESSION_ID);
+    await gateway.getActiveDraftRecovery(SESSION_ID);
+    await gateway.switchLocalDocumentDraft(
+      SESSION_ID,
+      "54bf90af-b193-4387-8618-ae168b775407",
+      "269482aa-2c25-4a64-9006-c64ff075b9e5",
+    );
+    await gateway.closeLocalDocumentDraft(SESSION_ID);
+    await gateway.saveDocumentDraft({
+      sessionId: SESSION_ID,
+      requestId: REQUEST_ID,
+      changeId: "269482aa-2c25-4a64-9006-c64ff075b9e5",
+      documentId: "80a44162-92c6-4f2c-9b77-ef5c42a52e5a",
+      path: "docs/api/지도-api.md",
+      expectedHash: "abc123",
+      markdown: "# 지도 API\n",
+    });
 
     expect(calls).toEqual([
       {
@@ -103,6 +146,85 @@ describe("TauriDocumentsGateway", () => {
           requestId: REQUEST_ID,
           commitOid: "0123456789abcdef",
           pathAtCommit: "legacy/guide.md",
+        },
+      },
+      {
+        command: "list_document_templates",
+        args: { sessionId: SESSION_ID },
+      },
+      {
+        command: "validate_document_creation",
+        args: { sessionId: SESSION_ID, folder: "docs/api", fileName: "지도 API.md" },
+      },
+      {
+        command: "create_document_draft",
+        args: {
+          request: {
+            sessionId: SESSION_ID,
+            requestId: REQUEST_ID,
+            title: "지도 API",
+            folder: "docs/api",
+            fileName: "지도 API.md",
+            templateId: "builtin:api_contract",
+            separateChange: true,
+          },
+        },
+      },
+      {
+        command: "edit_existing_document_draft",
+        args: {
+          request: {
+            sessionId: SESSION_ID,
+            requestId: REQUEST_ID,
+            path: "docs/guide.md",
+            title: "Guide",
+          },
+        },
+      },
+      {
+        command: "duplicate_team_template",
+        args: {
+          request: {
+            sessionId: SESSION_ID,
+            requestId: REQUEST_ID,
+            sourceTemplateId: "builtin:api_contract",
+            fileName: "mockly-api.md",
+            label: "Mockly API",
+            description: null,
+            separateChange: false,
+          },
+        },
+      },
+      {
+        command: "list_local_document_drafts",
+        args: { sessionId: SESSION_ID },
+      },
+      {
+        command: "get_active_draft_recovery",
+        args: { sessionId: SESSION_ID },
+      },
+      {
+        command: "switch_local_document_draft",
+        args: {
+          sessionId: SESSION_ID,
+          requestId: "54bf90af-b193-4387-8618-ae168b775407",
+          changeId: "269482aa-2c25-4a64-9006-c64ff075b9e5",
+        },
+      },
+      {
+        command: "close_local_document_draft",
+        args: { sessionId: SESSION_ID },
+      },
+      {
+        command: "save_document_draft",
+        args: {
+          sessionId: SESSION_ID,
+          requestId: REQUEST_ID,
+          changeId: "269482aa-2c25-4a64-9006-c64ff075b9e5",
+          documentId: "80a44162-92c6-4f2c-9b77-ef5c42a52e5a",
+          path: "docs/api/지도-api.md",
+          expectedHash: "abc123",
+          markdown: "# 지도 API\n",
         },
       },
     ]);

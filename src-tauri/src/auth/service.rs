@@ -6,7 +6,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use crate::auth::model::{AccessToken, AuthStatusEvent, DeviceAuthorization, DeviceTokenPoll};
+use crate::auth::model::{
+    AccessToken, AuthStatusEvent, DeviceAuthorization, DeviceTokenPoll, GithubUserSummary,
+};
 use crate::auth::ports::{AuthEventSink, Clock, CredentialStore, Delay, DeviceFlowApi};
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 
@@ -98,6 +100,7 @@ pub struct AuthService {
     begin_reservations: Arc<std::sync::Mutex<HashMap<Uuid, u64>>>,
     refresh: Mutex<()>,
     access_session: Mutex<AccessSession>,
+    authenticated_principal: Mutex<Option<GithubUserSummary>>,
 }
 
 impl AuthService {
@@ -120,6 +123,7 @@ impl AuthService {
             begin_reservations: Arc::new(std::sync::Mutex::new(HashMap::new())),
             refresh: Mutex::new(()),
             access_session: Mutex::new(AccessSession::Uninitialized),
+            authenticated_principal: Mutex::new(None),
         }
     }
 
@@ -128,6 +132,7 @@ impl AuthService {
         let (generation, reservation) = {
             let mut lifecycle = self.lifecycle.lock().await;
             invalidate_lifecycle(&mut lifecycle);
+            *self.authenticated_principal.lock().await = None;
             let generation = lifecycle.generation;
             let reservation =
                 BeginReservation::new(self.begin_reservations.clone(), request_id, generation);
@@ -319,18 +324,29 @@ impl AuthService {
                         let _ = self.events.emit(AuthStatusEvent::Cancelled { request_id });
                         return delete_result;
                     }
-                    lifecycle.active.remove(&request_id);
-                    drop(lifecycle);
                     *self.access_session.lock().await = AccessSession::Authenticated {
                         access_token: tokens.access_token().clone(),
                         expires_at_unix: tokens.access_expires_at_unix(),
                     };
+                    *self.authenticated_principal.lock().await = Some(user.clone());
+                    lifecycle.active.remove(&request_id);
+                    drop(lifecycle);
                     if !self
                         .events
                         .emit(AuthStatusEvent::Authenticated { request_id, user })
                     {
-                        self.credentials.delete().await?;
-                        *self.access_session.lock().await = AccessSession::SignedOut;
+                        let lifecycle = self.lifecycle.lock().await;
+                        if lifecycle.generation == authorization.generation
+                            && !self.has_begin_reservation(lifecycle.generation)
+                            && lifecycle
+                                .active
+                                .values()
+                                .all(|job| job.kind != JobKind::Login)
+                        {
+                            self.credentials.delete().await?;
+                            *self.access_session.lock().await = AccessSession::SignedOut;
+                            *self.authenticated_principal.lock().await = None;
+                        }
                     }
                     return Ok(());
                 }
@@ -344,6 +360,51 @@ impl AuthService {
         self.access_token_locked()
             .await?
             .ok_or_else(|| self.reauthentication_required())
+    }
+
+    pub(crate) async fn authenticated_principal(&self) -> Result<GithubUserSummary, AppError> {
+        self.authenticated_principal
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(reauthentication_error)
+    }
+
+    pub(crate) async fn establish_authenticated_principal_if_current(
+        &self,
+        expected_generation: u64,
+        user: GithubUserSummary,
+    ) -> bool {
+        let lifecycle = self.lifecycle.lock().await;
+        if lifecycle.generation != expected_generation
+            || lifecycle
+                .active
+                .values()
+                .any(|job| job.kind == JobKind::Login)
+            || self.has_begin_reservation(lifecycle.generation)
+        {
+            return false;
+        }
+        *self.authenticated_principal.lock().await = Some(user);
+        true
+    }
+
+    pub(crate) async fn invalidate_authenticated_principal_if_current(
+        &self,
+        expected_generation: u64,
+    ) -> bool {
+        let lifecycle = self.lifecycle.lock().await;
+        if lifecycle.generation != expected_generation
+            || lifecycle
+                .active
+                .values()
+                .any(|job| job.kind == JobKind::Login)
+            || self.has_begin_reservation(lifecycle.generation)
+        {
+            return false;
+        }
+        *self.authenticated_principal.lock().await = None;
+        true
     }
 
     async fn access_token_locked(&self) -> Result<Option<AccessToken>, AppError> {
@@ -401,12 +462,14 @@ impl AuthService {
             Ok(Some(tokens)) => tokens,
             Ok(None) => {
                 *self.access_session.lock().await = AccessSession::SignedOut;
+                *self.authenticated_principal.lock().await = None;
                 self.finish_job(job_id).await;
                 return Ok(None);
             }
             Err(error) => {
                 if error.code == ErrorCode::ReauthenticationRequired {
                     *self.access_session.lock().await = AccessSession::ReauthenticationRequired;
+                    *self.authenticated_principal.lock().await = None;
                     self.emit_reauthentication_required();
                 }
                 return Err(error);
@@ -480,6 +543,7 @@ impl AuthService {
         let result = self.credentials.delete().await;
         if result.is_ok() {
             *self.access_session.lock().await = AccessSession::SignedOut;
+            *self.authenticated_principal.lock().await = None;
         }
         result
     }
@@ -501,11 +565,12 @@ impl AuthService {
 
     pub(crate) async fn lifecycle_generation(&self) -> Option<u64> {
         let lifecycle = self.lifecycle.lock().await;
-        lifecycle
+        (lifecycle
             .active
             .values()
             .all(|job| job.kind != JobKind::Login)
-            .then_some(lifecycle.generation)
+            && !self.has_begin_reservation(lifecycle.generation))
+        .then_some(lifecycle.generation)
     }
 
     pub(crate) async fn has_stored_credentials(&self) -> Result<bool, AppError> {
@@ -556,6 +621,7 @@ impl AuthService {
         lifecycle.active.remove(&job_id);
         if result.is_ok() {
             *self.access_session.lock().await = AccessSession::ReauthenticationRequired;
+            *self.authenticated_principal.lock().await = None;
         }
         result
     }
@@ -1497,6 +1563,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_auth_probe_cannot_restore_a_principal_after_account_transition_begins() {
+        let service = service(
+            FakeDeviceFlowApi::with_polls([]),
+            MemoryCredentialStore::default(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        );
+        let probe_generation = service.lifecycle_generation().await.unwrap();
+
+        service.begin(uuid::Uuid::new_v4()).await.unwrap();
+        assert!(
+            !service
+                .establish_authenticated_principal_if_current(probe_generation, test_user())
+                .await
+        );
+        assert!(service.authenticated_principal().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn current_revocation_clears_the_cached_principal() {
+        let service = service(
+            FakeDeviceFlowApi::with_polls([]),
+            MemoryCredentialStore::default(),
+            FakeClock::at(1_000),
+            NeverDelay,
+            RecordingAuthEvents::default(),
+        );
+        let generation = service.lifecycle_generation().await.unwrap();
+        assert!(
+            service
+                .establish_authenticated_principal_if_current(generation, test_user())
+                .await
+        );
+
+        assert!(
+            service
+                .invalidate_authenticated_principal_if_current(generation)
+                .await
+        );
+        assert!(service.authenticated_principal().await.is_err());
+    }
+
+    #[tokio::test]
     async fn device_flow_stores_tokens_and_emits_only_public_status() {
         let api = FakeDeviceFlowApi::approved_after_two_polls();
         let credentials = MemoryCredentialStore::default();
@@ -1564,6 +1674,10 @@ mod tests {
             "ghu_private"
         );
         assert_eq!(credentials.load_count(), 0);
+        assert_eq!(
+            service.authenticated_principal().await.unwrap().login,
+            "hyeeun"
+        );
     }
 
     #[tokio::test]
@@ -2271,9 +2385,16 @@ mod tests {
             service.valid_access_token().await.unwrap().expose_secret(),
             "ghu_cached"
         );
+        let generation = service.lifecycle_generation().await.unwrap();
+        assert!(
+            service
+                .establish_authenticated_principal_if_current(generation, test_user())
+                .await
+        );
         service.logout().await.unwrap();
 
         assert!(service.valid_access_token().await.is_err());
+        assert!(service.authenticated_principal().await.is_err());
         assert_eq!(credentials.load_count(), 1);
     }
 

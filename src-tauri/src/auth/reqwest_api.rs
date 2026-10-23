@@ -143,6 +143,12 @@ impl DeviceFlowApi for ReqwestDeviceFlowApi {
             .map_err(|_| github_unavailable())?;
         let status = response.status();
         if !status.is_success() {
+            if cfg!(debug_assertions) {
+                eprintln!(
+                    "GitHub authenticated-user request failed http_status={}",
+                    status.as_u16()
+                );
+            }
             let code = if status == reqwest::StatusCode::UNAUTHORIZED {
                 ErrorCode::ReauthenticationRequired
             } else if status == reqwest::StatusCode::FORBIDDEN {

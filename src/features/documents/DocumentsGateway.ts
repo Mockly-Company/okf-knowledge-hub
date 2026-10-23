@@ -6,6 +6,18 @@ import type {
   DocumentSessionSnapshot,
   HistoryCursor,
   HistoryPage,
+  CreateDocumentDraftRequest,
+  CreateDocumentDraftResponse,
+  EditExistingDocumentDraftRequest,
+  DuplicateTeamTemplateRequest,
+  DuplicateTeamTemplateResponse,
+  DocumentTargetValidation,
+  DocumentTemplateCatalog,
+  DraftSummary,
+  SwitchLocalDocumentDraftResponse,
+  SaveDocumentDraftRequest,
+  SaveDocumentDraftResponse,
+  RecoveredDocument,
   Unlisten,
 } from "./model";
 
@@ -13,6 +25,32 @@ export interface DocumentsGateway {
   startSession(requestId: string): Promise<DocumentSessionSnapshot>;
   stopSession(sessionId: string): Promise<void>;
   refreshSession(sessionId: string): Promise<void>;
+  listDocumentTemplates(sessionId: string): Promise<DocumentTemplateCatalog>;
+  validateDocumentCreation(
+    sessionId: string,
+    folder: string,
+    fileName: string,
+  ): Promise<DocumentTargetValidation>;
+  createDocumentDraft(
+    request: CreateDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse>;
+  editExistingDocumentDraft(
+    request: EditExistingDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse>;
+  duplicateTeamTemplate(
+    request: DuplicateTeamTemplateRequest,
+  ): Promise<DuplicateTeamTemplateResponse>;
+  listLocalDocumentDrafts(sessionId: string): Promise<DraftSummary[]>;
+  getActiveDraftRecovery(sessionId: string): Promise<RecoveredDocument | null>;
+  switchLocalDocumentDraft(
+    sessionId: string,
+    requestId: string,
+    changeId: string | null,
+  ): Promise<SwitchLocalDocumentDraftResponse>;
+  closeLocalDocumentDraft(sessionId: string): Promise<void>;
+  saveDocumentDraft(
+    request: SaveDocumentDraftRequest,
+  ): Promise<SaveDocumentDraftResponse>;
   searchDocuments(
     sessionId: string,
     requestId: string,

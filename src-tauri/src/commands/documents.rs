@@ -2,15 +2,22 @@ use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::{Uuid, Variant, Version};
 
+use crate::documents::authoring::{
+    load_document_templates, validate_document_target, DocumentTargetValidation,
+    DocumentTemplateCatalog,
+};
 use crate::documents::contract::{
     DocumentAsset, DocumentCatalog, DocumentContent, DocumentEvent, HistoryCursor, HistoryPage,
     IndexStatus, SearchResult,
+};
+use crate::documents::drafts::{
+    CreatedDocument, DraftSummary, RecoveredDocument, SaveDocumentResult,
 };
 use crate::documents::history::{DocumentHistory, DEFAULT_HISTORY_PAGE_LIMIT};
 use crate::documents::reader::DocumentReader;
@@ -261,10 +268,11 @@ where
         .map_err(|_| document_session_conflict())?;
     let mut cleanup = DocumentStartCleanup::new(services, context.clone());
 
-    let (workspace, branch) = load_document_workspace(services).await?;
+    let (workspace, branch, cache_key) = load_document_workspace(services).await?;
     let cache_directory = services
         .document_cache_root
-        .join(workspace.workspace_id.to_string());
+        .join(workspace.workspace_id.to_string())
+        .join(cache_key);
     let cache_path = cache_directory.join("search.sqlite3");
     run_blocking(move || {
         std::fs::create_dir_all(cache_directory).map_err(|_| document_index_unavailable())
@@ -441,6 +449,514 @@ pub async fn refresh_document_session(
 ) -> CommandResult<()> {
     let _access = state.acquire_authenticated_command().await?;
     refresh_document_session_inner(&state, session_id).await
+}
+
+pub(crate) async fn list_document_templates_inner(
+    services: &AppServices,
+    session_id: Uuid,
+) -> CommandResult<DocumentTemplateCatalog> {
+    validate_client_id(session_id, "문서 세션")?;
+    let context = active_context(services, session_id)?;
+    let repository_root = context.workspace().repository_root.clone();
+    let catalog = run_blocking(move || load_document_templates(&repository_root)).await;
+    let _mutation = services.document_sessions.lock_mutation().await;
+    ensure_active_context(services, &context)?;
+    catalog.map_err(sanitize_document_error)
+}
+
+#[tauri::command]
+pub async fn list_document_templates(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+) -> CommandResult<DocumentTemplateCatalog> {
+    let _access = state.acquire_authenticated_command().await?;
+    list_document_templates_inner(&state, session_id).await
+}
+
+pub(crate) async fn validate_document_creation_inner(
+    services: &AppServices,
+    session_id: Uuid,
+    folder: String,
+    file_name: String,
+) -> CommandResult<DocumentTargetValidation> {
+    validate_client_id(session_id, "문서 세션")?;
+    let context = active_context(services, session_id)?;
+    let repository_root = context.workspace().repository_root.clone();
+    let document_roots = context.workspace().document_roots.clone();
+    let validation = run_blocking(move || {
+        validate_document_target(&repository_root, &document_roots, &folder, &file_name)
+    })
+    .await;
+    let _mutation = services.document_sessions.lock_mutation().await;
+    ensure_active_context(services, &context)?;
+    validation.map_err(sanitize_document_error)
+}
+
+#[tauri::command]
+pub async fn validate_document_creation(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+    folder: String,
+    file_name: String,
+) -> CommandResult<DocumentTargetValidation> {
+    let _access = state.acquire_authenticated_command().await?;
+    validate_document_creation_inner(&state, session_id, folder, file_name).await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDocumentDraftRequest {
+    pub session_id: Uuid,
+    pub request_id: Uuid,
+    pub title: String,
+    pub folder: String,
+    pub file_name: String,
+    pub template_id: String,
+    pub separate_change: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateDocumentDraftResponse {
+    pub request_id: Uuid,
+    pub document: CreatedDocument,
+}
+
+pub(crate) async fn create_document_draft_inner(
+    services: &AppServices,
+    request: CreateDocumentDraftRequest,
+    authenticated_author_login: &str,
+) -> CommandResult<CreateDocumentDraftResponse> {
+    validate_client_id(request.session_id, "문서 세션")?;
+    validate_client_id(request.request_id, "문서 생성 요청")?;
+    let _mutation = services.document_sessions.lock_mutation().await;
+    let context = active_context(services, request.session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let template_root = context.workspace().repository_root.clone();
+    let settings = services.local_settings.clone();
+    let manager = services.document_drafts.clone();
+    let request_for_work = request.clone();
+    let author_login = authenticated_author_login.to_owned();
+    let document = run_blocking(move || {
+        let connected = settings.load_connected_document_workspace()?;
+        if connected.workspace_id != workspace_id {
+            return Err(document_session_stale());
+        }
+        let catalog = load_document_templates(&template_root)?;
+        let template = catalog
+            .templates
+            .into_iter()
+            .find(|template| template.id == request_for_work.template_id)
+            .ok_or_else(|| document_path_invalid(&request_for_work.template_id))?;
+        let active = manager.active_change(workspace_id)?;
+        let created_change = request_for_work.separate_change || active.is_none();
+        let change_id = if created_change {
+            let change_id = Uuid::new_v4();
+            manager.create_change(
+                &connected.repository_root,
+                workspace_id,
+                &author_login,
+                &request_for_work.title,
+                change_id,
+                connected.document_roots,
+            )?;
+            change_id
+        } else {
+            active.expect("checked above").change_id
+        };
+        let result = manager.add_document(
+            workspace_id,
+            change_id,
+            &request_for_work.folder,
+            &request_for_work.file_name,
+            &request_for_work.title,
+            &template,
+            Uuid::new_v4(),
+        );
+        if result.is_err() && created_change {
+            manager.discard_empty_change(workspace_id, change_id);
+        }
+        result
+    })
+    .await
+    .map_err(sanitize_document_error)?;
+    ensure_active_context(services, &context)?;
+    Ok(CreateDocumentDraftResponse {
+        request_id: request.request_id,
+        document,
+    })
+}
+
+#[tauri::command]
+pub async fn create_document_draft(
+    state: State<'_, AppServices>,
+    request: CreateDocumentDraftRequest,
+) -> CommandResult<CreateDocumentDraftResponse> {
+    let _access = state.acquire_authenticated_command().await?;
+    let author_login = state
+        .auth
+        .as_ref()
+        .ok_or_else(github_unavailable)?
+        .authenticated_principal()
+        .await?
+        .login;
+    create_document_draft_inner(&state, request, &author_login).await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditExistingDocumentDraftRequest {
+    pub session_id: Uuid,
+    pub request_id: Uuid,
+    pub path: String,
+    pub title: String,
+}
+
+pub(crate) async fn edit_existing_document_draft_inner(
+    services: &AppServices,
+    request: EditExistingDocumentDraftRequest,
+    authenticated_author_login: &str,
+) -> CommandResult<CreateDocumentDraftResponse> {
+    validate_client_id(request.session_id, "문서 세션")?;
+    validate_client_id(request.request_id, "기존 문서 편집 요청")?;
+    let _mutation = services.document_sessions.lock_mutation().await;
+    let context = active_context(services, request.session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let settings = services.local_settings.clone();
+    let manager = services.document_drafts.clone();
+    let request_for_work = request.clone();
+    let author_login = authenticated_author_login.to_owned();
+    let document = run_blocking(move || {
+        let connected = settings.load_connected_document_workspace()?;
+        if connected.workspace_id != workspace_id {
+            return Err(document_session_stale());
+        }
+        let active = manager.active_change(workspace_id)?;
+        let created_change = active.is_none();
+        let change_id = if let Some(active) = active {
+            active.change_id
+        } else {
+            let change_id = Uuid::new_v4();
+            manager.create_change(
+                &connected.repository_root,
+                workspace_id,
+                &author_login,
+                &format!("{} 수정", request_for_work.title),
+                change_id,
+                connected.document_roots,
+            )?;
+            change_id
+        };
+        let result = manager.add_existing_document(
+            workspace_id,
+            change_id,
+            &request_for_work.path,
+            &request_for_work.title,
+            Uuid::new_v4(),
+        );
+        if result.is_err() && created_change {
+            manager.discard_empty_change(workspace_id, change_id);
+        }
+        result
+    })
+    .await
+    .map_err(sanitize_document_error)?;
+    ensure_active_context(services, &context)?;
+    Ok(CreateDocumentDraftResponse {
+        request_id: request.request_id,
+        document,
+    })
+}
+
+#[tauri::command]
+pub async fn edit_existing_document_draft(
+    state: State<'_, AppServices>,
+    request: EditExistingDocumentDraftRequest,
+) -> CommandResult<CreateDocumentDraftResponse> {
+    let _access = state.acquire_authenticated_command().await?;
+    let author_login = state
+        .auth
+        .as_ref()
+        .ok_or_else(github_unavailable)?
+        .authenticated_principal()
+        .await?
+        .login;
+    edit_existing_document_draft_inner(&state, request, &author_login).await
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateTeamTemplateRequest {
+    pub session_id: Uuid,
+    pub request_id: Uuid,
+    pub source_template_id: String,
+    pub file_name: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub separate_change: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateTeamTemplateResponse {
+    pub request_id: Uuid,
+    pub path: String,
+    pub draft: DraftSummary,
+}
+
+pub(crate) async fn duplicate_team_template_inner(
+    services: &AppServices,
+    request: DuplicateTeamTemplateRequest,
+    authenticated_author_login: &str,
+) -> CommandResult<DuplicateTeamTemplateResponse> {
+    validate_client_id(request.session_id, "문서 세션")?;
+    validate_client_id(request.request_id, "팀 템플릿 생성 요청")?;
+    let _mutation = services.document_sessions.lock_mutation().await;
+    let context = active_context(services, request.session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let template_root = context.workspace().repository_root.clone();
+    let settings = services.local_settings.clone();
+    let manager = services.document_drafts.clone();
+    let request_for_work = request.clone();
+    let author_login = authenticated_author_login.to_owned();
+    let (path, draft) = run_blocking(move || {
+        let connected = settings.load_connected_document_workspace()?;
+        if connected.workspace_id != workspace_id {
+            return Err(document_session_stale());
+        }
+        let source = load_document_templates(&template_root)?
+            .templates
+            .into_iter()
+            .find(|template| template.id == request_for_work.source_template_id)
+            .ok_or_else(|| document_path_invalid(&request_for_work.source_template_id))?;
+        let active = manager.active_change(workspace_id)?;
+        let created_change = request_for_work.separate_change || active.is_none();
+        let change_id = if created_change {
+            let change_id = Uuid::new_v4();
+            manager.create_change(
+                &connected.repository_root,
+                workspace_id,
+                &author_login,
+                &request_for_work.label,
+                change_id,
+                connected.document_roots,
+            )?;
+            change_id
+        } else {
+            active.expect("checked above").change_id
+        };
+        let path = match manager.add_team_template(
+            workspace_id,
+            change_id,
+            &request_for_work.file_name,
+            &request_for_work.label,
+            request_for_work.description.as_deref(),
+            &source,
+        ) {
+            Ok(path) => path,
+            Err(error) => {
+                if created_change {
+                    manager.discard_empty_change(workspace_id, change_id);
+                }
+                return Err(error);
+            }
+        };
+        let draft = manager
+            .active_change(workspace_id)?
+            .ok_or_else(document_session_stale)?;
+        Ok((path, draft))
+    })
+    .await
+    .map_err(sanitize_document_error)?;
+    ensure_active_context(services, &context)?;
+    Ok(DuplicateTeamTemplateResponse {
+        request_id: request.request_id,
+        path,
+        draft,
+    })
+}
+
+#[tauri::command]
+pub async fn duplicate_team_template(
+    state: State<'_, AppServices>,
+    request: DuplicateTeamTemplateRequest,
+) -> CommandResult<DuplicateTeamTemplateResponse> {
+    let _access = state.acquire_authenticated_command().await?;
+    let author_login = state
+        .auth
+        .as_ref()
+        .ok_or_else(github_unavailable)?
+        .authenticated_principal()
+        .await?
+        .login;
+    duplicate_team_template_inner(&state, request, &author_login).await
+}
+
+fn github_unavailable() -> AppError {
+    AppError::new(
+        ErrorCode::GithubUnavailable,
+        "GitHub 계정 정보를 확인할 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+}
+
+pub(crate) async fn list_local_document_drafts_inner(
+    services: &AppServices,
+    session_id: Uuid,
+) -> CommandResult<Vec<DraftSummary>> {
+    validate_client_id(session_id, "문서 세션")?;
+    let context = active_context(services, session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let manager = services.document_drafts.clone();
+    let drafts = run_blocking(move || manager.list_changes(workspace_id)).await?;
+    ensure_active_context(services, &context)?;
+    Ok(drafts)
+}
+
+#[tauri::command]
+pub async fn list_local_document_drafts(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+) -> CommandResult<Vec<DraftSummary>> {
+    let _access = state.acquire_authenticated_command().await?;
+    list_local_document_drafts_inner(&state, session_id).await
+}
+
+pub(crate) async fn get_active_draft_recovery_inner(
+    services: &AppServices,
+    session_id: Uuid,
+) -> CommandResult<Option<RecoveredDocument>> {
+    validate_client_id(session_id, "문서 세션")?;
+    let context = active_context(services, session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let manager = services.document_drafts.clone();
+    let recovery = run_blocking(move || manager.active_recovery(workspace_id)).await?;
+    ensure_active_context(services, &context)?;
+    Ok(recovery)
+}
+
+#[tauri::command]
+pub async fn get_active_draft_recovery(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+) -> CommandResult<Option<RecoveredDocument>> {
+    let _access = state.acquire_authenticated_command().await?;
+    get_active_draft_recovery_inner(&state, session_id).await
+}
+
+pub(crate) async fn switch_local_document_draft_inner(
+    services: &AppServices,
+    session_id: Uuid,
+    change_id: Option<Uuid>,
+) -> CommandResult<Option<DraftSummary>> {
+    validate_client_id(session_id, "문서 세션")?;
+    let _mutation = services.document_sessions.lock_mutation().await;
+    let context = active_context(services, session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let manager = services.document_drafts.clone();
+    run_blocking(move || match change_id {
+        Some(change_id) => manager.switch_change(workspace_id, change_id).map(Some),
+        None => manager.close_active(workspace_id).map(|_| None),
+    })
+    .await
+    .map_err(sanitize_document_error)
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SwitchLocalDocumentDraftResponse {
+    pub request_id: Uuid,
+    pub draft: Option<DraftSummary>,
+}
+
+#[tauri::command]
+pub async fn switch_local_document_draft(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+    request_id: Uuid,
+    change_id: Option<Uuid>,
+) -> CommandResult<SwitchLocalDocumentDraftResponse> {
+    let _access = state.acquire_authenticated_command().await?;
+    validate_client_id(request_id, "Draft 전환 요청")?;
+    let draft = switch_local_document_draft_inner(&state, session_id, change_id).await?;
+    Ok(SwitchLocalDocumentDraftResponse { request_id, draft })
+}
+
+#[tauri::command]
+pub async fn close_local_document_draft(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+) -> CommandResult<()> {
+    let _access = state.acquire_authenticated_command().await?;
+    switch_local_document_draft_inner(&state, session_id, None)
+        .await
+        .map(|_| ())
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDocumentDraftResponse {
+    pub request_id: Uuid,
+    pub result: SaveDocumentResult,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn save_document_draft_inner(
+    services: &AppServices,
+    session_id: Uuid,
+    request_id: Uuid,
+    change_id: Uuid,
+    document_id: Uuid,
+    path: String,
+    expected_hash: String,
+    markdown: String,
+) -> CommandResult<SaveDocumentDraftResponse> {
+    validate_client_id(session_id, "문서 세션")?;
+    validate_client_id(request_id, "문서 저장 요청")?;
+    let _mutation = services.document_sessions.lock_mutation().await;
+    let context = active_context(services, session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let manager = services.document_drafts.clone();
+    let result = run_blocking(move || {
+        manager.save_document(
+            workspace_id,
+            change_id,
+            document_id,
+            &path,
+            &expected_hash,
+            &markdown,
+        )
+    })
+    .await
+    .map_err(sanitize_document_error)?;
+    ensure_active_context(services, &context)?;
+    Ok(SaveDocumentDraftResponse { request_id, result })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn save_document_draft(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+    request_id: Uuid,
+    change_id: Uuid,
+    document_id: Uuid,
+    path: String,
+    expected_hash: String,
+    markdown: String,
+) -> CommandResult<SaveDocumentDraftResponse> {
+    let _access = state.acquire_authenticated_command().await?;
+    save_document_draft_inner(
+        &state,
+        session_id,
+        request_id,
+        change_id,
+        document_id,
+        path,
+        expected_hash,
+        markdown,
+    )
+    .await
 }
 
 pub(crate) async fn search_documents_inner(
@@ -743,19 +1259,39 @@ pub async fn read_document_version(
 
 async fn load_document_workspace(
     services: &AppServices,
-) -> CommandResult<(ConnectedDocumentWorkspace, String)> {
+) -> CommandResult<(ConnectedDocumentWorkspace, String, String)> {
     let settings = services.local_settings.clone();
     let repository_git = services.repository_git.clone();
+    let document_drafts = services.document_drafts.clone();
     run_blocking(move || {
         let workspace = settings.load_connected_document_workspace()?;
+        let active = document_drafts.active_change(workspace.workspace_id)?;
+        let repository_root = if active.is_some() {
+            document_drafts.active_worktree(workspace.workspace_id)?
+        } else {
+            workspace.repository_root.clone()
+        };
         let repository = repository_git
-            .inspect(&workspace.repository_root)
+            .inspect(&repository_root)
             .map_err(|_| document_workspace_unavailable())?;
-        let branch = repository
-            .default_branch
-            .filter(|branch| !branch.trim().is_empty())
-            .ok_or_else(document_workspace_unavailable)?;
-        Ok((workspace, branch))
+        let (branch, cache_key) = match active {
+            Some(draft) => (draft.branch, draft.change_id.to_string()),
+            None => (
+                repository
+                    .default_branch
+                    .filter(|branch| !branch.trim().is_empty())
+                    .ok_or_else(document_workspace_unavailable)?,
+                "main".to_owned(),
+            ),
+        };
+        Ok((
+            ConnectedDocumentWorkspace {
+                repository_root,
+                ..workspace
+            },
+            branch,
+            cache_key,
+        ))
     })
     .await
     .map_err(sanitize_document_error)
@@ -1248,15 +1784,19 @@ mod tests {
     use crate::state::AppServices;
 
     use super::{
-        list_document_history_inner, list_document_history_with_completion_hook, published_event,
+        create_document_draft_inner, edit_existing_document_draft_inner,
+        list_document_history_inner, list_document_history_with_completion_hook,
+        list_document_templates_inner, list_local_document_drafts_inner, published_event,
         read_document_asset_inner, read_document_asset_with_completion_hook, read_document_inner,
         read_document_version_inner, read_document_version_with_completion_hook,
         read_document_with_completion_hook, recover_lagged_document_events,
-        refresh_document_session_inner, search_documents_inner,
+        refresh_document_session_inner, save_document_draft_inner, search_documents_inner,
         search_documents_with_completion_hook, start_document_session_inner,
         start_document_session_with_async_hook, start_document_session_with_boundaries,
-        start_document_session_with_hook, stop_document_session_inner, DocumentEventEmitter,
-        DocumentEventEnvelope, StartDocumentSessionTestBoundaries,
+        start_document_session_with_hook, stop_document_session_inner,
+        validate_document_creation_inner, CreateDocumentDraftRequest, DocumentEventEmitter,
+        DocumentEventEnvelope, EditExistingDocumentDraftRequest,
+        StartDocumentSessionTestBoundaries,
     };
 
     const REPOSITORY_FULL_NAME: &str = "Mockly-Company/mockly-knowledge";
@@ -1454,6 +1994,184 @@ mod tests {
         stop_document_session_inner(&fixture.services, request_id)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn template_catalog_and_target_validation_use_only_the_active_session_workspace() {
+        let fixture = DocumentServicesFixture::new();
+        fs::create_dir_all(fixture._repository.path().join(".okf/templates")).unwrap();
+        fs::write(
+            fixture._repository.path().join(".okf/templates/team.md"),
+            "---\nlabel: Team template\n---\n# {{title}}\n",
+        )
+        .unwrap();
+        let session_id = Uuid::new_v4();
+        start_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+
+        let catalog = list_document_templates_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+        let validation = validate_document_creation_inner(
+            &fixture.services,
+            session_id,
+            "docs".into(),
+            "새 API.md".into(),
+        )
+        .await
+        .unwrap();
+
+        assert!(catalog
+            .templates
+            .iter()
+            .any(|template| template.id == "team:team.md"));
+        assert_eq!(validation.relative_path, "docs/새-api.md");
+        let json = serde_json::to_string(&(catalog, validation)).unwrap();
+        assert!(!json.contains(fixture._repository.path().to_str().unwrap()));
+        assert!(!json.contains(fixture._cache.path().to_str().unwrap()));
+    }
+
+    #[tokio::test]
+    async fn creating_documents_reuses_the_active_change_and_restart_reads_its_worktree() {
+        let fixture = DocumentServicesFixture::new();
+        let session_id = Uuid::new_v4();
+        start_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+
+        let first = create_document_draft_inner(
+            &fixture.services,
+            CreateDocumentDraftRequest {
+                session_id,
+                request_id: Uuid::new_v4(),
+                title: "지도 API 계약".into(),
+                folder: "docs/api".into(),
+                file_name: "지도 API 계약.md".into(),
+                template_id: "builtin:api_contract".into(),
+                separate_change: true,
+            },
+            "KANCHOEUN",
+        )
+        .await
+        .unwrap();
+        let second = create_document_draft_inner(
+            &fixture.services,
+            CreateDocumentDraftRequest {
+                session_id,
+                request_id: Uuid::new_v4(),
+                title: "검색 시퀀스".into(),
+                folder: "docs".into(),
+                file_name: "검색 시퀀스.md".into(),
+                template_id: "builtin:feature_design".into(),
+                separate_change: false,
+            },
+            "KANCHOEUN",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(first.document.change_id, second.document.change_id);
+        assert_ne!(first.request_id, Uuid::nil());
+        let drafts = list_local_document_drafts_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+        assert_eq!(drafts.len(), 1);
+        stop_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+        let restarted = start_document_session_inner(&fixture.services, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(restarted.branch, first.document.draft.branch);
+        assert!(restarted
+            .catalog
+            .documents
+            .iter()
+            .any(|document| document.path == first.document.path));
+    }
+
+    #[tokio::test]
+    async fn editing_an_existing_document_creates_a_draft_and_echoes_the_request_id() {
+        let fixture = DocumentServicesFixture::new();
+        let session_id = Uuid::new_v4();
+        start_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+        let request_id = Uuid::new_v4();
+
+        let response = edit_existing_document_draft_inner(
+            &fixture.services,
+            EditExistingDocumentDraftRequest {
+                session_id,
+                request_id,
+                path: "docs/guide.md".into(),
+                title: "API Guide".into(),
+            },
+            "KANCHOEUN",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response.request_id, request_id);
+        assert_eq!(response.document.path, "docs/guide.md");
+        assert_eq!(response.document.draft.author_login, "KANCHOEUN");
+        assert!(response.document.markdown.contains("# API Guide"));
+        assert!(!response.document.content_hash.is_empty());
+    }
+
+    #[tokio::test]
+    async fn save_command_echoes_request_id_and_reports_external_change_without_overwrite() {
+        let fixture = DocumentServicesFixture::new();
+        let session_id = Uuid::new_v4();
+        start_document_session_inner(&fixture.services, session_id)
+            .await
+            .unwrap();
+        let created = create_document_draft_inner(
+            &fixture.services,
+            CreateDocumentDraftRequest {
+                session_id,
+                request_id: Uuid::new_v4(),
+                title: "충돌".into(),
+                folder: "docs".into(),
+                file_name: "충돌.md".into(),
+                template_id: "builtin:blank".into(),
+                separate_change: true,
+            },
+            "hyeeun",
+        )
+        .await
+        .unwrap();
+        let worktree = fixture
+            .services
+            .document_drafts
+            .active_worktree(fixture.workspace_id)
+            .unwrap();
+        fs::write(worktree.join(&created.document.path), "external\n").unwrap();
+        let request_id = Uuid::new_v4();
+
+        let saved = save_document_draft_inner(
+            &fixture.services,
+            session_id,
+            request_id,
+            created.document.change_id,
+            created.document.document_id,
+            created.document.path.clone(),
+            created.document.content_hash.clone(),
+            "hub\n".into(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(saved.request_id, request_id);
+        assert!(matches!(
+            saved.result,
+            crate::documents::drafts::SaveDocumentResult::Conflict(_)
+        ));
+        assert_eq!(
+            fs::read_to_string(worktree.join(&created.document.path)).unwrap(),
+            "external\n"
+        );
     }
 
     #[tokio::test]

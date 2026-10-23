@@ -8,15 +8,20 @@ import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { AppShell } from "./AppShell";
 
-function renderShell() {
+function renderShell(
+  initialEntry = "/",
+  gateway = FakeWorkspaceConnectionGateway.connected(),
+) {
   return render(
-    <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+    <WorkspaceConnectionProvider gateway={gateway}>
       <DocumentsProvider gateway={new FakeDocumentsGateway()}>
-        <MemoryRouter initialEntries={["/"]}>
+        <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
             <Route element={<AppShell />}>
               <Route index element={<h1>프로젝트 진행 상황</h1>} />
               <Route path="documents" element={<h1>Documents</h1>} />
+              <Route path="project" element={<h1>Project</h1>} />
+              <Route path="settings" element={<h1>Settings</h1>} />
             </Route>
           </Routes>
         </MemoryRouter>
@@ -46,14 +51,6 @@ describe("AppShell", () => {
     renderShell();
     await userEvent.click(screen.getByRole("link", { name: "Documents" }));
     expect(screen.getByRole("heading", { name: "Documents" })).toBeInTheDocument();
-  });
-
-  it("keeps settings with the product navigation", () => {
-    renderShell();
-
-    expect(screen.getByRole("navigation", { name: "주 메뉴" })).toContainElement(
-      screen.getByRole("link", { name: "Settings" }),
-    );
   });
 
   it("collapses and restores the sidebar", async () => {
@@ -88,4 +85,33 @@ describe("AppShell", () => {
     expect(screen.getByRole("navigation", { name: "주 메뉴" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "사이드바 접기" })).toHaveFocus();
   });
+
+  it("keeps the sidebar menu discoverable before the main content for keyboard users", async () => {
+    const user = userEvent.setup();
+    renderShell("/documents");
+
+    await user.tab();
+
+    expect(screen.getByRole("button", { name: "사이드바 접기" })).toHaveFocus();
+    expect(screen.getByRole("navigation", { name: "주 메뉴" })).toContainElement(
+      screen.getByRole("link", { name: "Documents" }),
+    );
+    expect(screen.getByRole("link", { name: "Documents" })).toBeVisible();
+  });
+
+  it.each(["/", "/documents", "/project", "/settings"])(
+    "shows the GitHub reauthentication banner on %s",
+    async (initialEntry) => {
+      const gateway = FakeWorkspaceConnectionGateway.connected();
+      gateway.authState = { status: "reauthentication_required" };
+      renderShell(initialEntry, gateway);
+
+      const banner = await screen.findByRole("status");
+      expect(banner).toHaveTextContent("GitHub 재로그인 필요");
+      expect(banner).toHaveTextContent("GitHub 인증이 만료되었습니다.");
+      expect(
+        screen.getByRole("link", { name: "Settings에서 다시 연결" }),
+      ).toHaveAttribute("href", "/settings");
+    },
+  );
 });

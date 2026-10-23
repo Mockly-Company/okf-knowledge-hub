@@ -27,10 +27,17 @@ function contrast(a: string, b: string): number {
 }
 
 describe("OkHub color tokens", () => {
-  it("uses white text on a dedicated accessible primary action color", () => {
+  it("uses comfortable mint-white text on the accessible primary action color", () => {
     expect(token(css, "--color-primary-action")).toBe("#007c71");
     expect(token(css, "--color-primary-action-hover")).toBe("#00665f");
-    expect(token(css, "--color-on-primary")).toBe("#ffffff");
+    expect(token(css, "--color-on-primary")).toBe("#f4fffd");
+  });
+
+  it("keeps the approved neutral surfaces and text hierarchy", () => {
+    expect(token(css, "--color-text-strong")).toBe("#24272d");
+    expect(token(css, "--color-text-muted")).toBe("#6c737d");
+    expect(token(css, "--color-border")).toBe("#e5e7eb");
+    expect(token(css, "--color-canvas")).toBe("#f7f8f9");
   });
 
   it.each([

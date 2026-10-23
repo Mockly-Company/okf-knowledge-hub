@@ -10,6 +10,10 @@ use crate::auth::model::{
 use crate::error::AppError;
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 pub trait CredentialStore: Send + Sync {
     async fn load(&self) -> Result<Option<StoredTokens>, AppError>;
     async fn save(&self, tokens: &StoredTokens) -> Result<(), AppError>;
@@ -17,6 +21,10 @@ pub trait CredentialStore: Send + Sync {
 }
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 pub trait DeviceFlowApi: Send + Sync {
     async fn request_device_code(&self, client_id: &str) -> Result<DeviceCodeResponse, AppError>;
 
@@ -43,6 +51,10 @@ pub trait Clock: Send + Sync {
 }
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 pub trait Delay: Send + Sync {
     async fn wait(&self, seconds: u64);
 }

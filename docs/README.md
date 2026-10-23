@@ -15,6 +15,7 @@
 
 ## 개발 참고 문서
 
+- [Storybook 화면 검토 안내](development/storybook-guide.md) — 개발·검토용 실행 방법과 예시 데이터 범위
 - [GitHub App과 로컬 개발 설정](development/github-app.md)
 - [GitHub 인증 정보 저장과 macOS Keychain](development/auth-credential-storage.md) — 코드 서명, entitlement, Access Group, Keychain 구현 차이와 `-34018` 조사 기록
 

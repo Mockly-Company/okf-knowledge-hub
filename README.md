@@ -51,16 +51,26 @@
 
 ## 개발
 
-Node.js 22.12 이상과 pnpm 10, Rust 1.88.0을 준비한 뒤 의존성을 설치합니다. GitHub 연결을 수동으로 확인하려면 [GitHub App 개발 설정](docs/development/github-app.md)의 공개 Client ID 설정을 먼저 완료하세요.
+Node.js 22.12 이상과 pnpm 10, Rust 1.88.0을 준비한 뒤 의존성을 설치합니다. 공식 GitHub App의 공개 Client ID가 앱에 포함되어 있어 별도 환경변수 없이 GitHub 연결을 확인할 수 있습니다. 포크나 자체 GitHub App을 사용할 때는 [GitHub App 개발 설정](docs/development/github-app.md)에 따라 Client ID를 재정의하세요.
+
+macOS에서 소스를 직접 개발할 때는 Apple Developer 계정 대신 개발자 기기에 한 번 생성하는 로컬 code-signing identity를 사용합니다. 최초 한 번 설정한 뒤에는 현재 worktree에서 `pnpm tauri dev`로 실행합니다.
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm dev:setup:macos # macOS 최초 1회
+pnpm tauri dev
+```
+
+debug 창 제목과 Settings의 앱 정보에서 현재 branch와 commit을 확인할 수 있습니다. `target/debug/bundle/macos/OkHub.app`은 과거 빌드일 수 있으므로 개발 수동 검증에 사용하지 않습니다. 패키징 결과를 확인할 때만 별도로 `pnpm tauri build`를 실행합니다.
+
+전체 자동 검증은 다음 명령을 사용합니다.
+
+```bash
 pnpm test:run
 pnpm build
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
-pnpm tauri build --debug --no-bundle
 ```
 
 ## 아직 확정하지 않은 것

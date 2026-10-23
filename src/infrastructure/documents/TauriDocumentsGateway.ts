@@ -11,6 +11,18 @@ import type {
   DocumentSessionSnapshot,
   HistoryCursor,
   HistoryPage,
+  CreateDocumentDraftRequest,
+  CreateDocumentDraftResponse,
+  EditExistingDocumentDraftRequest,
+  DocumentTargetValidation,
+  DocumentTemplateCatalog,
+  DraftSummary,
+  SwitchLocalDocumentDraftResponse,
+  DuplicateTeamTemplateRequest,
+  DuplicateTeamTemplateResponse,
+  SaveDocumentDraftRequest,
+  SaveDocumentDraftResponse,
+  RecoveredDocument,
   Unlisten,
 } from "@/features/documents/model";
 
@@ -49,6 +61,70 @@ export class TauriDocumentsGateway implements DocumentsGateway {
 
   refreshSession(sessionId: string): Promise<void> {
     return this.invokeCommand("refresh_document_session", { sessionId });
+  }
+
+  listDocumentTemplates(sessionId: string): Promise<DocumentTemplateCatalog> {
+    return this.invokeCommand("list_document_templates", { sessionId });
+  }
+
+  validateDocumentCreation(
+    sessionId: string,
+    folder: string,
+    fileName: string,
+  ): Promise<DocumentTargetValidation> {
+    return this.invokeCommand("validate_document_creation", {
+      sessionId,
+      folder,
+      fileName,
+    });
+  }
+
+  createDocumentDraft(
+    request: CreateDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse> {
+    return this.invokeCommand("create_document_draft", { request });
+  }
+
+  editExistingDocumentDraft(
+    request: EditExistingDocumentDraftRequest,
+  ): Promise<CreateDocumentDraftResponse> {
+    return this.invokeCommand("edit_existing_document_draft", { request });
+  }
+
+  duplicateTeamTemplate(
+    request: DuplicateTeamTemplateRequest,
+  ): Promise<DuplicateTeamTemplateResponse> {
+    return this.invokeCommand("duplicate_team_template", { request });
+  }
+
+  listLocalDocumentDrafts(sessionId: string): Promise<DraftSummary[]> {
+    return this.invokeCommand("list_local_document_drafts", { sessionId });
+  }
+
+  getActiveDraftRecovery(sessionId: string): Promise<RecoveredDocument | null> {
+    return this.invokeCommand("get_active_draft_recovery", { sessionId });
+  }
+
+  switchLocalDocumentDraft(
+    sessionId: string,
+    requestId: string,
+    changeId: string | null,
+  ): Promise<SwitchLocalDocumentDraftResponse> {
+    return this.invokeCommand("switch_local_document_draft", {
+      sessionId,
+      requestId,
+      changeId,
+    });
+  }
+
+  closeLocalDocumentDraft(sessionId: string): Promise<void> {
+    return this.invokeCommand("close_local_document_draft", { sessionId });
+  }
+
+  saveDocumentDraft(
+    request: SaveDocumentDraftRequest,
+  ): Promise<SaveDocumentDraftResponse> {
+    return this.invokeCommand("save_document_draft", { ...request });
   }
 
   searchDocuments(

@@ -1,11 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Link, Outlet } from "react-router-dom";
 import { PanelLeftOpen } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Tooltip } from "@/components/ui/tooltip";
+import { Button, IconButton } from "@/components/ui/button";
+import {
+  StatusFeedback,
+  StatusFeedbackDescription,
+  StatusFeedbackTitle,
+} from "@/components/ui/status-feedback";
+import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { AppSidebar } from "./AppSidebar";
 
 export function AppShell() {
+  const { account } = useWorkspaceConnection();
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const collapseButtonRef = useRef<HTMLButtonElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
@@ -44,24 +50,39 @@ export function AppShell() {
         />
       ) : (
         <div className="app-shell__open-sidebar">
-          <Tooltip content="사이드바 열기">
-            <Button
-              ref={openButtonRef}
-              variant="icon"
-              aria-label="사이드바 열기"
-              onClick={() => updateSidebar(true)}
-            >
-              <PanelLeftOpen aria-hidden="true" strokeWidth={1.75} />
-            </Button>
-          </Tooltip>
+          <IconButton
+            ref={openButtonRef}
+            label="사이드바 열기"
+            onClick={() => updateSidebar(true)}
+          >
+            <PanelLeftOpen aria-hidden="true" strokeWidth={1.75} />
+          </IconButton>
         </div>
       )}
       <main
         aria-label="OkHub"
-        className={`app-shell__main${
+        className={`app-shell__main overflow-y-auto bg-[var(--color-surface)]${
           isSidebarOpen ? "" : " app-shell__main--sidebar-collapsed"
         }`}
       >
+        {account.status === "reauthentication_required" ? (
+          <StatusFeedback
+            variant="banner"
+            tone="warning"
+            actionPlacement="end"
+            className="app-shell__reauthentication-banner"
+            action={
+              <Button asChild variant="secondary">
+                <Link to="/settings">Settings에서 다시 연결</Link>
+              </Button>
+            }
+          >
+            <StatusFeedbackTitle>GitHub 재로그인 필요</StatusFeedbackTitle>
+            <StatusFeedbackDescription>
+              GitHub 인증이 만료되었습니다. 다시 로그인해 주세요.
+            </StatusFeedbackDescription>
+          </StatusFeedback>
+        ) : null}
         <Outlet />
       </main>
     </div>

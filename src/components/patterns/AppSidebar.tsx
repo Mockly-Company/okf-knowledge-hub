@@ -7,8 +7,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type RefObject } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import { Tooltip } from "@/components/ui/tooltip";
+import { IconButton } from "@/components/ui/button";
 import { DocumentTree } from "@/features/documents/components/DocumentTree";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
@@ -32,11 +31,10 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
     state: documentsState,
     selectDocument,
     showDocumentsHome,
+    openNewDocument,
   } = useDocuments();
-  const { state, account, isCurrentWorkspaceLoading } = useWorkspaceConnection();
+  const { account } = useWorkspaceConnection();
   const [avatarFailed, setAvatarFailed] = useState(false);
-  const connectedWorkspace =
-    state.status === "connected" ? state.connectedWorkspace : null;
   const accountUser =
     account.status === "authenticated" || account.status === "logging_out"
       ? account.user
@@ -56,31 +54,15 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
           OK
         </span>
         <strong>OkHub</strong>
-        <Tooltip content="사이드바 접기">
-          <Button
-            ref={collapseButtonRef}
-            variant="icon"
-            className="app-sidebar__collapse"
-            aria-label="사이드바 접기"
-            onClick={onCollapse}
-          >
-            <PanelLeftClose aria-hidden="true" strokeWidth={1.75} />
-          </Button>
-        </Tooltip>
-      </div>
-      {isCurrentWorkspaceLoading ? (
-        <div
-          className="app-sidebar__workspace app-sidebar__skeleton"
-          aria-label="워크스페이스 불러오는 중"
-        />
-      ) : (
-        <div
-          className="app-sidebar__workspace"
-          title={connectedWorkspace?.summary.name}
+        <IconButton
+          ref={collapseButtonRef}
+          label="사이드바 접기"
+          className="app-sidebar__collapse"
+          onClick={onCollapse}
         >
-          {connectedWorkspace?.summary.name ?? "워크스페이스 연결 필요"}
-        </div>
-      )}
+          <PanelLeftClose aria-hidden="true" strokeWidth={1.75} />
+        </IconButton>
+      </div>
       <div className="app-sidebar__section app-sidebar__section--primary">
         <nav aria-label="주 메뉴" className="app-sidebar__nav">
           {navigationItems.map(({ to, label, icon: Icon, end }) => (
@@ -108,6 +90,7 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
               entries={documentsState.catalog.roots}
               selectedPath={documentsState.selectedPath}
               onSelectDocument={selectDocument}
+              onNewDocument={openNewDocument}
             />
           </div>
         ) : null}

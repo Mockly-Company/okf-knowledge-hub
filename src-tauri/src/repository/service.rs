@@ -88,6 +88,10 @@ pub(crate) trait GitRepositoryPort: Send + Sync {
 }
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 pub(crate) trait RepositoryCredentialPort: Send + Sync {
     async fn valid_access_token(&self) -> Result<AccessToken, AppError>;
 }
@@ -100,6 +104,10 @@ impl RepositoryCredentialPort for AuthService {
 }
 
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
 pub(crate) trait RepositoryRemotePort: Send + Sync {
     async fn resolve_remote_repository(
         &self,

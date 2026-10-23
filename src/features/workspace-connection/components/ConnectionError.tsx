@@ -1,8 +1,8 @@
-import { CircleAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StatusFeedback, StatusFeedbackTitle, StatusFeedbackDescription } from "@/components/ui/status-feedback";
 import type { AppError, RecoveryAction } from "../types";
 
-const recoveryLabels: Record<RecoveryAction, string> = {
+export const recoveryLabels: Record<RecoveryAction, string> = {
   restart_login: "로그인 다시 시작",
   reinstall_github_app: "GitHub 앱 설치 관리",
   choose_another_directory: "다른 위치 선택",
@@ -20,19 +20,22 @@ interface ConnectionErrorProps {
 }
 
 export function ConnectionError({ error, localPath, onRecover }: ConnectionErrorProps) {
+  const action = error.recovery ? (
+    <Button
+      variant="secondary"
+      onClick={() => onRecover(error.recovery!)}
+    >
+      {recoveryLabels[error.recovery]}
+    </Button>
+  ) : undefined;
+
   return (
-    <section className="connection-error" aria-labelledby="connection-error-title">
-      <CircleAlert aria-hidden="true" strokeWidth={1.75} />
+    <StatusFeedback variant="banner" tone="error" action={action} actionPlacement="end">
       <div>
-        <h2 id="connection-error-title">연결을 완료하지 못했습니다</h2>
-        <p>{error.message}</p>
-        {localPath ? <code>{localPath}</code> : null}
-        {error.recovery ? (
-          <Button variant="secondary" onClick={() => onRecover(error.recovery!)}>
-            {recoveryLabels[error.recovery]}
-          </Button>
-        ) : null}
+        <h2 id="connection-error-title" className="m-0"><StatusFeedbackTitle>연결을 완료하지 못했습니다</StatusFeedbackTitle></h2>
+        <StatusFeedbackDescription>{error.message}</StatusFeedbackDescription>
+        {localPath ? <code className="mt-[var(--space-2)] block w-fit max-w-full break-all">{localPath}</code> : null}
       </div>
-    </section>
+    </StatusFeedback>
   );
 }

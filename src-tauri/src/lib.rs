@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod build_info;
 pub mod commands;
 pub mod documents;
 pub mod error;
@@ -9,6 +10,7 @@ pub mod state;
 pub mod workspace;
 
 pub const APP_TITLE: &str = "OkHub";
+const OFFICIAL_GITHUB_CLIENT_ID: &str = "Iv23liwme4YWGbzRMNxH";
 
 fn github_client_id() -> String {
     let runtime = std::env::var("OKHUB_GITHUB_CLIENT_ID").ok();
@@ -19,7 +21,7 @@ fn select_github_client_id(runtime: Option<&str>, compiled: Option<&str>) -> Str
     runtime
         .and_then(non_empty_trimmed)
         .or_else(|| compiled.and_then(non_empty_trimmed))
-        .unwrap_or_default()
+        .unwrap_or(OFFICIAL_GITHUB_CLIENT_ID)
         .to_owned()
 }
 
@@ -38,6 +40,10 @@ pub fn run() {
         .setup(|app| {
             use tauri::Manager;
 
+            if let Some(window) = app.get_webview_window("main") {
+                window.set_title(&build_info::window_title())?;
+            }
+
             let store = tauri_plugin_store::StoreBuilder::new(
                 app,
                 settings::store_adapter::SETTINGS_FILE_NAME,
@@ -48,7 +54,9 @@ pub fn run() {
                 settings::store_adapter::TauriLocalSettingsStore::new(store),
             );
             let document_cache_root = app.path().app_data_dir()?.join("document-search");
+            let document_draft_root = app.path().app_data_dir()?.join("document-drafts");
             std::fs::create_dir_all(&document_cache_root)?;
+            std::fs::create_dir_all(&document_draft_root)?;
             let credentials = auth::keyring_store::KeyringCredentialStore::new()
                 .map_err(|_| std::io::Error::other("failed to initialize credential storage"))?;
             let auth_jobs = state::JobRegistry::default();
@@ -64,14 +72,17 @@ pub fn run() {
                 ),
             );
             app.manage(
-                state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs).with_documents(
-                    documents::runtime::DocumentRuntime::new(),
-                    document_cache_root,
-                ),
+                state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs)
+                    .with_document_storage(
+                        documents::runtime::DocumentRuntime::new(),
+                        document_cache_root,
+                        document_draft_root,
+                    ),
             );
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            build_info::get_build_info,
             commands::auth::get_auth_state,
             commands::auth::begin_github_auth,
             commands::auth::cancel_github_auth,
@@ -88,6 +99,16 @@ pub fn run() {
             commands::documents::start_document_session,
             commands::documents::stop_document_session,
             commands::documents::refresh_document_session,
+            commands::documents::list_document_templates,
+            commands::documents::validate_document_creation,
+            commands::documents::create_document_draft,
+            commands::documents::edit_existing_document_draft,
+            commands::documents::duplicate_team_template,
+            commands::documents::list_local_document_drafts,
+            commands::documents::get_active_draft_recovery,
+            commands::documents::switch_local_document_draft,
+            commands::documents::close_local_document_draft,
+            commands::documents::save_document_draft,
             commands::documents::search_documents,
             commands::documents::read_document,
             commands::documents::read_document_asset,
@@ -115,10 +136,27 @@ mod tests {
             select_github_client_id(Some(" runtime-id "), Some("compiled-id")),
             "runtime-id"
         );
+    }
+
+    #[test]
+    fn compiled_client_id_overrides_the_official_public_client_id() {
         assert_eq!(
             select_github_client_id(None, Some(" compiled-id ")),
             "compiled-id"
         );
-        assert_eq!(select_github_client_id(Some("  "), None), "");
+    }
+
+    #[test]
+    fn blank_overrides_fall_back_to_the_official_public_client_id() {
+        assert_eq!(
+            select_github_client_id(Some("  "), Some("\t")),
+            "Iv23liwme4YWGbzRMNxH"
+        );
+    }
+
+    #[test]
+    fn official_repository_build_always_has_a_client_id() {
+        assert!(!select_github_client_id(None, None).is_empty());
+        assert_eq!(select_github_client_id(None, None), "Iv23liwme4YWGbzRMNxH");
     }
 }

@@ -376,6 +376,7 @@ export function documentsReducer(
     case "sessionStarting":
       return {
         ...createInitialDocumentsState(),
+        searchQuery: state.searchQuery,
         status: "starting",
         activeSessionId: action.sessionId,
       };
