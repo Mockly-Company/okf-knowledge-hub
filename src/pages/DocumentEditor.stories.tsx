@@ -72,6 +72,20 @@ type Story = StoryObj<EditorStoryArgs>;
 // Stable direct URLs for the existing visual audit; normal review uses Controls.
 export const Rich: Story = { args: { mode: "rich" }, tags: ["!dev", "!autodocs"] };
 export const Source: Story = { args: { mode: "source" }, tags: ["!dev", "!autodocs"] };
+export const CodeScrollKeyboardTest: Story = {
+  tags: ["!dev", "!autodocs"],
+  render: () => <div style={{ width: 390, maxWidth: "100%" }}><EditorPreview initialMarkdown={'# 코드 접근성\n\n```text\n' + "가로 스크롤 키보드 접근 확인 ".repeat(30) + '\n```'} /></div>,
+  play: async ({ canvas }) => {
+    const scroller = await canvas.findByRole("group", { name: "코드 가로 스크롤" }, { timeout: 5000 });
+    await expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+    const block = canvas.getByRole("group", { name: "코드 블록" });
+    within(block).getByRole("button", { name: "코드 블록 삭제" }).focus();
+    await userEvent.tab();
+    await expect(scroller).toHaveFocus();
+    await userEvent.tab();
+    await expect(within(block).getByRole("textbox", { name: "코드 내용" })).toHaveFocus();
+  },
+};
 export const SaveError: Story = { args: { mode: "source", error: true }, tags: ["!dev", "!autodocs"] };
 export const RichInteractionTest: Story = { ...Rich, tags: ["!dev", "!autodocs"], play: async ({ canvas }) => {
   const title = await canvas.findByLabelText("문서 제목");

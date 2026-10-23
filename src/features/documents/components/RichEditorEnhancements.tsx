@@ -3,7 +3,7 @@ import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext
 import { $isListNode } from "@lexical/list";
 import { usePublisher } from "@mdxeditor/gurx";
 import { $getNodeByKey, $createLineBreakNode } from "lexical";
-import { EditorView } from "@codemirror/view";
+import { EditorView, ViewPlugin } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
@@ -27,10 +27,17 @@ export const editorCodeLanguages = {
 };
 
 // Override the built-in lineWrapping extension without replacing its editing/keybinding lifecycle.
-export const codeEditorLayout = EditorView.theme({
+export const codeEditorLayout = [EditorView.theme({
   ".cm-content": { whiteSpace: "pre", overflowWrap: "normal" },
   ".cm-scroller": { overflowX: "auto" },
-});
+  ".cm-scroller:focus-visible": { outline: "2px solid var(--color-primary)", outlineOffset: "-2px" },
+}), ViewPlugin.define(view => {
+  // The scroll container needs its own Tab stop, separate from the editable text.
+  view.scrollDOM.tabIndex = 0;
+  view.scrollDOM.setAttribute("role", "group");
+  view.scrollDOM.setAttribute("aria-label", "코드 가로 스크롤");
+  return {};
+})];
 export const codeEditorLabel = EditorView.contentAttributes.of({ "aria-label": "코드 내용" });
 export const codeEditorHighlight = Prec.highest(syntaxHighlighting(HighlightStyle.define([
   { tag: tags.keyword, color: "var(--color-editor-code-keyword)" },
