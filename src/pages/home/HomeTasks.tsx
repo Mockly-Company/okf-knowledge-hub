@@ -5,7 +5,7 @@ import { ReviewTaskRow, IssueTaskRow } from "./HomeTaskRows";
 import "./home-tasks.css";
 
 export type HomeTaskState = "ready" | "empty" | "loading" | "error" | "stale" | "unavailable";
-export type ReviewTask = { id: string; title: string; repository: string; number: number; requester: string; requestedAt?: string | null; updatedAt: string };
+export type ReviewTask = { url?: string; id: string; title: string; repository: string; number: number; requester: string; requestedAt?: string | null; updatedAt: string };
 export type ProjectStatusTone = "neutral" | "info" | "warning" | "primary";
 export type IssueTask = { id: string; title: string; repository: string; number: number; url: string; projectStatus?: string; projectStatusTone?: ProjectStatusTone; dueDate?: string | null; updatedAt: string };
 export type HomeTaskData = { status: HomeTaskState; updatedAt?: string; reviews: ReviewTask[]; issues: IssueTask[] };

@@ -1,3 +1,4 @@
+import { HomeSettingsPanel } from "@/features/home/HomeSettingsPanel";
 import { useState } from "react";
 import { Check } from "lucide-react";
 import { PageHeader } from "@/components/patterns/PageHeader";
@@ -15,6 +16,7 @@ import { createBuildInfoGateway } from "@/infrastructure/build-info/createBuildI
 
 const settingsCategories = [
   "워크스페이스",
+  "홈",
   "외부 연결",
   "문서",
   "작업 방식",
@@ -44,11 +46,13 @@ const defaultBuildInfoGateway = createBuildInfoGateway();
 
 export function SettingsPage({
   buildInfoGateway = defaultBuildInfoGateway,
+  initialCategory = "화면",
 }: {
   buildInfoGateway?: BuildInfoGateway;
+  initialCategory?: string;
 }) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
-  const [activeCategory, setActiveCategory] = useState("화면");
+  const [activeCategory, setActiveCategory] = useState(initialCategory);
 
   return (
     <section
@@ -87,6 +91,8 @@ export function SettingsPage({
         </aside>
         {activeCategory === "워크스페이스" ? (
           <WorkspaceSettingsPanel />
+        ) : activeCategory === "홈" ? (
+          <HomeSettingsPanel />
         ) : activeCategory === "외부 연결" ? (
           <GitHubAccountPanel />
         ) : activeCategory === "화면" ? (

@@ -6,18 +6,14 @@ import { TaskTime } from "./TaskTime";
 
 export function ReviewTaskRow({ review, onOpen }: { review: ReviewTask; onOpen?: (id: string) => void }) {
   const hasRequestTime = Number.isFinite(Date.parse(review.requestedAt ?? ""));
-  return <li>
-    <Tooltip followCursor content={<span className="home-task-title-tooltip">{review.title}</span>}>
-    <Button variant="ghost" className="home-task-row" disabled={!onOpen} onClick={() => onOpen?.(review.id)}>
+  const content = <>
       <GitPullRequest className="home-task-row__icon" aria-hidden="true" size={20} />
-      <span className="home-task-row__body">
-        <strong>{review.title}</strong>
-        <span className="home-task-row__source home-task-row__metadata"><span title={review.repository}>{review.repository}</span><span className="home-task-row__reference">PR #{review.number}</span></span>
-      </span>
+      <span className="home-task-row__body"><strong>{review.title}</strong><span className="home-task-row__source home-task-row__metadata"><span title={review.repository}>{review.repository}</span><span className="home-task-row__reference">PR #{review.number}</span></span></span>
       <span className="home-task-row__aside home-task-row__metadata"><span className="home-task-row__extra">요청자 {review.requester}</span><span className="home-task-row__date">{hasRequestTime ? <TaskTime value={review.requestedAt!} /> : "요청 시각 없음"}</span></span>
-    </Button>
-    </Tooltip>
-  </li>;
+    </>;
+  return <li><Tooltip followCursor content={<span className="home-task-title-tooltip">{review.title}</span>}>
+    {review.url && !onOpen ? <a className="home-task-row" href={review.url} target="_blank" rel="noreferrer">{content}<span className="sr-only">GitHub에서 새 탭으로 열기</span></a> : <Button variant="ghost" className="home-task-row" disabled={!onOpen} onClick={()=>onOpen?.(review.id)}>{content}</Button>}
+  </Tooltip></li>;
 }
 
 export function IssueTaskRow({ issue }: { issue: IssueTask }) {

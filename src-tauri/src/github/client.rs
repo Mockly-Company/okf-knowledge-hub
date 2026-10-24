@@ -463,6 +463,45 @@ impl GithubHttpClient {
         })
     }
 
+    /// Fixed read-only Home queries; credentials never cross the command boundary.
+    pub(crate) async fn read_graphql(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value, AppError> {
+        if !query.trim_start().starts_with("query ") {
+            return Err(github_unavailable_error());
+        }
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["graphql"],
+                &[],
+                Some(json!({"query":query,"variables":variables})),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        let value: serde_json::Value =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        if value
+            .get("errors")
+            .is_some_and(|errors| !errors.as_array().is_some_and(Vec::is_empty))
+        {
+            return Err(github_unavailable_error());
+        }
+        value
+            .get("data")
+            .filter(|data| !data.is_null())
+            .cloned()
+            .ok_or_else(github_unavailable_error)
+    }
+
     pub async fn current_user(&self) -> Result<GithubUserSummary, AppError> {
         let response: GithubUserResponse = self
             .get_json(&["user"], &[], HttpFailureContext::Repository)
@@ -817,6 +856,35 @@ mod tests {
     use super::*;
     use crate::auth::model::AccessToken;
     use crate::error::{ErrorCode, RecoveryAction};
+
+    #[tokio::test]
+    async fn home_graphql_rejects_partial_errors_and_writes_without_leaking_response_details() {
+        let transport = RecordingTransport::with_responses(vec![HttpResponse::new(
+            200,
+            HeaderMap::new(),
+            br#"{"data":{"search":{}},"errors":[{"message":"private details"}]}"#.to_vec(),
+        )]);
+        let client = GithubHttpClient::with_base_url(
+            SequenceTokenProvider::default(),
+            transport.clone(),
+            "https://api.github.com/",
+        )
+        .unwrap();
+        let error = client
+            .read_graphql("query Home { viewer { login } }", json!({}))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+        assert!(!error.message.contains("private details"));
+        assert!(client
+            .read_graphql("mutation { createIssue }", json!({}))
+            .await
+            .is_err());
+        let requests = transport.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, HttpMethod::Post);
+        assert!(requests[0].url.ends_with("/graphql"));
+    }
 
     #[derive(Clone, Default)]
     struct SequenceTokenProvider {

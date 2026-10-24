@@ -218,6 +218,36 @@ impl LocalSettingsService {
         self.store.remove(CURRENT_WORKSPACE_PATH_KEY)
     }
 
+    pub(crate) fn load_home_preferences(
+        &self,
+        scope: &str,
+    ) -> Result<Option<crate::home::Preferences>, AppError> {
+        let raw = self.store.read(&format!("home-preferences:{scope}"))?;
+        raw.map(|value| {
+            serde_json::from_str(&value).map_err(|_| {
+                AppError::new(
+                    ErrorCode::LocalSettingsUnavailable,
+                    "홈 설정을 읽을 수 없습니다.",
+                )
+            })
+        })
+        .transpose()
+    }
+    pub(crate) fn save_home_preferences(
+        &self,
+        scope: &str,
+        preferences: &crate::home::Preferences,
+    ) -> Result<(), AppError> {
+        let value = serde_json::to_string(preferences).map_err(|_| {
+            AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "홈 설정을 저장하지 못했습니다.",
+            )
+        })?;
+        self.store
+            .write(&format!("home-preferences:{scope}"), &value)
+    }
+
     pub fn load_display_density(&self) -> Result<DisplayDensity, AppError> {
         let value = self.store.read(DISPLAY_DENSITY_KEY)?;
         Ok(DisplayDensity::from_stored(value.as_deref()))
@@ -396,6 +426,38 @@ mod tests {
     use crate::workspace::service::{WorkspaceInspection, WorkspaceSummary};
 
     const UNKNOWN_KEY: &str = "future-setting";
+
+    #[test]
+    fn home_preferences_are_isolated_by_account_workspace_scope_and_preserve_other_settings() {
+        let store = MemoryLocalSettingsStore::with_values([("unrelated", "keep".into())]);
+        let service = LocalSettingsService::new(store.clone());
+        let prefs = crate::home::Preferences {
+            project_id: "P".into(),
+            status_field_id: "S".into(),
+            in_progress_option_ids: vec!["W".into()],
+            due_date_field_id: None,
+        };
+        service
+            .save_home_preferences("alice-workspace-a", &prefs)
+            .unwrap();
+        assert_eq!(
+            service
+                .load_home_preferences("alice-workspace-a")
+                .unwrap()
+                .unwrap()
+                .project_id,
+            "P"
+        );
+        assert!(service
+            .load_home_preferences("bob-workspace-a")
+            .unwrap()
+            .is_none());
+        assert!(service
+            .load_home_preferences("alice-workspace-b")
+            .unwrap()
+            .is_none());
+        assert_eq!(store.raw("unrelated").as_deref(), Some("keep"));
+    }
 
     #[derive(Clone, Default)]
     struct MemoryLocalSettingsStore {

@@ -4,6 +4,7 @@ pub mod commands;
 pub mod documents;
 pub mod error;
 pub mod github;
+mod home;
 pub mod repository;
 pub mod settings;
 pub mod state;
@@ -83,6 +84,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             build_info::get_build_info,
+            commands::home::load_home,
+            commands::home::configure_home,
+            commands::home::open_home_github_url,
             commands::auth::get_auth_state,
             commands::auth::begin_github_auth,
             commands::auth::cancel_github_auth,

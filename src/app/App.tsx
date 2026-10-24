@@ -1,3 +1,5 @@
+import type { HomeGateway } from "@/features/home/HomeGateway";
+import { createHomeGateway } from "@/infrastructure/home/TauriHomeGateway";
 import { useState } from "react";
 import { HashRouter } from "react-router-dom";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
@@ -11,16 +13,19 @@ import { createWorkspaceConnectionGateway } from "@/infrastructure/workspace/cre
 import { AppRoutes } from "./AppRoutes";
 
 interface AppProps {
+  homeGateway?: HomeGateway;
   workspaceGateway?: WorkspaceConnectionGateway;
   preferencesRepository?: PreferencesRepository;
   documentsGateway?: DocumentsGateway;
 }
 
 export function App({
+  homeGateway = createHomeGateway(),
   workspaceGateway = createWorkspaceConnectionGateway(),
   preferencesRepository = createPreferencesRepository(),
   documentsGateway = createDocumentsGateway(),
 }: AppProps) {
+  const [home] = useState(() => homeGateway);
   const [repository] = useState(() => preferencesRepository);
   const [workspace] = useState(() => workspaceGateway);
   const [documents] = useState(() => documentsGateway);
@@ -29,7 +34,7 @@ export function App({
     <PreferencesProvider repository={repository}>
       <WorkspaceConnectionProvider gateway={workspace}>
         <HashRouter>
-          <AppRoutes documentsGateway={documents} />
+          <AppRoutes documentsGateway={documents} homeGateway={home} />
         </HashRouter>
       </WorkspaceConnectionProvider>
     </PreferencesProvider>
