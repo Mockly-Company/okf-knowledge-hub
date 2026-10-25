@@ -24,6 +24,18 @@ const boardGateway = FakeProjectBoardGateway.withIssues(
       url: "https://example.test/issues/12",
       layer: "planning",
       status: "in_progress",
+      children: [
+        {
+          number: 13,
+          title: "하위 작업",
+          url: "https://example.test/issues/13",
+          layer: "planning",
+          status: "backlog",
+          children: [],
+          kind: "작업",
+        },
+      ],
+      kind: "기능",
     },
     {
       number: 34,
@@ -31,6 +43,8 @@ const boardGateway = FakeProjectBoardGateway.withIssues(
       url: "https://example.test/issues/34",
       layer: "design",
       status: "backlog",
+      children: [],
+      kind: null,
     },
   ],
   "2026-10-25T12:00:00+09:00",

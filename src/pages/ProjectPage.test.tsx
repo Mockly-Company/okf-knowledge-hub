@@ -47,6 +47,18 @@ describe("ProjectPage", () => {
             url: "https://example.test/issues/12",
             layer: "planning",
             status: "in_progress",
+            children: [
+              {
+                number: 13,
+                title: "하위 작업",
+                url: "https://example.test/issues/13",
+                layer: "planning",
+                status: "backlog",
+                children: [],
+                kind: "작업",
+              },
+            ],
+            kind: "기능",
           },
           {
             number: 34,
@@ -54,6 +66,8 @@ describe("ProjectPage", () => {
             url: "https://example.test/issues/34",
             layer: "design",
             status: "backlog",
+            children: [],
+            kind: null,
           },
         ],
         "2026-10-25T12:00:00+09:00",
@@ -110,6 +124,8 @@ describe("ProjectPage", () => {
           url: "https://example.test/issues/12",
           layer: "planning",
           status: "in_progress",
+          children: [],
+          kind: "기능",
         },
       ],
       "2026-10-25T12:00:00+09:00",
@@ -222,6 +238,8 @@ describe("ProjectPage", () => {
               url: "https://example.test/issues/7",
               layer: "unassigned",
               status: "backlog",
+              children: [],
+              kind: null,
             },
           ],
           null,
@@ -234,32 +252,61 @@ describe("ProjectPage", () => {
       within(lane).getByRole("article", { name: "Issue #7 분류 전 이슈" }),
     ).toBeInTheDocument();
   });
-  it("lets users pick a project from the fetched list", async () => {
+  it("switches between layer and tree views", async () => {
     const user = userEvent.setup();
-    const gateway = FakeProjectBoardGateway.unlinked();
-    render(<ProjectPage gateway={gateway} />);
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 12,
+              title: "기획서 초안",
+              url: "https://example.test/issues/12",
+              layer: "planning",
+              status: "in_progress",
+              children: [
+                {
+                  number: 13,
+                  title: "하위 작업",
+                  url: "https://example.test/issues/13",
+                  layer: "planning",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                },
+              ],
+              kind: "기능",
+            },
+          ],
+          null,
+        )}
+      />,
+    );
 
-    await screen.findByRole("textbox", { name: "Project URL" });
-    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
+    await screen.findByRole("region", { name: "기획 레이어" });
+    await user.click(screen.getByRole("button", { name: "계층별" }));
 
-    const choice = await screen.findByRole("radio", {
-      name: "Mockly · Mockly-Company #1",
-    });
-    await user.click(choice);
+    expect(
+      await screen.findByRole("region", { name: "계층 보기" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("article", { name: "에픽 #12 기획서 초안" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
+    ).toBeInTheDocument();
+
     await user.click(
-      screen.getByRole("button", { name: "이 프로젝트 연결" }),
+      screen.getByRole("button", { name: "기획서 초안 접기" }),
     );
+    expect(
+      screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
+    ).not.toBeInTheDocument();
 
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "listGithubProjects"),
-      ).toHaveLength(1),
-    );
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "linkGithubProject"),
-      ).toHaveLength(1),
-    );
+    await user.click(screen.getByRole("button", { name: "영역별" }));
+    expect(
+      await screen.findByRole("region", { name: "기획 레이어" }),
+    ).toBeInTheDocument();
   });
 
   it("lets linked workspaces switch projects from the list", async () => {
@@ -273,9 +320,10 @@ describe("ProjectPage", () => {
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "프로젝트 변경" }));
-    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
 
-    const choice = await screen.findByRole("radio", {
+    const combo = await screen.findByRole("combobox", { name: "Project 목록" });
+    await user.click(combo);
+    const choice = await screen.findByRole("option", {
       name: "Mockly · Mockly-Company #1",
     });
     await user.click(choice);

@@ -18,6 +18,10 @@ export interface BoardIssue {
   url: string;
   layer: BoardLayer;
   status: BoardStatus;
+  /** 하위 이슈(스토리·태스크의 자식). 없으면 빈 배열. */
+  children: BoardIssue[];
+  /** 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 null. */
+  kind: string | null;
 }
 
 export interface ProjectBoard {

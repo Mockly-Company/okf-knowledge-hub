@@ -12,8 +12,8 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    DraftPullRequest, DraftPullRequestRequest, GithubProjectListItem, GithubProjectSummary,
-    GithubRepositoryDetail, GithubRepositorySummary, Page,
+    DraftPullRequest, DraftPullRequestRequest, GithubProjectItem, GithubProjectListItem,
+    GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page,
 };
 use crate::project_board::model::ProjectOwnerScope;
 
@@ -136,16 +136,6 @@ struct GithubProjectV2Response {
     title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GithubProjectItem {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub labels: Vec<String>,
-    pub status: Option<String>,
-    pub area: Option<String>,
-}
-
 #[derive(Deserialize)]
 struct GithubProjectItemsResponse {
     data: Option<GithubProjectItemsData>,
@@ -199,6 +189,20 @@ struct GithubProjectItemContent {
     title: Option<String>,
     url: Option<String>,
     labels: Option<GithubProjectLabelConnection>,
+    #[serde(rename = "subIssues", default)]
+    sub_issues: Option<GithubSubIssuesConnection>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesConnection {
+    nodes: Vec<Option<GithubSubIssueNode>>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssueNode {
+    number: Option<u64>,
+    title: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -416,7 +420,7 @@ fn project_permission_error() -> AppError {
 
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}} subIssues(first:20){{nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -936,6 +940,26 @@ impl GithubHttpClient {
                     .iter()
                     .find(|(field, _)| field == "영역")
                     .map(|(_, name)| name.clone());
+                let kind = single_selects
+                    .iter()
+                    .find(|(field, _)| field == "타입")
+                    .map(|(_, name)| name.clone());
+                let sub_issues = content
+                    .sub_issues
+                    .map(|connection| {
+                        connection
+                            .nodes
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|node| match (node.number, node.title, node.url) {
+                                (Some(number), Some(title), Some(url)) => {
+                                    Some(GithubSubIssue { number, title, url })
+                                }
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 items.push(GithubProjectItem {
                     number,
                     title,
@@ -943,6 +967,8 @@ impl GithubHttpClient {
                     labels,
                     status,
                     area,
+                    kind,
+                    sub_issues,
                 });
             }
             // 페이지당 100개, 최대 5페이지까지만 읽는다(API 호출 상한).
@@ -1627,7 +1653,7 @@ mod tests {
         let transport = RecordingTransport::with_responses(vec![
             response(
                 200,
-                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":{"nodes":[]}}]}}}}}"#,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]},"subIssues":{"nodes":[{"number":13,"title":"하위 작업","url":"https://example.test/issues/13"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":{"nodes":[]}}]}}}}}"#,
             ),
             response(
                 200,
@@ -1646,6 +1672,8 @@ mod tests {
         assert_eq!(items[0].labels, vec!["layer:planning"]);
         assert_eq!(items[0].status.as_deref(), Some("In progress"));
         assert_eq!(items[0].area.as_deref(), Some("백엔드"));
+        assert_eq!(items[0].sub_issues.len(), 1);
+        assert_eq!(items[0].sub_issues[0].number, 13);
         assert_eq!(items[1].number, 34);
         assert!(items[1].status.is_none());
         let bodies: Vec<_> = transport

@@ -95,6 +95,12 @@ pub struct BoardIssue {
     pub url: String,
     pub layer: BoardLayer,
     pub status: BoardStatus,
+    /// 하위 이슈(스토리·태스크의 자식). 없는 경우 빈 배열.
+    #[serde(default)]
+    pub children: Vec<BoardIssue>,
+    /// 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -246,11 +252,22 @@ mod tests {
                 url: "https://example.test/issues/12".to_owned(),
                 layer: BoardLayer::Planning,
                 status: BoardStatus::InProgress,
+                children: vec![super::BoardIssue {
+                    number: 13,
+                    title: "하위 작업".to_owned(),
+                    url: "https://example.test/issues/13".to_owned(),
+                    layer: BoardLayer::Planning,
+                    status: BoardStatus::Backlog,
+                    children: Vec::new(),
+                    kind: Some("작업".to_owned()),
+                }],
+                kind: Some("기능".to_owned()),
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
         };
         let json = serde_json::to_string(&board).expect("board serializes");
         assert!(json.contains("\"fetchedAt\""));
+        assert!(json.contains("\"children\""));
         let restored: ProjectBoard = serde_json::from_str(&json).expect("board parses");
         assert_eq!(restored, board);
     }
