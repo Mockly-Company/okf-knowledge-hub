@@ -363,9 +363,9 @@ fn project_permission_error() -> AppError {
 fn project_not_found_error() -> AppError {
     AppError::new(
         ErrorCode::GithubPermissionDenied,
-        "해당 GitHub Project를 찾을 수 없습니다.",
+        "해당 GitHub Project를 찾을 수 없습니다. URL의 번호를 확인하고, GitHub App에 Projects 읽기 권한이 있는지 확인해 주세요.",
     )
-    .with_recovery(RecoveryAction::Retry)
+    .with_recovery(RecoveryAction::ReinstallGithubApp)
     .with_detail("reason", "project_not_found")
 }
 
@@ -1431,7 +1431,7 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode::GithubPermissionDenied);
-        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
+        assert_eq!(error.recovery, Some(RecoveryAction::ReinstallGithubApp));
     }
 
     #[tokio::test]
