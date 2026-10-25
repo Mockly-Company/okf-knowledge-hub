@@ -10,14 +10,36 @@ describe("TauriProjectBoardGateway", () => {
       args?: Record<string, unknown>,
     ): Promise<T> => {
       calls.push({ command, args });
-      return { issues: [], fetchedAt: null } as T;
+      return { issues: [], fetchedAt: null, skipped: 0 } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
 
     const board = await gateway.getProjectBoard();
 
     expect(calls).toEqual([{ command: "get_project_board", args: undefined }]);
-    expect(board).toEqual({ issues: [], fetchedAt: null });
+    expect(board).toEqual({ issues: [], fetchedAt: null, skipped: 0 });
+  });
+
+  it("maps the sync command", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> =
+      [];
+    const invoke = async <T>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      calls.push({ command, args });
+      return {
+        issues: [],
+        fetchedAt: "2026-10-25T12:00:00+09:00",
+        skipped: 0,
+      } as T;
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    const board = await gateway.syncProjectBoard();
+
+    expect(calls).toEqual([{ command: "sync_project_board", args: undefined }]);
+    expect(board.fetchedAt).toBe("2026-10-25T12:00:00+09:00");
   });
 
   it("maps project resolve and link commands", async () => {
@@ -34,6 +56,7 @@ describe("TauriProjectBoardGateway", () => {
           owner: "Mockly-Company",
           number: 1,
           title: "Mockly Board",
+          scope: "organization",
         } as T;
       }
       return undefined as T;
@@ -58,6 +81,7 @@ describe("TauriProjectBoardGateway", () => {
             owner: "Mockly-Company",
             number: 1,
             title: "Mockly Board",
+            scope: "organization",
           },
         },
       },

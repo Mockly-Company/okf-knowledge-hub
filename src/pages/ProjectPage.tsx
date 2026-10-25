@@ -100,6 +100,7 @@ export function ProjectPage({
 }) {
   const [board, setBoard] = useState<ProjectBoard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isUnlinked, setIsUnlinked] = useState(false);
   const [projectUrl, setProjectUrl] = useState("");
@@ -122,12 +123,29 @@ export function ProjectPage({
         (error as { code?: string }).code === "workspace_invalid"
       ) {
         setIsUnlinked(true);
-        setBoard({ issues: [], fetchedAt: null });
+        setBoard({ issues: [], fetchedAt: null, skipped: 0 });
       } else {
         setLoadError("Project 보드를 불러오지 못했습니다.");
       }
     } finally {
       setIsLoading(false);
+    }
+  }, [gateway]);
+
+  const refresh = useCallback(async () => {
+    setIsSyncing(true);
+    setLoadError(null);
+    try {
+      setBoard(await gateway.syncProjectBoard());
+      setIsUnlinked(false);
+    } catch (error) {
+      setLoadError(
+        typeof error === "object" && error !== null && "message" in error
+          ? String((error as { message: string }).message)
+          : "Project 보드를 가져오지 못했습니다.",
+      );
+    } finally {
+      setIsSyncing(false);
     }
   }, [gateway]);
 
@@ -201,8 +219,9 @@ export function ProjectPage({
             <Button
               type="button"
               variant="secondary"
-              onClick={() => void load()}
-              disabled={isLoading}
+              onClick={() => void refresh()}
+              disabled={isLoading || isSyncing}
+              loading={isSyncing}
             >
               <RefreshCw aria-hidden="true" strokeWidth={1.75} />
               새로고침
@@ -243,6 +262,14 @@ export function ProjectPage({
           </Button>
         ))}
       </div>
+
+      {board && board.skipped > 0 ? (
+        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+          {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
+          Issue에 {`layer:기획/디자인/프론트엔드/백엔드`} 라벨과 상태 값을 확인해
+          주세요.
+        </p>
+      ) : null}
 
       <div className="mt-[var(--space-6)] flex justify-end">
         <TabsList aria-label="Project 보기">

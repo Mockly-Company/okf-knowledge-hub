@@ -99,6 +99,9 @@ pub struct ProjectBoard {
     pub issues: Vec<BoardIssue>,
     /// 마지막으로 GitHub에서 가져온 시각(RFC 3339). 아직 가져오지 않았으면 `None`.
     pub fetched_at: Option<String>,
+    /// 레이어/상태를 판별할 수 없어 보드에서 제외한 항목 수.
+    #[serde(default)]
+    pub skipped: u32,
 }
 
 impl ProjectBoard {
@@ -106,6 +109,7 @@ impl ProjectBoard {
         Self {
             issues: Vec::new(),
             fetched_at: None,
+            skipped: 0,
         }
     }
 }
@@ -117,9 +121,11 @@ pub struct ResolvedGithubProject {
     pub owner: String,
     pub number: u64,
     pub title: String,
+    pub scope: ProjectOwnerScope,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProjectOwnerScope {
     Organization,
     User,
@@ -237,6 +243,7 @@ mod tests {
                 status: BoardStatus::InProgress,
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
+            skipped: 0,
         };
         let json = serde_json::to_string(&board).expect("board serializes");
         assert!(json.contains("\"fetchedAt\""));
