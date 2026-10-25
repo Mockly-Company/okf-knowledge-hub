@@ -116,6 +116,30 @@ fn read_workspace_document(repository_root: &std::path::Path) -> CommandResult<W
     WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(repository_root))
 }
 
+/// 로그인한 계정이 볼 수 있는 GitHub Projects 목록을 가져온다.
+#[tauri::command]
+pub async fn list_github_projects(
+    state: State<'_, AppServices>,
+) -> CommandResult<Vec<ResolvedGithubProject>> {
+    let _access = state.acquire_authenticated_command().await?;
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let items = github.list_projects().await?;
+    Ok(items
+        .into_iter()
+        .map(|item| ResolvedGithubProject {
+            id: item.id,
+            owner: item.owner,
+            number: item.number,
+            title: item.title,
+            scope: if item.organization {
+                ProjectOwnerScope::Organization
+            } else {
+                ProjectOwnerScope::User
+            },
+        })
+        .collect())
+}
+
 /// 붙여넣은 Project URL에서 owner/number를 읽고 GitHub에서 Node ID와 제목을 가져온다.
 #[tauri::command]
 pub async fn resolve_github_project(

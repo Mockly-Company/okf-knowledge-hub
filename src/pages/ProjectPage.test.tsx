@@ -163,6 +163,7 @@ describe("ProjectPage", () => {
       },
       syncProjectBoard: () => gateway.syncProjectBoard(),
       resolveGithubProject: (url: string) => gateway.resolveGithubProject(url),
+      listGithubProjects: () => gateway.listGithubProjects(),
       linkGithubProject: (project: ResolvedGithubProject) =>
         gateway.linkGithubProject(project),
     };
@@ -220,6 +221,34 @@ describe("ProjectPage", () => {
         "3개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다. Issue에 layer:기획/디자인/프론트엔드/백엔드 라벨과 상태 값을 확인해 주세요.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("lets users pick a project from the fetched list", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.unlinked();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
+
+    const choice = await screen.findByRole("radio", {
+      name: "Mockly · Mockly-Company #1",
+    });
+    await user.click(choice);
+    await user.click(
+      screen.getByRole("button", { name: "이 프로젝트 연결" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "listGithubProjects"),
+      ).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "linkGithubProject"),
+      ).toHaveLength(1),
+    );
   });
 
   it("explains why a project URL cannot be resolved", async () => {
