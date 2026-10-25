@@ -12,8 +12,8 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    DraftPullRequest, DraftPullRequestRequest, GithubProjectSummary, GithubRepositoryDetail,
-    GithubRepositorySummary, Page,
+    DraftPullRequest, DraftPullRequestRequest, GithubProjectListItem, GithubProjectSummary,
+    GithubRepositoryDetail, GithubRepositorySummary, Page,
 };
 use crate::project_board::model::ProjectOwnerScope;
 
@@ -84,6 +84,50 @@ struct GithubProjectLookupData {
 struct GithubProjectOwnerResponse {
     #[serde(rename = "projectV2")]
     project_v2: Option<GithubProjectV2Response>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectsListResponse {
+    data: Option<GithubProjectsListData>,
+    errors: Option<Vec<GithubProjectLookupError>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectsListData {
+    viewer: Option<GithubProjectsViewer>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectsViewer {
+    login: Option<String>,
+    organizations: Option<GithubOrganizationConnection>,
+    #[serde(rename = "projectsV2")]
+    projects_v2: Option<GithubProjectV2Connection>,
+}
+
+#[derive(Deserialize)]
+struct GithubOrganizationConnection {
+    nodes: Vec<Option<GithubOrganizationNode>>,
+}
+
+#[derive(Deserialize)]
+struct GithubOrganizationNode {
+    login: Option<String>,
+    #[serde(rename = "projectsV2")]
+    projects_v2: Option<GithubProjectV2Connection>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectV2Connection {
+    nodes: Vec<Option<GithubProjectV2ListItem>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectV2ListItem {
+    id: String,
+    number: i64,
+    title: String,
+    closed: bool,
 }
 
 #[derive(Deserialize)]
@@ -881,6 +925,74 @@ impl GithubHttpClient {
         Ok(items)
     }
 
+    /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
+    /// 조직 프로젝트와 개인 프로젝트를 합쳐서 반환한다.
+    pub async fn list_projects(&self) -> Result<Vec<GithubProjectListItem>, AppError> {
+        let query = "query{viewer{login organizations(first:20){nodes{login projectsV2(first:20){nodes{id number title closed}}}} projectsV2(first:20){nodes{id number title closed}}}}";
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["graphql"],
+                &[],
+                Some(serde_json::json!({ "query": query })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_project_error(response.status));
+        }
+        let body: GithubProjectsListResponse =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        if let Some(errors) = body.errors {
+            return Err(map_project_lookup_errors(&errors));
+        }
+        let mut projects = Vec::new();
+        if let Some(viewer) = body.data.and_then(|data| data.viewer) {
+            for org in viewer
+                .organizations
+                .into_iter()
+                .flat_map(|connection| connection.nodes)
+                .flatten()
+            {
+                let owner = org.login.unwrap_or_default();
+                if owner.is_empty() {
+                    continue;
+                }
+                for node in org
+                    .projects_v2
+                    .into_iter()
+                    .flat_map(|connection| connection.nodes)
+                    .flatten()
+                {
+                    projects.push(GithubProjectListItem {
+                        id: node.id,
+                        owner: owner.clone(),
+                        number: node.number.max(0) as u64,
+                        title: node.title,
+                        closed: node.closed,
+                        organization: true,
+                    });
+                }
+            }
+            let login = viewer.login.unwrap_or_default();
+            for node in viewer
+                .projects_v2
+                .into_iter()
+                .flat_map(|connection| connection.nodes)
+                .flatten()
+            {
+                projects.push(GithubProjectListItem {
+                    id: node.id,
+                    owner: login.clone(),
+                    number: node.number.max(0) as u64,
+                    title: node.title,
+                    closed: node.closed,
+                    organization: false,
+                });
+            }
+        }
+        Ok(projects)
+    }
+
     pub async fn create_draft_pull_request(
         &self,
         request: &DraftPullRequestRequest,
@@ -1468,6 +1580,31 @@ mod tests {
         assert_eq!(bodies.len(), 2);
         assert!(bodies[0].contains("\"after\":null"));
         assert!(bodies[1].contains("\"after\":\"cursor-1\""));
+    }
+
+    #[tokio::test]
+    async fn project_listing_combines_organization_and_user_projects() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":"hyeeun","organizations":{"nodes":[{"login":"Mockly-Company","projectsV2":{"nodes":[{"id":"PVT_kwDOExample","number":1,"title":"Mockly","closed":false}]}}]},"projectsV2":{"nodes":[{"id":"PVT_kwDOUser","number":3,"title":"개인 정리","closed":true}]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let projects = service.list_projects().await.unwrap();
+
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].id, "PVT_kwDOExample");
+        assert_eq!(projects[0].owner, "Mockly-Company");
+        assert_eq!(projects[0].number, 1);
+        assert!(!projects[0].closed);
+        assert!(projects[0].organization);
+        assert_eq!(projects[1].owner, "hyeeun");
+        assert!(!projects[1].organization);
+        assert_eq!(
+            transport.requests()[0].url,
+            "https://api.example.test/graphql"
+        );
     }
 
     #[tokio::test]

@@ -42,6 +42,31 @@ describe("TauriProjectBoardGateway", () => {
     expect(board.fetchedAt).toBe("2026-10-25T12:00:00+09:00");
   });
 
+  it("maps the project list command", async () => {
+    const invoke = async <T>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      expect(command).toBe("list_github_projects");
+      expect(args).toBeUndefined();
+      return [
+        {
+          id: "PVT_kwDOExample",
+          owner: "Mockly-Company",
+          number: 1,
+          title: "Mockly",
+          scope: "organization",
+        },
+      ] as T;
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    const projects = await gateway.listGithubProjects();
+
+    expect(projects).toHaveLength(1);
+    expect(projects[0].title).toBe("Mockly");
+  });
+
   it("maps project resolve and link commands", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> =
       [];

@@ -10,8 +10,19 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     | { method: "getProjectBoard" }
     | { method: "syncProjectBoard" }
     | { method: "resolveGithubProject"; url: string }
+    | { method: "listGithubProjects" }
     | { method: "linkGithubProject"; project: ResolvedGithubProject }
   > = [];
+
+  projectList: ResolvedGithubProject[] | Error = [
+    {
+      id: "PVT_kwDOFake",
+      owner: "Mockly-Company",
+      number: 1,
+      title: "Mockly",
+      scope: "organization",
+    },
+  ];
 
   resolveResult: ResolvedGithubProject | Error = {
     id: "PVT_kwDOFake",
@@ -71,6 +82,14 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
       throw this.resolveResult;
     }
     return this.resolveResult;
+  }
+
+  async listGithubProjects(): Promise<ResolvedGithubProject[]> {
+    this.calls.push({ method: "listGithubProjects" });
+    if (this.projectList instanceof Error) {
+      throw this.projectList;
+    }
+    return this.projectList;
   }
 
   async linkGithubProject(project: ResolvedGithubProject): Promise<void> {

@@ -31,6 +31,10 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
     });
   }
 
+  listGithubProjects(): Promise<ResolvedGithubProject[]> {
+    return this.invokeCommand<ResolvedGithubProject[]>("list_github_projects");
+  }
+
   linkGithubProject(project: ResolvedGithubProject): Promise<void> {
     return this.invokeCommand<void>("link_github_project", { project });
   }

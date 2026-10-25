@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Radio } from "@/components/ui/radio";
 import { Select } from "@/components/ui/select";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
@@ -105,8 +106,12 @@ export function ProjectPage({
   const [isUnlinked, setIsUnlinked] = useState(false);
   const [projectUrl, setProjectUrl] = useState("");
   const [resolved, setResolved] = useState<ResolvedGithubProject | null>(null);
+  const [projectOptions, setProjectOptions] = useState<
+    ResolvedGithubProject[] | null
+  >(null);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
+  const [isListing, setIsListing] = useState(false);
   const [isLinking, setIsLinking] = useState(false);
   const [filter, setFilter] = useState<LayerFilter>("all");
 
@@ -170,6 +175,21 @@ export function ProjectPage({
     }
   }, [gateway, projectUrl]);
 
+  const listProjects = useCallback(async () => {
+    setIsListing(true);
+    setLinkError(null);
+    try {
+      setProjectOptions(await gateway.listGithubProjects());
+    } catch (error) {
+      setLinkError(
+        typeof error === "object" && error !== null && "message" in error
+          ? String((error as { message: string }).message)
+          : "Project 목록을 가져오지 못했습니다.",
+      );
+    } finally {
+      setIsListing(false);
+    }
+  }, [gateway]);
   const link = useCallback(async () => {
     if (!resolved) {
       return;
@@ -310,6 +330,49 @@ export function ProjectPage({
               불러오기
             </Button>
           </div>
+          <div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void listProjects()}
+              disabled={isListing}
+              loading={isListing}
+            >
+              목록에서 고르기
+            </Button>
+          </div>
+          {projectOptions ? (
+            <div
+              role="radiogroup"
+              aria-label="GitHub Project 목록"
+              className="grid gap-[var(--space-2)]"
+            >
+              {projectOptions.length === 0 ? (
+                <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                  볼 수 있는 Project가 없습니다.
+                </p>
+              ) : null}
+              {projectOptions.map((option) => (
+                <label
+                  key={option.id}
+                  className="flex cursor-pointer items-center gap-[var(--space-2)]"
+                >
+                  <Radio
+                    name="github-project-choice"
+                    value={option.id}
+                    checked={resolved?.id === option.id}
+                    onChange={() => {
+                      setResolved(option);
+                      setLinkError(null);
+                    }}
+                  />
+                  <span>
+                    {option.title} · {option.owner} #{option.number}
+                  </span>
+                </label>
+              ))}
+            </div>
+          ) : null}
           {resolved ? (
             <div className="grid gap-[var(--space-2)]">
               <p className="m-0">
