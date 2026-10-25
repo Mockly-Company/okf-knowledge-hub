@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
-use crate::github::model::GithubProjectSummary;
+use crate::github::model::{GithubProjectItem, GithubProjectSummary};
 use crate::project_board::{
     load_cached_board, parse_project_url, BoardIssue, BoardLayer, BoardStatus, ProjectBoard,
     ProjectOwnerScope, ResolvedGithubProject,
@@ -214,6 +214,37 @@ fn is_project_not_found(error: &AppError) -> bool {
             .is_some_and(|reason| reason == "project_not_found")
 }
 
+fn build_tree(
+    item: &GithubProjectItem,
+    all: &[GithubProjectItem],
+    visiting: &mut std::collections::HashSet<String>,
+) -> BoardIssue {
+    let children = item
+        .sub_issues
+        .iter()
+        .filter_map(|sub| {
+            if !visiting.insert(sub.url.clone()) {
+                return None;
+            }
+            let child = all
+                .iter()
+                .find(|candidate| candidate.url == sub.url)
+                .map(|found| build_tree(found, all, visiting));
+            visiting.remove(&sub.url);
+            child
+        })
+        .collect();
+    BoardIssue {
+        number: item.number,
+        title: item.title.clone(),
+        url: item.url.clone(),
+        layer: map_layer(item.area.as_deref(), &item.labels),
+        status: map_status(item.status.as_deref()),
+        children,
+        kind: item.kind.clone(),
+    }
+}
+
 fn map_status(status: Option<&str>) -> BoardStatus {
     match status {
         Some("Backlog") => BoardStatus::Backlog,
@@ -320,14 +351,19 @@ pub async fn sync_project_board(
         Err(error) => return Err(error),
     };
     let mut issues = Vec::new();
-    for item in items {
-        issues.push(BoardIssue {
-            number: item.number,
-            title: item.title,
-            url: item.url,
-            layer: map_layer(item.area.as_deref(), &item.labels),
-            status: map_status(item.status.as_deref()),
-        });
+    let mut child_urls = std::collections::HashSet::new();
+    for item in &items {
+        for sub in &item.sub_issues {
+            child_urls.insert(sub.url.clone());
+        }
+    }
+    for item in &items {
+        if child_urls.contains(&item.url) {
+            continue;
+        }
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(item.url.clone());
+        issues.push(build_tree(item, &items, &mut visiting));
     }
     let board = ProjectBoard {
         issues,
@@ -344,7 +380,8 @@ pub async fn sync_project_board(
 
 #[cfg(test)]
 mod tests {
-    use super::{map_layer, map_status};
+    use super::{build_tree, map_layer, map_status};
+    use crate::github::model::{GithubProjectItem, GithubSubIssue};
     use crate::project_board::{BoardLayer, BoardStatus};
 
     #[test]
@@ -369,5 +406,42 @@ mod tests {
         assert_eq!(map_layer(Some("프론트"), &[]), BoardLayer::Frontend);
         assert_eq!(map_layer(Some("미정"), &[]), BoardLayer::Unassigned);
         assert_eq!(map_layer(None, &[]), BoardLayer::Unassigned);
+    }
+
+    fn sample_item(number: u64, url: &str, sub_urls: &[&str]) -> GithubProjectItem {
+        GithubProjectItem {
+            number,
+            title: format!("issue-{number}"),
+            url: url.to_owned(),
+            labels: Vec::new(),
+            status: Some("In progress".to_owned()),
+            area: Some("백엔드".to_owned()),
+            kind: None,
+            sub_issues: sub_urls
+                .iter()
+                .enumerate()
+                .map(|(index, sub)| GithubSubIssue {
+                    number: 100 + index as u64,
+                    title: format!("sub-{index}"),
+                    url: (*sub).to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn build_tree_nests_children_and_skips_cycles() {
+        let items = vec![
+            sample_item(1, "https://example.test/1", &["https://example.test/2"]),
+            sample_item(2, "https://example.test/2", &["https://example.test/1"]),
+        ];
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(items[0].url.clone());
+        let root = build_tree(&items[0], &items, &mut visiting);
+
+        assert_eq!(root.children.len(), 1);
+        assert_eq!(root.children[0].number, 2);
+        assert!(root.children[0].children.is_empty());
+        assert_eq!(root.children[0].layer, BoardLayer::Backend);
     }
 }

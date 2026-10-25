@@ -67,3 +67,22 @@ pub struct DraftPullRequest {
     pub html_url: String,
     pub is_draft: bool,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubProjectItem {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub labels: Vec<String>,
+    pub status: Option<String>,
+    pub area: Option<String>,
+    pub kind: Option<String>,
+    pub sub_issues: Vec<GithubSubIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubSubIssue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+}

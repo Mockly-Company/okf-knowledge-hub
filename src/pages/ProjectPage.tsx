@@ -18,6 +18,7 @@ import {
   type ProjectBoard,
   type ResolvedGithubProject,
 } from "@/features/project-board/model";
+import { ProjectTree } from "@/features/project-board/ProjectTree";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 type LayerFilter = "all" | BoardLayer;
@@ -32,9 +33,13 @@ function issuesFor(
   if (!board) {
     return [];
   }
-  return board.issues.filter(
+  return flattenIssues(board.issues).filter(
     (issue) => issue.layer === layer && issue.status === status,
   );
+}
+
+function flattenIssues(issues: BoardIssue[]): BoardIssue[] {
+  return issues.flatMap((issue) => [issue, ...flattenIssues(issue.children)]);
 }
 
 function BoardColumn({
@@ -94,6 +99,8 @@ function BoardColumn({
   );
 }
 
+type BoardView = "layers" | "tree";
+
 export function ProjectPage({
   gateway = sharedGateway,
 }: {
@@ -115,6 +122,8 @@ export function ProjectPage({
   const [isListing, setIsListing] = useState(false);
   const [isLinking, setIsLinking] = useState(false);
   const [filter, setFilter] = useState<LayerFilter>("all");
+  const [view, setView] = useState<BoardView>("layers");
+  const panelVisible = isUnlinked || showLinkPanel;
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -220,6 +229,12 @@ export function ProjectPage({
     }
   }, [gateway, load, resolved]);
 
+  useEffect(() => {
+    if (panelVisible && projectOptions === null && !isListing) {
+      void listProjects();
+    }
+  }, [panelVisible, projectOptions, isListing, listProjects]);
+
   const visibleLayers = useMemo(
     () =>
       BOARD_LAYERS.filter(
@@ -278,11 +293,12 @@ export function ProjectPage({
         }
       />
 
-      <div
-        className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
-        role="group"
-        aria-label="레이어 필터"
-      >
+      {view === "layers" ? (
+        <div
+          className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
+          role="group"
+          aria-label="레이어 필터"
+        >
         <Button
           type="button"
           variant={filter === "all" ? "primary" : "secondary"}
@@ -303,8 +319,31 @@ export function ProjectPage({
           </Button>
         ))}
       </div>
+      ) : null}
 
-      <div className="mt-[var(--space-6)] flex justify-end">
+      <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
+        <div
+          className="flex flex-wrap gap-[var(--space-2)]"
+          role="group"
+          aria-label="보드 보기 방식"
+        >
+          <Button
+            type="button"
+            variant={view === "layers" ? "primary" : "secondary"}
+            aria-pressed={view === "layers"}
+            onClick={() => setView("layers")}
+          >
+            영역별
+          </Button>
+          <Button
+            type="button"
+            variant={view === "tree" ? "primary" : "secondary"}
+            aria-pressed={view === "tree"}
+            onClick={() => setView("tree")}
+          >
+            계층별
+          </Button>
+        </div>
         <TabsList aria-label="Project 보기">
           <TabsTrigger selected>Board</TabsTrigger>
           <TabsTrigger selected={false} disabled>
@@ -343,49 +382,25 @@ export function ProjectPage({
               불러오기
             </Button>
           </div>
-          <div>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void listProjects()}
-              disabled={isListing}
-              loading={isListing}
+          <FormField label="Project 목록">
+            <Select
+              value={resolved?.id ?? ""}
+              disabled={isListing || projectOptions === null}
+              onValueChange={(value) => {
+                setResolved(
+                  projectOptions?.find((option) => option.id === value) ?? null,
+                );
+                setLinkError(null);
+              }}
             >
-              목록에서 고르기
-            </Button>
-          </div>
-          {projectOptions ? (
-            <div
-              role="radiogroup"
-              aria-label="GitHub Project 목록"
-              className="grid gap-[var(--space-2)]"
-            >
-              {projectOptions.length === 0 ? (
-                <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
-                  볼 수 있는 Project가 없습니다.
-                </p>
-              ) : null}
-              {projectOptions.map((option) => (
-                <label
-                  key={option.id}
-                  className="flex cursor-pointer items-center gap-[var(--space-2)]"
-                >
-                  <Radio
-                    name="github-project-choice"
-                    value={option.id}
-                    checked={resolved?.id === option.id}
-                    onChange={() => {
-                      setResolved(option);
-                      setLinkError(null);
-                    }}
-                  />
-                  <span>
-                    {option.title} · {option.owner} #{option.number}
-                  </span>
-                </label>
+              <option value="">선택하세요</option>
+              {(projectOptions ?? []).map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.title} · {option.owner} #{option.number}
+                </option>
               ))}
-            </div>
-          ) : null}
+            </Select>
+          </FormField>
           {resolved ? (
             <div className="grid gap-[var(--space-2)]">
               <p className="m-0">
@@ -422,6 +437,8 @@ export function ProjectPage({
             </Button>
           </div>
         </div>
+      ) : view === "tree" ? (
+        <ProjectTree issues={board?.issues ?? []} />
       ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
