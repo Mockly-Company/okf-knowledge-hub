@@ -225,10 +225,24 @@ fn map_status(status: &str) -> Option<BoardStatus> {
     }
 }
 
-fn map_layer(labels: &[String]) -> Option<BoardLayer> {
+fn map_layer(area: Option<&str>, labels: &[String]) -> Option<BoardLayer> {
+    // 팀의 Project `영역` 필드가 기준이고, 없으면 `layer:*` 라벨을 본다.
+    if let Some(layer) = area.and_then(map_area) {
+        return Some(layer);
+    }
     labels
         .iter()
         .find_map(|label| BoardLayer::from_label(label))
+}
+
+fn map_area(area: &str) -> Option<BoardLayer> {
+    match area.trim() {
+        "기획" => Some(BoardLayer::Planning),
+        "디자인" => Some(BoardLayer::Design),
+        "프론트엔드" | "프론트" => Some(BoardLayer::Frontend),
+        "백엔드" => Some(BoardLayer::Backend),
+        _ => None,
+    }
 }
 
 fn fetched_now() -> CommandResult<String> {
@@ -306,7 +320,7 @@ pub async fn sync_project_board(
     let mut skipped = 0u32;
     for item in items {
         match (
-            map_layer(&item.labels),
+            map_layer(item.area.as_deref(), &item.labels),
             item.status.as_deref().and_then(map_status),
         ) {
             (Some(layer), Some(status)) => issues.push(BoardIssue {
@@ -347,12 +361,17 @@ mod tests {
     }
 
     #[test]
-    fn first_layer_label_wins() {
+    fn first_layer_source_wins() {
         assert_eq!(
-            map_layer(&["bug".to_owned(), "layer:design".to_owned()]),
+            map_layer(Some("백엔드"), &["layer:design".to_owned()]),
+            Some(BoardLayer::Backend)
+        );
+        assert_eq!(
+            map_layer(None, &["layer:design".to_owned()]),
             Some(BoardLayer::Design)
         );
-        assert_eq!(map_layer(&["bug".to_owned()]), None);
-        assert_eq!(map_layer(&[]), None);
+        assert_eq!(map_layer(Some("프론트"), &[]), Some(BoardLayer::Frontend));
+        assert_eq!(map_layer(Some("미정"), &[]), None);
+        assert_eq!(map_layer(None, &[]), None);
     }
 }

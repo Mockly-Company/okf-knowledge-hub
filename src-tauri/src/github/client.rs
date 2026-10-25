@@ -143,6 +143,7 @@ pub struct GithubProjectItem {
     pub url: String,
     pub labels: Vec<String>,
     pub status: Option<String>,
+    pub area: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -898,23 +899,29 @@ impl GithubHttpClient {
                             .collect()
                     })
                     .unwrap_or_default();
-                let status = node
+                let single_selects = node
                     .field_values
                     .nodes
                     .into_iter()
                     .flatten()
                     .filter(|value| value.kind == "ProjectV2ItemFieldSingleSelectValue")
-                    .find(|value| {
-                        value.field.as_ref().and_then(|field| field.name.as_deref())
-                            == Some("Status")
-                    })
-                    .and_then(|value| value.name);
+                    .filter_map(|value| value.field.and_then(|field| field.name.zip(value.name)))
+                    .collect::<Vec<_>>();
+                let status = single_selects
+                    .iter()
+                    .find(|(field, _)| field == "Status")
+                    .map(|(_, name)| name.clone());
+                let area = single_selects
+                    .iter()
+                    .find(|(field, _)| field == "영역")
+                    .map(|(_, name)| name.clone());
                 items.push(GithubProjectItem {
                     number,
                     title,
                     url,
                     labels,
                     status,
+                    area,
                 });
             }
             match connection.page_info {
@@ -1552,7 +1559,7 @@ mod tests {
         let transport = RecordingTransport::with_responses(vec![
             response(
                 200,
-                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":{"nodes":[]}}]}}}}}"#,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":{"nodes":[]}}]}}}}}"#,
             ),
             response(
                 200,
@@ -1570,6 +1577,7 @@ mod tests {
         assert_eq!(items[0].number, 12);
         assert_eq!(items[0].labels, vec!["layer:planning"]);
         assert_eq!(items[0].status.as_deref(), Some("In progress"));
+        assert_eq!(items[0].area.as_deref(), Some("백엔드"));
         assert_eq!(items[1].number, 34);
         assert!(items[1].status.is_none());
         let bodies: Vec<_> = transport
