@@ -34,21 +34,21 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
 
   loadError: Error | null = null;
 
-  constructor(public board: ProjectBoard = { issues: [], fetchedAt: null, skipped: 0 }) {}
+  constructor(public board: ProjectBoard = { issues: [], fetchedAt: null }) {}
 
   static empty(): FakeProjectBoardGateway {
-    return new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0 });
+    return new FakeProjectBoardGateway({ issues: [], fetchedAt: null });
   }
 
   static withIssues(issues: BoardIssue[], fetchedAt: string | null = null) {
-    return new FakeProjectBoardGateway({ issues, fetchedAt, skipped: 0 });
+    return new FakeProjectBoardGateway({ issues, fetchedAt });
   }
 
   private boardResult: ProjectBoard | { code: string; message: string } | null =
     null;
 
   static unlinked(): FakeProjectBoardGateway {
-    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0 });
+    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null });
     gateway.boardResult = {
       code: "workspace_invalid",
       message: "GitHub Project가 연결되지 않았습니다.",

@@ -104,6 +104,7 @@ export function ProjectPage({
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isUnlinked, setIsUnlinked] = useState(false);
+  const [showLinkPanel, setShowLinkPanel] = useState(false);
   const [projectUrl, setProjectUrl] = useState("");
   const [resolved, setResolved] = useState<ResolvedGithubProject | null>(null);
   const [projectOptions, setProjectOptions] = useState<
@@ -128,7 +129,7 @@ export function ProjectPage({
         (error as { code?: string }).code === "workspace_invalid"
       ) {
         setIsUnlinked(true);
-        setBoard({ issues: [], fetchedAt: null, skipped: 0 });
+        setBoard({ issues: [], fetchedAt: null });
       } else {
         setLoadError("Project 보드를 불러오지 못했습니다.");
       }
@@ -206,6 +207,7 @@ export function ProjectPage({
     setLinkError(null);
     try {
       await gateway.linkGithubProject(resolved);
+      setShowLinkPanel(false);
       await load();
     } catch (error) {
       setLinkError(
@@ -254,6 +256,17 @@ export function ProjectPage({
               <RefreshCw aria-hidden="true" strokeWidth={1.75} />
               새로고침
             </Button>
+            {!isUnlinked ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setShowLinkPanel((shown) => !shown)}
+                aria-expanded={isUnlinked || showLinkPanel}
+                disabled={isLoading || isSyncing}
+              >
+                프로젝트 변경
+              </Button>
+            ) : null}
             <div className="w-64 max-w-full">
               <FormField label="Iteration">
                 <Select disabled defaultValue="none">
@@ -291,13 +304,6 @@ export function ProjectPage({
         ))}
       </div>
 
-      {board && board.skipped > 0 ? (
-        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
-          {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
-          Project의 영역 값과 상태 값을 확인해 주세요.
-        </p>
-      ) : null}
-
       <div className="mt-[var(--space-6)] flex justify-end">
         <TabsList aria-label="Project 보기">
           <TabsTrigger selected>Board</TabsTrigger>
@@ -307,7 +313,7 @@ export function ProjectPage({
         </TabsList>
       </div>
 
-      {isUnlinked ? (
+      {isUnlinked || showLinkPanel ? (
         <section
           aria-label="GitHub Project 연결"
           className="mt-[var(--space-4)] grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-4)]"

@@ -10,14 +10,14 @@ describe("TauriProjectBoardGateway", () => {
       args?: Record<string, unknown>,
     ): Promise<T> => {
       calls.push({ command, args });
-      return { issues: [], fetchedAt: null, skipped: 0 } as T;
+      return { issues: [], fetchedAt: null } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
 
     const board = await gateway.getProjectBoard();
 
     expect(calls).toEqual([{ command: "get_project_board", args: undefined }]);
-    expect(board).toEqual({ issues: [], fetchedAt: null, skipped: 0 });
+    expect(board).toEqual({ issues: [], fetchedAt: null });
   });
 
   it("maps the sync command", async () => {
@@ -31,7 +31,6 @@ describe("TauriProjectBoardGateway", () => {
       return {
         issues: [],
         fetchedAt: "2026-10-25T12:00:00+09:00",
-        skipped: 0,
       } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
