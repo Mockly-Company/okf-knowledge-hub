@@ -134,7 +134,7 @@ export function ProjectPage({
         titleId="project-title"
         title="Project"
         actions={
-          <div className="flex items-center gap-[var(--space-3)]">
+          <div className="flex min-w-0 flex-wrap items-center justify-end gap-[var(--space-3)]">
             <span
               className="text-[var(--font-meta-size)] text-[var(--text-muted)]"
               aria-live="polite"
@@ -164,7 +164,7 @@ export function ProjectPage({
       />
 
       <div
-        className="mt-[var(--space-4)] flex gap-[var(--space-2)]"
+        className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
         role="group"
         aria-label="레이어 필터"
       >
@@ -212,7 +212,7 @@ export function ProjectPage({
       ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
-            <section key={layer.id} aria-label={`${layer.name} 레이어`}>
+            <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">
               <h2 className="m-0 mb-[var(--space-3)]">
                 {layer.name}{" "}
                 <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
