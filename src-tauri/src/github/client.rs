@@ -414,6 +414,12 @@ fn project_permission_error() -> AppError {
     .with_recovery(RecoveryAction::ReinstallGithubApp)
 }
 
+fn project_items_query(root: &str) -> String {
+    format!(
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+    )
+}
+
 fn project_not_found_error() -> AppError {
     AppError::new(
         ErrorCode::GithubPermissionDenied,
@@ -865,9 +871,7 @@ impl GithubHttpClient {
                 // 거부하므로, 첫 페이지는 키 자체를 빼고 보낸다.
                 variables.insert("after".to_owned(), serde_json::Value::from(cursor));
             }
-            let query = format!(
-                "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}"
-            );
+            let query = project_items_query(root);
             let response = self
                 .send(
                     HttpMethod::Post,
@@ -1585,6 +1589,20 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode::GithubUnavailable);
+    }
+
+    #[test]
+    fn project_items_query_is_balanced_graphql() {
+        for root in ["organization", "user"] {
+            let query = super::project_items_query(root);
+            assert_eq!(
+                query.matches('{').count(),
+                query.matches('}').count(),
+                "unbalanced braces in project items query"
+            );
+            assert!(query.contains("projectV2(number:$number)"));
+            assert!(query.contains("after:$after"));
+        }
     }
 
     #[tokio::test]
