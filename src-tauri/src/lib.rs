@@ -116,6 +116,7 @@ pub fn run() {
             commands::documents::list_document_history,
             commands::documents::read_document_version,
             commands::project_board::get_project_board,
+            commands::project_board::sync_project_board,
             commands::project_board::resolve_github_project,
             commands::project_board::link_github_project,
             settings::commands::get_display_density,

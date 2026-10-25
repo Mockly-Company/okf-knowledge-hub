@@ -100,9 +100,20 @@ describe("ProjectPage", () => {
     expect(screen.queryByRole("region", { name: "백엔드 레이어" })).not.toBeInTheDocument();
   });
 
-  it("reloads the board when the refresh button is pressed", async () => {
+  it("syncs with GitHub when the refresh button is pressed", async () => {
     const user = userEvent.setup();
-    const gateway = FakeProjectBoardGateway.empty();
+    const gateway = FakeProjectBoardGateway.withIssues(
+      [
+        {
+          number: 12,
+          title: "기획서 초안",
+          url: "https://example.test/issues/12",
+          layer: "planning",
+          status: "in_progress",
+        },
+      ],
+      "2026-10-25T12:00:00+09:00",
+    );
     render(<ProjectPage gateway={gateway} />);
 
     await screen.findByRole("region", { name: "기획 레이어" });
@@ -114,9 +125,12 @@ describe("ProjectPage", () => {
 
     await waitFor(() =>
       expect(
-        gateway.calls.filter((call) => call.method === "getProjectBoard"),
-      ).toHaveLength(2),
+        gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+      ).toHaveLength(1),
     );
+    expect(
+      await screen.findByRole("article", { name: "Issue #12 기획서 초안" }),
+    ).toBeInTheDocument();
   });
 
   it("offers issue creation only from Backlog and explains why it is unavailable", async () => {
@@ -147,6 +161,7 @@ describe("ProjectPage", () => {
         attempts += 1;
         return gateway.getProjectBoard();
       },
+      syncProjectBoard: () => gateway.syncProjectBoard(),
       resolveGithubProject: (url: string) => gateway.resolveGithubProject(url),
       linkGithubProject: (project: ResolvedGithubProject) =>
         gateway.linkGithubProject(project),
@@ -193,6 +208,18 @@ describe("ProjectPage", () => {
         gateway.calls.filter((call) => call.method === "getProjectBoard"),
       ).toHaveLength(2),
     );
+  });
+
+  it("notes items excluded for missing layer or status", async () => {
+    const gateway = FakeProjectBoardGateway.empty();
+    gateway.board = { issues: [], fetchedAt: null, skipped: 3 };
+    render(<ProjectPage gateway={gateway} />);
+
+    expect(
+      await screen.findByText(
+        "3개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다. Issue에 layer:기획/디자인/프론트엔드/백엔드 라벨과 상태 값을 확인해 주세요.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("explains why a project URL cannot be resolved", async () => {

@@ -21,6 +21,10 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
     return this.invokeCommand<ProjectBoard>("get_project_board");
   }
 
+  syncProjectBoard(): Promise<ProjectBoard> {
+    return this.invokeCommand<ProjectBoard>("sync_project_board");
+  }
+
   resolveGithubProject(url: string): Promise<ResolvedGithubProject> {
     return this.invokeCommand<ResolvedGithubProject>("resolve_github_project", {
       url,
