@@ -12,9 +12,10 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    DraftPullRequest, DraftPullRequestRequest, GithubRepositoryDetail, GithubRepositorySummary,
-    Page,
+    DraftPullRequest, DraftPullRequestRequest, GithubProjectSummary, GithubRepositoryDetail,
+    GithubRepositorySummary, Page,
 };
+use crate::project_board::model::ProjectOwnerScope;
 
 pub const INITIALIZATION_DRAFT_PR_BODY: &str = "## Summary\n\n- Initialize this repository as an OkHub knowledge workspace\n\n## Why\n\n- Share OKF documents and workspace metadata through Git\n\n## Changes\n\n- Add `.okf/workspace.yml`\n- Add the initial document and template roots when missing\n\n## Test Plan\n\n- Validate `.okf/workspace.yml` in OkHub\n- Confirm the configured document root stays inside the repository\n\n## Review Notes\n\n- This change contains workspace metadata only";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -65,6 +66,37 @@ impl GithubUserResponse {
 #[derive(Deserialize)]
 struct GithubInstallationResponse {
     id: u64,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLookupResponse {
+    data: Option<GithubProjectLookupData>,
+    errors: Option<Vec<GithubProjectLookupError>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLookupData {
+    organization: Option<GithubProjectOwnerResponse>,
+    user: Option<GithubProjectOwnerResponse>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectOwnerResponse {
+    #[serde(rename = "projectV2")]
+    project_v2: Option<GithubProjectV2Response>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectV2Response {
+    id: String,
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLookupError {
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -200,6 +232,48 @@ fn map_http_error(
         .with_recovery(RecoveryAction::ReinstallGithubApp);
     }
     github_unavailable_error()
+}
+
+fn map_project_error(status: u16) -> AppError {
+    if status == 401 {
+        return AppError::new(
+            ErrorCode::ReauthenticationRequired,
+            "GitHub에 다시 로그인해 주세요.",
+        )
+        .with_recovery(RecoveryAction::RestartLogin);
+    }
+    if matches!(status, 403 | 404) {
+        return project_permission_error();
+    }
+    github_unavailable_error()
+}
+
+fn map_project_lookup_errors(errors: &[GithubProjectLookupError]) -> AppError {
+    let forbidden = errors.iter().any(|error| {
+        error.kind.as_deref() == Some("FORBIDDEN")
+            || error.message.contains("INSUFFICIENT_SCOPES")
+            || error.message.contains("scopes")
+    });
+    if forbidden {
+        return project_permission_error();
+    }
+    project_not_found_error()
+}
+
+fn project_permission_error() -> AppError {
+    AppError::new(
+        ErrorCode::GithubPermissionDenied,
+        "GitHub에서 프로젝트 정보를 읽을 권한이 없습니다.",
+    )
+    .with_recovery(RecoveryAction::ReinstallGithubApp)
+}
+
+fn project_not_found_error() -> AppError {
+    AppError::new(
+        ErrorCode::GithubPermissionDenied,
+        "해당 GitHub Project를 찾을 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
 }
 
 fn map_draft_pull_request_error(
@@ -573,6 +647,52 @@ impl GithubHttpClient {
             )
             .await?;
         ensure_repository_identity(response.into_detail(), expected_repository_id)
+    }
+
+    pub async fn resolve_project(
+        &self,
+        owner_scope: ProjectOwnerScope,
+        owner: &str,
+        number: u64,
+    ) -> Result<GithubProjectSummary, AppError> {
+        let root = match owner_scope {
+            ProjectOwnerScope::Organization => "organization",
+            ProjectOwnerScope::User => "user",
+        };
+        let query = format!(
+            "query($login:String!,$number:Int!){{{root}(login:$login){{projectV2(number:$number){{id title}}}}}}"
+        );
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["graphql"],
+                &[],
+                Some(serde_json::json!({
+                    "query": query,
+                    "variables": { "login": owner, "number": number },
+                })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_project_error(response.status));
+        }
+        let body: GithubProjectLookupResponse =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        if let Some(errors) = body.errors {
+            return Err(map_project_lookup_errors(&errors));
+        }
+        let project = match owner_scope {
+            ProjectOwnerScope::Organization => body.data.and_then(|data| data.organization),
+            ProjectOwnerScope::User => body.data.and_then(|data| data.user),
+        }
+        .and_then(|owner| owner.project_v2)
+        .ok_or_else(project_not_found_error)?;
+        Ok(GithubProjectSummary {
+            id: project.id,
+            owner: owner.to_owned(),
+            number,
+            title: project.title,
+        })
     }
 
     pub async fn create_draft_pull_request(
@@ -1058,6 +1178,74 @@ mod tests {
         assert_eq!(requests[0].user_agent, "OkHub/0.1.0");
         assert_eq!(requests[0].bearer_token, "ghu_test_1");
         assert!(!serde_json::to_string(&user).unwrap().contains("ghu_test"));
+    }
+
+    #[tokio::test]
+    async fn project_lookup_posts_graphql_and_returns_the_node_id() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"organization":{"projectV2":{"id":"PVT_kwDOExample","title":"Mockly Board"}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let project = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert_eq!(project.id, "PVT_kwDOExample");
+        assert_eq!(project.owner, "Mockly-Company");
+        assert_eq!(project.number, 1);
+        assert_eq!(project.title, "Mockly Board");
+        assert!(!serde_json::to_string(&project)
+            .unwrap()
+            .contains("ghu_test"));
+        let sent = &transport.requests()[0];
+        assert_eq!(sent.method, HttpMethod::Post);
+        assert_eq!(sent.url, "https://api.example.test/graphql");
+        assert!(sent
+            .body
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("projectV2"));
+    }
+
+    #[tokio::test]
+    async fn project_lookup_scope_errors_ask_for_reinstallation() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":null,"errors":[{"type":"FORBIDDEN","message":"INSUFFICIENT_SCOPES"}]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubPermissionDenied);
+        assert_eq!(error.recovery, Some(RecoveryAction::ReinstallGithubApp));
+    }
+
+    #[tokio::test]
+    async fn project_lookup_missing_project_is_not_found() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"organization":{"projectV2":null}}}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 9)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubPermissionDenied);
+        assert_eq!(error.recovery, Some(RecoveryAction::Retry));
     }
 
     #[tokio::test]

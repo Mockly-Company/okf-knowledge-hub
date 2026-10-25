@@ -4,6 +4,7 @@ import { FormField } from "@/components/patterns/FormField";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
@@ -14,6 +15,7 @@ import {
   type BoardLayer,
   type BoardStatus,
   type ProjectBoard,
+  type ResolvedGithubProject,
 } from "@/features/project-board/model";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
@@ -99,15 +101,31 @@ export function ProjectPage({
   const [board, setBoard] = useState<ProjectBoard | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isUnlinked, setIsUnlinked] = useState(false);
+  const [projectUrl, setProjectUrl] = useState("");
+  const [resolved, setResolved] = useState<ResolvedGithubProject | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [isResolving, setIsResolving] = useState(false);
+  const [isLinking, setIsLinking] = useState(false);
   const [filter, setFilter] = useState<LayerFilter>("all");
 
   const load = useCallback(async () => {
     setIsLoading(true);
     setLoadError(null);
+    setIsUnlinked(false);
     try {
       setBoard(await gateway.getProjectBoard());
-    } catch {
-      setLoadError("Project 보드를 불러오지 못했습니다.");
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        (error as { code?: string }).code === "workspace_invalid"
+      ) {
+        setIsUnlinked(true);
+        setBoard({ issues: [], fetchedAt: null });
+      } else {
+        setLoadError("Project 보드를 불러오지 못했습니다.");
+      }
     } finally {
       setIsLoading(false);
     }
@@ -116,6 +134,43 @@ export function ProjectPage({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const resolve = useCallback(async () => {
+    setIsResolving(true);
+    setLinkError(null);
+    setResolved(null);
+    try {
+      setResolved(await gateway.resolveGithubProject(projectUrl));
+    } catch (error) {
+      setLinkError(
+        typeof error === "object" && error !== null && "message" in error
+          ? String((error as { message: string }).message)
+          : "Project 주소를 확인해 주세요.",
+      );
+    } finally {
+      setIsResolving(false);
+    }
+  }, [gateway, projectUrl]);
+
+  const link = useCallback(async () => {
+    if (!resolved) {
+      return;
+    }
+    setIsLinking(true);
+    setLinkError(null);
+    try {
+      await gateway.linkGithubProject(resolved);
+      await load();
+    } catch (error) {
+      setLinkError(
+        typeof error === "object" && error !== null && "message" in error
+          ? String((error as { message: string }).message)
+          : "Project 연결에 실패했습니다.",
+      );
+    } finally {
+      setIsLinking(false);
+    }
+  }, [gateway, load, resolved]);
 
   const visibleLayers = useMemo(
     () =>
@@ -198,6 +253,61 @@ export function ProjectPage({
         </TabsList>
       </div>
 
+      {isUnlinked ? (
+        <section
+          aria-label="GitHub Project 연결"
+          className="mt-[var(--space-4)] grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-4)]"
+        >
+          <h2 className="m-0">GitHub Project 연결</h2>
+          <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
+            Project 페이지 주소(URL)를 붙여넣으면 소유자·번호·Node
+            ID를 자동으로 불러옵니다. 예:
+            https://github.com/orgs/Mockly-Company/projects/1
+          </p>
+          <FormField label="Project URL">
+            <Input
+              value={projectUrl}
+              onChange={(event) => setProjectUrl(event.target.value)}
+              placeholder="https://github.com/orgs/{owner}/projects/{number}"
+              inputMode="url"
+            />
+          </FormField>
+          <div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void resolve()}
+              disabled={isResolving || projectUrl.trim().length === 0}
+              loading={isResolving}
+            >
+              불러오기
+            </Button>
+          </div>
+          {resolved ? (
+            <div className="grid gap-[var(--space-2)]">
+              <p className="m-0">
+                {resolved.title} · {resolved.owner} #{resolved.number}
+              </p>
+              <div>
+                <Button
+                  type="button"
+                  onClick={() => void link()}
+                  disabled={isLinking}
+                  loading={isLinking}
+                >
+                  이 프로젝트 연결
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {linkError ? (
+            <p role="alert" className="m-0">
+              {linkError}
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
       {isLoading && board === null ? (
         <p role="status">Project 불러오는 중</p>
       ) : loadError ? (
@@ -213,11 +323,8 @@ export function ProjectPage({
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
             <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">
-              <h2 className="m-0 mb-[var(--space-3)]">
-                {layer.name}{" "}
-                <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
-                  {layer.label}
-                </span>
+              <h2 className="m-0 mb-[var(--space-3)]" title={layer.label}>
+                {layer.name}
               </h2>
               <section
                 className="overflow-x-auto rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--color-canvas)] p-[var(--space-4)]"

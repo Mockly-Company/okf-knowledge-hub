@@ -2,6 +2,8 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
+import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import type { ResolvedGithubProject } from "@/features/project-board/model";
 import { ProjectPage } from "./ProjectPage";
 
 afterEach(cleanup);
@@ -137,19 +139,77 @@ describe("ProjectPage", () => {
 
   it("shows a retry affordance when loading fails", async () => {
     const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.empty();
+    gateway.loadError = new Error("offline");
     let attempts = 0;
-    const gateway = {
+    const counting: ProjectBoardGateway = {
       getProjectBoard: async () => {
         attempts += 1;
-        throw new Error("offline");
+        return gateway.getProjectBoard();
       },
+      resolveGithubProject: (url: string) => gateway.resolveGithubProject(url),
+      linkGithubProject: (project: ResolvedGithubProject) =>
+        gateway.linkGithubProject(project),
     };
-    render(<ProjectPage gateway={gateway} />);
+    render(<ProjectPage gateway={counting} />);
 
     expect(
       await screen.findByText("Project 보드를 불러오지 못했습니다."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
     await waitFor(() => expect(attempts).toBe(2));
+  });
+
+  it("lets users link a project from its URL when none is connected", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.unlinked();
+    render(<ProjectPage gateway={gateway} />);
+
+    const urlBox = await screen.findByRole("textbox", { name: "Project URL" });
+    await user.type(
+      urlBox,
+      "https://github.com/orgs/Mockly-Company/projects/1",
+    );
+    await user.click(screen.getByRole("button", { name: "불러오기" }));
+
+    expect(
+      await screen.findByText("Mockly Board · Mockly-Company #1"),
+    ).toBeInTheDocument();
+    expect(
+      gateway.calls.filter((call) => call.method === "resolveGithubProject"),
+    ).toHaveLength(1);
+
+    await user.click(
+      screen.getByRole("button", { name: "이 프로젝트 연결" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "linkGithubProject"),
+      ).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "getProjectBoard"),
+      ).toHaveLength(2),
+    );
+  });
+
+  it("explains why a project URL cannot be resolved", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.unlinked();
+    gateway.resolveResult = new Error("GitHub Project URL 형식을 확인해 주세요.");
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    await user.type(
+      screen.getByRole("textbox", { name: "Project URL" }),
+      "not a project url",
+    );
+    await user.click(screen.getByRole("button", { name: "불러오기" }));
+
+    expect(
+      await screen.findByRole("alert"),
+    ).toHaveTextContent("GitHub Project URL 형식을 확인해 주세요.");
   });
 });

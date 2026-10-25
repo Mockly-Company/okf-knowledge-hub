@@ -64,3 +64,16 @@ export const Empty: StoryObj<typeof meta> = {
     ).toBeVisible();
   },
 };
+
+export const NotLinked: StoryObj<typeof meta> = {
+  render: () => (
+    <PageStoryFrame>
+      <ProjectPage gateway={FakeProjectBoardGateway.unlinked()} />
+    </PageStoryFrame>
+  ),
+  play: async ({ canvas }) => {
+    await expect(
+      await canvas.findByRole("region", { name: "GitHub Project 연결" }),
+    ).toBeVisible();
+  },
+};

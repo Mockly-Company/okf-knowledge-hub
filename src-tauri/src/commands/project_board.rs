@@ -1,10 +1,13 @@
 use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
-use crate::project_board::{load_cached_board, ProjectBoard};
+use crate::github::model::GithubProjectSummary;
+use crate::project_board::{
+    load_cached_board, parse_project_url, ProjectBoard, ResolvedGithubProject,
+};
 use crate::settings::model::CurrentWorkspaceStatus;
 use crate::state::AppServices;
-use crate::workspace::model::WorkspaceDocument;
+use crate::workspace::model::{GithubProjectRef, GithubWorkspaceConfig, WorkspaceDocument};
 
 pub const PROJECT_BOARD_CACHE_DIR_NAME: &str = "project-board";
 
@@ -80,4 +83,93 @@ pub async fn get_project_board(
         .with_detail("reason", error.to_string())
     })?;
     load_cached_board(&cache_root)
+}
+
+fn service_unavailable() -> AppError {
+    AppError::new(
+        ErrorCode::GithubUnavailable,
+        "워크스페이스 저장소 서비스를 사용할 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+}
+
+fn invalid_project_url_error(reason: String) -> AppError {
+    AppError::new(ErrorCode::WorkspaceInvalid, reason).with_recovery(RecoveryAction::Retry)
+}
+
+fn current_repository_root(services: &AppServices) -> CommandResult<std::path::PathBuf> {
+    let settings = services.local_settings.clone();
+    let current = settings
+        .load_current()
+        .map_err(|_| settings_unavailable_error())?
+        .ok_or_else(workspace_missing_error)?;
+    if current.status != CurrentWorkspaceStatus::Connected {
+        return Err(workspace_missing_error());
+    }
+    Ok(std::path::PathBuf::from(&current.path))
+}
+
+fn read_workspace_document(repository_root: &std::path::Path) -> CommandResult<WorkspaceDocument> {
+    let source = std::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
+        .map_err(|_| workspace_file_error(repository_root))?;
+    WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(repository_root))
+}
+
+/// 붙여넣은 Project URL에서 owner/number를 읽고 GitHub에서 Node ID와 제목을 가져온다.
+#[tauri::command]
+pub async fn resolve_github_project(
+    state: State<'_, AppServices>,
+    url: String,
+) -> CommandResult<ResolvedGithubProject> {
+    let _access = state.acquire_authenticated_command().await?;
+    let parsed = parse_project_url(&url).map_err(invalid_project_url_error)?;
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let summary: GithubProjectSummary = github
+        .resolve_project(parsed.scope, &parsed.owner, parsed.number)
+        .await?;
+    Ok(ResolvedGithubProject {
+        id: summary.id,
+        owner: summary.owner,
+        number: summary.number,
+        title: summary.title,
+    })
+}
+
+/// 확인된 프로젝트를 현재 워크스페이스의 `.okf/workspace.yml`에 연결한다.
+#[tauri::command]
+pub async fn link_github_project(
+    state: State<'_, AppServices>,
+    project: ResolvedGithubProject,
+) -> CommandResult<()> {
+    let _access = state.acquire_authenticated_command().await?;
+    let repository_root = current_repository_root(&state)?;
+    let mut document = read_workspace_document(&repository_root)?;
+    let mut github = document
+        .config
+        .github
+        .take()
+        .unwrap_or(GithubWorkspaceConfig {
+            project: None,
+            extra: Default::default(),
+        });
+    github.project = Some(GithubProjectRef {
+        id: project.id,
+        owner: project.owner,
+        number: project.number,
+        extra: Default::default(),
+    });
+    document.config.github = Some(github);
+    let content = document.to_yaml()?;
+    std::fs::write(repository_root.join(".okf").join("workspace.yml"), content).map_err(
+        |error| {
+            AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "워크스페이스 파일을 저장할 수 없습니다.",
+            )
+            .with_recovery(RecoveryAction::OpenWorkspaceFile)
+            .with_detail("path", repository_root.display().to_string())
+            .with_detail("reason", error.to_string())
+        },
+    )?;
+    Ok(())
 }

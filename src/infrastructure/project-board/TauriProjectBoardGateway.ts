@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
-import type { ProjectBoard } from "@/features/project-board/model";
+import type {
+  ProjectBoard,
+  ResolvedGithubProject,
+} from "@/features/project-board/model";
 
 type InvokeDesktop = <T>(
   command: string,
@@ -16,5 +19,15 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
 
   getProjectBoard(): Promise<ProjectBoard> {
     return this.invokeCommand<ProjectBoard>("get_project_board");
+  }
+
+  resolveGithubProject(url: string): Promise<ResolvedGithubProject> {
+    return this.invokeCommand<ResolvedGithubProject>("resolve_github_project", {
+      url,
+    });
+  }
+
+  linkGithubProject(project: ResolvedGithubProject): Promise<void> {
+    return this.invokeCommand<void>("link_github_project", { project });
   }
 }
