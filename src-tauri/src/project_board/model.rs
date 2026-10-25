@@ -9,24 +9,27 @@ pub enum BoardLayer {
     Design,
     Frontend,
     Backend,
+    Unassigned,
 }
 
 impl BoardLayer {
-    pub fn all() -> [BoardLayer; 4] {
+    pub fn all() -> [BoardLayer; 5] {
         [
             BoardLayer::Planning,
             BoardLayer::Design,
             BoardLayer::Frontend,
             BoardLayer::Backend,
+            BoardLayer::Unassigned,
         ]
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> Option<&'static str> {
         match self {
-            BoardLayer::Planning => "layer:planning",
-            BoardLayer::Design => "layer:design",
-            BoardLayer::Frontend => "layer:frontend",
-            BoardLayer::Backend => "layer:backend",
+            BoardLayer::Planning => Some("layer:planning"),
+            BoardLayer::Design => Some("layer:design"),
+            BoardLayer::Frontend => Some("layer:frontend"),
+            BoardLayer::Backend => Some("layer:backend"),
+            BoardLayer::Unassigned => None,
         }
     }
 
@@ -36,6 +39,7 @@ impl BoardLayer {
             BoardLayer::Design => "디자인",
             BoardLayer::Frontend => "프론트엔드",
             BoardLayer::Backend => "백엔드",
+            BoardLayer::Unassigned => "미지정",
         }
     }
 
@@ -99,9 +103,6 @@ pub struct ProjectBoard {
     pub issues: Vec<BoardIssue>,
     /// 마지막으로 GitHub에서 가져온 시각(RFC 3339). 아직 가져오지 않았으면 `None`.
     pub fetched_at: Option<String>,
-    /// 레이어/상태를 판별할 수 없어 보드에서 제외한 항목 수.
-    #[serde(default)]
-    pub skipped: u32,
 }
 
 impl ProjectBoard {
@@ -109,7 +110,6 @@ impl ProjectBoard {
         Self {
             issues: Vec::new(),
             fetched_at: None,
-            skipped: 0,
         }
     }
 }
@@ -193,10 +193,11 @@ mod tests {
 
     #[test]
     fn layer_labels_match_the_github_convention() {
-        assert_eq!(BoardLayer::Planning.label(), "layer:planning");
-        assert_eq!(BoardLayer::Design.label(), "layer:design");
-        assert_eq!(BoardLayer::Frontend.label(), "layer:frontend");
-        assert_eq!(BoardLayer::Backend.label(), "layer:backend");
+        assert_eq!(BoardLayer::Planning.label(), Some("layer:planning"));
+        assert_eq!(BoardLayer::Design.label(), Some("layer:design"));
+        assert_eq!(BoardLayer::Frontend.label(), Some("layer:frontend"));
+        assert_eq!(BoardLayer::Backend.label(), Some("layer:backend"));
+        assert_eq!(BoardLayer::Unassigned.label(), None);
     }
 
     #[test]
@@ -247,7 +248,6 @@ mod tests {
                 status: BoardStatus::InProgress,
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
-            skipped: 0,
         };
         let json = serde_json::to_string(&board).expect("board serializes");
         assert!(json.contains("\"fetchedAt\""));

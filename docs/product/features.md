@@ -57,7 +57,7 @@
 
 - 워크스페이스당 하나의 GitHub Project 연결
 - 여러 저장소의 Issue와 PR을 모은 Board와 목록
-- Board는 레이어(기획/디자인/프론트엔드/백엔드)별 수영 레인으로 나누어 보여줍니다. 레이어 구분 원본은 GitHub Project의 `영역` 필드이며, 값이 없을 때만 Issue 라벨(`layer:planning`, `layer:design`, `layer:frontend`, `layer:backend`)을 대신 봅니다.
+- Board는 레이어(기획/디자인/프론트엔드/백엔드/미지정)별 수영 레인으로 나누어 보여줍니다. 레이어 구분 원본은 GitHub Project의 `영역` 필드이며, 값이 없을 때만 Issue 라벨(`layer:planning`, `layer:design`, `layer:frontend`, `layer:backend`)을 대신 봅니다. 둘 다 없으면 미지정 레인에 모아 언제든 직접 할당할 수 있게 합니다.
 - 나에게 할당된 Issue와 Iteration
 - 담당자와 관련 기능 필터
 - GitHub Issue 생성, 조회, 댓글과 종료

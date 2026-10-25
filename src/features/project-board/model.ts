@@ -1,4 +1,9 @@
-export type BoardLayer = "planning" | "design" | "frontend" | "backend";
+export type BoardLayer =
+  | "planning"
+  | "design"
+  | "frontend"
+  | "backend"
+  | "unassigned";
 
 export type BoardStatus =
   | "backlog"
@@ -19,8 +24,6 @@ export interface ProjectBoard {
   issues: BoardIssue[];
   /** 마지막으로 GitHub에서 가져온 시각(RFC 3339). 아직 없으면 null. */
   fetchedAt: string | null;
-  /** 레이어/상태를 판별할 수 없어 제외한 항목 수. */
-  skipped: number;
 }
 
 export interface ResolvedGithubProject {
@@ -34,12 +37,13 @@ export interface ResolvedGithubProject {
 export const BOARD_LAYERS: ReadonlyArray<{
   id: BoardLayer;
   name: string;
-  label: string;
+  label?: string;
 }> = [
   { id: "planning", name: "기획", label: "layer:planning" },
   { id: "design", name: "디자인", label: "layer:design" },
   { id: "frontend", name: "프론트엔드", label: "layer:frontend" },
   { id: "backend", name: "백엔드", label: "layer:backend" },
+  { id: "unassigned", name: "미지정" },
 ];
 
 export const BOARD_STATUSES: ReadonlyArray<{

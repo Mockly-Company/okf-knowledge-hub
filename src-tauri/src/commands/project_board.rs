@@ -220,25 +220,28 @@ fn is_project_not_found(error: &AppError) -> bool {
             .is_some_and(|reason| reason == "project_not_found")
 }
 
-fn map_status(status: &str) -> Option<BoardStatus> {
+fn map_status(status: Option<&str>) -> BoardStatus {
     match status {
-        "Backlog" => Some(BoardStatus::Backlog),
-        "Ready" => Some(BoardStatus::Ready),
-        "In progress" => Some(BoardStatus::InProgress),
-        "In review" => Some(BoardStatus::InReview),
-        "Done" => Some(BoardStatus::Done),
-        _ => None,
+        Some("Backlog") => BoardStatus::Backlog,
+        Some("Ready") => BoardStatus::Ready,
+        Some("In progress") => BoardStatus::InProgress,
+        Some("In review") => BoardStatus::InReview,
+        Some("Done") => BoardStatus::Done,
+        // 알 수 없는 상태는 triage 대상이므로 Backlog에 둔다.
+        _ => BoardStatus::Backlog,
     }
 }
 
-fn map_layer(area: Option<&str>, labels: &[String]) -> Option<BoardLayer> {
+fn map_layer(area: Option<&str>, labels: &[String]) -> BoardLayer {
     // 팀의 Project `영역` 필드가 기준이고, 없으면 `layer:*` 라벨을 본다.
+    // 둘 다 없으면 미지정 레인에 모아 언제든 직접 할당할 수 있게 한다.
     if let Some(layer) = area.and_then(map_area) {
-        return Some(layer);
+        return layer;
     }
     labels
         .iter()
         .find_map(|label| BoardLayer::from_label(label))
+        .unwrap_or(BoardLayer::Unassigned)
 }
 
 fn map_area(area: &str) -> Option<BoardLayer> {
@@ -336,26 +339,18 @@ pub async fn sync_project_board(
         Err(error) => return Err(error),
     };
     let mut issues = Vec::new();
-    let mut skipped = 0u32;
     for item in items {
-        match (
-            map_layer(item.area.as_deref(), &item.labels),
-            item.status.as_deref().and_then(map_status),
-        ) {
-            (Some(layer), Some(status)) => issues.push(BoardIssue {
-                number: item.number,
-                title: item.title,
-                url: item.url,
-                layer,
-                status,
-            }),
-            _ => skipped += 1,
-        }
+        issues.push(BoardIssue {
+            number: item.number,
+            title: item.title,
+            url: item.url,
+            layer: map_layer(item.area.as_deref(), &item.labels),
+            status: map_status(item.status.as_deref()),
+        });
     }
     let board = ProjectBoard {
         issues,
         fetched_at: Some(fetched_now()?),
-        skipped,
     };
     let cache_root = app
         .path()
@@ -373,24 +368,25 @@ mod tests {
 
     #[test]
     fn status_names_map_to_board_columns() {
-        assert_eq!(map_status("Backlog"), Some(BoardStatus::Backlog));
-        assert_eq!(map_status("In progress"), Some(BoardStatus::InProgress));
-        assert_eq!(map_status("Done"), Some(BoardStatus::Done));
-        assert_eq!(map_status("Todo"), None);
+        assert_eq!(map_status(Some("Backlog")), BoardStatus::Backlog);
+        assert_eq!(map_status(Some("In progress")), BoardStatus::InProgress);
+        assert_eq!(map_status(Some("Done")), BoardStatus::Done);
+        assert_eq!(map_status(Some("Todo")), BoardStatus::Backlog);
+        assert_eq!(map_status(None), BoardStatus::Backlog);
     }
 
     #[test]
     fn first_layer_source_wins() {
         assert_eq!(
             map_layer(Some("백엔드"), &["layer:design".to_owned()]),
-            Some(BoardLayer::Backend)
+            BoardLayer::Backend
         );
         assert_eq!(
             map_layer(None, &["layer:design".to_owned()]),
-            Some(BoardLayer::Design)
+            BoardLayer::Design
         );
-        assert_eq!(map_layer(Some("프론트"), &[]), Some(BoardLayer::Frontend));
-        assert_eq!(map_layer(Some("미정"), &[]), None);
-        assert_eq!(map_layer(None, &[]), None);
+        assert_eq!(map_layer(Some("프론트"), &[]), BoardLayer::Frontend);
+        assert_eq!(map_layer(Some("미정"), &[]), BoardLayer::Unassigned);
+        assert_eq!(map_layer(None, &[]), BoardLayer::Unassigned);
     }
 }

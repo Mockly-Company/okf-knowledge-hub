@@ -19,7 +19,7 @@ describe("ProjectPage", () => {
   it("renders one swimlane per layer with five status columns", async () => {
     renderProject();
 
-    for (const layer of ["기획", "디자인", "프론트엔드", "백엔드"]) {
+    for (const layer of ["기획", "디자인", "프론트엔드", "백엔드", "미지정"]) {
       const lane = await screen.findByRole("region", {
         name: `${layer} 레이어`,
       });
@@ -211,18 +211,29 @@ describe("ProjectPage", () => {
     );
   });
 
-  it("notes items excluded for missing layer or status", async () => {
-    const gateway = FakeProjectBoardGateway.empty();
-    gateway.board = { issues: [], fetchedAt: null, skipped: 3 };
-    render(<ProjectPage gateway={gateway} />);
+  it("groups layer-less issues into the unassigned swimlane", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 7,
+              title: "분류 전 이슈",
+              url: "https://example.test/issues/7",
+              layer: "unassigned",
+              status: "backlog",
+            },
+          ],
+          null,
+        )}
+      />,
+    );
 
+    const lane = await screen.findByRole("region", { name: "미지정 레이어" });
     expect(
-      await screen.findByText(
-        "3개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다. Project의 영역 값과 상태 값을 확인해 주세요.",
-      ),
+      within(lane).getByRole("article", { name: "Issue #7 분류 전 이슈" }),
     ).toBeInTheDocument();
   });
-
   it("lets users pick a project from the fetched list", async () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.unlinked();
@@ -248,6 +259,39 @@ describe("ProjectPage", () => {
       expect(
         gateway.calls.filter((call) => call.method === "linkGithubProject"),
       ).toHaveLength(1),
+    );
+  });
+
+  it("lets linked workspaces switch projects from the list", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.empty();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("region", { name: "기획 레이어" });
+    expect(
+      screen.queryByRole("region", { name: "GitHub Project 연결" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "프로젝트 변경" }));
+    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
+
+    const choice = await screen.findByRole("radio", {
+      name: "Mockly · Mockly-Company #1",
+    });
+    await user.click(choice);
+    await user.click(
+      screen.getByRole("button", { name: "이 프로젝트 연결" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "linkGithubProject"),
+      ).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "GitHub Project 연결" }),
+      ).not.toBeInTheDocument(),
     );
   });
 
