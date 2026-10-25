@@ -144,11 +144,19 @@ export function ProjectPage({
       setBoard(await gateway.syncProjectBoard());
       setIsUnlinked(false);
     } catch (error) {
-      setLoadError(
+      const message =
         typeof error === "object" && error !== null && "message" in error
           ? String((error as { message: string }).message)
-          : "Project 보드를 가져오지 못했습니다.",
-      );
+          : "Project 보드를 가져오지 못했습니다.";
+      const reason =
+        typeof error === "object" &&
+        error !== null &&
+        "details" in error &&
+        typeof (error as { details?: unknown }).details === "object" &&
+        (error as { details: Record<string, string> }).details !== null
+          ? (error as { details: Record<string, string> }).details.reason
+          : undefined;
+      setLoadError(reason ? `${message} (원인: ${reason})` : message);
     } finally {
       setIsSyncing(false);
     }
