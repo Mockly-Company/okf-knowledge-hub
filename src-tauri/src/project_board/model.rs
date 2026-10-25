@@ -110,9 +110,78 @@ impl ProjectBoard {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedGithubProject {
+    pub id: String,
+    pub owner: String,
+    pub number: u64,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectOwnerScope {
+    Organization,
+    User,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedProjectUrl {
+    pub scope: ProjectOwnerScope,
+    pub owner: String,
+    pub number: u64,
+}
+
+/// `https://github.com/orgs/{owner}/projects/{number}`,
+/// `https://github.com/users/{login}/projects/{number}` 형태를 읽는다.
+/// (`/views/...` 같은 꼬리 경로는 무시한다.)
+pub fn parse_project_url(raw: &str) -> Result<ParsedProjectUrl, String> {
+    let trimmed = raw.trim();
+    let without_scheme = trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+        .ok_or_else(|| "GitHub Project URL은 https:// 로 시작해야 합니다.".to_owned())?;
+    let mut segments = without_scheme.split('/').filter(|part| !part.is_empty());
+    let _host = segments
+        .next()
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| "GitHub Project URL 형식을 확인해 주세요.".to_owned())?;
+    let scope_segment = segments.next().unwrap_or_default();
+    let scope = match scope_segment {
+        "orgs" => ProjectOwnerScope::Organization,
+        "users" => ProjectOwnerScope::User,
+        _ => {
+            return Err(
+                "GitHub Project URL은 /orgs/{이름}/projects/{번호} 또는 /users/{이름}/projects/{번호} 형태여야 합니다."
+                    .to_owned(),
+            )
+        }
+    };
+    let owner = segments.next().unwrap_or_default();
+    if owner.is_empty() {
+        return Err("GitHub Project URL 형식을 확인해 주세요.".to_owned());
+    }
+    if segments.next().unwrap_or_default() != "projects" {
+        return Err(
+            "GitHub Project URL은 /orgs/{이름}/projects/{번호} 또는 /users/{이름}/projects/{번호} 형태여야 합니다."
+                .to_owned(),
+        );
+    }
+    let number = segments
+        .next()
+        .and_then(|part| part.parse::<u64>().ok())
+        .filter(|number| *number > 0)
+        .ok_or_else(|| "GitHub Project 번호를 확인해 주세요.".to_owned())?;
+    Ok(ParsedProjectUrl {
+        scope,
+        owner: owner.to_owned(),
+        number,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BoardLayer, BoardStatus, ProjectBoard};
+    use super::{parse_project_url, BoardLayer, BoardStatus, ProjectBoard, ProjectOwnerScope};
 
     #[test]
     fn layer_labels_match_the_github_convention() {
@@ -133,6 +202,28 @@ mod tests {
             Some(BoardLayer::Backend)
         );
         assert_eq!(BoardLayer::from_label("layer:unknown"), None);
+    }
+
+    #[test]
+    fn project_url_parses_org_and_user_forms() {
+        let parsed =
+            parse_project_url("https://github.com/orgs/Mockly-Company/projects/1").unwrap();
+        assert_eq!(parsed.scope, ProjectOwnerScope::Organization);
+        assert_eq!(parsed.owner, "Mockly-Company");
+        assert_eq!(parsed.number, 1);
+
+        let parsed =
+            parse_project_url("https://github.com/users/octocat/projects/42/views/1").unwrap();
+        assert_eq!(parsed.scope, ProjectOwnerScope::User);
+        assert_eq!(parsed.owner, "octocat");
+        assert_eq!(parsed.number, 42);
+    }
+
+    #[test]
+    fn project_url_rejects_non_project_paths() {
+        assert!(parse_project_url("https://github.com/Mockly-Company/mockly-mobile").is_err());
+        assert!(parse_project_url("not a url").is_err());
+        assert!(parse_project_url("https://github.com/orgs/acme/projects/0").is_err());
     }
 
     #[test]

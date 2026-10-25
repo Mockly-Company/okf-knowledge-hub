@@ -1,6 +1,9 @@
 pub mod model;
 
-pub use model::{BoardIssue, BoardLayer, BoardStatus, ProjectBoard};
+pub use model::{
+    parse_project_url, BoardIssue, BoardLayer, BoardStatus, ParsedProjectUrl, ProjectBoard,
+    ProjectOwnerScope, ResolvedGithubProject,
+};
 
 use std::fs;
 use std::path::{Path, PathBuf};

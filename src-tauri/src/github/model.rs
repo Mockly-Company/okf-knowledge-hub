@@ -2,6 +2,15 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct GithubProjectSummary {
+    pub id: String,
+    pub owner: String,
+    pub number: u64,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct GithubRepositorySummary {
     pub id: String,
     pub owner: String,

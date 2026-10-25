@@ -21,6 +21,13 @@ export interface ProjectBoard {
   fetchedAt: string | null;
 }
 
+export interface ResolvedGithubProject {
+  id: string;
+  owner: string;
+  number: number;
+  title: string;
+}
+
 export const BOARD_LAYERS: ReadonlyArray<{
   id: BoardLayer;
   name: string;
