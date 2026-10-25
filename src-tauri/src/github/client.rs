@@ -394,7 +394,16 @@ fn map_project_lookup_errors(errors: &[GithubProjectLookupError]) -> AppError {
     if forbidden {
         return project_permission_error();
     }
-    project_not_found_error()
+    let detail = errors
+        .first()
+        .map(|error| error.message.as_str())
+        .unwrap_or("unknown GraphQL error");
+    AppError::new(
+        ErrorCode::GithubUnavailable,
+        "GitHub 요청을 처리하지 못했습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+    .with_detail("reason", detail.to_owned())
 }
 
 fn project_permission_error() -> AppError {
@@ -848,6 +857,14 @@ impl GithubHttpClient {
         let mut items = Vec::new();
         let mut after: Option<String> = None;
         for _ in 0..5 {
+            let mut variables = serde_json::Map::new();
+            variables.insert("login".to_owned(), serde_json::Value::from(owner));
+            variables.insert("number".to_owned(), serde_json::Value::from(number));
+            if let Some(cursor) = after.as_deref() {
+                // `after: null`을 명시하면 GitHub이 커서 오류로 전체 요청을
+                // 거부하므로, 첫 페이지는 키 자체를 빼고 보낸다.
+                variables.insert("after".to_owned(), serde_json::Value::from(cursor));
+            }
             let query = format!(
                 "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}"
             );
@@ -858,7 +875,7 @@ impl GithubHttpClient {
                     &[],
                     Some(serde_json::json!({
                         "query": query,
-                        "variables": { "login": owner, "number": number, "after": after },
+                        "variables": variables,
                     })),
                 )
                 .await?;
@@ -1554,6 +1571,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_lookup_surfaces_unexpected_graphql_errors() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":null,"errors":[{"type":"ARGUMENT_ERROR","message":"after does not appear to be a valid cursor"}]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+    }
+
+    #[tokio::test]
     async fn project_items_come_with_status_and_labels_across_pages() {
         let tokens = SequenceTokenProvider::default();
         let transport = RecordingTransport::with_responses(vec![
@@ -1586,7 +1620,7 @@ mod tests {
             .map(|request| request.body.clone().unwrap().to_string())
             .collect();
         assert_eq!(bodies.len(), 2);
-        assert!(bodies[0].contains("\"after\":null"));
+        assert!(!bodies[0].contains("\"after\""));
         assert!(bodies[1].contains("\"after\":\"cursor-1\""));
     }
 
