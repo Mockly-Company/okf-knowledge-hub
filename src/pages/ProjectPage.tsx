@@ -286,8 +286,7 @@ export function ProjectPage({
       {board && board.skipped > 0 ? (
         <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
           {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
-          Issue에 {`layer:기획/디자인/프론트엔드/백엔드`} 라벨과 상태 값을 확인해
-          주세요.
+          Project의 영역 값과 상태 값을 확인해 주세요.
         </p>
       ) : null}
 
