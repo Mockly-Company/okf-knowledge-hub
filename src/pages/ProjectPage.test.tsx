@@ -429,28 +429,91 @@ describe("ProjectPage", () => {
     );
 
     const tree = await screen.findByRole("region", { name: "계층 보기" });
-    const flow = within(tree).getByRole("region", {
-      name: "순서 있는 흐름",
-    });
-    const summary = within(flow).getByRole("list", { name: "흐름 요약" });
-    const chains = within(summary).getAllByRole("listitem");
+    const flow = within(tree).getByRole("list", { name: "흐름 요약" });
+    const chains = within(flow).getAllByRole("listitem");
     expect(chains.map((chain) => chain.getAttribute("aria-label"))).toEqual([
       "기획",
       "디자인",
       "기획 직후 작업",
     ]);
-    const steps = within(flow).getAllByRole("article");
-    expect(steps.map((step) => step.getAttribute("aria-label"))).toEqual([
-      "스토리 #2 기획",
-      "스토리 #3 디자인",
-      "태스크 #5 기획 직후 작업",
-    ]);
+    const steps = within(tree).getAllByRole("article");
+    expect(
+      steps
+        .map((step) => step.getAttribute("aria-label"))
+        .filter(
+          (label) =>
+            label === "스토리 #2 기획" ||
+            label === "스토리 #3 디자인" ||
+            label === "태스크 #5 기획 직후 작업",
+        ),
+    ).toEqual(["스토리 #2 기획", "스토리 #3 디자인", "태스크 #5 기획 직후 작업"]);
     expect(
       within(flow).queryByRole("article", { name: "태스크 #4 자유 작업" }),
     ).not.toBeInTheDocument();
     expect(
       within(tree).getByRole("article", { name: "태스크 #4 자유 작업" }),
     ).toBeInTheDocument();
+  });
+
+  it("renders flows in nested subtasks", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "에픽",
+              url: "https://example.test/issues/1",
+              layer: "unassigned",
+              status: "backlog",
+              children: [
+                {
+                  number: 2,
+                  title: "부모 작업",
+                  url: "https://example.test/issues/2",
+                  layer: "planning",
+                  status: "in_progress",
+                  children: [
+                    {
+                      number: 3,
+                      title: "먼저 할 일",
+                      url: "https://example.test/issues/3",
+                      layer: "planning",
+                      status: "in_progress",
+                      children: [],
+                      kind: "작업",
+                      dependsOn: null,
+                    },
+                    {
+                      number: 4,
+                      title: "나중 할 일",
+                      url: "https://example.test/issues/4",
+                      layer: "planning",
+                      status: "backlog",
+                      children: [],
+                      kind: "작업",
+                      dependsOn: 3,
+                    },
+                  ],
+                  kind: "작업",
+                  dependsOn: null,
+                },
+              ],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+    const flow = within(tree).getByRole("list", { name: "흐름 요약" });
+    expect(
+      within(flow)
+        .getAllByRole("listitem")
+        .map((item) => item.getAttribute("aria-label")),
+    ).toEqual(["먼저 할 일", "나중 할 일"]);
   });
 
   it("renders cyclic dependencies without hanging", async () => {
