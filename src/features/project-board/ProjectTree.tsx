@@ -231,43 +231,93 @@ function buildFlow(children: BoardIssue[]): {
   };
 }
 
+interface FlowSummaryNodeState {
+  issue: BoardIssue;
+  children: FlowSummaryNodeState[];
+}
+
+function FlowSummaryNode({
+  node,
+  isRoot,
+}: {
+  node: FlowSummaryNodeState;
+  isRoot: boolean;
+}) {
+  return (
+    <li aria-label={node.issue.title} className="grid gap-[var(--space-1)]">
+      <span className="flex items-center gap-x-[var(--space-1)]">
+        {isRoot ? null : (
+          <span
+            aria-hidden="true"
+            className="text-[length:1.1rem] font-bold text-[var(--color-primary-action)]"
+          >
+            →
+          </span>
+        )}
+        <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-[var(--space-3)] py-[var(--space-1)] text-[var(--font-meta-size)] font-[number:var(--font-weight-control)]">
+          {node.issue.title}
+        </span>
+      </span>
+      {node.children.length > 0 ? (
+        <ol className="m-0 ml-[var(--space-2)] grid list-none gap-[var(--space-1)] border-l-2 border-[var(--color-primary-action)] p-0 pl-[var(--space-3)]">
+          {node.children.map((child) => (
+            <FlowSummaryNode
+              key={child.issue.url}
+              node={child}
+              isRoot={false}
+            />
+          ))}
+        </ol>
+      ) : null}
+    </li>
+  );
+}
+
 function FlowSteps({ steps }: { steps: FlowStep[] }) {
   if (steps.length === 0) {
     return null;
   }
-  const byNumber = new Map(steps.map((step) => [step.issue.number, step.issue]));
-  const predecessorNumbers = new Set<number>();
+  const stepNumbers = new Set(steps.map((step) => step.issue.number));
+  const dependentsOf = new Map<number, BoardIssue[]>();
   for (const step of steps) {
-    if (step.predecessor != null) {
-      predecessorNumbers.add(step.predecessor.number);
+    if (step.predecessor != null && stepNumbers.has(step.predecessor.number)) {
+      const list = dependentsOf.get(step.predecessor.number) ?? [];
+      list.push(step.issue);
+      dependentsOf.set(step.predecessor.number, list);
     }
   }
-  const paths: BoardIssue[][] = steps
-    .filter((step) => !predecessorNumbers.has(step.issue.number))
-    .map((leaf) => {
-      const path = [leaf.issue];
-      const seen = new Set<number>([leaf.issue.number]);
-      let current = leaf.issue;
-      while (
-        current.dependsOn != null &&
-        byNumber.has(current.dependsOn) &&
-        !seen.has(current.dependsOn)
-      ) {
-        const previous = byNumber.get(current.dependsOn);
-        if (!previous) {
-          break;
-        }
-        seen.add(previous.number);
-        path.unshift(previous);
-        current = previous;
-      }
-      return path;
-    })
-    .sort(
+  const depthOf = new Map(steps.map((step) => [step.issue.number, step.depth]));
+  for (const list of dependentsOf.values()) {
+    list.sort(
       (left, right) =>
-        (left[0]?.number ?? 0) - (right[0]?.number ?? 0) ||
-        left.length - right.length,
+        (depthOf.get(left.number) ?? 0) - (depthOf.get(right.number) ?? 0) ||
+        left.number - right.number,
     );
+  }
+  const buildNode = (
+    issue: BoardIssue,
+    seen: Set<number>,
+  ): FlowSummaryNodeState => {
+    const children = (dependentsOf.get(issue.number) ?? []).filter(
+      (child) => !seen.has(child.number),
+    );
+    return {
+      issue,
+      children: children.map((child) =>
+        buildNode(child, new Set([...seen, child.number])),
+      ),
+    };
+  };
+  let roots = steps
+    .filter(
+      (step) =>
+        step.predecessor == null || !stepNumbers.has(step.predecessor.number),
+    )
+    .map((step) => step.issue);
+  if (roots.length === 0) {
+    roots = steps.map((step) => step.issue);
+  }
+  const forest = roots.map((root) => buildNode(root, new Set([root.number])));
   return (
     <section
       aria-label="순서 있는 흐름"
@@ -278,30 +328,10 @@ function FlowSteps({ steps }: { steps: FlowStep[] }) {
       </h2>
       <ol
         aria-label="흐름 요약"
-        className="m-0 grid list-none gap-[var(--space-2)] p-0"
+        className="m-0 grid list-none gap-[var(--space-1)] p-0"
       >
-        {paths.map((path) => (
-          <li
-            key={path.map((node) => node.number).join("-")}
-            aria-label={path.map((node) => node.title).join(" 다음 ")}
-            className="flex flex-wrap items-center gap-x-[var(--space-1)] gap-y-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] p-[var(--space-3)]"
-          >
-            {path.map((node, index) => (
-              <span key={node.url} className="flex items-center gap-x-[var(--space-1)]">
-                {index > 0 ? (
-                  <span
-                    aria-hidden="true"
-                    className="text-[length:1.1rem] font-bold text-[var(--color-primary-action)]"
-                  >
-                    →
-                  </span>
-                ) : null}
-                <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-[var(--space-3)] py-[var(--space-1)] text-[var(--font-meta-size)] font-[number:var(--font-weight-control)]">
-                  {node.title}
-                </span>
-              </span>
-            ))}
-          </li>
+        {forest.map((root) => (
+          <FlowSummaryNode key={root.issue.url} node={root} isRoot />
         ))}
       </ol>
       <ol className="m-0 grid list-none gap-[var(--space-1)] p-0">
