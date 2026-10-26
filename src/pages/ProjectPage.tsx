@@ -140,7 +140,7 @@ export function ProjectPage({
   const [isListing, setIsListing] = useState(false);
   const [isLinking, setIsLinking] = useState(false);
   const [filter, setFilter] = useState<LayerFilter>("all");
-  const [view, setView] = useState<BoardView>("layers");
+  const [view, setView] = useState<BoardView>("tree");
   const [hideDone, setHideDone] = useState(true);
   const panelVisible = isUnlinked || showLinkPanel;
 

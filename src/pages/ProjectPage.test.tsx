@@ -15,9 +15,16 @@ function renderProject(board = FakeProjectBoardGateway.empty()) {
   };
 }
 
+async function showLayersView(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "영역별" }));
+  await screen.findByRole("region", { name: "기획 레이어" });
+}
+
 describe("ProjectPage", () => {
   it("renders one swimlane per layer with five status columns", async () => {
+    const user = userEvent.setup();
     renderProject();
+    await showLayersView(user);
 
     for (const layer of ["기획", "디자인", "프론트엔드", "백엔드", "미지정"]) {
       const lane = await screen.findByRole("region", {
@@ -38,6 +45,7 @@ describe("ProjectPage", () => {
   });
 
   it("shows each fetched issue once inside its own layer and status cell", async () => {
+    const user = userEvent.setup();
     renderProject(
       FakeProjectBoardGateway.withIssues(
         [
@@ -73,8 +81,9 @@ describe("ProjectPage", () => {
         "2026-10-25T12:00:00+09:00",
       ),
     );
+    await showLayersView(user);
 
-    const planning = await screen.findByRole("region", {
+    const planning = screen.getByRole("region", {
       name: "기획 레이어",
     });
     expect(
@@ -103,8 +112,8 @@ describe("ProjectPage", () => {
   it("filters swimlanes by layer", async () => {
     const user = userEvent.setup();
     renderProject();
+    await showLayersView(user);
 
-    await screen.findByRole("region", { name: "기획 레이어" });
     await user.click(screen.getByRole("button", { name: "디자인" }));
 
     expect(screen.queryByRole("region", { name: "기획 레이어" })).not.toBeInTheDocument();
@@ -131,8 +140,8 @@ describe("ProjectPage", () => {
       "2026-10-25T12:00:00+09:00",
     );
     render(<ProjectPage gateway={gateway} />);
+    await showLayersView(user);
 
-    await screen.findByRole("region", { name: "기획 레이어" });
     expect(
       gateway.calls.filter((call) => call.method === "getProjectBoard"),
     ).toHaveLength(1);
@@ -150,9 +159,11 @@ describe("ProjectPage", () => {
   });
 
   it("offers issue creation only from Backlog and explains why it is unavailable", async () => {
+    const user = userEvent.setup();
     renderProject();
+    await showLayersView(user);
 
-    const planning = await screen.findByRole("region", {
+    const planning = screen.getByRole("region", {
       name: "기획 레이어",
     });
     const backlog = within(planning).getByRole("region", {
@@ -228,6 +239,7 @@ describe("ProjectPage", () => {
   });
 
   it("groups layer-less issues into the unassigned swimlane", async () => {
+    const user = userEvent.setup();
     render(
       <ProjectPage
         gateway={FakeProjectBoardGateway.withIssues(
@@ -246,8 +258,9 @@ describe("ProjectPage", () => {
         )}
       />,
     );
+    await showLayersView(user);
 
-    const lane = await screen.findByRole("region", { name: "미지정 레이어" });
+    const lane = screen.getByRole("region", { name: "미지정 레이어" });
     expect(
       within(lane).getByRole("article", { name: "Issue #7 분류 전 이슈" }),
     ).toBeInTheDocument();
@@ -283,12 +296,7 @@ describe("ProjectPage", () => {
       />,
     );
 
-    await screen.findByRole("region", { name: "기획 레이어" });
-    await user.click(screen.getByRole("button", { name: "계층별" }));
-
-    expect(
-      await screen.findByRole("region", { name: "계층 보기" }),
-    ).toBeInTheDocument();
+    await screen.findByRole("region", { name: "계층 보기" });
     expect(
       screen.getByRole("article", { name: "에픽 #12 기획서 초안" }),
     ).toBeInTheDocument();
@@ -303,10 +311,14 @@ describe("ProjectPage", () => {
     expect(
       await screen.findByRole("region", { name: "기획 레이어" }),
     ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "계층별" }));
+    expect(
+      await screen.findByRole("region", { name: "계층 보기" }),
+    ).toBeInTheDocument();
   });
 
   it("orders tree children by phase before status", async () => {
-    const user = userEvent.setup();
     render(
       <ProjectPage
         gateway={FakeProjectBoardGateway.withIssues(
@@ -345,8 +357,6 @@ describe("ProjectPage", () => {
       />,
     );
 
-    await screen.findByRole("region", { name: "기획 레이어" });
-    await user.click(screen.getByRole("button", { name: "계층별" }));
     const tree = await screen.findByRole("region", { name: "계층 보기" });
 
     const cards = within(tree).getAllByRole("article");
@@ -361,8 +371,7 @@ describe("ProjectPage", () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.empty();
     render(<ProjectPage gateway={gateway} />);
-
-    await screen.findByRole("region", { name: "기획 레이어" });
+    await showLayersView(user);
     expect(
       screen.queryByRole("region", { name: "GitHub Project 연결" }),
     ).not.toBeInTheDocument();
@@ -439,7 +448,8 @@ describe("ProjectPage", () => {
       />,
     );
 
-    await screen.findByRole("region", { name: "백엔드 레이어" });
+    await showLayersView(user);
+
     expect(
       screen.queryByRole("article", { name: "Issue #1 끝난 에픽" }),
     ).not.toBeInTheDocument();

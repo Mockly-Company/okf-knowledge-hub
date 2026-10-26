@@ -200,8 +200,8 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       aria-label="계층 보기"
     >
       <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
-        왼쪽부터 기획 → 디자인 → 백엔드 → 프론트 순서로 읽으세요. 앞 단계가
-        끝나야 다음 단계가 완성됩니다.
+        화살표는 상위-하위 항목의 실제 연결입니다. 같은 줄의 카드는
+        기획 → 디자인 → 백엔드 → 프론트 영역 순서대로 나열됩니다.
       </p>
       {epics.map((issue) => (
         <EpicCard key={issue.url} issue={issue} />
