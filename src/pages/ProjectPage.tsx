@@ -4,6 +4,7 @@ import { FormField } from "@/components/patterns/FormField";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
 import { Select } from "@/components/ui/select";
@@ -29,17 +30,34 @@ function issuesFor(
   board: ProjectBoard | null,
   layer: BoardLayer,
   status: BoardStatus,
+  hideDone: boolean,
 ): BoardIssue[] {
   if (!board) {
     return [];
   }
   return flattenIssues(board.issues).filter(
-    (issue) => issue.layer === layer && issue.status === status,
+    (issue) =>
+      issue.layer === layer &&
+      issue.status === status &&
+      (!hideDone || issue.status !== "done"),
   );
 }
 
 function flattenIssues(issues: BoardIssue[]): BoardIssue[] {
   return issues.flatMap((issue) => [issue, ...flattenIssues(issue.children)]);
+}
+
+function withoutDone(issues: BoardIssue[]): BoardIssue[] {
+  const kept: BoardIssue[] = [];
+  for (const issue of issues) {
+    const children = withoutDone(issue.children);
+    if (issue.status === "done") {
+      kept.push(...children);
+    } else {
+      kept.push({ ...issue, children });
+    }
+  }
+  return kept;
 }
 
 function BoardColumn({
@@ -136,6 +154,7 @@ export function ProjectPage({
   const [isLinking, setIsLinking] = useState(false);
   const [filter, setFilter] = useState<LayerFilter>("all");
   const [view, setView] = useState<BoardView>("layers");
+  const [hideDone, setHideDone] = useState(true);
   const panelVisible = isUnlinked || showLinkPanel;
 
   const load = useCallback(async () => {
@@ -342,27 +361,36 @@ export function ProjectPage({
       ) : null}
 
       <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
-        <div
-          className="flex flex-wrap gap-[var(--space-2)]"
-          role="group"
-          aria-label="보드 보기 방식"
-        >
-          <Button
-            type="button"
-            variant={view === "layers" ? "primary" : "secondary"}
-            aria-pressed={view === "layers"}
-            onClick={() => setView("layers")}
+        <div className="flex flex-wrap items-center gap-[var(--space-3)]">
+          <div
+            className="flex flex-wrap gap-[var(--space-2)]"
+            role="group"
+            aria-label="보드 보기 방식"
           >
-            영역별
-          </Button>
-          <Button
-            type="button"
-            variant={view === "tree" ? "primary" : "secondary"}
-            aria-pressed={view === "tree"}
-            onClick={() => setView("tree")}
-          >
-            계층별
-          </Button>
+            <Button
+              type="button"
+              variant={view === "layers" ? "primary" : "secondary"}
+              aria-pressed={view === "layers"}
+              onClick={() => setView("layers")}
+            >
+              영역별
+            </Button>
+            <Button
+              type="button"
+              variant={view === "tree" ? "primary" : "secondary"}
+              aria-pressed={view === "tree"}
+              onClick={() => setView("tree")}
+            >
+              계층별
+            </Button>
+          </div>
+          <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+            <Checkbox
+              checked={hideDone}
+              onChange={(event) => setHideDone(event.target.checked)}
+            />
+            완료 항목 숨기기
+          </label>
         </div>
         <TabsList aria-label="Project 보기">
           <TabsTrigger selected>Board</TabsTrigger>
@@ -458,7 +486,7 @@ export function ProjectPage({
           </div>
         </div>
       ) : view === "tree" ? (
-        <ProjectTree issues={board?.issues ?? []} />
+        <ProjectTree issues={hideDone && board ? withoutDone(board.issues) : (board?.issues ?? [])} />
       ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
@@ -477,7 +505,7 @@ export function ProjectPage({
                       key={id}
                       layerName={layer.name}
                       statusName={name}
-                      issues={issuesFor(board, layer.id, id)}
+                      issues={issuesFor(board, layer.id, id, hideDone)}
                       canAddIssue={id === "backlog"}
                     />
                   ))}
