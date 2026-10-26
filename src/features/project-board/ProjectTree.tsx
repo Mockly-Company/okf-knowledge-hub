@@ -231,44 +231,82 @@ function buildFlow(children: BoardIssue[]): {
   };
 }
 
-interface FlowSummaryNodeState {
+interface FlowTreeNode {
   issue: BoardIssue;
-  children: FlowSummaryNodeState[];
+  children: FlowTreeNode[];
 }
 
-function FlowSummaryNode({
-  node,
-  isRoot,
-}: {
-  node: FlowSummaryNodeState;
-  isRoot: boolean;
-}) {
+function FlowNodeCard({ issue }: { issue: BoardIssue }) {
+  const progress = epicProgress(issue);
   return (
-    <li aria-label={node.issue.title} className="grid gap-[var(--space-1)]">
-      <span className="flex items-center gap-x-[var(--space-1)]">
-        {isRoot ? null : (
-          <span
-            aria-hidden="true"
-            className="text-[length:1.1rem] font-bold text-[var(--color-primary-action)]"
-          >
-            →
-          </span>
-        )}
-        <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-[var(--space-3)] py-[var(--space-1)] text-[var(--font-meta-size)] font-[number:var(--font-weight-control)]">
-          {node.issue.title}
+    <article
+      aria-label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
+      className="grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+    >
+      <div className="font-[number:var(--font-weight-control)]">
+        {kindLabel(issue.kind)} #{issue.number} {issue.title}
+      </div>
+      <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+        <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+        <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+          {layerName(issue.layer)}
+          {issue.kind ? ` · ${issue.kind}` : null}
         </span>
-      </span>
-      {node.children.length > 0 ? (
-        <ol className="m-0 ml-[var(--space-2)] grid list-none gap-[var(--space-1)] border-l-2 border-[var(--color-primary-action)] p-0 pl-[var(--space-3)]">
-          {node.children.map((child) => (
-            <FlowSummaryNode
-              key={child.issue.url}
-              node={child}
-              isRoot={false}
-            />
-          ))}
-        </ol>
+      </div>
+      {issue.children.length > 0 ? (
+        <div className="grid gap-[var(--space-1)]">
+          <ProgressBar progress={progress} />
+          <div>
+            {issue.children.map((child) => (
+              <LeafRow key={child.url} issue={child} depth={1} />
+            ))}
+          </div>
+        </div>
       ) : null}
+    </article>
+  );
+}
+
+function FlowTreeRow({
+  node,
+  isLast,
+}: {
+  node: FlowTreeNode;
+  isLast: boolean;
+}) {
+  const dot =
+    node.issue.status === "done"
+      ? "bg-[var(--color-primary-action)]"
+      : "bg-[var(--surface)]";
+  return (
+    <li aria-label={node.issue.title} className="grid">
+      <div className="flex gap-x-[var(--space-3)]">
+        <div
+          aria-hidden="true"
+          className="flex w-[14px] shrink-0 flex-col items-center"
+        >
+          <span
+            className={`mt-[20px] h-[14px] w-[14px] shrink-0 rounded-full border-[3px] border-[var(--color-primary-action)] ${dot}`}
+          />
+          {isLast ? null : (
+            <span className="w-[2px] flex-1 bg-[var(--color-primary-action)]" />
+          )}
+        </div>
+        <div className="grid min-w-0 flex-1 gap-[var(--space-3)] pb-[var(--space-3)]">
+          <FlowNodeCard issue={node.issue} />
+          {node.children.length > 0 ? (
+            <ol className="m-0 grid list-none gap-0 p-0">
+              {node.children.map((child, index) => (
+                <FlowTreeRow
+                  key={child.issue.url}
+                  node={child}
+                  isLast={index === node.children.length - 1}
+                />
+              ))}
+            </ol>
+          ) : null}
+        </div>
+      </div>
     </li>
   );
 }
@@ -297,7 +335,7 @@ function FlowSteps({ steps }: { steps: FlowStep[] }) {
   const buildNode = (
     issue: BoardIssue,
     seen: Set<number>,
-  ): FlowSummaryNodeState => {
+  ): FlowTreeNode => {
     const children = (dependentsOf.get(issue.number) ?? []).filter(
       (child) => !seen.has(child.number),
     );
@@ -317,7 +355,22 @@ function FlowSteps({ steps }: { steps: FlowStep[] }) {
   if (roots.length === 0) {
     roots = steps.map((step) => step.issue);
   }
-  const forest = roots.map((root) => buildNode(root, new Set([root.number])));
+  const rendered = new Set<number>();
+  const collect = (node: FlowTreeNode): void => {
+    rendered.add(node.issue.number);
+    for (const child of node.children) {
+      collect(child);
+    }
+  };
+  const forest: FlowTreeNode[] = [];
+  for (const root of roots) {
+    if (rendered.has(root.number)) {
+      continue;
+    }
+    const node = buildNode(root, new Set([root.number]));
+    collect(node);
+    forest.push(node);
+  }
   return (
     <section
       aria-label="순서 있는 흐름"
@@ -328,55 +381,14 @@ function FlowSteps({ steps }: { steps: FlowStep[] }) {
       </h2>
       <ol
         aria-label="흐름 요약"
-        className="m-0 grid list-none gap-[var(--space-1)] p-0"
+        className="m-0 grid list-none gap-0 p-0"
       >
-        {forest.map((root) => (
-          <FlowSummaryNode key={root.issue.url} node={root} isRoot />
-        ))}
-      </ol>
-      <ol className="m-0 grid list-none gap-[var(--space-1)] p-0">
-        {steps.map((step, index) => (
-          <li key={step.issue.url} className="grid gap-[var(--space-1)]">
-            {index > 0 ? (
-              <span
-                aria-hidden="true"
-                className="text-[length:1.1rem] font-bold text-[var(--color-primary-action)]"
-              >
-                ↓
-              </span>
-            ) : null}
-            <article
-              aria-label={`${kindLabel(step.issue.kind)} #${step.issue.number} ${step.issue.title}`}
-              className="grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
-            >
-              {step.predecessor ? (
-                <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
-                  ← #{step.predecessor.number} {step.predecessor.title}{" "}
-                  다음에 진행
-                </p>
-              ) : null}
-              <div className="font-[number:var(--font-weight-control)]">
-                {kindLabel(step.issue.kind)} #{step.issue.number}{" "}
-                {step.issue.title}
-              </div>
-              <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-                <StatusBadge tone="neutral">
-                  {statusName(step.issue.status)}
-                </StatusBadge>
-                <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
-                  {layerName(step.issue.layer)}
-                  {step.issue.kind ? ` · ${step.issue.kind}` : null}
-                </span>
-              </div>
-              {step.issue.children.length > 0 ? (
-                <div>
-                  {step.issue.children.map((child) => (
-                    <LeafRow key={child.url} issue={child} depth={1} />
-                  ))}
-                </div>
-              ) : null}
-            </article>
-          </li>
+        {forest.map((root, index) => (
+          <FlowTreeRow
+            key={root.issue.url}
+            node={root}
+            isLast={index === forest.length - 1}
+          />
         ))}
       </ol>
     </section>
@@ -440,9 +452,9 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       aria-label="계층 보기"
     >
       <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
-        ↓로 이어진 카드는 순서가 있습니다. 본문에{" "}
-        <code>이전 단계: #N</code>을 적으면 흐름으로 보여줍니다. 묶음
-        위·아래 순서는 진행 순서가 아닙니다.
+        아래 트리에서 순서와 갈래를 한눈에 볼 수 있습니다. 본문에{" "}
+        <code>이전 단계: #N</code>을 적으면 흐름으로 이어서 보여줍니다.
+        묶음 위·아래 순서는 진행 순서가 아닙니다.
       </p>
       {epics.map((issue) => (
         <EpicCard key={issue.url} issue={issue} />

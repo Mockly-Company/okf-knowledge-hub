@@ -164,10 +164,10 @@ export const Flow: StoryObj<typeof meta> = {
   ),
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByRole("region", { name: "순서 있는 흐름" }),
+      await canvas.findByRole("list", { name: "흐름 요약" }),
     ).toBeVisible();
     await expect(
-      await canvas.findByText("← #2 예시 기획 다음에 진행"),
+      await canvas.findByRole("article", { name: "스토리 #3 예시 기획-IA 구조" }),
     ).toBeVisible();
   },
 };

@@ -446,9 +446,6 @@ describe("ProjectPage", () => {
       "태스크 #5 기획 직후 작업",
     ]);
     expect(
-      within(flow).getAllByText("← #2 기획 다음에 진행"),
-    ).toHaveLength(2);
-    expect(
       within(flow).queryByRole("article", { name: "태스크 #4 자유 작업" }),
     ).not.toBeInTheDocument();
     expect(
