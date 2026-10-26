@@ -318,7 +318,7 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("orders tree children by phase before status", async () => {
+  it("groups tree children by layer before status", async () => {
     render(
       <ProjectPage
         gateway={FakeProjectBoardGateway.withIssues(
@@ -362,8 +362,8 @@ describe("ProjectPage", () => {
     const cards = within(tree).getAllByRole("article");
     expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
       "에픽 #1 에픽",
-      "태스크 #3 백엔드 작업",
       "태스크 #2 프론트 작업",
+      "태스크 #3 백엔드 작업",
     ]);
   });
 
