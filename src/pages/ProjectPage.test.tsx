@@ -293,15 +293,11 @@ describe("ProjectPage", () => {
       screen.getByRole("article", { name: "에픽 #12 기획서 초안" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
+      screen.getByRole("article", { name: "태스크 #13 하위 작업" }),
     ).toBeInTheDocument();
-
-    await user.click(
-      screen.getByRole("button", { name: "기획서 초안 접기" }),
-    );
     expect(
-      screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
-    ).not.toBeInTheDocument();
+      screen.getByRole("progressbar", { name: "진행률 0퍼센트" }),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "영역별" }));
     expect(

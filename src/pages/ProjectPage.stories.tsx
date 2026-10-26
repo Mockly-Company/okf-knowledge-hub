@@ -91,3 +91,22 @@ export const NotLinked: StoryObj<typeof meta> = {
     ).toBeVisible();
   },
 };
+
+export const Tree: StoryObj<typeof meta> = {
+  render: () => (
+    <PageStoryFrame>
+      <ProjectPage gateway={boardGateway} />
+    </PageStoryFrame>
+  ),
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "계층별" }),
+    );
+    await expect(
+      await canvas.findByRole("region", { name: "계층 보기" }),
+    ).toBeVisible();
+    await expect(
+      await canvas.findByRole("article", { name: "에픽 #12 기획서 초안" }),
+    ).toBeVisible();
+  },
+};
