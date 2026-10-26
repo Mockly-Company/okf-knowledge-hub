@@ -360,4 +360,45 @@ describe("ProjectPage", () => {
       await screen.findByRole("alert"),
     ).toHaveTextContent("GitHub Project URL 형식을 확인해 주세요.");
   });
+
+  it("hides done work unless the toggle is off", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "끝난 에픽",
+              url: "https://example.test/issues/1",
+              layer: "backend",
+              status: "done",
+              children: [],
+              kind: null,
+            },
+            {
+              number: 2,
+              title: "진행 중 작업",
+              url: "https://example.test/issues/2",
+              layer: "backend",
+              status: "in_progress",
+              children: [],
+              kind: "작업",
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    await screen.findByRole("region", { name: "백엔드 레이어" });
+    expect(
+      screen.queryByRole("article", { name: "Issue #1 끝난 에픽" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("checkbox", { name: "완료 항목 숨기기" }));
+    expect(
+      await screen.findByRole("article", { name: "Issue #1 끝난 에픽" }),
+    ).toBeInTheDocument();
+  });
 });
