@@ -156,10 +156,11 @@ function EpicCard({ issue }: { issue: BoardIssue }) {
             에픽 #{issue.number} {issue.title}
           </span>
           <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
-          <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
-            {layerName(issue.layer)}
-            {issue.kind ? ` · ${issue.kind}` : null}
-          </span>
+          {issue.kind ? (
+            <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+              {issue.kind}
+            </span>
+          ) : null}
         </div>
         <ProgressBar progress={progress} />
       </div>
