@@ -4,6 +4,7 @@ import {
   layerName,
   statusName,
   type BoardIssue,
+  type BoardLayer,
   type BoardStatus,
 } from "@/features/project-board/model";
 
@@ -15,7 +16,25 @@ const STATUS_ORDER: BoardStatus[] = [
   "done",
 ];
 
-function sortByPipeline(left: BoardIssue, right: BoardIssue): number {
+/**
+ * 작업 순서: 기획이 먼저 나와야 디자인이 화면을 만들고,
+ * 백엔드(DB 설계)가 나와야 프론트가 API를 연결할 수 있다.
+ * 미지정은 맨 뒤로 둔다.
+ */
+const PHASE_ORDER: BoardLayer[] = [
+  "planning",
+  "design",
+  "backend",
+  "frontend",
+  "unassigned",
+];
+
+function sortByPhaseThenStatus(left: BoardIssue, right: BoardIssue): number {
+  const phaseDiff =
+    PHASE_ORDER.indexOf(left.layer) - PHASE_ORDER.indexOf(right.layer);
+  if (phaseDiff !== 0) {
+    return phaseDiff;
+  }
   return STATUS_ORDER.indexOf(left.status) - STATUS_ORDER.indexOf(right.status);
 }
 
@@ -111,9 +130,11 @@ function ChildCard({ issue }: { issue: BoardIssue }) {
         <div className="grid gap-[var(--space-1)]">
           <ProgressBar progress={progress} />
           <div>
-            {issue.children.map((child) => (
-              <LeafRow key={child.url} issue={child} />
-            ))}
+            {[...issue.children]
+              .sort(sortByPhaseThenStatus)
+              .map((child) => (
+                <LeafRow key={child.url} issue={child} />
+              ))}
           </div>
         </div>
       ) : null}
@@ -123,7 +144,7 @@ function ChildCard({ issue }: { issue: BoardIssue }) {
 
 function EpicCard({ issue }: { issue: BoardIssue }) {
   const progress = epicProgress(issue);
-  const ordered = [...issue.children].sort(sortByPipeline);
+  const ordered = [...issue.children].sort(sortByPhaseThenStatus);
   return (
     <article
       aria-label={`에픽 #${issue.number} ${issue.title}`}
@@ -177,6 +198,10 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       role="region"
       aria-label="계층 보기"
     >
+      <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
+        왼쪽부터 기획 → 디자인 → 백엔드 → 프론트 순서로 읽으세요. 앞 단계가
+        끝나야 다음 단계가 완성됩니다.
+      </p>
       {epics.map((issue) => (
         <EpicCard key={issue.url} issue={issue} />
       ))}

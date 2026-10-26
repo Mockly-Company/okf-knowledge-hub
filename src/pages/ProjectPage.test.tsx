@@ -305,6 +305,58 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("orders tree children by phase before status", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "에픽",
+              url: "https://example.test/issues/1",
+              layer: "unassigned",
+              status: "backlog",
+              children: [
+                {
+                  number: 2,
+                  title: "프론트 작업",
+                  url: "https://example.test/issues/2",
+                  layer: "frontend",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                },
+                {
+                  number: 3,
+                  title: "백엔드 작업",
+                  url: "https://example.test/issues/3",
+                  layer: "backend",
+                  status: "in_progress",
+                  children: [],
+                  kind: "작업",
+                },
+              ],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    await screen.findByRole("region", { name: "기획 레이어" });
+    await user.click(screen.getByRole("button", { name: "계층별" }));
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+
+    const cards = within(tree).getAllByRole("article");
+    expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
+      "에픽 #1 에픽",
+      "태스크 #3 백엔드 작업",
+      "태스크 #2 프론트 작업",
+    ]);
+  });
+
   it("lets linked workspaces switch projects from the list", async () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.empty();
