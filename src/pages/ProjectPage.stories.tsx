@@ -92,8 +92,7 @@ export const NotLinked: StoryObj<typeof meta> = {
   },
 };
 
-export const Layers: StoryObj<typeof meta> = {
-  render: () => (
+export const Layers: StoryObj<typeof meta> = {  render: () => (
     <PageStoryFrame>
       <ProjectPage gateway={boardGateway} />
     </PageStoryFrame>
@@ -107,6 +106,68 @@ export const Layers: StoryObj<typeof meta> = {
     ).toBeVisible();
     await expect(
       await canvas.findByRole("article", { name: "Issue #12 기획서 초안" }),
+    ).toBeVisible();
+  },
+};
+
+const flowGateway = FakeProjectBoardGateway.withIssues(
+  [
+    {
+      number: 1,
+      title: "예시 에픽",
+      url: "https://example.test/issues/1",
+      layer: "unassigned",
+      status: "in_progress",
+      children: [
+        {
+          number: 2,
+          title: "예시 기획",
+          url: "https://example.test/issues/2",
+          layer: "planning",
+          status: "in_progress",
+          children: [],
+          kind: "기능",
+          dependsOn: null,
+        },
+        {
+          number: 3,
+          title: "예시 기획-IA 구조",
+          url: "https://example.test/issues/3",
+          layer: "planning",
+          status: "backlog",
+          children: [],
+          kind: "기능",
+          dependsOn: 2,
+        },
+        {
+          number: 4,
+          title: "예시 디자인-홈화면",
+          url: "https://example.test/issues/4",
+          layer: "design",
+          status: "backlog",
+          children: [],
+          kind: "기능",
+          dependsOn: 3,
+        },
+      ],
+      kind: null,
+    },
+  ],
+  "2026-10-25T12:00:00+09:00",
+);
+
+export const Flow: StoryObj<typeof meta> = {
+  render: () => (
+    <PageStoryFrame>
+      <ProjectPage gateway={flowGateway} />
+    </PageStoryFrame>
+  ),
+  play: async ({ canvas }) => {
+    await expect(
+      await canvas.findByRole("region", { name: "순서 있는 흐름" }),
+    ).toBeVisible();
+    await expect(
+      await canvas.findByText("← #2 예시 기획 다음에 진행"),
     ).toBeVisible();
   },
 };

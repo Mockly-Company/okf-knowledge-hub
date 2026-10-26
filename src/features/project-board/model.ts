@@ -22,6 +22,8 @@ export interface BoardIssue {
   children: BoardIssue[];
   /** 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 null. */
   kind: string | null;
+  /** 같은 부모 아래 선행 이슈 번호. 본문 `이전 단계: #N`에서 온다. */
+  dependsOn?: number | null;
 }
 
 export interface ProjectBoard {

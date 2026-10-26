@@ -175,8 +175,126 @@ function ChildCard({ issue }: { issue: BoardIssue }) {
   );
 }
 
+interface FlowStep {
+  issue: BoardIssue;
+  predecessor: BoardIssue | null;
+  depth: number;
+}
+
+/** 같은 에픽 안에서 `이전 단계`로 이어진 흐름과, 순서 없는 항목을 나눈다. */
+function buildFlow(children: BoardIssue[]): {
+  steps: FlowStep[];
+  independent: BoardIssue[];
+} {
+  const byNumber = new Map(children.map((child) => [child.number, child]));
+  const chained = children.filter(
+    (issue) =>
+      (issue.dependsOn != null && byNumber.has(issue.dependsOn)) ||
+      children.some((other) => other.dependsOn === issue.number),
+  );
+  const chainedNumbers = new Set(chained.map((issue) => issue.number));
+  const depthOf = (issue: BoardIssue): number => {
+    let depth = 0;
+    const seen = new Set<number>([issue.number]);
+    let current = issue;
+    while (
+      current.dependsOn != null &&
+      byNumber.has(current.dependsOn) &&
+      !seen.has(current.dependsOn)
+    ) {
+      seen.add(current.dependsOn);
+      const next = byNumber.get(current.dependsOn);
+      if (!next) {
+        break;
+      }
+      current = next;
+      depth += 1;
+    }
+    return depth;
+  };
+  const steps = chained
+    .map((issue) => ({
+      issue,
+      predecessor:
+        issue.dependsOn != null
+          ? (byNumber.get(issue.dependsOn) ?? null)
+          : null,
+      depth: depthOf(issue),
+    }))
+    .sort(
+      (left, right) =>
+        left.depth - right.depth || left.issue.number - right.issue.number,
+    );
+  return {
+    steps,
+    independent: children.filter((issue) => !chainedNumbers.has(issue.number)),
+  };
+}
+
+function FlowSteps({ steps }: { steps: FlowStep[] }) {
+  if (steps.length === 0) {
+    return null;
+  }
+  return (
+    <section
+      aria-label="순서 있는 흐름"
+      className="grid min-w-0 gap-[var(--space-2)]"
+    >
+      <h2 className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--text-muted)]">
+        순서 있는 흐름
+      </h2>
+      <ol className="m-0 grid list-none gap-[var(--space-1)] p-0">
+        {steps.map((step, index) => (
+          <li key={step.issue.url} className="grid gap-[var(--space-1)]">
+            {index > 0 ? (
+              <span
+                aria-hidden="true"
+                className="text-[var(--text-muted)]"
+              >
+                ↓
+              </span>
+            ) : null}
+            <article
+              aria-label={`${kindLabel(step.issue.kind)} #${step.issue.number} ${step.issue.title}`}
+              className="grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+            >
+              {step.predecessor ? (
+                <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                  ← #{step.predecessor.number} {step.predecessor.title}{" "}
+                  다음에 진행
+                </p>
+              ) : null}
+              <div className="font-[number:var(--font-weight-control)]">
+                {kindLabel(step.issue.kind)} #{step.issue.number}{" "}
+                {step.issue.title}
+              </div>
+              <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+                <StatusBadge tone="neutral">
+                  {statusName(step.issue.status)}
+                </StatusBadge>
+                <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                  {layerName(step.issue.layer)}
+                  {step.issue.kind ? ` · ${step.issue.kind}` : null}
+                </span>
+              </div>
+              {step.issue.children.length > 0 ? (
+                <div>
+                  {step.issue.children.map((child) => (
+                    <LeafRow key={child.url} issue={child} depth={1} />
+                  ))}
+                </div>
+              ) : null}
+            </article>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 function EpicCard({ issue }: { issue: BoardIssue }) {
   const progress = epicProgress(issue);
+  const flow = buildFlow(issue.children);
   return (
     <article
       aria-label={`에픽 #${issue.number} ${issue.title}`}
@@ -196,8 +314,11 @@ function EpicCard({ issue }: { issue: BoardIssue }) {
         </div>
         <ProgressBar progress={progress} />
       </div>
+      <FlowSteps steps={flow.steps} />
       {LAYER_GROUPS.map((layer) => {
-        const group = issue.children.filter((child) => child.layer === layer);
+        const group = flow.independent.filter(
+          (child) => child.layer === layer,
+        );
         if (group.length === 0) {
           return null;
         }
@@ -228,9 +349,9 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       aria-label="계층 보기"
     >
       <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
-        위·아래 순서는 진행 순서가 아닙니다. 실제 연결은 들여쓰기로만
-        표시되고, 같은 줄의 묶음은 영역별 분류일 뿐입니다. 프론트부터
-        시작해도 되고 백엔드부터 시작해도 됩니다.
+        ↓로 이어진 카드는 순서가 있습니다. 본문에{" "}
+        <code>이전 단계: #N</code>을 적으면 흐름으로 보여줍니다. 묶음
+        위·아래 순서는 진행 순서가 아닙니다.
       </p>
       {epics.map((issue) => (
         <EpicCard key={issue.url} issue={issue} />

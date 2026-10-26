@@ -14,6 +14,7 @@ use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
     DraftPullRequest, DraftPullRequestRequest, GithubProjectItem, GithubProjectListItem,
     GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page,
+    parse_depends_on,
 };
 use crate::project_board::model::ProjectOwnerScope;
 
@@ -188,6 +189,8 @@ struct GithubProjectItemContent {
     number: Option<u64>,
     title: Option<String>,
     url: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
     labels: Option<GithubProjectLabelConnection>,
     #[serde(rename = "subIssues", default)]
     sub_issues: Option<GithubSubIssuesConnection>,
@@ -420,7 +423,7 @@ fn project_permission_error() -> AppError {
 
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}} subIssues(first:20){{nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url body labels(first:20){{nodes{{name}}}} subIssues(first:20){{nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -968,6 +971,7 @@ impl GithubHttpClient {
                     status,
                     area,
                     kind,
+                    depends_on: parse_depends_on(content.body.as_deref()),
                     sub_issues,
                 });
             }

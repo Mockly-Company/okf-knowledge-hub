@@ -242,6 +242,7 @@ fn build_tree(
         status: map_status(item.status.as_deref()),
         children,
         kind: item.kind.clone(),
+        depends_on: item.depends_on,
     }
 }
 
@@ -417,6 +418,7 @@ mod tests {
             status: Some("In progress".to_owned()),
             area: Some("백엔드".to_owned()),
             kind: None,
+            depends_on: None,
             sub_issues: sub_urls
                 .iter()
                 .enumerate()

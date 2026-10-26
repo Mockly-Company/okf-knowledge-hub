@@ -101,6 +101,9 @@ pub struct BoardIssue {
     /// 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// 같은 부모 아래에서의 선행 이슈 번호. 본문 `이전 단계: #N`에서 온다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,8 +259,10 @@ mod tests {
                     status: BoardStatus::Backlog,
                     children: Vec::new(),
                     kind: Some("작업".to_owned()),
+                    depends_on: None,
                 }],
                 kind: Some("기능".to_owned()),
+                depends_on: None,
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
         };

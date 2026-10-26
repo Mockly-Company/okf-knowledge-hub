@@ -367,6 +367,127 @@ describe("ProjectPage", () => {
     ]);
   });
 
+  it("shows dependency chains as a flow with predecessor captions", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "에픽",
+              url: "https://example.test/issues/1",
+              layer: "unassigned",
+              status: "backlog",
+              children: [
+                {
+                  number: 2,
+                  title: "기획",
+                  url: "https://example.test/issues/2",
+                  layer: "planning",
+                  status: "in_progress",
+                  children: [],
+                  kind: "기능",
+                  dependsOn: null,
+                },
+                {
+                  number: 3,
+                  title: "디자인",
+                  url: "https://example.test/issues/3",
+                  layer: "design",
+                  status: "backlog",
+                  children: [],
+                  kind: "기능",
+                  dependsOn: 2,
+                },
+                {
+                  number: 4,
+                  title: "자유 작업",
+                  url: "https://example.test/issues/4",
+                  layer: "backend",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: null,
+                },
+              ],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+    const flow = within(tree).getByRole("region", {
+      name: "순서 있는 흐름",
+    });
+    const steps = within(flow).getAllByRole("article");
+    expect(steps.map((step) => step.getAttribute("aria-label"))).toEqual([
+      "스토리 #2 기획",
+      "스토리 #3 디자인",
+    ]);
+    expect(
+      within(flow).getByText("← #2 기획 다음에 진행"),
+    ).toBeInTheDocument();
+    expect(
+      within(flow).queryByRole("article", { name: "태스크 #4 자유 작업" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(tree).getByRole("article", { name: "태스크 #4 자유 작업" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders cyclic dependencies without hanging", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "에픽",
+              url: "https://example.test/issues/1",
+              layer: "unassigned",
+              status: "backlog",
+              children: [
+                {
+                  number: 2,
+                  title: "순환 A",
+                  url: "https://example.test/issues/2",
+                  layer: "planning",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: 3,
+                },
+                {
+                  number: 3,
+                  title: "순환 B",
+                  url: "https://example.test/issues/3",
+                  layer: "design",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: 2,
+                },
+              ],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+    expect(
+      within(tree).getByRole("article", { name: "태스크 #2 순환 A" }),
+    ).toBeInTheDocument();
+    expect(
+      within(tree).getByRole("article", { name: "태스크 #3 순환 B" }),
+    ).toBeInTheDocument();
+  });
+
   it("lets linked workspaces switch projects from the list", async () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.empty();
