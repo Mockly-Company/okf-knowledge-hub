@@ -409,6 +409,16 @@ describe("ProjectPage", () => {
                   kind: "작업",
                   dependsOn: null,
                 },
+                {
+                  number: 5,
+                  title: "기획 직후 작업",
+                  url: "https://example.test/issues/5",
+                  layer: "backend",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: 2,
+                },
               ],
               kind: null,
             },
@@ -426,10 +436,11 @@ describe("ProjectPage", () => {
     expect(steps.map((step) => step.getAttribute("aria-label"))).toEqual([
       "스토리 #2 기획",
       "스토리 #3 디자인",
+      "태스크 #5 기획 직후 작업",
     ]);
     expect(
-      within(flow).getByText("← #2 기획 다음에 진행"),
-    ).toBeInTheDocument();
+      within(flow).getAllByText("← #2 기획 다음에 진행"),
+    ).toHaveLength(2);
     expect(
       within(flow).queryByRole("article", { name: "태스크 #4 자유 작업" }),
     ).not.toBeInTheDocument();
