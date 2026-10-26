@@ -432,6 +432,13 @@ describe("ProjectPage", () => {
     const flow = within(tree).getByRole("region", {
       name: "순서 있는 흐름",
     });
+    const summary = within(flow).getByRole("list", { name: "흐름 요약" });
+    expect(summary.textContent).toContain("기획");
+    const chains = within(summary).getAllByRole("listitem");
+    expect(chains.map((chain) => chain.getAttribute("aria-label"))).toEqual([
+      "기획 다음 디자인",
+      "기획 다음 기획 직후 작업",
+    ]);
     const steps = within(flow).getAllByRole("article");
     expect(steps.map((step) => step.getAttribute("aria-label"))).toEqual([
       "스토리 #2 기획",

@@ -235,6 +235,39 @@ function FlowSteps({ steps }: { steps: FlowStep[] }) {
   if (steps.length === 0) {
     return null;
   }
+  const byNumber = new Map(steps.map((step) => [step.issue.number, step.issue]));
+  const predecessorNumbers = new Set<number>();
+  for (const step of steps) {
+    if (step.predecessor != null) {
+      predecessorNumbers.add(step.predecessor.number);
+    }
+  }
+  const paths: BoardIssue[][] = steps
+    .filter((step) => !predecessorNumbers.has(step.issue.number))
+    .map((leaf) => {
+      const path = [leaf.issue];
+      const seen = new Set<number>([leaf.issue.number]);
+      let current = leaf.issue;
+      while (
+        current.dependsOn != null &&
+        byNumber.has(current.dependsOn) &&
+        !seen.has(current.dependsOn)
+      ) {
+        const previous = byNumber.get(current.dependsOn);
+        if (!previous) {
+          break;
+        }
+        seen.add(previous.number);
+        path.unshift(previous);
+        current = previous;
+      }
+      return path;
+    })
+    .sort(
+      (left, right) =>
+        (left[0]?.number ?? 0) - (right[0]?.number ?? 0) ||
+        left.length - right.length,
+    );
   return (
     <section
       aria-label="순서 있는 흐름"
@@ -243,13 +276,41 @@ function FlowSteps({ steps }: { steps: FlowStep[] }) {
       <h2 className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--text-muted)]">
         순서 있는 흐름
       </h2>
+      <ol
+        aria-label="흐름 요약"
+        className="m-0 grid list-none gap-[var(--space-2)] p-0"
+      >
+        {paths.map((path) => (
+          <li
+            key={path.map((node) => node.number).join("-")}
+            aria-label={path.map((node) => node.title).join(" 다음 ")}
+            className="flex flex-wrap items-center gap-x-[var(--space-1)] gap-y-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] p-[var(--space-3)]"
+          >
+            {path.map((node, index) => (
+              <span key={node.url} className="flex items-center gap-x-[var(--space-1)]">
+                {index > 0 ? (
+                  <span
+                    aria-hidden="true"
+                    className="text-[length:1.1rem] font-bold text-[var(--color-primary-action)]"
+                  >
+                    →
+                  </span>
+                ) : null}
+                <span className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-[var(--space-3)] py-[var(--space-1)] text-[var(--font-meta-size)] font-[number:var(--font-weight-control)]">
+                  {node.title}
+                </span>
+              </span>
+            ))}
+          </li>
+        ))}
+      </ol>
       <ol className="m-0 grid list-none gap-[var(--space-1)] p-0">
         {steps.map((step, index) => (
           <li key={step.issue.url} className="grid gap-[var(--space-1)]">
             {index > 0 ? (
               <span
                 aria-hidden="true"
-                className="text-[var(--text-muted)]"
+                className="text-[length:1.1rem] font-bold text-[var(--color-primary-action)]"
               >
                 ↓
               </span>
