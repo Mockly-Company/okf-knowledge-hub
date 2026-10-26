@@ -9,3 +9,5 @@ playwright-report/
 src-tauri/target/
 src-tauri/gen/
 *.log
+mcp/tsconfig.tsbuildinfo
+mcp/dist/
