@@ -236,12 +236,18 @@ interface FlowTreeNode {
   children: FlowTreeNode[];
 }
 
-function FlowNodeCard({ issue }: { issue: BoardIssue }) {
+function FlowNodeCard({
+  issue,
+  isBranch,
+}: {
+  issue: BoardIssue;
+  isBranch: boolean;
+}) {
   const progress = epicProgress(issue);
   return (
     <article
       aria-label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
-      className="grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+      className={`grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)] ${isBranch ? "ring-1 ring-[var(--color-primary-action)]" : ""}`}
     >
       <div className="font-[number:var(--font-weight-control)]">
         {kindLabel(issue.kind)} #{issue.number} {issue.title}
@@ -267,33 +273,38 @@ function FlowNodeCard({ issue }: { issue: BoardIssue }) {
   );
 }
 
+function FlowElbow({ isLast }: { isLast: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="absolute bottom-0 left-0 top-0 w-[28px]"
+    >
+      <span
+        className={`absolute left-[13px] top-0 w-[2px] bg-[var(--color-primary-action)] ${isLast ? "h-[26px]" : "h-full"}`}
+      />
+      <span className="absolute left-[13px] top-[24px] h-[2px] w-[15px] bg-[var(--color-primary-action)]" />
+    </span>
+  );
+}
+
 function FlowTreeRow({
   node,
   isLast,
+  isRoot,
 }: {
   node: FlowTreeNode;
   isLast: boolean;
+  isRoot: boolean;
 }) {
-  const dot =
-    node.issue.status === "done"
-      ? "bg-[var(--color-primary-action)]"
-      : "bg-[var(--surface)]";
   return (
-    <li aria-label={node.issue.title} className="grid">
-      <div className="flex gap-x-[var(--space-3)]">
-        <div
-          aria-hidden="true"
-          className="flex w-[14px] shrink-0 flex-col items-center"
-        >
-          <span
-            className={`mt-[20px] h-[14px] w-[14px] shrink-0 rounded-full border-[3px] border-[var(--color-primary-action)] ${dot}`}
+    <li aria-label={node.issue.title} className="relative grid">
+      {isRoot ? null : <FlowElbow isLast={isLast} />}
+      <div className={isRoot ? undefined : "pl-[28px]"}>
+        <div className="grid gap-[var(--space-3)] pb-[var(--space-3)]">
+          <FlowNodeCard
+            issue={node.issue}
+            isBranch={node.children.length > 0}
           />
-          {isLast ? null : (
-            <span className="w-[2px] flex-1 bg-[var(--color-primary-action)]" />
-          )}
-        </div>
-        <div className="grid min-w-0 flex-1 gap-[var(--space-3)] pb-[var(--space-3)]">
-          <FlowNodeCard issue={node.issue} />
           {node.children.length > 0 ? (
             <ol className="m-0 grid list-none gap-0 p-0">
               {node.children.map((child, index) => (
@@ -301,6 +312,7 @@ function FlowTreeRow({
                   key={child.issue.url}
                   node={child}
                   isLast={index === node.children.length - 1}
+                  isRoot={false}
                 />
               ))}
             </ol>
@@ -388,6 +400,7 @@ function FlowSteps({ steps }: { steps: FlowStep[] }) {
             key={root.issue.url}
             node={root}
             isLast={index === forest.length - 1}
+            isRoot
           />
         ))}
       </ol>
