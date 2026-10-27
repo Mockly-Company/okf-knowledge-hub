@@ -945,8 +945,13 @@ impl GithubHttpClient {
                     area,
                 });
             }
+            // 페이지당 100개, 최대 5페이지까지만 읽는다(API 호출 상한).
+            // 커서가 없는데 다음 페이지가 있으면 무한 재요청이 되므로 중단한다.
             match connection.page_info {
-                Some(page) if page.has_next_page => after = page.end_cursor,
+                Some(page) if page.has_next_page => match page.end_cursor {
+                    Some(cursor) => after = Some(cursor),
+                    None => break,
+                },
                 _ => break,
             }
         }

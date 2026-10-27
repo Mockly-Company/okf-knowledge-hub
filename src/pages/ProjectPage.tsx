@@ -59,31 +59,40 @@ function BoardColumn({
       </header>
       <div className="grid gap-[var(--space-3)] pt-[var(--space-2)]">
         {issues.length === 0 ? (
-          <div className="grid min-h-24 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--border-strong)] bg-[var(--surface)] px-[var(--space-3)] text-center text-[var(--text-muted)]">
+          <div className="grid min-h-24 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border-strong)] bg-[var(--color-surface)] px-[var(--space-3)] text-center text-[var(--color-text-muted)]">
             연결된 Issue 없음
           </div>
         ) : (
           issues.map((issue) => (
             <article
               key={issue.number}
-              className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+              className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
               aria-label={`Issue #${issue.number} ${issue.title}`}
             >
-              <div className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+              <div className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
                 #{issue.number}
               </div>
-              <div>{issue.title}</div>
+              <div>
+                <a
+                  href={issue.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-inherit no-underline hover:underline"
+                >
+                  {issue.title}
+                </a>
+              </div>
             </article>
           ))
         )}
         {canAddIssue ? (
-          <div className="grid min-h-28 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)] text-center">
+          <div className="grid min-h-28 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)] text-center">
             <div className="grid justify-items-center gap-[var(--space-2)]">
               <Button type="button" variant="secondary" disabled>
                 <Plus aria-hidden="true" strokeWidth={1.75} />
                 새 Issue
               </Button>
-              <p className="m-0 text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--text-muted)]">
+              <p className="m-0 text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]">
                 GitHub Project와 Iteration을 연결하면 만들 수 있습니다.
               </p>
             </div>
@@ -237,7 +246,7 @@ export function ProjectPage({
         actions={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-[var(--space-3)]">
             <span
-              className="text-[var(--font-meta-size)] text-[var(--text-muted)]"
+              className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
               aria-live="polite"
             >
               {board?.fetchedAt
@@ -292,7 +301,7 @@ export function ProjectPage({
       </div>
 
       {board && board.skipped > 0 ? (
-        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
           {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
           Project의 영역 값과 상태 값을 확인해 주세요.
         </p>
@@ -310,10 +319,10 @@ export function ProjectPage({
       {isUnlinked ? (
         <section
           aria-label="GitHub Project 연결"
-          className="mt-[var(--space-4)] grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-4)]"
+          className="mt-[var(--space-4)] grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)]"
         >
           <h2 className="m-0">GitHub Project 연결</h2>
-          <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
+          <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
             Project 페이지 주소(URL)를 붙여넣으면 소유자·번호·Node
             ID를 자동으로 불러옵니다. 예:
             https://github.com/orgs/Mockly-Company/projects/1
@@ -355,7 +364,7 @@ export function ProjectPage({
               className="grid gap-[var(--space-2)]"
             >
               {projectOptions.length === 0 ? (
-                <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
                   볼 수 있는 Project가 없습니다.
                 </p>
               ) : null}
@@ -424,7 +433,7 @@ export function ProjectPage({
                 {layer.name}
               </h2>
               <section
-                className="overflow-x-auto rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--color-canvas)] p-[var(--space-4)]"
+                className="overflow-x-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-4)]"
                 aria-label={`${layer.name} 보드`}
                 tabIndex={0}
               >

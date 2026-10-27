@@ -12,7 +12,7 @@ use crate::workspace::model::{GithubProjectRef, GithubWorkspaceConfig, Workspace
 
 pub const PROJECT_BOARD_CACHE_DIR_NAME: &str = "project-board";
 
-fn workspace_project_required(services: &AppServices) -> CommandResult<std::path::PathBuf> {
+async fn workspace_project_required(services: &AppServices) -> CommandResult<std::path::PathBuf> {
     let settings = services.local_settings.clone();
     let current = settings
         .load_current()
@@ -22,7 +22,8 @@ fn workspace_project_required(services: &AppServices) -> CommandResult<std::path
         return Err(workspace_missing_error());
     }
     let repository_root = std::path::PathBuf::from(&current.path);
-    let source = std::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
+    let source = tokio::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
+        .await
         .map_err(|_| workspace_file_error(&current.path))?;
     let document =
         WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(&current.path))?;
@@ -68,22 +69,24 @@ pub async fn get_project_board(
     state: State<'_, AppServices>,
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
-    workspace_project_required(&state)?;
+    workspace_project_required(&state).await?;
     let cache_root = app
         .path()
         .app_data_dir()
         .map_err(|_| settings_unavailable_error())?
         .join(PROJECT_BOARD_CACHE_DIR_NAME);
-    std::fs::create_dir_all(&cache_root).map_err(|error| {
-        AppError::new(
-            ErrorCode::WorkspaceInvalid,
-            "저장된 Project 보드를 읽을 수 없습니다.",
-        )
-        .with_recovery(RecoveryAction::Retry)
-        .with_detail("path", cache_root.display().to_string())
-        .with_detail("reason", error.to_string())
-    })?;
-    load_cached_board(&cache_root)
+    tokio::fs::create_dir_all(&cache_root)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "저장된 Project 보드를 읽을 수 없습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry)
+            .with_detail("path", cache_root.display().to_string())
+            .with_detail("reason", error.to_string())
+        })?;
+    load_cached_board(&cache_root).await
 }
 
 fn service_unavailable() -> AppError {
@@ -110,8 +113,11 @@ fn current_repository_root(services: &AppServices) -> CommandResult<std::path::P
     Ok(std::path::PathBuf::from(&current.path))
 }
 
-fn read_workspace_document(repository_root: &std::path::Path) -> CommandResult<WorkspaceDocument> {
-    let source = std::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
+async fn read_workspace_document(
+    repository_root: &std::path::Path,
+) -> CommandResult<WorkspaceDocument> {
+    let source = tokio::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
+        .await
         .map_err(|_| workspace_file_error(repository_root))?;
     WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(repository_root))
 }
@@ -169,7 +175,7 @@ pub async fn link_github_project(
 ) -> CommandResult<()> {
     let _access = state.acquire_authenticated_command().await?;
     let repository_root = current_repository_root(&state)?;
-    let mut document = read_workspace_document(&repository_root)?;
+    let mut document = read_workspace_document(&repository_root).await?;
     let mut github = document
         .config
         .github
@@ -186,8 +192,9 @@ pub async fn link_github_project(
     });
     document.config.github = Some(github);
     let content = document.to_yaml()?;
-    std::fs::write(repository_root.join(".okf").join("workspace.yml"), content).map_err(
-        |error| {
+    tokio::fs::write(repository_root.join(".okf").join("workspace.yml"), content)
+        .await
+        .map_err(|error| {
             AppError::new(
                 ErrorCode::WorkspaceInvalid,
                 "워크스페이스 파일을 저장할 수 없습니다.",
@@ -195,8 +202,7 @@ pub async fn link_github_project(
             .with_recovery(RecoveryAction::OpenWorkspaceFile)
             .with_detail("path", repository_root.display().to_string())
             .with_detail("reason", error.to_string())
-        },
-    )?;
+        })?;
     Ok(())
 }
 
@@ -257,7 +263,10 @@ fn fetched_now() -> CommandResult<String> {
         })
 }
 
-fn save_cached_board(cache_root: &std::path::Path, board: &ProjectBoard) -> CommandResult<()> {
+async fn save_cached_board(
+    cache_root: &std::path::Path,
+    board: &ProjectBoard,
+) -> CommandResult<()> {
     let path = cache_root.join("board.json");
     let content = serde_json::to_string(board).map_err(|error| {
         AppError::new(
@@ -267,8 +276,8 @@ fn save_cached_board(cache_root: &std::path::Path, board: &ProjectBoard) -> Comm
         .with_recovery(RecoveryAction::Retry)
         .with_detail("reason", error.to_string())
     })?;
-    std::fs::create_dir_all(cache_root)
-        .and_then(|()| std::fs::write(&path, content))
+    tokio::fs::create_dir_all(cache_root)
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::WorkspaceInvalid,
@@ -277,7 +286,17 @@ fn save_cached_board(cache_root: &std::path::Path, board: &ProjectBoard) -> Comm
             .with_recovery(RecoveryAction::Retry)
             .with_detail("path", path.display().to_string())
             .with_detail("reason", error.to_string())
-        })
+        })?;
+    tokio::fs::write(&path, content).await.map_err(|error| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "Project 보드를 저장할 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("path", path.display().to_string())
+        .with_detail("reason", error.to_string())
+    })?;
+    Ok(())
 }
 
 /// 연결된 GitHub Project에서 Issue/PR을 가져와 보드 캐시를 갱신한다.
@@ -289,7 +308,7 @@ pub async fn sync_project_board(
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
     let repository_root = current_repository_root(&state)?;
-    let document = read_workspace_document(&repository_root)?;
+    let document = read_workspace_document(&repository_root).await?;
     let project = document
         .config
         .github
@@ -343,7 +362,7 @@ pub async fn sync_project_board(
         .app_data_dir()
         .map_err(|_| settings_unavailable_error())?
         .join(PROJECT_BOARD_CACHE_DIR_NAME);
-    save_cached_board(&cache_root, &board)?;
+    save_cached_board(&cache_root, &board).await?;
     Ok(board)
 }
 
