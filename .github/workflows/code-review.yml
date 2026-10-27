@@ -1,0 +1,36 @@
+name: Muse Spark 코드 리뷰
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, synchronize]
+
+concurrency:
+  group: muse-spark-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  muse-spark-review:
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: FRONT_END
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Muse Spark 리뷰
+        uses: actions/github-script@v7
+        env:
+          MODEL_API_KEY: ${{ secrets.MUSE_SPARK_API_KEY }}
+        with:
+          script: |
+            const review = require('./.github/scripts/muse-spark-review.cjs');
+            await review({ github, context, core });
