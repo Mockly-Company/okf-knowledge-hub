@@ -263,7 +263,7 @@ async function callModel(core, messages) {
       return parseModelJson(message);
     } catch (error) {
       if (attempt >= 3 || error.retryable === false) throw error;
-      core.warning(`Muse Spark 요청 재시도 (${attempt}/2): ${error.message}`);
+      core.warning(`Muse Spark 요청 재시도 (${attempt}/3): ${error.message}`);
       await new Promise(resolve => setTimeout(resolve, 5000 * attempt));
     }
   }
@@ -382,7 +382,10 @@ async function fetchThreads(github, owner, repo, number) {
   let after = null;
   do {
     const data = await github.graphql(THREADS_QUERY, { owner, repo, number, after });
-    const page = data.repository.pullRequest.reviewThreads;
+    const page = data.repository.pullRequest.reviewThreads ?? {
+      nodes: [],
+      pageInfo: { hasNextPage: false, endCursor: null },
+    };
     for (const thread of page.nodes) {
       const root = thread.comments.nodes[0];
       if (!root) continue;
@@ -503,6 +506,7 @@ async function run({ github, context, core }) {
 
   const newIds = new Set();
   for (const item of review.issues) {
+    if (item.path && !fullDiff.validLines[item.path]) continue;
     const issue = {
       id: `${SEVERITY[item.severity].prefix}${state.nextId[item.severity]++}`,
       ...item,
