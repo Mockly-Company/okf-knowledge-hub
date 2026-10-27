@@ -87,6 +87,7 @@ function commitExists(sha) {
 
 function parseDiff(diff) {
   const validLines = {};
+  const addedLines = {};
   const out = [];
   let path = null;
   let right = 0;
@@ -115,6 +116,7 @@ function parseDiff(diff) {
     }
     if (path && right > 0 && (line.startsWith('+') || line.startsWith(' '))) {
       (validLines[path] ??= new Set()).add(right);
+      if (line.startsWith('+')) (addedLines[path] ??= new Set()).add(right);
       out.push(`${String(right).padStart(6)} ${line}`);
       right++;
       continue;
@@ -126,7 +128,7 @@ function parseDiff(diff) {
   if (annotated.length > MAX_DIFF_CHARS) {
     annotated = `${annotated.slice(0, MAX_DIFF_CHARS)}\n... (diff가 너무 길어 이후 생략)`;
   }
-  return { annotated, validLines };
+  return { annotated, validLines, addedLines };
 }
 
 function parseState(body) {
@@ -379,9 +381,14 @@ function renderFitted(state, newIds) {
 
 async function fetchThreads(github, owner, repo, number) {
   const threads = new Map();
-  let after = null;
+  let after;
   do {
-    const data = await github.graphql(THREADS_QUERY, { owner, repo, number, after });
+    const data = await github.graphql(THREADS_QUERY, {
+      owner,
+      repo,
+      number,
+      after: after ?? undefined,
+    });
     const page = data.repository.pullRequest.reviewThreads ?? {
       nodes: [],
       pageInfo: { hasNextPage: false, endCursor: null },
@@ -514,7 +521,7 @@ async function run({ github, context, core }) {
       status: 'open',
     };
     newIds.add(issue.id);
-    if (issue.severity === 'must' && fullDiff.validLines[issue.path]?.has(issue.line)) {
+    if (issue.severity === 'must' && fullDiff.addedLines[issue.path]?.has(issue.line)) {
       try {
         const { data } = await github.rest.pulls.createReviewComment({
           owner,
