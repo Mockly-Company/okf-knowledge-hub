@@ -128,6 +128,14 @@ pub struct ResolvedGithubProject {
     pub scope: ProjectOwnerScope,
 }
 
+/// 연결 후보 Project 목록과 잘림 여부.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubProjectList {
+    pub projects: Vec<ResolvedGithubProject>,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectOwnerScope {

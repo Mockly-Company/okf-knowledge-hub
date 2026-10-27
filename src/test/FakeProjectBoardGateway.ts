@@ -2,6 +2,7 @@ import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardG
 import type {
   BoardIssue,
   ProjectBoard,
+  ProjectList,
   ResolvedGithubProject,
 } from "@/features/project-board/model";
 
@@ -23,6 +24,8 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
       scope: "organization",
     },
   ];
+
+  listTruncated = false;
 
   resolveResult: ResolvedGithubProject | Error = {
     id: "PVT_kwDOFake",
@@ -93,12 +96,12 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     return this.resolveResult;
   }
 
-  async listGithubProjects(): Promise<ResolvedGithubProject[]> {
+  async listGithubProjects(): Promise<ProjectList> {
     this.calls.push({ method: "listGithubProjects" });
     if (this.projectList instanceof Error) {
       throw this.projectList;
     }
-    return this.projectList;
+    return { projects: this.projectList, truncated: this.listTruncated };
   }
 
   async linkGithubProject(project: ResolvedGithubProject): Promise<void> {

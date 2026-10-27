@@ -1,8 +1,8 @@
 pub mod model;
 
 pub use model::{
-    parse_project_url, BoardIssue, BoardLayer, BoardStatus, ParsedProjectUrl, ProjectBoard,
-    ProjectOwnerScope, ResolvedGithubProject,
+    parse_project_url, BoardIssue, BoardLayer, BoardStatus, GithubProjectList, ParsedProjectUrl,
+    ProjectBoard, ProjectOwnerScope, ResolvedGithubProject,
 };
 
 use std::path::{Path, PathBuf};
@@ -23,7 +23,13 @@ fn sanitize_cache_key(raw: &str) -> String {
 }
 
 pub fn project_board_cache_file(cache_root: &Path, cache_key: &str) -> PathBuf {
-    cache_root.join(format!("board-{}.json", sanitize_cache_key(cache_key)))
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    cache_key.hash(&mut hasher);
+    let digest = format!("{:016x}", hasher.finish());
+    let stem: String = sanitize_cache_key(cache_key).chars().take(32).collect();
+    cache_root.join(format!("board-{stem}-{digest}.json"))
 }
 
 /// 캐시된 보드를 읽는다. 캐시가 없으면 빈 보드를 반환한다.
@@ -56,7 +62,7 @@ pub async fn load_cached_board(
 
 #[cfg(test)]
 mod tests {
-    use super::load_cached_board;
+    use super::{load_cached_board, project_board_cache_file};
     use crate::project_board::ProjectBoard;
 
     #[tokio::test]
@@ -72,7 +78,7 @@ mod tests {
     async fn cached_board_keeps_issues_and_fetch_time() {
         let dir = tempfile::tempdir().expect("temp dir");
         std::fs::write(
-            dir.path().join("board-test.json"),
+            project_board_cache_file(dir.path(), "test"),
             r#"{"issues": [], "fetchedAt": "2026-10-25T12:00:00+09:00"}"#,
         )
         .expect("cache file");
@@ -88,10 +94,23 @@ mod tests {
     #[tokio::test]
     async fn broken_cache_reports_a_readable_error() {
         let dir = tempfile::tempdir().expect("temp dir");
-        std::fs::write(dir.path().join("board-test.json"), "{oops").expect("cache file");
+        std::fs::write(project_board_cache_file(dir.path(), "test"), "{oops").expect("cache file");
         let error = load_cached_board(dir.path(), "test")
             .await
             .expect_err("broken cache");
         assert_eq!(error.message, "저장된 Project 보드를 읽을 수 없습니다.");
+    }
+
+    #[test]
+    fn cache_keys_with_same_sanitized_form_stay_distinct() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let left = project_board_cache_file(dir.path(), "PVT:1");
+        let right = project_board_cache_file(dir.path(), "PVT/1");
+        assert_ne!(left, right);
+        assert_eq!(
+            project_board_cache_file(dir.path(), "PVT:1"),
+            left,
+            "same key must map to the same file"
+        );
     }
 }

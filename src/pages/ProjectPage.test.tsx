@@ -210,7 +210,12 @@ describe("ProjectPage", () => {
     await waitFor(() =>
       expect(
         gateway.calls.filter((call) => call.method === "getProjectBoard"),
-      ).toHaveLength(2),
+      ).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+      ).toHaveLength(1),
     );
   });
 

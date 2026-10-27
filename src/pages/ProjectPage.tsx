@@ -136,6 +136,7 @@ export function ProjectPage({
   const [projectOptions, setProjectOptions] = useState<
     ResolvedGithubProject[] | null
   >(null);
+  const [isProjectListTruncated, setIsProjectListTruncated] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [isListing, setIsListing] = useState(false);
@@ -214,7 +215,9 @@ export function ProjectPage({
     setIsListing(true);
     setLinkError(null);
     try {
-      setProjectOptions(await gateway.listGithubProjects());
+      const list = await gateway.listGithubProjects();
+      setProjectOptions(list.projects);
+      setIsProjectListTruncated(list.truncated);
     } catch (error) {
       setLinkError(
         typeof error === "object" && error !== null && "message" in error
@@ -233,7 +236,7 @@ export function ProjectPage({
     setLinkError(null);
     try {
       await gateway.linkGithubProject(resolved);
-      await load();
+      await refresh();
     } catch (error) {
       setLinkError(
         typeof error === "object" && error !== null && "message" in error
@@ -243,7 +246,7 @@ export function ProjectPage({
     } finally {
       setIsLinking(false);
     }
-  }, [gateway, load, resolved]);
+  }, [gateway, refresh, resolved]);
 
   const visibleLayers = useMemo(
     () =>
@@ -397,6 +400,11 @@ export function ProjectPage({
               {projectOptions.length === 0 ? (
                 <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
                   볼 수 있는 Project가 없습니다.
+                </p>
+              ) : null}
+              {isProjectListTruncated ? (
+                <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+                  목록이 잘렸을 수 있습니다. (최대 100개까지 표시)
                 </p>
               ) : null}
               {projectOptions.map((option) => (

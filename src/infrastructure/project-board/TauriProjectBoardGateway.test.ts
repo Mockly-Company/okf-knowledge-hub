@@ -49,22 +49,26 @@ describe("TauriProjectBoardGateway", () => {
     ): Promise<T> => {
       expect(command).toBe("list_github_projects");
       expect(args).toBeUndefined();
-      return [
-        {
-          id: "PVT_kwDOExample",
-          owner: "Mockly-Company",
-          number: 1,
-          title: "Mockly",
-          scope: "organization",
-        },
-      ] as T;
+      return {
+        projects: [
+          {
+            id: "PVT_kwDOExample",
+            owner: "Mockly-Company",
+            number: 1,
+            title: "Mockly",
+            scope: "organization",
+          },
+        ],
+        truncated: true,
+      } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
 
-    const projects = await gateway.listGithubProjects();
+    const list = await gateway.listGithubProjects();
 
-    expect(projects).toHaveLength(1);
-    expect(projects[0].title).toBe("Mockly");
+    expect(list.projects).toHaveLength(1);
+    expect(list.projects[0].title).toBe("Mockly");
+    expect(list.truncated).toBe(true);
   });
 
   it("maps project resolve and link commands", async () => {

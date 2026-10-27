@@ -4,7 +4,7 @@ use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::github::model::GithubProjectSummary;
 use crate::project_board::{
     load_cached_board, parse_project_url, project_board_cache_file, BoardIssue, BoardLayer,
-    BoardStatus, ProjectBoard, ProjectOwnerScope, ResolvedGithubProject,
+    BoardStatus, GithubProjectList, ProjectBoard, ProjectOwnerScope, ResolvedGithubProject,
 };
 use crate::settings::model::CurrentWorkspaceStatus;
 use crate::state::AppServices;
@@ -128,24 +128,27 @@ async fn read_workspace_document(
 #[tauri::command]
 pub async fn list_github_projects(
     state: State<'_, AppServices>,
-) -> CommandResult<Vec<ResolvedGithubProject>> {
+) -> CommandResult<GithubProjectList> {
     let _access = state.acquire_authenticated_command().await?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
-    let items = github.list_projects().await?;
-    Ok(items
-        .into_iter()
-        .map(|item| ResolvedGithubProject {
-            id: item.id,
-            owner: item.owner,
-            number: item.number,
-            title: item.title,
-            scope: if item.organization {
-                ProjectOwnerScope::Organization
-            } else {
-                ProjectOwnerScope::User
-            },
-        })
-        .collect())
+    let (items, truncated) = github.list_projects().await?;
+    Ok(GithubProjectList {
+        projects: items
+            .into_iter()
+            .map(|item| ResolvedGithubProject {
+                id: item.id,
+                owner: item.owner,
+                number: item.number,
+                title: item.title,
+                scope: if item.organization {
+                    ProjectOwnerScope::Organization
+                } else {
+                    ProjectOwnerScope::User
+                },
+            })
+            .collect(),
+        truncated,
+    })
 }
 
 /// 붙여넣은 Project URL에서 owner/number를 읽고 GitHub에서 Node ID와 제목을 가져온다.
@@ -290,7 +293,20 @@ async fn save_cached_board(
             .with_detail("path", path.display().to_string())
             .with_detail("reason", error.to_string())
         })?;
-    tokio::fs::write(&path, content).await.map_err(|error| {
+    // 크래시 시 반만 쓰인 캐시가 남지 않도록 임시 파일에 쓰고 교체한다.
+    let tmp_path = path.with_extension("json.tmp");
+    tokio::fs::write(&tmp_path, content)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "Project 보드를 저장할 수 없습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry)
+            .with_detail("path", tmp_path.display().to_string())
+            .with_detail("reason", error.to_string())
+        })?;
+    tokio::fs::rename(&tmp_path, &path).await.map_err(|error| {
         AppError::new(
             ErrorCode::WorkspaceInvalid,
             "Project 보드를 저장할 수 없습니다.",

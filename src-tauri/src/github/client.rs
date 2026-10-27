@@ -107,6 +107,8 @@ struct GithubProjectsViewer {
 
 #[derive(Deserialize)]
 struct GithubOrganizationConnection {
+    #[serde(rename = "pageInfo", default)]
+    page_info: Option<GithubProjectPageInfo>,
     nodes: Vec<Option<GithubOrganizationNode>>,
 }
 
@@ -119,6 +121,8 @@ struct GithubOrganizationNode {
 
 #[derive(Deserialize)]
 struct GithubProjectV2Connection {
+    #[serde(rename = "pageInfo", default)]
+    page_info: Option<GithubProjectPageInfo>,
     nodes: Vec<Option<GithubProjectV2ListItem>>,
 }
 
@@ -389,7 +393,7 @@ fn map_project_lookup_errors(errors: &[GithubProjectLookupError]) -> AppError {
     let forbidden = errors.iter().any(|error| {
         error.kind.as_deref() == Some("FORBIDDEN")
             || error.message.contains("INSUFFICIENT_SCOPES")
-            || error.message.contains("scopes")
+            || error.message.contains("FORBIDDEN")
     });
     if forbidden {
         return project_permission_error();
@@ -960,11 +964,11 @@ impl GithubHttpClient {
 
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
     /// 조직 프로젝트와 개인 프로젝트를 합쳐서 반환한다.
-    pub async fn list_projects(&self) -> Result<Vec<GithubProjectListItem>, AppError> {
+    pub async fn list_projects(&self) -> Result<(Vec<GithubProjectListItem>, bool), AppError> {
         // 목록 조회용: 조직 최대 20개, 조직·개인별 Project 최대 100개까지만 읽는다
         // (연결 후보 선택용이라 페이지네이션하지 않는다). 닫힌 프로젝트는
-        // 후보에서 제외한다. 100개가 넘는 조직은 목록에 다 안 나올 수 있다.
-        let query = "query{viewer{login organizations(first:20){nodes{login projectsV2(first:100){nodes{id number title closed}}}} projectsV2(first:100){nodes{id number title closed}}}}";
+        // 후보에서 제외한다. 잘림 여부는 bool로 함께 반환한다.
+        let query = "query{viewer{login organizations(first:20){pageInfo{hasNextPage}nodes{login projectsV2(first:100){pageInfo{hasNextPage}nodes{id number title closed}}}} projectsV2(first:100){pageInfo{hasNextPage}nodes{id number title closed}}}}";
         let response = self
             .send(
                 HttpMethod::Post,
@@ -982,7 +986,21 @@ impl GithubHttpClient {
             return Err(map_project_lookup_errors(&errors));
         }
         let mut projects = Vec::new();
+        let mut truncated = false;
         if let Some(viewer) = body.data.and_then(|data| data.viewer) {
+            truncated = viewer
+                .organizations
+                .as_ref()
+                .and_then(|connection| connection.page_info.as_ref())
+                .map(|page| page.has_next_page)
+                .unwrap_or(false);
+            truncated = truncated
+                || viewer
+                    .projects_v2
+                    .as_ref()
+                    .and_then(|connection| connection.page_info.as_ref())
+                    .map(|page| page.has_next_page)
+                    .unwrap_or(false);
             for org in viewer
                 .organizations
                 .into_iter()
@@ -992,6 +1010,15 @@ impl GithubHttpClient {
                 let owner = org.login.unwrap_or_default();
                 if owner.is_empty() {
                     continue;
+                }
+                if org
+                    .projects_v2
+                    .as_ref()
+                    .and_then(|connection| connection.page_info.as_ref())
+                    .map(|page| page.has_next_page)
+                    .unwrap_or(false)
+                {
+                    truncated = true;
                 }
                 for node in org
                     .projects_v2
@@ -1014,7 +1041,16 @@ impl GithubHttpClient {
             }
             let login = viewer.login.unwrap_or_default();
             if login.is_empty() {
-                return Ok(projects);
+                return Ok((projects, truncated));
+            }
+            if viewer
+                .projects_v2
+                .as_ref()
+                .and_then(|connection| connection.page_info.as_ref())
+                .map(|page| page.has_next_page)
+                .unwrap_or(false)
+            {
+                truncated = true;
             }
             for node in viewer
                 .projects_v2
@@ -1035,7 +1071,7 @@ impl GithubHttpClient {
                 });
             }
         }
-        Ok(projects)
+        Ok((projects, truncated))
     }
 
     pub async fn create_draft_pull_request(
@@ -1574,6 +1610,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_lookup_unrelated_scope_mention_is_not_a_permission_error() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":null,"errors":[{"type":"INTERNAL","message":"telescope query exceeded scopes limit"}]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+    }
+
+    #[tokio::test]
     async fn project_lookup_missing_project_is_not_found() {
         let tokens = SequenceTokenProvider::default();
         let transport = RecordingTransport::with_responses(vec![response(
@@ -1699,8 +1752,9 @@ mod tests {
         )]);
         let service = client(tokens, transport.clone());
 
-        let projects = service.list_projects().await.unwrap();
+        let (projects, truncated) = service.list_projects().await.unwrap();
 
+        assert!(!truncated);
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].id, "PVT_kwDOExample");
         assert_eq!(projects[0].owner, "Mockly-Company");
@@ -1722,8 +1776,24 @@ mod tests {
         )]);
         let service = client(tokens, transport.clone());
 
-        let projects = service.list_projects().await.unwrap();
+        let (projects, truncated) = service.list_projects().await.unwrap();
 
+        assert!(!truncated);
+        assert!(projects.is_empty());
+    }
+
+    #[tokio::test]
+    async fn project_listing_reports_truncation() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":"hyeeun","organizations":{"nodes":[]},"projectsV2":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let (projects, truncated) = service.list_projects().await.unwrap();
+
+        assert!(truncated);
         assert!(projects.is_empty());
     }
 

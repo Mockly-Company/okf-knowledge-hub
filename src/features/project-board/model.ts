@@ -33,6 +33,12 @@ export interface ResolvedGithubProject {
   scope: "organization" | "user";
 }
 
+/** 연결 후보 Project 목록과 잘림 여부. */
+export interface ProjectList {
+  projects: ResolvedGithubProject[];
+  truncated: boolean;
+}
+
 export const BOARD_LAYERS: ReadonlyArray<{
   id: BoardLayer;
   name: string;
