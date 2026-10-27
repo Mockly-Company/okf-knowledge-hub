@@ -12,6 +12,8 @@ jobs:
   muse-spark-review:
     if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # REVIEW_RESOLVE_TOKEN 읽기용. required reviewers 등 protection rule을
+    # 추가하지 마세요. 추가하면 리뷰 실행 자체가 승인 대기됩니다.
     environment: FRONT_END
     timeout-minutes: 20
     permissions:
