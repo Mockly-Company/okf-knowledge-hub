@@ -42,7 +42,7 @@ pub async fn load_cached_board(
     match tokio::fs::read_to_string(&path).await {
         Ok(content) => serde_json::from_str(&content).map_err(|error| {
             AppError::new(
-                ErrorCode::WorkspaceInvalid,
+                ErrorCode::CacheUnavailable,
                 "저장된 Project 보드를 읽을 수 없습니다.",
             )
             .with_recovery(RecoveryAction::Retry)
@@ -51,7 +51,7 @@ pub async fn load_cached_board(
         }),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ProjectBoard::empty()),
         Err(error) => Err(AppError::new(
-            ErrorCode::WorkspaceInvalid,
+            ErrorCode::CacheUnavailable,
             "저장된 Project 보드를 읽을 수 없습니다.",
         )
         .with_recovery(RecoveryAction::Retry)

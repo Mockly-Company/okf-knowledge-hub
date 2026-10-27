@@ -81,7 +81,7 @@ pub async fn get_project_board(
         .await
         .map_err(|error| {
             AppError::new(
-                ErrorCode::WorkspaceInvalid,
+                ErrorCode::CacheUnavailable,
                 "저장된 Project 보드를 읽을 수 없습니다.",
             )
             .with_recovery(RecoveryAction::Retry)
@@ -180,6 +180,20 @@ pub async fn link_github_project(
 ) -> CommandResult<()> {
     let _access = state.acquire_authenticated_command().await?;
     let repository_root = current_repository_root(&state)?;
+    // 프론트가 보낸 값을 그대로 저장하지 않고 GitHub에 재조회해 검증한다.
+    // id·owner·number가 어긋나면 다른 프로젝트를 가리킬 수 있다.
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let verified = github
+        .resolve_project(project.scope, &project.owner, project.number)
+        .await?;
+    if verified.id != project.id
+        || verified.owner != project.owner
+        || verified.number != project.number
+    {
+        return Err(invalid_project_url_error(
+            "Project 정보가 일치하지 않습니다. 다시 불러와 연결해 주세요.".to_owned(),
+        ));
+    }
     let mut document = read_workspace_document(&repository_root).await?;
     let mut github = document
         .config
@@ -276,7 +290,7 @@ async fn save_cached_board(
     let path = project_board_cache_file(cache_root, cache_key);
     let content = serde_json::to_string(board).map_err(|error| {
         AppError::new(
-            ErrorCode::WorkspaceInvalid,
+            ErrorCode::CacheUnavailable,
             "Project 보드를 저장할 수 없습니다.",
         )
         .with_recovery(RecoveryAction::Retry)
@@ -286,7 +300,7 @@ async fn save_cached_board(
         .await
         .map_err(|error| {
             AppError::new(
-                ErrorCode::WorkspaceInvalid,
+                ErrorCode::CacheUnavailable,
                 "Project 보드를 저장할 수 없습니다.",
             )
             .with_recovery(RecoveryAction::Retry)
@@ -299,7 +313,7 @@ async fn save_cached_board(
         .await
         .map_err(|error| {
             AppError::new(
-                ErrorCode::WorkspaceInvalid,
+                ErrorCode::CacheUnavailable,
                 "Project 보드를 저장할 수 없습니다.",
             )
             .with_recovery(RecoveryAction::Retry)
@@ -308,7 +322,7 @@ async fn save_cached_board(
         })?;
     tokio::fs::rename(&tmp_path, &path).await.map_err(|error| {
         AppError::new(
-            ErrorCode::WorkspaceInvalid,
+            ErrorCode::CacheUnavailable,
             "Project 보드를 저장할 수 없습니다.",
         )
         .with_recovery(RecoveryAction::Retry)

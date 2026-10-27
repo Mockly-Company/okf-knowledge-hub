@@ -187,7 +187,9 @@ pub fn parse_project_url(raw: &str) -> Result<ParsedProjectUrl, String> {
                 .to_owned(),
         );
     }
-    let number = segments
+    let number_raw = segments.next().unwrap_or_default();
+    let number = number_raw
+        .split(['?', '#'])
         .next()
         .and_then(|part| part.parse::<u64>().ok())
         .filter(|number| *number > 0)
@@ -246,6 +248,9 @@ mod tests {
         assert!(parse_project_url("https://github.com/orgs/acme/projects/0").is_err());
         assert!(parse_project_url("http://github.com/orgs/acme/projects/1").is_err());
         assert!(parse_project_url("https://evil.com/orgs/acme/projects/1").is_err());
+        let with_query =
+            parse_project_url("https://github.com/orgs/acme/projects/7?from=home#tab").unwrap();
+        assert_eq!(with_query.number, 7);
     }
 
     #[test]
