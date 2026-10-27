@@ -42,6 +42,37 @@ const RESOLVE_MUTATION = `
     resolveReviewThread(input: { threadId: $id }) { thread { isResolved } }
   }`;
 
+// GITHUB_TOKEN으로는 resolveReviewThread가 거부되므로("Resource not accessible
+// by integration") 별도 PAT(RESOLVE_TOKEN)가 있을 때만 스레드를 닫는다.
+let resolveWarned = false;
+async function resolveThread(core, id) {
+  const token = process.env.RESOLVE_TOKEN;
+  if (!token) {
+    if (!resolveWarned) {
+      resolveWarned = true;
+      core.warning(
+        'RESOLVE_TOKEN 시크릿이 없어 review thread 자동 resolve를 건너뜁니다. 대화는 직접 닫아주세요.'
+      );
+    }
+    return;
+  }
+  const res = await fetch('https://api.github.com/graphql', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ query: RESOLVE_MUTATION, variables: { id } }),
+    signal: AbortSignal.timeout(30000),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.errors) {
+    throw new Error(
+      `스레드 resolve 실패: ${res.status} ${(json.errors ?? []).map(e => e.message).join('; ').slice(0, 300)}`
+    );
+  }
+}
+
 const SYSTEM_PROMPT = `아래 가이드라인에 따라 PR을 한국어로 리뷰하세요.
 
 반드시 다음 형태의 JSON 객체 하나만 출력하세요. 코드 펜스나 다른 텍스트는 쓰지 마세요.
@@ -505,7 +536,7 @@ async function run({ github, context, core }) {
           body: `✅ 해결됨${reason ? `: ${reason}` : ''}`,
         });
       }
-      await github.graphql(RESOLVE_MUTATION, { id: thread.id });
+      await resolveThread(core, thread.id);
     } catch (error) {
       core.warning(`${issue.id} 스레드 resolve 실패: ${error.message}`);
     }
