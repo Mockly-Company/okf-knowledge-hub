@@ -22,6 +22,9 @@ import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriPr
 
 type LayerFilter = "all" | BoardLayer;
 
+/** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
+const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
+
 const sharedGateway = new TauriProjectBoardGateway();
 
 function formatFetchedAt(iso: string): string {
@@ -30,7 +33,6 @@ function formatFetchedAt(iso: string): string {
     return iso;
   }
   return new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul",
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(time));
@@ -150,7 +152,7 @@ export function ProjectPage({
       if (
         typeof error === "object" &&
         error !== null &&
-        (error as { code?: string }).code === "workspace_invalid"
+        UNLINKED_CODES.has((error as { code?: string }).code ?? "")
       ) {
         setIsUnlinked(true);
         setBoard({ issues: [], fetchedAt: null, skipped: 0, truncated: false });

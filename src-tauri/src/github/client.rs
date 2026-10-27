@@ -961,9 +961,10 @@ impl GithubHttpClient {
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
     /// 조직 프로젝트와 개인 프로젝트를 합쳐서 반환한다.
     pub async fn list_projects(&self) -> Result<Vec<GithubProjectListItem>, AppError> {
-        // 목록 조회용: 조직·개인 모두 최대 20개까지만 읽는다(연결 후보 선택용이라
-        // 페이지네이션하지 않는다). 닫힌 프로젝트는 후보에서 제외한다.
-        let query = "query{viewer{login organizations(first:20){nodes{login projectsV2(first:20){nodes{id number title closed}}}} projectsV2(first:20){nodes{id number title closed}}}}";
+        // 목록 조회용: 조직 최대 20개, 조직·개인별 Project 최대 100개까지만 읽는다
+        // (연결 후보 선택용이라 페이지네이션하지 않는다). 닫힌 프로젝트는
+        // 후보에서 제외한다. 100개가 넘는 조직은 목록에 다 안 나올 수 있다.
+        let query = "query{viewer{login organizations(first:20){nodes{login projectsV2(first:100){nodes{id number title closed}}}} projectsV2(first:100){nodes{id number title closed}}}}";
         let response = self
             .send(
                 HttpMethod::Post,

@@ -86,7 +86,7 @@ describe("ProjectPage", () => {
       "datetime",
       "2026-10-25T12:00:00+09:00",
     );
-    expect(fetchedAt).toHaveTextContent("2026. 10. 25. 오후 12:00");
+    expect(fetchedAt).toHaveTextContent("2026. 10. 25.");
   });
 
   it("filters swimlanes by layer", async () => {
@@ -240,6 +240,16 @@ describe("ProjectPage", () => {
 
   it("hides swimlanes until a project is connected", async () => {
     const gateway = FakeProjectBoardGateway.unlinked();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    expect(
+      screen.queryByRole("region", { name: "기획 레이어" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("treats a missing workspace as unconnected", async () => {
+    const gateway = FakeProjectBoardGateway.missingWorkspace();
     render(<ProjectPage gateway={gateway} />);
 
     await screen.findByRole("textbox", { name: "Project URL" });

@@ -56,6 +56,15 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     return gateway;
   }
 
+  static missingWorkspace(): FakeProjectBoardGateway {
+    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
+    gateway.boardResult = {
+      code: "workspace_missing",
+      message: "워크스페이스가 연결되지 않았습니다.",
+    };
+    return gateway;
+  }
+
   async getProjectBoard(): Promise<ProjectBoard> {
     this.calls.push({ method: "getProjectBoard" });
     if (this.loadError) {
