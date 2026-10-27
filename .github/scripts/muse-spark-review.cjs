@@ -507,6 +507,7 @@ async function run({ github, context, core }) {
   const newIds = new Set();
   for (const item of review.issues) {
     if (item.path && !fullDiff.validLines[item.path]) continue;
+    if (item.line && !fullDiff.validLines[item.path]?.has(item.line)) item.line = null;
     const issue = {
       id: `${SEVERITY[item.severity].prefix}${state.nextId[item.severity]++}`,
       ...item,
