@@ -54,7 +54,7 @@ async function resolveThread(core, id) {
         'RESOLVE_TOKEN 시크릿이 없어 review thread 자동 resolve를 건너뜁니다. 대화는 직접 닫아주세요.'
       );
     }
-    return;
+    return false;
   }
   const res = await fetch('https://api.github.com/graphql', {
     method: 'POST',
@@ -71,6 +71,7 @@ async function resolveThread(core, id) {
       `스레드 resolve 실패: ${res.status} ${(json.errors ?? []).map(e => e.message).join('; ').slice(0, 300)}`
     );
   }
+  return true;
 }
 
 const SYSTEM_PROMPT = `아래 가이드라인에 따라 PR을 한국어로 리뷰하세요.
@@ -525,20 +526,34 @@ async function run({ github, context, core }) {
   for (const issue of state.issues) {
     const thread = threads.get(issue.commentId);
     if (issue.status !== 'resolved' || !thread || thread.isResolved) continue;
+    let closed = false;
     try {
-      if (resolvedNow.includes(issue)) {
-        const reason = issue.resolvedBy === 'manual' ? '요약 코멘트에서 수동 체크' : issue.note;
-        await github.rest.pulls.createReplyForReviewComment({
-          owner,
-          repo,
-          pull_number: pr.number,
-          comment_id: issue.commentId,
-          body: `✅ 해결됨${reason ? `: ${reason}` : ''}`,
-        });
-      }
-      await resolveThread(core, thread.id);
+      closed = await resolveThread(core, thread.id);
     } catch (error) {
       core.warning(`${issue.id} 스레드 resolve 실패: ${error.message}`);
+    }
+    if (!closed) {
+      // 스레드를 닫지 못했는데 resolved로 두면 다음 실행에서 재시도하지 않으므로,
+      // 모델이 해결했다고 본 항목만 open으로 되돌린다(사람이 직접 처리한 항목은 유지).
+      if (issue.resolvedBy !== 'manual') {
+        Object.assign(issue, { status: 'open' });
+        delete issue.resolvedBy;
+        delete issue.note;
+      }
+      continue;
+    }
+    if (!resolvedNow.includes(issue)) continue;
+    try {
+      const reason = issue.resolvedBy === 'manual' ? '요약 코멘트에서 수동 체크' : issue.note;
+      await github.rest.pulls.createReplyForReviewComment({
+        owner,
+        repo,
+        pull_number: pr.number,
+        comment_id: issue.commentId,
+        body: `✅ 해결됨${reason ? `: ${reason}` : ''}`,
+      });
+    } catch (error) {
+      core.warning(`${issue.id} 해결 답글 작성 실패: ${error.message}`);
     }
   }
 
