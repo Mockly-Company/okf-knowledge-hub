@@ -28,6 +28,8 @@ export interface ProjectBoard {
   issues: BoardIssue[];
   /** 마지막으로 GitHub에서 가져온 시각(RFC 3339). 아직 없으면 null. */
   fetchedAt: string | null;
+  /** 레이어/상태를 판별할 수 없어 제외한 항목 수. */
+  skipped: number;
 }
 
 export interface ResolvedGithubProject {

@@ -174,7 +174,7 @@ export function ProjectPage({
         (error as { code?: string }).code === "workspace_invalid"
       ) {
         setIsUnlinked(true);
-        setBoard({ issues: [], fetchedAt: null });
+        setBoard({ issues: [], fetchedAt: null, skipped: 0 });
       } else {
         setLoadError("Project 보드를 불러오지 못했습니다.");
       }
