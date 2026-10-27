@@ -961,6 +961,8 @@ impl GithubHttpClient {
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
     /// 조직 프로젝트와 개인 프로젝트를 합쳐서 반환한다.
     pub async fn list_projects(&self) -> Result<Vec<GithubProjectListItem>, AppError> {
+        // 목록 조회용: 조직·개인 모두 최대 20개까지만 읽는다(연결 후보 선택용이라
+        // 페이지네이션하지 않는다). 닫힌 프로젝트는 후보에서 제외한다.
         let query = "query{viewer{login organizations(first:20){nodes{login projectsV2(first:20){nodes{id number title closed}}}} projectsV2(first:20){nodes{id number title closed}}}}";
         let response = self
             .send(
@@ -996,6 +998,9 @@ impl GithubHttpClient {
                     .flat_map(|connection| connection.nodes)
                     .flatten()
                 {
+                    if node.closed {
+                        continue;
+                    }
                     projects.push(GithubProjectListItem {
                         id: node.id,
                         owner: owner.clone(),
@@ -1007,12 +1012,18 @@ impl GithubHttpClient {
                 }
             }
             let login = viewer.login.unwrap_or_default();
+            if login.is_empty() {
+                return Ok(projects);
+            }
             for node in viewer
                 .projects_v2
                 .into_iter()
                 .flat_map(|connection| connection.nodes)
                 .flatten()
             {
+                if node.closed {
+                    continue;
+                }
                 projects.push(GithubProjectListItem {
                     id: node.id,
                     owner: login.clone(),
@@ -1658,18 +1669,30 @@ mod tests {
 
         let projects = service.list_projects().await.unwrap();
 
-        assert_eq!(projects.len(), 2);
+        assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].id, "PVT_kwDOExample");
         assert_eq!(projects[0].owner, "Mockly-Company");
         assert_eq!(projects[0].number, 1);
         assert!(!projects[0].closed);
         assert!(projects[0].organization);
-        assert_eq!(projects[1].owner, "hyeeun");
-        assert!(!projects[1].organization);
         assert_eq!(
             transport.requests()[0].url,
             "https://api.example.test/graphql"
         );
+    }
+
+    #[tokio::test]
+    async fn project_listing_skips_empty_login_and_closed_projects() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":null,"organizations":{"nodes":[]},"projectsV2":{"nodes":[{"id":"PVT_kwDOUser","number":3,"title":"개인 정리","closed":false}]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let projects = service.list_projects().await.unwrap();
+
+        assert!(projects.is_empty());
     }
 
     #[tokio::test]

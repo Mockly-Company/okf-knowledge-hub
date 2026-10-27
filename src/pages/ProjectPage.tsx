@@ -65,7 +65,7 @@ function BoardColumn({
         ) : (
           issues.map((issue) => (
             <article
-              key={issue.number}
+              key={issue.url}
               className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
               aria-label={`Issue #${issue.number} ${issue.title}`}
             >
@@ -73,14 +73,18 @@ function BoardColumn({
                 #{issue.number}
               </div>
               <div>
-                <a
-                  href={issue.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-inherit no-underline hover:underline"
-                >
-                  {issue.title}
-                </a>
+                {issue.url.startsWith("https://") ? (
+                  <a
+                    href={issue.url}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="text-inherit no-underline hover:underline"
+                  >
+                    {issue.title}
+                  </a>
+                ) : (
+                  <span>{issue.title}</span>
+                )}
               </div>
             </article>
           ))
