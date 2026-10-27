@@ -81,9 +81,12 @@ describe("ProjectPage", () => {
       }),
     ).toBeInTheDocument();
 
-    expect(
-      screen.getByText("마지막 새로고침 2026-10-25T12:00:00+09:00"),
-    ).toBeInTheDocument();
+    const fetchedAt = screen.getByRole("time");
+    expect(fetchedAt).toHaveAttribute(
+      "datetime",
+      "2026-10-25T12:00:00+09:00",
+    );
+    expect(fetchedAt).toHaveTextContent("2026. 10. 25. 오후 12:00");
   });
 
   it("filters swimlanes by layer", async () => {
@@ -213,7 +216,7 @@ describe("ProjectPage", () => {
 
   it("notes items excluded for missing layer or status", async () => {
     const gateway = FakeProjectBoardGateway.empty();
-    gateway.board = { issues: [], fetchedAt: null, skipped: 3 };
+    gateway.board = { issues: [], fetchedAt: null, skipped: 3, truncated: false };
     render(<ProjectPage gateway={gateway} />);
 
     expect(
@@ -221,6 +224,28 @@ describe("ProjectPage", () => {
         "3개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다. Project의 영역 값과 상태 값을 확인해 주세요.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("notes truncation when the board hits the page cap", async () => {
+    const gateway = FakeProjectBoardGateway.empty();
+    gateway.board = { issues: [], fetchedAt: null, skipped: 0, truncated: true };
+    render(<ProjectPage gateway={gateway} />);
+
+    expect(
+      await screen.findByText(
+        "보드 항목이 많아 일부만 표시됩니다. (최대 500개)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("hides swimlanes until a project is connected", async () => {
+    const gateway = FakeProjectBoardGateway.unlinked();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    expect(
+      screen.queryByRole("region", { name: "기획 레이어" }),
+    ).not.toBeInTheDocument();
   });
 
   it("lets users pick a project from the fetched list", async () => {

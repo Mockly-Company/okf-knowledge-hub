@@ -10,14 +10,14 @@ describe("TauriProjectBoardGateway", () => {
       args?: Record<string, unknown>,
     ): Promise<T> => {
       calls.push({ command, args });
-      return { issues: [], fetchedAt: null, skipped: 0 } as T;
+      return { issues: [], fetchedAt: null, skipped: 0, truncated: false } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
 
     const board = await gateway.getProjectBoard();
 
     expect(calls).toEqual([{ command: "get_project_board", args: undefined }]);
-    expect(board).toEqual({ issues: [], fetchedAt: null, skipped: 0 });
+    expect(board).toEqual({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
   });
 
   it("maps the sync command", async () => {

@@ -3,8 +3,8 @@ use tauri::{AppHandle, Manager, State};
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::github::model::GithubProjectSummary;
 use crate::project_board::{
-    load_cached_board, parse_project_url, BoardIssue, BoardLayer, BoardStatus, ProjectBoard,
-    ProjectOwnerScope, ResolvedGithubProject,
+    load_cached_board, parse_project_url, project_board_cache_file, BoardIssue, BoardLayer,
+    BoardStatus, ProjectBoard, ProjectOwnerScope, ResolvedGithubProject,
 };
 use crate::settings::model::CurrentWorkspaceStatus;
 use crate::state::AppServices;
@@ -12,7 +12,9 @@ use crate::workspace::model::{GithubProjectRef, GithubWorkspaceConfig, Workspace
 
 pub const PROJECT_BOARD_CACHE_DIR_NAME: &str = "project-board";
 
-async fn workspace_project_required(services: &AppServices) -> CommandResult<std::path::PathBuf> {
+async fn workspace_project_required(
+    services: &AppServices,
+) -> CommandResult<(std::path::PathBuf, String)> {
     let settings = services.local_settings.clone();
     let current = settings
         .load_current()
@@ -28,7 +30,7 @@ async fn workspace_project_required(services: &AppServices) -> CommandResult<std
     let document =
         WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(&current.path))?;
     match document.config.github.and_then(|github| github.project) {
-        Some(_) => Ok(repository_root),
+        Some(project) => Ok((repository_root, project.id)),
         None => Err(AppError::new(
             ErrorCode::WorkspaceInvalid,
             "GitHub Project가 연결되지 않았습니다.",
@@ -69,7 +71,7 @@ pub async fn get_project_board(
     state: State<'_, AppServices>,
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
-    workspace_project_required(&state).await?;
+    let (_repository_root, project_key) = workspace_project_required(&state).await?;
     let cache_root = app
         .path()
         .app_data_dir()
@@ -86,7 +88,7 @@ pub async fn get_project_board(
             .with_detail("path", cache_root.display().to_string())
             .with_detail("reason", error.to_string())
         })?;
-    load_cached_board(&cache_root).await
+    load_cached_board(&cache_root, &project_key).await
 }
 
 fn service_unavailable() -> AppError {
@@ -265,9 +267,10 @@ fn fetched_now() -> CommandResult<String> {
 
 async fn save_cached_board(
     cache_root: &std::path::Path,
+    cache_key: &str,
     board: &ProjectBoard,
 ) -> CommandResult<()> {
-    let path = cache_root.join("board.json");
+    let path = project_board_cache_file(cache_root, cache_key);
     let content = serde_json::to_string(board).map_err(|error| {
         AppError::new(
             ErrorCode::WorkspaceInvalid,
@@ -323,7 +326,7 @@ pub async fn sync_project_board(
         })?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
     let (first_scope, fallback_scope) = resolve_project_scope(&project);
-    let items = match github
+    let (items, truncated) = match github
         .list_project_items(first_scope, &project.owner, project.number)
         .await
     {
@@ -356,13 +359,14 @@ pub async fn sync_project_board(
         issues,
         fetched_at: Some(fetched_now()?),
         skipped,
+        truncated,
     };
     let cache_root = app
         .path()
         .app_data_dir()
         .map_err(|_| settings_unavailable_error())?
         .join(PROJECT_BOARD_CACHE_DIR_NAME);
-    save_cached_board(&cache_root, &board).await?;
+    save_cached_board(&cache_root, &project.id, &board).await?;
     Ok(board)
 }
 

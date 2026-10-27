@@ -24,6 +24,18 @@ type LayerFilter = "all" | BoardLayer;
 
 const sharedGateway = new TauriProjectBoardGateway();
 
+function formatFetchedAt(iso: string): string {
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) {
+    return iso;
+  }
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul",
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(time));
+}
+
 function issuesFor(
   board: ProjectBoard | null,
   layer: BoardLayer,
@@ -141,7 +153,7 @@ export function ProjectPage({
         (error as { code?: string }).code === "workspace_invalid"
       ) {
         setIsUnlinked(true);
-        setBoard({ issues: [], fetchedAt: null, skipped: 0 });
+        setBoard({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
       } else {
         setLoadError("Project 보드를 불러오지 못했습니다.");
       }
@@ -253,9 +265,16 @@ export function ProjectPage({
               className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
               aria-live="polite"
             >
-              {board?.fetchedAt
-                ? `마지막 새로고침 ${board.fetchedAt}`
-                : "아직 불러오지 않음"}
+              {board?.fetchedAt ? (
+                <>
+                  마지막 새로고침{" "}
+                  <time dateTime={board.fetchedAt}>
+                    {formatFetchedAt(board.fetchedAt)}
+                  </time>
+                </>
+              ) : (
+                "아직 불러오지 않음"
+              )}
             </span>
             <Button
               type="button"
@@ -308,6 +327,12 @@ export function ProjectPage({
         <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
           {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
           Project의 영역 값과 상태 값을 확인해 주세요.
+        </p>
+      ) : null}
+
+      {board && board.truncated ? (
+        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+          보드 항목이 많아 일부만 표시됩니다. (최대 500개)
         </p>
       ) : null}
 
@@ -429,7 +454,7 @@ export function ProjectPage({
             </Button>
           </div>
         </div>
-      ) : (
+      ) : isUnlinked ? null : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
             <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">

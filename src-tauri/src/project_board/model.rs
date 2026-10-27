@@ -102,6 +102,9 @@ pub struct ProjectBoard {
     /// 레이어/상태를 판별할 수 없어 보드에서 제외한 항목 수.
     #[serde(default)]
     pub skipped: u32,
+    /// 페이지 상한(5페이지)에 걸려 일부 항목을 가져오지 못했는지 여부.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 impl ProjectBoard {
@@ -110,6 +113,7 @@ impl ProjectBoard {
             issues: Vec::new(),
             fetched_at: None,
             skipped: 0,
+            truncated: false,
         }
     }
 }
@@ -248,6 +252,7 @@ mod tests {
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
             skipped: 0,
+            truncated: false,
         };
         let json = serde_json::to_string(&board).expect("board serializes");
         assert!(json.contains("\"fetchedAt\""));

@@ -850,12 +850,13 @@ impl GithubHttpClient {
 
     /// 프로젝트 보드 동기화용으로 Issue/PR 목록을 가져온다.
     /// `Status` 단일 선택 필드 값과 `layer:*` 라벨을 함께 반환한다.
+    /// 두 번째 값은 페이지 상한(5페이지)에 걸려 잘렸는지 여부다.
     pub async fn list_project_items(
         &self,
         owner_scope: ProjectOwnerScope,
         owner: &str,
         number: u64,
-    ) -> Result<Vec<GithubProjectItem>, AppError> {
+    ) -> Result<(Vec<GithubProjectItem>, bool), AppError> {
         let root = match owner_scope {
             ProjectOwnerScope::Organization => "organization",
             ProjectOwnerScope::User => "user",
@@ -945,17 +946,16 @@ impl GithubHttpClient {
                     area,
                 });
             }
-            // 페이지당 100개, 최대 5페이지까지만 읽는다(API 호출 상한).
-            // 커서가 없는데 다음 페이지가 있으면 무한 재요청이 되므로 중단한다.
+            // 5페이지·500개를 넘기면 나머지는 버린다. 잘림은 호출자가 노출한다.
             match connection.page_info {
                 Some(page) if page.has_next_page => match page.end_cursor {
                     Some(cursor) => after = Some(cursor),
-                    None => break,
+                    None => return Ok((items, true)),
                 },
-                _ => break,
+                _ => return Ok((items, false)),
             }
         }
-        Ok(items)
+        Ok((items, true))
     }
 
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
@@ -1622,6 +1622,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn project_items_report_truncation_at_page_cap() {
+        let page = |cursor: &str| {
+            response(
+                200,
+                &format!(
+                    r#"{{"data":{{"organization":{{"projectV2":{{"items":{{"pageInfo":{{"hasNextPage":true,"endCursor":"{cursor}"}},"nodes":[{{"content":{{"__typename":"Issue","number":1,"title":"t","url":"https://example.test/issues/1","labels":{{"nodes":[]}}}},"fieldValues":{{"nodes":[]}}}}]}}}}}}}}}}"#,
+                ),
+            )
+        };
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![
+            page("c1"),
+            page("c2"),
+            page("c3"),
+            page("c4"),
+            page("c5"),
+        ]);
+        let service = client(tokens, transport.clone());
+
+        let (items, truncated) = service
+            .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert!(truncated);
+        assert_eq!(items.len(), 5);
+        assert_eq!(transport.requests().len(), 5);
+    }
+
+    #[tokio::test]
     async fn project_items_come_with_status_and_labels_across_pages() {
         let tokens = SequenceTokenProvider::default();
         let transport = RecordingTransport::with_responses(vec![
@@ -1636,11 +1666,12 @@ mod tests {
         ]);
         let service = client(tokens, transport.clone());
 
-        let items = service
+        let (items, truncated) = service
             .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
             .await
             .unwrap();
 
+        assert!(!truncated);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].number, 12);
         assert_eq!(items[0].labels, vec!["layer:planning"]);
