@@ -13,6 +13,9 @@ const EXCLUDES = [
   ':(exclude)**/*.snap',
   ':(exclude)**/*.zip',
   ':(exclude)**/dist/**',
+  ':(exclude)**/.env*',
+  ':(exclude)**/*.pem',
+  ':(exclude)**/*.key',
 ];
 const MAX_DIFF_CHARS = 600000;
 const MAX_COMMENT_CHARS = 65000;
@@ -294,7 +297,12 @@ async function callModel(core, messages) {
         ? content.map(part => part.text ?? '').join('')
         : content;
       if (!message) throw new Error('응답에 content가 없습니다.');
-      return parseModelJson(message);
+      try {
+        return parseModelJson(message);
+      } catch (e) {
+        e.retryable = false;
+        throw e;
+      }
     } catch (error) {
       if (attempt >= 3 || error.retryable === false) throw error;
       core.warning(`Muse Spark 요청 재시도 (${attempt}/3): ${error.message}`);
