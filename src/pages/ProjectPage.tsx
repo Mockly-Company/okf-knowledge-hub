@@ -6,7 +6,6 @@ import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
-import { Radio } from "@/components/ui/radio";
 import { Select } from "@/components/ui/select";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
@@ -27,15 +26,15 @@ type LayerFilter = "all" | BoardLayer;
 const sharedGateway = new TauriProjectBoardGateway();
 
 function issuesFor(
-  board: ProjectBoard | null,
+  flatIssues: BoardIssue[],
   layer: BoardLayer,
   status: BoardStatus,
   hideDone: boolean,
 ): BoardIssue[] {
-  if (!board) {
+  if (flatIssues.length === 0) {
     return [];
   }
-  return flattenIssues(board.issues).filter(
+  return flatIssues.filter(
     (issue) =>
       issue.layer === layer &&
       issue.status === status &&
@@ -52,7 +51,11 @@ function withoutDone(issues: BoardIssue[]): BoardIssue[] {
   for (const issue of issues) {
     const children = withoutDone(issue.children);
     if (issue.status === "done") {
-      kept.push(...children);
+      // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
+      // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.
+      if (children.length > 0) {
+        kept.push({ ...issue, children });
+      }
     } else {
       kept.push({ ...issue, children });
     }
@@ -151,6 +154,7 @@ export function ProjectPage({
   const [linkError, setLinkError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [isListing, setIsListing] = useState(false);
+  const [listFailed, setListFailed] = useState(false);
   const [isLinking, setIsLinking] = useState(false);
   const [filter, setFilter] = useState<LayerFilter>("all");
   const [view, setView] = useState<BoardView>("layers");
@@ -228,9 +232,11 @@ export function ProjectPage({
   const listProjects = useCallback(async () => {
     setIsListing(true);
     setLinkError(null);
+    setListFailed(false);
     try {
       setProjectOptions(await gateway.listGithubProjects());
     } catch (error) {
+      setListFailed(true);
       setLinkError(
         typeof error === "object" && error !== null && "message" in error
           ? String((error as { message: string }).message)
@@ -262,10 +268,10 @@ export function ProjectPage({
   }, [gateway, load, resolved]);
 
   useEffect(() => {
-    if (panelVisible && projectOptions === null && !isListing) {
+    if (panelVisible && projectOptions === null && !isListing && !listFailed) {
       void listProjects();
     }
-  }, [panelVisible, projectOptions, isListing, listProjects]);
+  }, [panelVisible, projectOptions, isListing, listFailed, listProjects]);
 
   const visibleLayers = useMemo(
     () =>
@@ -273,6 +279,10 @@ export function ProjectPage({
         (layer) => filter === "all" || layer.id === filter,
       ),
     [filter],
+  );
+  const flatIssues = useMemo(
+    () => flattenIssues(board?.issues ?? []),
+    [board?.issues],
   );
 
   return (
@@ -449,6 +459,19 @@ export function ProjectPage({
               ))}
             </Select>
           </FormField>
+          {listFailed ? (
+            <div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void listProjects()}
+                disabled={isListing}
+                loading={isListing}
+              >
+                목록 다시 불러오기
+              </Button>
+            </div>
+          ) : null}
           {resolved ? (
             <div className="grid gap-[var(--space-2)]">
               <p className="m-0">
@@ -505,7 +528,7 @@ export function ProjectPage({
                       key={id}
                       layerName={layer.name}
                       statusName={name}
-                      issues={issuesFor(board, layer.id, id, hideDone)}
+                      issues={issuesFor(flatIssues, layer.id, id, hideDone)}
                       canAddIssue={id === "backlog"}
                     />
                   ))}

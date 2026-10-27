@@ -220,26 +220,33 @@ fn is_project_not_found(error: &AppError) -> bool {
             .is_some_and(|reason| reason == "project_not_found")
 }
 
+/// 트리 재귀의 최대 깊이. GitHub 서브이슈 체인이 비정상적으로 깊어지거나
+/// 순환 참조가 `visiting` 검사를 우회해도 스택 오버플로를 막는다.
+const MAX_TREE_DEPTH: usize = 10;
+
 fn build_tree(
     item: &GithubProjectItem,
-    all: &[GithubProjectItem],
+    index: &std::collections::HashMap<&str, &GithubProjectItem>,
     visiting: &mut std::collections::HashSet<String>,
+    depth: usize,
 ) -> BoardIssue {
-    let children = item
-        .sub_issues
-        .iter()
-        .filter_map(|sub| {
-            if !visiting.insert(sub.url.clone()) {
-                return None;
-            }
-            let child = all
-                .iter()
-                .find(|candidate| candidate.url == sub.url)
-                .map(|found| build_tree(found, all, visiting));
-            visiting.remove(&sub.url);
-            child
-        })
-        .collect();
+    let children = if depth >= MAX_TREE_DEPTH {
+        Vec::new()
+    } else {
+        item.sub_issues
+            .iter()
+            .filter_map(|sub| {
+                if !visiting.insert(sub.url.clone()) {
+                    return None;
+                }
+                let child = index
+                    .get(sub.url.as_str())
+                    .map(|found| build_tree(found, index, visiting, depth + 1));
+                visiting.remove(&sub.url);
+                child
+            })
+            .collect()
+    };
     BoardIssue {
         number: item.number,
         title: item.title.clone(),
@@ -376,13 +383,15 @@ pub async fn sync_project_board(
             child_urls.insert(sub.url.clone());
         }
     }
+    let index: std::collections::HashMap<&str, &GithubProjectItem> =
+        items.iter().map(|item| (item.url.as_str(), item)).collect();
     for item in &items {
         if child_urls.contains(&item.url) {
             continue;
         }
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
-        issues.push(build_tree(item, &items, &mut visiting));
+        issues.push(build_tree(item, &index, &mut visiting, 0));
     }
     let board = ProjectBoard {
         issues,
@@ -450,17 +459,34 @@ mod tests {
 
     #[test]
     fn build_tree_nests_children_and_skips_cycles() {
-        let items = vec![
+        let items = [
             sample_item(1, "https://example.test/1", &["https://example.test/2"]),
             sample_item(2, "https://example.test/2", &["https://example.test/1"]),
         ];
+        let index: std::collections::HashMap<&str, &GithubProjectItem> =
+            items.iter().map(|item| (item.url.as_str(), item)).collect();
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(items[0].url.clone());
-        let root = build_tree(&items[0], &items, &mut visiting);
+        let root = build_tree(&items[0], &index, &mut visiting, 0);
 
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.children[0].number, 2);
         assert!(root.children[0].children.is_empty());
         assert_eq!(root.children[0].layer, BoardLayer::Backend);
+    }
+
+    #[test]
+    fn build_tree_stops_at_max_depth() {
+        let items = [
+            sample_item(1, "https://example.test/1", &["https://example.test/2"]),
+            sample_item(2, "https://example.test/2", &[]),
+        ];
+        let index: std::collections::HashMap<&str, &GithubProjectItem> =
+            items.iter().map(|item| (item.url.as_str(), item)).collect();
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(items[0].url.clone());
+        let root = build_tree(&items[0], &index, &mut visiting, super::MAX_TREE_DEPTH);
+
+        assert!(root.children.is_empty());
     }
 }

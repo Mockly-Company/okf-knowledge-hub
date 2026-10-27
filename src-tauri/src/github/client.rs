@@ -18,6 +18,10 @@ use crate::github::model::{
 use crate::project_board::model::ProjectOwnerScope;
 
 pub const INITIALIZATION_DRAFT_PR_BODY: &str = "## Summary\n\n- Initialize this repository as an OkHub knowledge workspace\n\n## Why\n\n- Share OKF documents and workspace metadata through Git\n\n## Changes\n\n- Add `.okf/workspace.yml`\n- Add the initial document and template roots when missing\n\n## Test Plan\n\n- Validate `.okf/workspace.yml` in OkHub\n- Confirm the configured document root stays inside the repository\n\n## Review Notes\n\n- This change contains workspace metadata only";
+/// Issue당 함께 가져오는 서브이슈 수. GitHub subIssues 커넥션은 별도 페이지네이션 없이
+/// 첫 페이지만 조회하므로, 이 값을 초과하는 자식은 보드에서 잘린다.
+/// 에픽 규모가 커지면 서브이슈 전용 후속 조회가 필요하다.
+pub const SUB_ISSUES_FIRST: usize = 20;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -420,7 +424,7 @@ fn project_permission_error() -> AppError {
 
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}} subIssues(first:20){{nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -854,6 +858,7 @@ impl GithubHttpClient {
 
     /// 프로젝트 보드 동기화용으로 Issue/PR 목록을 가져온다.
     /// `Status` 단일 선택 필드 값과 `layer:*` 라벨을 함께 반환한다.
+    /// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 가져오며 초과분은 잘린다.
     pub async fn list_project_items(
         &self,
         owner_scope: ProjectOwnerScope,

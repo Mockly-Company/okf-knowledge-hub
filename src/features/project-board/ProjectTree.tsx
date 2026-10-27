@@ -56,7 +56,9 @@ function TreeNode({
           </Button>
         ) : null}
         <span className="font-[number:var(--font-weight-control)]">
-          {role} #{issue.number} {issue.title}
+          <a href={issue.url} target="_blank" rel="noreferrer">
+            {role} #{issue.number} {issue.title}
+          </a>
         </span>
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
         <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
