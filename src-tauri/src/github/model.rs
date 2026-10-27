@@ -137,10 +137,7 @@ mod tests {
 
     #[test]
     fn reads_depends_on_line() {
-        assert_eq!(
-            parse_depends_on(Some("Depends-On: #12")),
-            Some(12)
-        );
+        assert_eq!(parse_depends_on(Some("Depends-On: #12")), Some(12));
         assert_eq!(parse_depends_on(Some("depends on: 7")), Some(7));
     }
 

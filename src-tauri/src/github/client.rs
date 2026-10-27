@@ -12,9 +12,9 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    DraftPullRequest, DraftPullRequestRequest, GithubProjectItem, GithubProjectListItem,
-    GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page,
-    parse_depends_on,
+    parse_depends_on, DraftPullRequest, DraftPullRequestRequest, GithubProjectItem,
+    GithubProjectListItem, GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary,
+    GithubSubIssue, Page,
 };
 use crate::project_board::model::ProjectOwnerScope;
 
