@@ -68,6 +68,35 @@ describe("TauriProjectBoardGateway", () => {
     expect(board.issues[0].kind).toBeNull();
   });
 
+  it("drops non-object entries from polluted caches", async () => {
+    const invoke = async <T>(): Promise<T> => {
+      return {
+        issues: [
+          null,
+          42,
+          {
+            number: 2,
+            title: "정상 이슈",
+            url: "https://example.test/issues/2",
+            layer: "planning",
+            status: "backlog",
+            children: [null, "oops"],
+            kind: null,
+          },
+        ],
+        fetchedAt: null,
+        skipped: 0,
+        truncated: false,
+      } as T;
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    const board = await gateway.getProjectBoard();
+
+    expect(board.issues).toHaveLength(1);
+    expect(board.issues[0].children).toEqual([]);
+  });
+
   it("maps the project list command", async () => {
     const invoke = async <T>(
       command: string,

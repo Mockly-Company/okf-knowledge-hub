@@ -18,6 +18,7 @@ import {
   type ResolvedGithubProject,
 } from "@/features/project-board/model";
 import { ProjectTree } from "@/features/project-board/ProjectTree";
+import { asIssueArray } from "@/features/project-board/boardUtils";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 type LayerFilter = "all" | BoardLayer;
@@ -27,11 +28,6 @@ const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 
 /** 프론트 재귀 깊이 상한. 백엔드 MAX_TREE_DEPTH(10)보다 여유 있게 둔다. */
 const MAX_WALK_DEPTH = 50;
-
-/** 오염된 캐시의 비배열 children은 빈 배열로 취급한다. */
-function asIssueArray(value: unknown): BoardIssue[] {
-  return Array.isArray(value) ? (value as BoardIssue[]) : [];
-}
 
 /** 레이어 뷰 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
 function* walkIssues(

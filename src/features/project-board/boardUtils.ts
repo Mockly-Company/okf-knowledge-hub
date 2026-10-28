@@ -1,0 +1,16 @@
+import type { BoardIssue } from "./model";
+
+/** 런타임에 외부 입력(캐시·API 응답)이 섞여 들어올 수 있어 형태를 검증한다. */
+export function isIssueLike(value: unknown): value is BoardIssue {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as BoardIssue).number === "number" &&
+    typeof (value as BoardIssue).url === "string"
+  );
+}
+
+/** 오염된 캐시의 비배열·비객체 원소는 버리고 유효한 이슈만 남긴다. */
+export function asIssueArray(value: unknown): BoardIssue[] {
+  return Array.isArray(value) ? value.filter(isIssueLike) : [];
+}
