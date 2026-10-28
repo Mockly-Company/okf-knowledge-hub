@@ -3,8 +3,9 @@ use tauri::{AppHandle, Manager, State};
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::github::model::GithubProjectSummary;
 use crate::project_board::{
-    load_cached_board, parse_project_url, project_board_cache_file, BoardIssue, BoardLayer,
-    BoardStatus, GithubProjectList, ProjectBoard, ProjectOwnerScope, ResolvedGithubProject,
+    load_cached_board, parse_project_url, project_board_cache_file, project_board_cache_tmp_file,
+    BoardIssue, BoardLayer, BoardStatus, GithubProjectList, ProjectBoard, ProjectOwnerScope,
+    ResolvedGithubProject,
 };
 use crate::settings::model::CurrentWorkspaceStatus;
 use crate::state::AppServices;
@@ -182,10 +183,24 @@ pub async fn link_github_project(
     let repository_root = current_repository_root(&state)?;
     // 프론트가 보낸 값을 그대로 저장하지 않고 GitHub에 재조회해 검증한다.
     // id·owner·number가 어긋나면 다른 프로젝트를 가리킬 수 있다.
+    // 스코프가 어긋났을 수 있어 반대 스코프로 한 번 더 시도한다.
     let github = state.github.clone().ok_or_else(service_unavailable)?;
-    let verified = github
+    let verified = match github
         .resolve_project(project.scope, &project.owner, project.number)
-        .await?;
+        .await
+    {
+        Ok(summary) => summary,
+        Err(error) if is_project_not_found(&error) => {
+            let fallback = match project.scope {
+                ProjectOwnerScope::Organization => ProjectOwnerScope::User,
+                ProjectOwnerScope::User => ProjectOwnerScope::Organization,
+            };
+            github
+                .resolve_project(fallback, &project.owner, project.number)
+                .await?
+        }
+        Err(error) => return Err(error),
+    };
     if verified.id != project.id
         || verified.owner != project.owner
         || verified.number != project.number
@@ -307,28 +322,29 @@ async fn save_cached_board(
             .with_detail("path", path.display().to_string())
             .with_detail("reason", error.to_string())
         })?;
-    // 크래시 시 반만 쓰인 캐시가 남지 않도록 임시 파일에 쓰고 교체한다.
-    let tmp_path = path.with_extension("json.tmp");
-    tokio::fs::write(&tmp_path, content)
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::CacheUnavailable,
-                "Project 보드를 저장할 수 없습니다.",
-            )
-            .with_recovery(RecoveryAction::Retry)
-            .with_detail("path", tmp_path.display().to_string())
-            .with_detail("reason", error.to_string())
-        })?;
-    tokio::fs::rename(&tmp_path, &path).await.map_err(|error| {
-        AppError::new(
+    // 크래시 시 반만 쓰인 캐시가 남지 않도록 고유한 임시 파일에 쓰고 교체한다.
+    // 실패한 tmp는 best-effort로 정리한다.
+    let tmp_path = project_board_cache_tmp_file(cache_root, cache_key);
+    if let Err(error) = tokio::fs::write(&tmp_path, content).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(AppError::new(
+            ErrorCode::CacheUnavailable,
+            "Project 보드를 저장할 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("path", tmp_path.display().to_string())
+        .with_detail("reason", error.to_string()));
+    }
+    if let Err(error) = tokio::fs::rename(&tmp_path, &path).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(AppError::new(
             ErrorCode::CacheUnavailable,
             "Project 보드를 저장할 수 없습니다.",
         )
         .with_recovery(RecoveryAction::Retry)
         .with_detail("path", path.display().to_string())
-        .with_detail("reason", error.to_string())
-    })?;
+        .with_detail("reason", error.to_string()));
+    }
     Ok(())
 }
 
@@ -356,7 +372,7 @@ pub async fn sync_project_board(
         })?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
     let (first_scope, fallback_scope) = resolve_project_scope(&project);
-    let (items, truncated) = match github
+    let (items, truncated, dropped) = match github
         .list_project_items(first_scope, &project.owner, project.number)
         .await
     {
@@ -369,7 +385,7 @@ pub async fn sync_project_board(
         Err(error) => return Err(error),
     };
     let mut issues = Vec::new();
-    let mut skipped = 0u32;
+    let mut skipped = dropped;
     for item in items {
         match (
             map_layer(item.area.as_deref(), &item.labels),

@@ -172,6 +172,14 @@ export function ProjectPage({
       setBoard(await gateway.syncProjectBoard());
       setIsUnlinked(false);
     } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        UNLINKED_CODES.has((error as { code?: string }).code ?? "")
+      ) {
+        setIsUnlinked(true);
+        return;
+      }
       const message =
         typeof error === "object" && error !== null && "message" in error
           ? String((error as { message: string }).message)
@@ -285,7 +293,7 @@ export function ProjectPage({
               type="button"
               variant="secondary"
               onClick={() => void refresh()}
-              disabled={isLoading || isSyncing}
+              disabled={isLoading || isSyncing || isUnlinked}
               loading={isSyncing}
             >
               <RefreshCw aria-hidden="true" strokeWidth={1.75} />
@@ -302,11 +310,13 @@ export function ProjectPage({
         }
       />
 
-      <div
-        className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
-        role="group"
-        aria-label="레이어 필터"
-      >
+      {isUnlinked || (isLoading && board === null) ? null : (
+        <>
+          <div
+            className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
+            role="group"
+            aria-label="레이어 필터"
+          >
         <Button
           type="button"
           variant={filter === "all" ? "primary" : "secondary"}
@@ -340,6 +350,8 @@ export function ProjectPage({
           보드 항목이 많아 일부만 표시됩니다. (최대 500개)
         </p>
       ) : null}
+        </>
+      )}
 
       <div className="mt-[var(--space-6)] flex justify-end">
         <TabsList aria-label="Project 보기">

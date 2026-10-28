@@ -22,14 +22,40 @@ fn sanitize_cache_key(raw: &str) -> String {
         .collect()
 }
 
-pub fn project_board_cache_file(cache_root: &Path, cache_key: &str) -> PathBuf {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    cache_key.hash(&mut hasher);
-    let digest = format!("{:016x}", hasher.finish());
+/// FNV-1a 64비트: 표준 라이브러리만으로 안정적인 해시.
+/// `DefaultHasher`는 버전 간 안정성을 보장하지 않아 영속 파일명에 쓸 수 없다.
+fn stable_hash64(raw: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in raw.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn cache_file_parts(cache_key: &str) -> (String, String) {
     let stem: String = sanitize_cache_key(cache_key).chars().take(32).collect();
+    let digest = format!("{:016x}", stable_hash64(cache_key));
+    (stem, digest)
+}
+
+pub fn project_board_cache_file(cache_root: &Path, cache_key: &str) -> PathBuf {
+    let (stem, digest) = cache_file_parts(cache_key);
     cache_root.join(format!("board-{stem}-{digest}.json"))
+}
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static CACHE_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 동시 sync가 같은 tmp를 덮어쓰지 않도록 pid·일련번호를 붙인 임시 경로.
+pub fn project_board_cache_tmp_file(cache_root: &Path, cache_key: &str) -> PathBuf {
+    let (stem, digest) = cache_file_parts(cache_key);
+    let seq = CACHE_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    cache_root.join(format!(
+        "board-{stem}-{digest}.{}.{seq}.tmp",
+        std::process::id()
+    ))
 }
 
 /// 캐시된 보드를 읽는다. 캐시가 없으면 빈 보드를 반환한다.

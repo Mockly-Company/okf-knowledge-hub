@@ -420,7 +420,7 @@ fn project_permission_error() -> AppError {
 
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:20){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:20){{nodes{{name}}}}}}}}fieldValues(first:20){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:100){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -854,18 +854,20 @@ impl GithubHttpClient {
 
     /// 프로젝트 보드 동기화용으로 Issue/PR 목록을 가져온다.
     /// `Status` 단일 선택 필드 값과 `layer:*` 라벨을 함께 반환한다.
-    /// 두 번째 값은 페이지 상한(5페이지)에 걸려 잘렸는지 여부다.
+    /// 두 번째 값은 페이지 상한(5페이지)에 걸려 잘렸는지, 세 번째 값은
+    /// 내용이 없어 버린 항목 수다.
     pub async fn list_project_items(
         &self,
         owner_scope: ProjectOwnerScope,
         owner: &str,
         number: u64,
-    ) -> Result<(Vec<GithubProjectItem>, bool), AppError> {
+    ) -> Result<(Vec<GithubProjectItem>, bool, u32), AppError> {
         let root = match owner_scope {
             ProjectOwnerScope::Organization => "organization",
             ProjectOwnerScope::User => "user",
         };
         let mut items = Vec::new();
+        let mut dropped = 0u32;
         let mut after: Option<String> = None;
         for _ in 0..5 {
             let mut variables = serde_json::Map::new();
@@ -905,14 +907,17 @@ impl GithubHttpClient {
             .ok_or_else(project_not_found_error)?;
             for node in connection.nodes.into_iter().flatten() {
                 let Some(content) = node.content else {
+                    dropped += 1;
                     continue;
                 };
                 if content.kind != "Issue" && content.kind != "PullRequest" {
+                    dropped += 1;
                     continue;
                 }
                 let (Some(number), Some(title), Some(url)) =
                     (content.number, content.title, content.url)
                 else {
+                    dropped += 1;
                     continue;
                 };
                 let labels = content
@@ -950,16 +955,16 @@ impl GithubHttpClient {
                     area,
                 });
             }
-            // 5페이지·500개를 넘기면 나머지는 버린다. 잘림은 호출자가 노출한다.
+            // 5페이지·500개를 넘기면 나머지는 버린다. 잘림·누락 수는 호출자가 노출한다.
             match connection.page_info {
                 Some(page) if page.has_next_page => match page.end_cursor {
                     Some(cursor) => after = Some(cursor),
-                    None => return Ok((items, true)),
+                    None => return Ok((items, true, dropped)),
                 },
-                _ => return Ok((items, false)),
+                _ => return Ok((items, false, dropped)),
             }
         }
-        Ok((items, true))
+        Ok((items, true, dropped))
     }
 
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
@@ -1695,12 +1700,13 @@ mod tests {
         ]);
         let service = client(tokens, transport.clone());
 
-        let (items, truncated) = service
+        let (items, truncated, dropped) = service
             .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
             .await
             .unwrap();
 
         assert!(truncated);
+        assert_eq!(dropped, 0);
         assert_eq!(items.len(), 5);
         assert_eq!(transport.requests().len(), 5);
     }
@@ -1720,12 +1726,13 @@ mod tests {
         ]);
         let service = client(tokens, transport.clone());
 
-        let (items, truncated) = service
+        let (items, truncated, dropped) = service
             .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
             .await
             .unwrap();
 
         assert!(!truncated);
+        assert_eq!(dropped, 1);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].number, 12);
         assert_eq!(items[0].labels, vec!["layer:planning"]);

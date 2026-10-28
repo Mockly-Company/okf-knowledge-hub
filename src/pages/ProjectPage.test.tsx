@@ -251,6 +251,9 @@ describe("ProjectPage", () => {
     expect(
       screen.queryByRole("region", { name: "기획 레이어" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "레이어 필터" }),
+    ).not.toBeInTheDocument();
   });
 
   it("treats a missing workspace as unconnected", async () => {
@@ -260,6 +263,9 @@ describe("ProjectPage", () => {
     await screen.findByRole("textbox", { name: "Project URL" });
     expect(
       screen.queryByRole("region", { name: "기획 레이어" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "레이어 필터" }),
     ).not.toBeInTheDocument();
   });
 
