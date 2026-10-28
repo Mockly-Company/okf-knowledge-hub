@@ -8,20 +8,28 @@ import {
   type BoardIssue,
 } from "@/features/project-board/model";
 
+/** Project `타입` 필드 값 → 트리 역할명. 모르는 값은 원값을 그대로 보여준다. */
+const KIND_ROLE: Record<string, string> = {
+  기능: "스토리",
+  작업: "태스크",
+};
+
 function roleLabel(depth: number, kind: string | null): string {
   if (depth === 0) {
     return "에픽";
   }
   if (depth === 1) {
-    if (kind === "기능") {
-      return "스토리";
-    }
-    if (kind === "작업") {
-      return "태스크";
+    if (kind) {
+      return KIND_ROLE[kind] ?? kind;
     }
     return "하위 항목";
   }
   return "서브태스크";
+}
+
+/** 외부 URL은 https만 링크로 렌더한다. 캐시 변조·오염 응답의 javascript: 스킴 차단. */
+function isSafeIssueUrl(url: string): boolean {
+  return url.startsWith("https://");
 }
 
 function TreeNode({
@@ -56,9 +64,15 @@ function TreeNode({
           </Button>
         ) : null}
         <span className="font-[number:var(--font-weight-control)]">
-          <a href={issue.url} target="_blank" rel="noreferrer">
-            {role} #{issue.number} {issue.title}
-          </a>
+          {isSafeIssueUrl(issue.url) ? (
+            <a href={issue.url} target="_blank" rel="noreferrer noopener">
+              {role} #{issue.number} {issue.title}
+            </a>
+          ) : (
+            <span>
+              {role} #{issue.number} {issue.title}
+            </span>
+          )}
         </span>
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
         <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
@@ -72,7 +86,7 @@ function TreeNode({
           aria-label={`${issue.title} 하위 항목`}
         >
           {issue.children.map((child) => (
-            <li key={child.url}>
+            <li key={`${child.number}-${child.url}`}>
               <TreeNode issue={child} depth={depth + 1} />
             </li>
           ))}
@@ -96,7 +110,7 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
     >
       {issues.map((issue) => (
         <div
-          key={issue.url}
+          key={`${issue.number}-${issue.url}`}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
         >
           <TreeNode issue={issue} depth={0} />

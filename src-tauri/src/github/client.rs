@@ -210,6 +210,7 @@ struct GithubProjectItemContent {
 
 #[derive(Deserialize)]
 struct GithubSubIssuesConnection {
+    #[serde(default)]
     nodes: Vec<Option<GithubSubIssueNode>>,
 }
 

@@ -306,41 +306,49 @@ fn is_project_not_found(error: &AppError) -> bool {
 /// 순환 참조가 `visiting` 검사를 우회해도 스택 오버플로를 막는다.
 const MAX_TREE_DEPTH: usize = 10;
 
+/// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 가져오며 초과분은 잘린다.
+/// GitHub subIssues 커넥션에 별도 페이지네이션을 하지 않으므로
+/// 자식이 20개를 넘는 에픽은 초과분이 보드에서 빠진다.
 fn build_tree(
     item: &GithubProjectItem,
     index: &std::collections::HashMap<&str, &GithubProjectItem>,
     visiting: &mut std::collections::HashSet<String>,
     depth: usize,
-) -> Option<BoardIssue> {
-    // 레이어를 판별할 수 없으면 미지정 레인에 모아 triage 대상으로 둔다.
-    let layer = map_layer(item.area.as_deref(), &item.labels).unwrap_or(BoardLayer::Unassigned);
-    let status = item.status.as_deref().and_then(map_status)?;
-    let children = if depth >= MAX_TREE_DEPTH {
+    skipped: &mut u32,
+) -> Vec<BoardIssue> {
+    let mut child_issues = if depth >= MAX_TREE_DEPTH {
         Vec::new()
     } else {
-        item.sub_issues
-            .iter()
-            .filter_map(|sub| {
-                if !visiting.insert(sub.url.clone()) {
-                    return None;
-                }
-                let child = index
-                    .get(sub.url.as_str())
-                    .and_then(|found| build_tree(found, index, visiting, depth + 1));
-                visiting.remove(&sub.url);
-                child
-            })
-            .collect()
+        let mut collected = Vec::new();
+        for sub in &item.sub_issues {
+            if !visiting.insert(sub.url.clone()) {
+                continue;
+            }
+            if let Some(found) = index.get(sub.url.as_str()) {
+                collected.extend(build_tree(found, index, visiting, depth + 1, skipped));
+            }
+            visiting.remove(&sub.url);
+        }
+        collected
     };
-    Some(BoardIssue {
-        number: item.number,
-        title: item.title.clone(),
-        url: item.url.clone(),
-        layer,
-        status,
-        children,
-        kind: item.kind.clone(),
-    })
+    // 레이어를 판별할 수 없으면 미지정 레인에 모아 triage 대상으로 둔다.
+    let layer = map_layer(item.area.as_deref(), &item.labels).unwrap_or(BoardLayer::Unassigned);
+    match item.status.as_deref().and_then(map_status) {
+        Some(status) => vec![BoardIssue {
+            number: item.number,
+            title: item.title.clone(),
+            url: item.url.clone(),
+            layer,
+            status,
+            children: std::mem::take(&mut child_issues),
+            kind: item.kind.clone(),
+        }],
+        // 상태를 판별할 수 없는 부모는 버리되 유효한 자식은 루트로 승격해 살린다.
+        None => {
+            *skipped += 1;
+            child_issues
+        }
+    }
 }
 
 fn map_status(status: &str) -> Option<BoardStatus> {
@@ -494,10 +502,7 @@ pub async fn sync_project_board(
         }
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
-        match build_tree(item, &index, &mut visiting, 0) {
-            Some(issue) => issues.push(issue),
-            None => skipped += 1,
-        }
+        issues.extend(build_tree(item, &index, &mut visiting, 0, &mut skipped));
     }
     let board = ProjectBoard {
         issues,
@@ -579,8 +584,11 @@ mod tests {
             items.iter().map(|item| (item.url.as_str(), item)).collect();
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(items[0].url.clone());
-        let root =
-            build_tree(&items[0], &index, &mut visiting, 0).expect("valid sample maps to a node");
+        let mut skipped = 0u32;
+        let roots = build_tree(&items[0], &index, &mut visiting, 0, &mut skipped);
+        assert_eq!(skipped, 0);
+        assert_eq!(roots.len(), 1);
+        let root = &roots[0];
 
         assert_eq!(root.children.len(), 1);
         assert_eq!(root.children[0].number, 2);
@@ -598,9 +606,35 @@ mod tests {
             items.iter().map(|item| (item.url.as_str(), item)).collect();
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(items[0].url.clone());
-        let root = build_tree(&items[0], &index, &mut visiting, super::MAX_TREE_DEPTH)
-            .expect("valid sample maps to a node");
+        let mut skipped = 0u32;
+        let roots = build_tree(
+            &items[0],
+            &index,
+            &mut visiting,
+            super::MAX_TREE_DEPTH,
+            &mut skipped,
+        );
+        assert_eq!(roots.len(), 1);
+        let root = &roots[0];
 
         assert!(root.children.is_empty());
+    }
+
+    #[test]
+    fn build_tree_promotes_children_of_unmappable_parent() {
+        let mut orphan = sample_item(2, "https://example.test/2", &[]);
+        orphan.status = Some("In progress".to_owned());
+        let mut parent = sample_item(1, "https://example.test/1", &["https://example.test/2"]);
+        parent.status = Some("알 수 없음".to_owned());
+        let items = [parent, orphan];
+        let index: std::collections::HashMap<&str, &GithubProjectItem> =
+            items.iter().map(|item| (item.url.as_str(), item)).collect();
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(items[0].url.clone());
+        let mut skipped = 0u32;
+        let roots = build_tree(&items[0], &index, &mut visiting, 0, &mut skipped);
+        assert_eq!(skipped, 1);
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].number, 2);
     }
 }

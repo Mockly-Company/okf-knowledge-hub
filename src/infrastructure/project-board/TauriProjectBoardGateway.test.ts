@@ -43,6 +43,31 @@ describe("TauriProjectBoardGateway", () => {
     expect(board.fetchedAt).toBe("2026-10-25T12:00:00+09:00");
   });
 
+  it("normalizes issues missing kind or children from old caches", async () => {
+    const invoke = async <T>(): Promise<T> => {
+      return {
+        issues: [
+          {
+            number: 1,
+            title: "구 캐시 이슈",
+            url: "https://example.test/issues/1",
+            layer: "planning",
+            status: "backlog",
+          },
+        ],
+        fetchedAt: null,
+        skipped: 0,
+        truncated: false,
+      } as T;
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    const board = await gateway.getProjectBoard();
+
+    expect(board.issues[0].children).toEqual([]);
+    expect(board.issues[0].kind).toBeNull();
+  });
+
   it("maps the project list command", async () => {
     const invoke = async <T>(
       command: string,

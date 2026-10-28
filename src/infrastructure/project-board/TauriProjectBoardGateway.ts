@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import type {
+  BoardIssue,
   ProjectBoard,
   ProjectList,
   ResolvedGithubProject,
@@ -19,11 +20,15 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
   ) {}
 
   getProjectBoard(): Promise<ProjectBoard> {
-    return this.invokeCommand<ProjectBoard>("get_project_board");
+    return this.invokeCommand<ProjectBoard>("get_project_board").then(
+      normalizeBoard,
+    );
   }
 
   syncProjectBoard(): Promise<ProjectBoard> {
-    return this.invokeCommand<ProjectBoard>("sync_project_board");
+    return this.invokeCommand<ProjectBoard>("sync_project_board").then(
+      normalizeBoard,
+    );
   }
 
   resolveGithubProject(url: string): Promise<ResolvedGithubProject> {
@@ -39,4 +44,23 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
   linkGithubProject(project: ResolvedGithubProject): Promise<void> {
     return this.invokeCommand<void>("link_github_project", { project });
   }
+}
+
+/**
+ * 백엔드는 kind=None이면 필드를 생략하므로 구 캐시에는 kind/children이
+ * 없을 수 있다. 프론트 타입(kind: string|null, children: 필수)에 맞춰 정규화한다.
+ */
+function normalizeIssue(issue: BoardIssue): BoardIssue {
+  return {
+    ...issue,
+    children: (issue.children ?? []).map(normalizeIssue),
+    kind: issue.kind ?? null,
+  };
+}
+
+function normalizeBoard(board: ProjectBoard): ProjectBoard {
+  return {
+    ...board,
+    issues: (board.issues ?? []).map(normalizeIssue),
+  };
 }

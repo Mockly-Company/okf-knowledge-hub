@@ -25,6 +25,14 @@ type LayerFilter = "all" | BoardLayer;
 /** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
 const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 
+/** 레이어 뷰 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
+function* walkIssues(issues: BoardIssue[]): Generator<BoardIssue> {
+  for (const issue of issues) {
+    yield issue;
+    yield* walkIssues(issue.children ?? []);
+  }
+}
+
 function withoutDone(issues: BoardIssue[]): BoardIssue[] {
   const kept: BoardIssue[] = [];
   for (const issue of issues) {
@@ -302,7 +310,7 @@ export function ProjectPage({
   );
   const groupedIssues = useMemo(() => {
     const grouped = new Map<string, BoardIssue[]>();
-    for (const issue of board?.issues ?? []) {
+    for (const issue of walkIssues(board?.issues ?? [])) {
       if (hideDone && issue.status === "done") {
         continue;
       }
@@ -316,6 +324,13 @@ export function ProjectPage({
     }
     return grouped;
   }, [board, hideDone]);
+
+  // 트리 펼침 상태(useState)가 무관한 렌더에 리셋되지 않도록 메모한다.
+  const treeIssues = useMemo(
+    () =>
+      hideDone && board ? withoutDone(board.issues) : (board?.issues ?? []),
+    [hideDone, board],
+  );
 
   return (
     <section
@@ -584,9 +599,7 @@ export function ProjectPage({
           ) : null}
           {!isUnlinked && board ? (
             view === "tree" ? (
-              <ProjectTree
-                issues={hideDone ? withoutDone(board.issues) : board.issues}
-              />
+              <ProjectTree issues={treeIssues} />
             ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
