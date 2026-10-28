@@ -502,13 +502,41 @@ pub async fn sync_project_board(
     }
     let index: std::collections::HashMap<&str, &GithubProjectItem> =
         items.iter().map(|item| (item.url.as_str(), item)).collect();
+    fn record_rendered(issue: &BoardIssue, rendered: &mut std::collections::HashSet<String>) {
+        if !rendered.insert(issue.url.clone()) {
+            return;
+        }
+        for child in &issue.children {
+            record_rendered(child, rendered);
+        }
+    }
+    let mut rendered = std::collections::HashSet::new();
     for item in &items {
         if child_urls.contains(&item.url) {
             continue;
         }
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
-        issues.extend(build_tree(item, &index, &mut visiting, 0, &mut skipped));
+        let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
+        for tree in &trees {
+            record_rendered(tree, &mut rendered);
+        }
+        issues.extend(trees);
+    }
+    // 순환 참조(A↔B)면 양쪽 모두 자식 집합에 있어 루트 판별에서 제외된다.
+    // 미렌더 노트를 루트로 승격해 통째로 사라지지 않게 한다.
+    // build_tree 내부 visiting 검사가 순환을 끊으므로 무한 재귀는 없다.
+    for item in &items {
+        if rendered.contains(&item.url) {
+            continue;
+        }
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(item.url.clone());
+        let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
+        for tree in &trees {
+            record_rendered(tree, &mut rendered);
+        }
+        issues.extend(trees);
     }
     let board = ProjectBoard {
         issues,
@@ -642,5 +670,50 @@ mod tests {
         assert_eq!(skipped, 1);
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].number, 2);
+    }
+
+    #[test]
+    fn sync_renders_cyclic_items_instead_of_dropping_them() {
+        // A<->B 순환: 양쪽 모두 자식 집합에 포함돼 루트 판별에서 제외된다.
+        // 폴백 렌더가 둘 중 하나를 루트로 승격해야 통째로 사라지지 않는다.
+        let items = [
+            sample_item(1, "https://example.test/1", &["https://example.test/2"]),
+            sample_item(2, "https://example.test/2", &["https://example.test/1"]),
+        ];
+        let mut child_urls = std::collections::HashSet::new();
+        for item in &items {
+            for sub in &item.sub_issues {
+                child_urls.insert(sub.url.clone());
+            }
+        }
+        let index: std::collections::HashMap<&str, &GithubProjectItem> =
+            items.iter().map(|item| (item.url.as_str(), item)).collect();
+        let mut issues = Vec::new();
+        let mut skipped = 0u32;
+        // 1차 루트 판별에서는 A<->B 모두 제외돼 issues가 비어 있다.
+        for item in &items {
+            if child_urls.contains(&item.url) {
+                continue;
+            }
+            let mut visiting = std::collections::HashSet::new();
+            visiting.insert(item.url.clone());
+            issues.extend(build_tree(item, &index, &mut visiting, 0, &mut skipped));
+        }
+        assert!(issues.is_empty());
+        // 폴백 렌더(미렌더 노드 승격) 후에는 통째로 사라지지 않는다.
+        let mut rendered = std::collections::HashSet::<String>::new();
+        for item in &items {
+            if rendered.contains(&item.url) {
+                continue;
+            }
+            let mut visiting = std::collections::HashSet::new();
+            visiting.insert(item.url.clone());
+            let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
+            for tree in &trees {
+                rendered.insert(tree.url.clone());
+            }
+            issues.extend(trees);
+        }
+        assert!(!issues.is_empty());
     }
 }

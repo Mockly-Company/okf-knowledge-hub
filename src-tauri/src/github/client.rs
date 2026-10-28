@@ -438,6 +438,11 @@ fn project_permission_error() -> AppError {
     .with_recovery(RecoveryAction::ReinstallGithubApp)
 }
 
+/// 보드 동기화용 projectV2.items 조회문.
+/// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 조회하고 초과분은 잘린다
+/// (subIssues 커넥션에 별도 페이지네이션을 하지 않음).
+/// 잘림은 `subIssues.pageInfo.hasNextPage`로 감지해 보드 `truncated`에 합친다.
+/// 에픽 규모가 커지면 서브이슈 전용 후속 조회가 필요하다.
 fn project_items_query(root: &str) -> String {
     format!(
         "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage}}nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",

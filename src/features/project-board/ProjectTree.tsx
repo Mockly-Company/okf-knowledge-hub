@@ -8,6 +8,9 @@ import {
   type BoardIssue,
 } from "@/features/project-board/model";
 
+/** TreeNode 재귀 깊이 상한. ProjectPage의 MAX_WALK_DEPTH(50)와 맞춘다. */
+const MAX_TREE_NODE_DEPTH = 50;
+
 /** Project `타입` 필드 값 → 트리 역할명. 모르는 값은 원값을 그대로 보여준다. */
 const KIND_ROLE: Record<string, string> = {
   기능: "스토리",
@@ -46,6 +49,26 @@ function TreeNode({
 }) {
   const [open, setOpen] = useState(depth === 0);
   const role = roleLabel(depth, issue.kind);
+  // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 깊게 중첩될 수 있다.
+  const children = issue.children ?? [];
+  if (depth > MAX_TREE_NODE_DEPTH) {
+    return (
+      <article
+        aria-label={`${role} #${issue.number} ${issue.title}`}
+        className="grid gap-[var(--space-2)]"
+      >
+        <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+          <span className="font-[number:var(--font-weight-control)]">
+            {role} #{issue.number} {issue.title}
+          </span>
+          <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+          <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+            하위 항목 생략됨
+          </span>
+        </div>
+      </article>
+    );
+  }
 
   return (
     <article
@@ -53,7 +76,7 @@ function TreeNode({
       className="grid gap-[var(--space-2)]"
     >
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-        {issue.children.length > 0 ? (
+        {children.length > 0 ? (
           <Button
             type="button"
             variant="ghost"
@@ -85,12 +108,12 @@ function TreeNode({
           {issue.kind ? ` · ${issue.kind}` : null}
         </span>
       </div>
-      {open && issue.children.length > 0 ? (
+      {open && children.length > 0 ? (
         <ul
           className="m-0 grid list-none gap-[var(--space-2)] pl-[var(--space-6)]"
           aria-label={`${issue.title} 하위 항목`}
         >
-          {issue.children.map((child) => (
+          {children.map((child) => (
             <li key={`${child.number}-${child.url}`}>
               <TreeNode issue={child} depth={depth + 1} />
             </li>
