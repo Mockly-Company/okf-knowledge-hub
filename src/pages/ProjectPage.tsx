@@ -490,7 +490,7 @@ export function ProjectPage({
       </div>
       {board && board.truncated ? (
         <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-          보드 항목이 많아 일부만 표시됩니다. (최대 500개)
+          보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈 최대 20개)
         </p>
       ) : null}
         </>

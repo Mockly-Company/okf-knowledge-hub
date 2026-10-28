@@ -517,6 +517,8 @@ pub async fn sync_project_board(
         if child_urls.contains(&item.url) {
             continue;
         }
+        // 매핑 실패로 트리가 비어도 처리済み로 표시해 폴백 중복을 막는다.
+        rendered.insert(item.url.clone());
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
         let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
@@ -532,6 +534,7 @@ pub async fn sync_project_board(
         if rendered.contains(&item.url) {
             continue;
         }
+        rendered.insert(item.url.clone());
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
         let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
