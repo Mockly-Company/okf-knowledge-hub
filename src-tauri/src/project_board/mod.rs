@@ -65,15 +65,14 @@ pub async fn load_cached_board(
 ) -> Result<ProjectBoard, AppError> {
     let path = project_board_cache_file(cache_root, cache_key);
     match tokio::fs::read_to_string(&path).await {
-        Ok(content) => serde_json::from_str(&content).map_err(|error| {
-            AppError::new(
-                ErrorCode::CacheUnavailable,
-                "저장된 Project 보드를 읽을 수 없습니다.",
-            )
-            .with_recovery(RecoveryAction::Retry)
-            .with_detail("path", path.display().to_string())
-            .with_detail("reason", error.to_string())
-        }),
+        // 손상된 캐시는 비어있는 것으로 취급한다. 다음 sync에서 덮어쓴다.
+        Ok(content) => Ok(serde_json::from_str(&content).unwrap_or_else(|_| {
+            eprintln!(
+                "warning: ignoring broken project board cache at {}",
+                path.display()
+            );
+            ProjectBoard::empty()
+        })),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(ProjectBoard::empty()),
         Err(error) => Err(AppError::new(
             ErrorCode::CacheUnavailable,
@@ -117,13 +116,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn broken_cache_reports_a_readable_error() {
+    async fn broken_cache_reads_as_an_empty_board() {
         let dir = tempfile::tempdir().expect("temp dir");
         std::fs::write(project_board_cache_file(dir.path(), "test"), "{oops").expect("cache file");
-        let error = load_cached_board(dir.path(), "test")
+        let board = load_cached_board(dir.path(), "test")
             .await
-            .expect_err("broken cache");
-        assert_eq!(error.message, "저장된 Project 보드를 읽을 수 없습니다.");
+            .expect("broken cache reads as empty");
+        assert_eq!(board, ProjectBoard::empty());
     }
 
     #[test]

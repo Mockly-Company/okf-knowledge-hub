@@ -164,7 +164,7 @@ pub fn parse_project_url(raw: &str) -> Result<ParsedProjectUrl, String> {
         .next()
         .filter(|host| !host.is_empty())
         .ok_or_else(|| "GitHub Project URL 형식을 확인해 주세요.".to_owned())?;
-    if host != "github.com" {
+    if !host.eq_ignore_ascii_case("github.com") {
         return Err("GitHub Project URL 형식을 확인해 주세요.".to_owned());
     }
     let scope_segment = segments.next().unwrap_or_default();
@@ -247,6 +247,8 @@ mod tests {
         assert!(parse_project_url("https://github.com/Mockly-Company/mockly-mobile").is_err());
         assert!(parse_project_url("not a url").is_err());
         assert!(parse_project_url("https://github.com/orgs/acme/projects/0").is_err());
+        let mixed_case = parse_project_url("https://GitHub.com/orgs/acme/projects/7").unwrap();
+        assert_eq!(mixed_case.number, 7);
         assert!(parse_project_url("http://github.com/orgs/acme/projects/1").is_err());
         assert!(parse_project_url("https://evil.com/orgs/acme/projects/1").is_err());
         let with_query =
