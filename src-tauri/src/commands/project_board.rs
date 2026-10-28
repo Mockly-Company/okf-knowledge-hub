@@ -334,9 +334,13 @@ fn map_area(area: &str) -> Option<BoardLayer> {
 }
 
 fn fetched_now() -> Option<String> {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .ok()
+    match time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339) {
+        Ok(formatted) => Some(formatted),
+        Err(error) => {
+            eprintln!("warning: failed to format fetched_at timestamp: {error:?}");
+            None
+        }
+    }
 }
 
 async fn save_cached_board(

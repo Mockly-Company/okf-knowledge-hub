@@ -844,7 +844,7 @@ impl GithubHttpClient {
         }
         let body: GithubProjectLookupResponse =
             deserialize_response(response).map_err(|_| github_unavailable_error())?;
-        if let Some(errors) = body.errors {
+        if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
             return Err(map_project_lookup_errors(&errors));
         }
         let project = match owner_scope {
@@ -904,7 +904,7 @@ impl GithubHttpClient {
             }
             let body: GithubProjectItemsResponse =
                 deserialize_response(response).map_err(|_| github_unavailable_error())?;
-            if let Some(errors) = body.errors {
+            if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
                 return Err(map_project_lookup_errors(&errors));
             }
             let connection = match owner_scope {
@@ -998,7 +998,7 @@ impl GithubHttpClient {
         }
         let body: GithubProjectsListResponse =
             deserialize_response(response).map_err(|_| github_unavailable_error())?;
-        if let Some(errors) = body.errors {
+        if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
             return Err(map_project_lookup_errors(&errors));
         }
         let mut projects = Vec::new();
@@ -1644,6 +1644,23 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode::GithubUnavailable);
+    }
+
+    #[tokio::test]
+    async fn project_lookup_empty_errors_do_not_fail() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"organization":{"projectV2":{"id":"PVT_kwDOExample","number":1,"title":"Mockly"}}},"errors":[]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let summary = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.id, "PVT_kwDOExample");
     }
 
     #[tokio::test]
