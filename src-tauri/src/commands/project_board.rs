@@ -48,6 +48,28 @@ async fn load_linked_project(
     }
 }
 
+/// 연결용 로더. 프로젝트 연결 여부와 무관하게 workspace 문서까지만 읽는다.
+/// 첫 연결 시에는 project가 없는 것이 정상이므로 여기서 요구하지 않는다.
+async fn load_workspace_document(
+    services: &AppServices,
+) -> CommandResult<(std::path::PathBuf, WorkspaceDocument)> {
+    let settings = services.local_settings.clone();
+    let current = settings
+        .load_current()
+        .map_err(|_| settings_unavailable_error())?
+        .ok_or_else(workspace_missing_error)?;
+    if current.status != CurrentWorkspaceStatus::Connected {
+        return Err(workspace_missing_error());
+    }
+    let repository_root = std::path::PathBuf::from(&current.path);
+    let source = tokio::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
+        .await
+        .map_err(|_| workspace_file_error(&current.path))?;
+    let document =
+        WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(&current.path))?;
+    Ok((repository_root, document))
+}
+
 fn settings_unavailable_error() -> AppError {
     AppError::new(
         ErrorCode::LocalSettingsUnavailable,
@@ -158,7 +180,7 @@ pub async fn link_github_project(
     project: ResolvedGithubProject,
 ) -> CommandResult<()> {
     let _access = state.acquire_authenticated_command().await?;
-    let (repository_root, _stored_project, mut document) = load_linked_project(&state).await?;
+    let (repository_root, mut document) = load_workspace_document(&state).await?;
     // 프론트가 보낸 값을 그대로 저장하지 않고 GitHub에 재조회해 검증한다.
     // id·owner·number가 어긋나면 다른 프로젝트를 가리킬 수 있다.
     // 스코프가 어긋났을 수 있어 반대 스코프로 한 번 더 시도한다.
@@ -330,7 +352,7 @@ async fn save_cached_board(
                 "Project 보드를 저장할 수 없습니다.",
             )
             .with_recovery(RecoveryAction::Retry)
-            .with_detail("path", path.display().to_string())
+            .with_detail("path", cache_root.display().to_string())
             .with_detail("reason", error.to_string())
         })?;
     // 크래시 시 반만 쓰인 캐시가 남지 않도록 고유한 임시 파일에 쓰고 교체한다.

@@ -62,6 +62,8 @@ function formatFetchedAt(iso: string): string {
   }).format(new Date(time));
 }
 
+const EMPTY_ISSUES: BoardIssue[] = [];
+
 function BoardColumn({
   layerName,
   statusName,
@@ -510,7 +512,7 @@ export function ProjectPage({
                       key={id}
                       layerName={layer.name}
                       statusName={name}
-                      issues={groupedIssues.get(`${layer.id}:${id}`) ?? []}
+                      issues={groupedIssues.get(`${layer.id}:${id}`) ?? EMPTY_ISSUES}
                       canAddIssue={id === "backlog"}
                     />
                   ))}
