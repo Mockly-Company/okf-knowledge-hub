@@ -75,23 +75,13 @@ pub async fn get_project_board(
     state: State<'_, AppServices>,
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
+    // 읽기는 파일시스템을 변경하지 않는다. 디렉터리는 저장 시점에 만든다.
     let (_repository_root, project_key) = workspace_project_required(&state).await?;
     let cache_root = app
         .path()
         .app_data_dir()
         .map_err(|_| settings_unavailable_error())?
         .join(PROJECT_BOARD_CACHE_DIR_NAME);
-    tokio::fs::create_dir_all(&cache_root)
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::CacheUnavailable,
-                "저장된 Project 보드를 읽을 수 없습니다.",
-            )
-            .with_recovery(RecoveryAction::Retry)
-            .with_detail("path", cache_root.display().to_string())
-            .with_detail("reason", error.to_string())
-        })?;
     load_cached_board(&cache_root, &project_key).await
 }
 

@@ -98,6 +98,7 @@ pub struct BoardIssue {
 pub struct ProjectBoard {
     pub issues: Vec<BoardIssue>,
     /// 마지막으로 GitHub에서 가져온 시각(RFC 3339). 아직 가져오지 않았으면 `None`.
+    #[serde(default)]
     pub fetched_at: Option<String>,
     /// 레이어/상태를 판별할 수 없어 보드에서 제외한 항목 수.
     #[serde(default)]
