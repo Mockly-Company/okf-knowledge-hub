@@ -7,7 +7,7 @@ test.describe.configure({ mode: "parallel" });
 
 const screens = [
   ["pages-homepage--default", "#home-title"],
-  ["pages-projectpage--default", '[aria-label="Project Board"]'],
+  ["pages-projectpage--default", '[aria-label="기획 보드"]'],
   ["pages-settingspage--display", "fieldset"],
   ["pages-settingspage--workspace", "dl"],
   ["pages-settingspage--connections", ".github-account-card"],

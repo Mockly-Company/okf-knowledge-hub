@@ -12,9 +12,10 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    DraftPullRequest, DraftPullRequestRequest, GithubRepositoryDetail, GithubRepositorySummary,
-    Page,
+    DraftPullRequest, DraftPullRequestRequest, GithubProjectListItem, GithubProjectSummary,
+    GithubRepositoryDetail, GithubRepositorySummary, Page,
 };
+use crate::project_board::model::ProjectOwnerScope;
 
 pub const INITIALIZATION_DRAFT_PR_BODY: &str = "## Summary\n\n- Initialize this repository as an OkHub knowledge workspace\n\n## Why\n\n- Share OKF documents and workspace metadata through Git\n\n## Changes\n\n- Add `.okf/workspace.yml`\n- Add the initial document and template roots when missing\n\n## Test Plan\n\n- Validate `.okf/workspace.yml` in OkHub\n- Confirm the configured document root stays inside the repository\n\n## Review Notes\n\n- This change contains workspace metadata only";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -65,6 +66,187 @@ impl GithubUserResponse {
 #[derive(Deserialize)]
 struct GithubInstallationResponse {
     id: u64,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLookupResponse {
+    data: Option<GithubProjectLookupData>,
+    errors: Option<Vec<GithubProjectLookupError>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLookupData {
+    organization: Option<GithubProjectOwnerResponse>,
+    user: Option<GithubProjectOwnerResponse>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectOwnerResponse {
+    #[serde(rename = "projectV2")]
+    project_v2: Option<GithubProjectV2Response>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectsListResponse {
+    data: Option<GithubProjectsListData>,
+    errors: Option<Vec<GithubProjectLookupError>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectsListData {
+    viewer: Option<GithubProjectsViewer>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectsViewer {
+    login: Option<String>,
+    organizations: Option<GithubOrganizationConnection>,
+    #[serde(rename = "projectsV2")]
+    projects_v2: Option<GithubProjectV2Connection>,
+}
+
+#[derive(Deserialize)]
+struct GithubOrganizationConnection {
+    #[serde(rename = "pageInfo", default)]
+    page_info: Option<GithubProjectPageInfo>,
+    #[serde(default)]
+    nodes: Vec<Option<GithubOrganizationNode>>,
+}
+
+#[derive(Deserialize)]
+struct GithubOrganizationNode {
+    login: Option<String>,
+    #[serde(rename = "projectsV2")]
+    projects_v2: Option<GithubProjectV2Connection>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectV2Connection {
+    #[serde(rename = "pageInfo", default)]
+    page_info: Option<GithubProjectPageInfo>,
+    #[serde(default)]
+    nodes: Vec<Option<GithubProjectV2ListItem>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectV2ListItem {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    number: i64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    closed: bool,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectV2Response {
+    id: String,
+    title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GithubProjectItem {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub labels: Vec<String>,
+    pub status: Option<String>,
+    pub area: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectItemsResponse {
+    data: Option<GithubProjectItemsData>,
+    errors: Option<Vec<GithubProjectLookupError>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectItemsData {
+    organization: Option<GithubProjectItemsOwner>,
+    user: Option<GithubProjectItemsOwner>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectItemsOwner {
+    #[serde(rename = "projectV2")]
+    project_v2: Option<GithubProjectV2Items>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectV2Items {
+    items: Option<GithubProjectItemsConnection>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectItemsConnection {
+    #[serde(rename = "pageInfo", default)]
+    page_info: Option<GithubProjectPageInfo>,
+    #[serde(default)]
+    nodes: Vec<Option<GithubProjectItemNode>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectPageInfo {
+    #[serde(rename = "hasNextPage", default)]
+    has_next_page: bool,
+    #[serde(rename = "endCursor", default)]
+    end_cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectItemNode {
+    content: Option<GithubProjectItemContent>,
+    #[serde(rename = "fieldValues", default)]
+    field_values: Option<GithubProjectFieldValues>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectItemContent {
+    #[serde(rename = "__typename")]
+    kind: String,
+    number: Option<u64>,
+    title: Option<String>,
+    url: Option<String>,
+    labels: Option<GithubProjectLabelConnection>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLabelConnection {
+    #[serde(default)]
+    nodes: Vec<Option<GithubProjectLabel>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLabel {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectFieldValues {
+    #[serde(default)]
+    nodes: Vec<Option<GithubProjectFieldValue>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectFieldValue {
+    #[serde(rename = "__typename")]
+    kind: String,
+    name: Option<String>,
+    field: Option<GithubProjectFieldName>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectFieldName {
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectLookupError {
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -200,6 +382,64 @@ fn map_http_error(
         .with_recovery(RecoveryAction::ReinstallGithubApp);
     }
     github_unavailable_error()
+}
+
+fn map_project_error(status: u16) -> AppError {
+    if status == 401 {
+        return AppError::new(
+            ErrorCode::ReauthenticationRequired,
+            "GitHub에 다시 로그인해 주세요.",
+        )
+        .with_recovery(RecoveryAction::RestartLogin);
+    }
+    if matches!(status, 403 | 404) {
+        return project_permission_error();
+    }
+    github_unavailable_error()
+}
+
+fn map_project_lookup_errors(errors: &[GithubProjectLookupError]) -> AppError {
+    let forbidden = errors.iter().any(|error| {
+        error.kind.as_deref() == Some("FORBIDDEN")
+            || error.message.contains("INSUFFICIENT_SCOPES")
+            || error.message.contains("FORBIDDEN")
+    });
+    if forbidden {
+        return project_permission_error();
+    }
+    let detail = errors
+        .first()
+        .map(|error| error.message.as_str())
+        .unwrap_or("unknown GraphQL error");
+    AppError::new(
+        ErrorCode::GithubUnavailable,
+        "GitHub 요청을 처리하지 못했습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+    .with_detail("reason", detail.to_owned())
+}
+
+fn project_permission_error() -> AppError {
+    AppError::new(
+        ErrorCode::GithubPermissionDenied,
+        "GitHub에서 프로젝트 정보를 읽을 권한이 없습니다.",
+    )
+    .with_recovery(RecoveryAction::ReinstallGithubApp)
+}
+
+fn project_items_query(root: &str) -> String {
+    format!(
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:100){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+    )
+}
+
+fn project_not_found_error() -> AppError {
+    AppError::new(
+        ErrorCode::GithubPermissionDenied,
+        "해당 GitHub Project를 찾을 수 없습니다. URL의 번호를 확인하고, GitHub App에 Projects 읽기 권한이 있는지 확인해 주세요.",
+    )
+    .with_recovery(RecoveryAction::ReinstallGithubApp)
+    .with_detail("reason", "project_not_found")
 }
 
 fn map_draft_pull_request_error(
@@ -573,6 +813,285 @@ impl GithubHttpClient {
             )
             .await?;
         ensure_repository_identity(response.into_detail(), expected_repository_id)
+    }
+
+    pub async fn resolve_project(
+        &self,
+        owner_scope: ProjectOwnerScope,
+        owner: &str,
+        number: u64,
+    ) -> Result<GithubProjectSummary, AppError> {
+        let root = match owner_scope {
+            ProjectOwnerScope::Organization => "organization",
+            ProjectOwnerScope::User => "user",
+        };
+        let query = format!(
+            "query($login:String!,$number:Int!){{{root}(login:$login){{projectV2(number:$number){{id title}}}}}}"
+        );
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["graphql"],
+                &[],
+                Some(serde_json::json!({
+                    "query": query,
+                    "variables": { "login": owner, "number": number },
+                })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_project_error(response.status));
+        }
+        let body: GithubProjectLookupResponse =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
+            return Err(map_project_lookup_errors(&errors));
+        }
+        let project = match owner_scope {
+            ProjectOwnerScope::Organization => body.data.and_then(|data| data.organization),
+            ProjectOwnerScope::User => body.data.and_then(|data| data.user),
+        }
+        .and_then(|owner| owner.project_v2)
+        .ok_or_else(project_not_found_error)?;
+        Ok(GithubProjectSummary {
+            id: project.id,
+            owner: owner.to_owned(),
+            number,
+            title: project.title,
+        })
+    }
+
+    /// 프로젝트 보드 동기화용으로 Issue/PR 목록을 가져온다.
+    /// `Status` 단일 선택 필드 값과 `layer:*` 라벨을 함께 반환한다.
+    /// 두 번째 값은 페이지 상한(5페이지)에 걸려 잘렸는지, 세 번째 값은
+    /// 내용이 없어 버린 항목 수다.
+    pub async fn list_project_items(
+        &self,
+        owner_scope: ProjectOwnerScope,
+        owner: &str,
+        number: u64,
+    ) -> Result<(Vec<GithubProjectItem>, bool, u32), AppError> {
+        let root = match owner_scope {
+            ProjectOwnerScope::Organization => "organization",
+            ProjectOwnerScope::User => "user",
+        };
+        let mut items = Vec::new();
+        let mut dropped = 0u32;
+        let mut after: Option<String> = None;
+        let query = project_items_query(root);
+        for _ in 0..5 {
+            let mut variables = serde_json::Map::new();
+            variables.insert("login".to_owned(), serde_json::Value::from(owner));
+            variables.insert("number".to_owned(), serde_json::Value::from(number));
+            if let Some(cursor) = after.as_deref() {
+                // `after: null`을 명시하면 GitHub이 커서 오류로 전체 요청을
+                // 거부하므로, 첫 페이지는 키 자체를 빼고 보낸다.
+                variables.insert("after".to_owned(), serde_json::Value::from(cursor));
+            }
+            let response = self
+                .send(
+                    HttpMethod::Post,
+                    &["graphql"],
+                    &[],
+                    Some(serde_json::json!({
+                        "query": query,
+                        "variables": variables,
+                    })),
+                )
+                .await?;
+            if !(200..300).contains(&response.status) {
+                return Err(map_project_error(response.status));
+            }
+            let body: GithubProjectItemsResponse =
+                deserialize_response(response).map_err(|_| github_unavailable_error())?;
+            if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
+                return Err(map_project_lookup_errors(&errors));
+            }
+            let connection = match owner_scope {
+                ProjectOwnerScope::Organization => body.data.and_then(|data| data.organization),
+                ProjectOwnerScope::User => body.data.and_then(|data| data.user),
+            }
+            .and_then(|owner| owner.project_v2)
+            .and_then(|project| project.items)
+            .ok_or_else(project_not_found_error)?;
+            for node in connection.nodes.into_iter().flatten() {
+                let Some(content) = node.content else {
+                    dropped += 1;
+                    continue;
+                };
+                if content.kind != "Issue" && content.kind != "PullRequest" {
+                    dropped += 1;
+                    continue;
+                }
+                let (Some(number), Some(title), Some(url)) =
+                    (content.number, content.title, content.url)
+                else {
+                    dropped += 1;
+                    continue;
+                };
+                let labels = content
+                    .labels
+                    .map(|connection| {
+                        connection
+                            .nodes
+                            .into_iter()
+                            .flatten()
+                            .map(|label| label.name)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let single_selects = node
+                    .field_values
+                    .map(|fields| fields.nodes)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flatten()
+                    .filter(|value| value.kind == "ProjectV2ItemFieldSingleSelectValue")
+                    .filter_map(|value| value.field.and_then(|field| field.name.zip(value.name)))
+                    .collect::<Vec<_>>();
+                let status = single_selects
+                    .iter()
+                    .find(|(field, _)| field == "Status")
+                    .map(|(_, name)| name.clone());
+                let area = single_selects
+                    .iter()
+                    .find(|(field, _)| field == "영역")
+                    .map(|(_, name)| name.clone());
+                items.push(GithubProjectItem {
+                    number,
+                    title,
+                    url,
+                    labels,
+                    status,
+                    area,
+                });
+            }
+            // 5페이지·500개를 넘기면 나머지는 버린다. 잘림·누락 수는 호출자가 노출한다.
+            match connection.page_info {
+                Some(page) if page.has_next_page => match page.end_cursor {
+                    Some(cursor) => after = Some(cursor),
+                    None => return Ok((items, true, dropped)),
+                },
+                _ => return Ok((items, false, dropped)),
+            }
+        }
+        Ok((items, true, dropped))
+    }
+
+    /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
+    /// 조직 프로젝트와 개인 프로젝트를 합쳐서 반환한다.
+    pub async fn list_projects(&self) -> Result<(Vec<GithubProjectListItem>, bool), AppError> {
+        // 목록 조회용: 조직 최대 20개, 조직·개인별 Project 최대 100개까지만 읽는다
+        // (연결 후보 선택용이라 페이지네이션하지 않는다). 닫힌 프로젝트는
+        // 후보에서 제외한다. 잘림 여부는 bool로 함께 반환한다.
+        let query = "query{viewer{login organizations(first:20){pageInfo{hasNextPage}nodes{login projectsV2(first:100){pageInfo{hasNextPage}nodes{id number title closed}}}} projectsV2(first:100){pageInfo{hasNextPage}nodes{id number title closed}}}}";
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["graphql"],
+                &[],
+                Some(serde_json::json!({ "query": query })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_project_error(response.status));
+        }
+        let body: GithubProjectsListResponse =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
+            return Err(map_project_lookup_errors(&errors));
+        }
+        let mut projects = Vec::new();
+        let mut truncated = false;
+        if let Some(viewer) = body.data.and_then(|data| data.viewer) {
+            truncated = viewer
+                .organizations
+                .as_ref()
+                .and_then(|connection| connection.page_info.as_ref())
+                .map(|page| page.has_next_page)
+                .unwrap_or(false);
+            truncated = truncated
+                || viewer
+                    .projects_v2
+                    .as_ref()
+                    .and_then(|connection| connection.page_info.as_ref())
+                    .map(|page| page.has_next_page)
+                    .unwrap_or(false);
+            for org in viewer
+                .organizations
+                .into_iter()
+                .flat_map(|connection| connection.nodes)
+                .flatten()
+            {
+                let owner = org.login.unwrap_or_default();
+                if owner.is_empty() {
+                    continue;
+                }
+                if org
+                    .projects_v2
+                    .as_ref()
+                    .and_then(|connection| connection.page_info.as_ref())
+                    .map(|page| page.has_next_page)
+                    .unwrap_or(false)
+                {
+                    truncated = true;
+                }
+                for node in org
+                    .projects_v2
+                    .into_iter()
+                    .flat_map(|connection| connection.nodes)
+                    .flatten()
+                {
+                    if node.closed
+                        || node.id.is_empty()
+                        || node.title.is_empty()
+                        || node.number <= 0
+                    {
+                        continue;
+                    }
+                    projects.push(GithubProjectListItem {
+                        id: node.id,
+                        owner: owner.clone(),
+                        number: node.number.max(0) as u64,
+                        title: node.title,
+                        closed: node.closed,
+                        organization: true,
+                    });
+                }
+            }
+            let login = viewer.login.unwrap_or_default();
+            if login.is_empty() {
+                return Ok((projects, truncated));
+            }
+            if viewer
+                .projects_v2
+                .as_ref()
+                .and_then(|connection| connection.page_info.as_ref())
+                .map(|page| page.has_next_page)
+                .unwrap_or(false)
+            {
+                truncated = true;
+            }
+            for node in viewer
+                .projects_v2
+                .into_iter()
+                .flat_map(|connection| connection.nodes)
+                .flatten()
+            {
+                if node.closed || node.id.is_empty() || node.title.is_empty() || node.number <= 0 {
+                    continue;
+                }
+                projects.push(GithubProjectListItem {
+                    id: node.id,
+                    owner: login.clone(),
+                    number: node.number.max(0) as u64,
+                    title: node.title,
+                    closed: node.closed,
+                    organization: false,
+                });
+            }
+        }
+        Ok((projects, truncated))
     }
 
     pub async fn create_draft_pull_request(
@@ -1058,6 +1577,279 @@ mod tests {
         assert_eq!(requests[0].user_agent, "OkHub/0.1.0");
         assert_eq!(requests[0].bearer_token, "ghu_test_1");
         assert!(!serde_json::to_string(&user).unwrap().contains("ghu_test"));
+    }
+
+    #[tokio::test]
+    async fn project_lookup_posts_graphql_and_returns_the_node_id() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"organization":{"projectV2":{"id":"PVT_kwDOExample","title":"Mockly Board"}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let project = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert_eq!(project.id, "PVT_kwDOExample");
+        assert_eq!(project.owner, "Mockly-Company");
+        assert_eq!(project.number, 1);
+        assert_eq!(project.title, "Mockly Board");
+        assert!(!serde_json::to_string(&project)
+            .unwrap()
+            .contains("ghu_test"));
+        let sent = &transport.requests()[0];
+        assert_eq!(sent.method, HttpMethod::Post);
+        assert_eq!(sent.url, "https://api.example.test/graphql");
+        assert!(sent
+            .body
+            .as_ref()
+            .unwrap()
+            .to_string()
+            .contains("projectV2"));
+    }
+
+    #[tokio::test]
+    async fn project_lookup_scope_errors_ask_for_reinstallation() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":null,"errors":[{"type":"FORBIDDEN","message":"INSUFFICIENT_SCOPES"}]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubPermissionDenied);
+        assert_eq!(error.recovery, Some(RecoveryAction::ReinstallGithubApp));
+    }
+
+    #[tokio::test]
+    async fn project_lookup_unrelated_scope_mention_is_not_a_permission_error() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":null,"errors":[{"type":"INTERNAL","message":"telescope query exceeded scopes limit"}]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+    }
+
+    #[tokio::test]
+    async fn project_lookup_empty_errors_do_not_fail() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"organization":{"projectV2":{"id":"PVT_kwDOExample","number":1,"title":"Mockly"}}},"errors":[]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let summary = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert_eq!(summary.id, "PVT_kwDOExample");
+    }
+
+    #[tokio::test]
+    async fn project_lookup_missing_project_is_not_found() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"organization":{"projectV2":null}}}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .resolve_project(ProjectOwnerScope::Organization, "Mockly-Company", 9)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubPermissionDenied);
+        assert_eq!(error.recovery, Some(RecoveryAction::ReinstallGithubApp));
+    }
+
+    #[tokio::test]
+    async fn project_lookup_surfaces_unexpected_graphql_errors() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":null,"errors":[{"type":"ARGUMENT_ERROR","message":"after does not appear to be a valid cursor"}]}"#,
+        )]);
+        let service = client(tokens, transport);
+
+        let error = service
+            .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::GithubUnavailable);
+    }
+
+    #[test]
+    fn project_items_query_is_balanced_graphql() {
+        for root in ["organization", "user"] {
+            let query = super::project_items_query(root);
+            assert_eq!(
+                query.matches('{').count(),
+                query.matches('}').count(),
+                "unbalanced braces in project items query"
+            );
+            assert!(query.contains("projectV2(number:$number)"));
+            assert!(query.contains("after:$after"));
+        }
+    }
+
+    #[tokio::test]
+    async fn project_items_report_truncation_at_page_cap() {
+        let page = |cursor: &str| {
+            response(
+                200,
+                &format!(
+                    r#"{{"data":{{"organization":{{"projectV2":{{"items":{{"pageInfo":{{"hasNextPage":true,"endCursor":"{cursor}"}},"nodes":[{{"content":{{"__typename":"Issue","number":1,"title":"t","url":"https://example.test/issues/1","labels":{{"nodes":[]}}}},"fieldValues":{{"nodes":[]}}}}]}}}}}}}}}}"#,
+                ),
+            )
+        };
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![
+            page("c1"),
+            page("c2"),
+            page("c3"),
+            page("c4"),
+            page("c5"),
+        ]);
+        let service = client(tokens, transport.clone());
+
+        let (items, truncated, dropped) = service
+            .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert!(truncated);
+        assert_eq!(dropped, 0);
+        assert_eq!(items.len(), 5);
+        assert_eq!(transport.requests().len(), 5);
+    }
+
+    #[tokio::test]
+    async fn project_items_come_with_status_and_labels_across_pages() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":null}]}}}}}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"content":{"__typename":"DraftIssue"},"fieldValues":{"nodes":[]}}]}}}}}"#,
+            ),
+        ]);
+        let service = client(tokens, transport.clone());
+
+        let (items, truncated, dropped) = service
+            .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert!(!truncated);
+        assert_eq!(dropped, 1);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].number, 12);
+        assert_eq!(items[0].labels, vec!["layer:planning"]);
+        assert_eq!(items[0].status.as_deref(), Some("In progress"));
+        assert_eq!(items[0].area.as_deref(), Some("백엔드"));
+        assert_eq!(items[1].number, 34);
+        assert!(items[1].status.is_none());
+        let bodies: Vec<_> = transport
+            .requests()
+            .iter()
+            .map(|request| request.body.clone().unwrap().to_string())
+            .collect();
+        assert_eq!(bodies.len(), 2);
+        assert!(!bodies[0].contains("\"after\""));
+        assert!(bodies[1].contains("\"after\":\"cursor-1\""));
+    }
+
+    #[tokio::test]
+    async fn project_listing_combines_organization_and_user_projects() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":"hyeeun","organizations":{"nodes":[{"login":"Mockly-Company","projectsV2":{"nodes":[{"id":"PVT_kwDOExample","number":1,"title":"Mockly","closed":false}]}}]},"projectsV2":{"nodes":[{"id":"PVT_kwDOUser","number":3,"title":"개인 정리","closed":true}]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let (projects, truncated) = service.list_projects().await.unwrap();
+
+        assert!(!truncated);
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, "PVT_kwDOExample");
+        assert_eq!(projects[0].owner, "Mockly-Company");
+        assert_eq!(projects[0].number, 1);
+        assert!(!projects[0].closed);
+        assert!(projects[0].organization);
+        assert_eq!(
+            transport.requests()[0].url,
+            "https://api.example.test/graphql"
+        );
+    }
+
+    #[tokio::test]
+    async fn project_listing_skips_empty_login_and_closed_projects() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":null,"organizations":{"nodes":[]},"projectsV2":{"nodes":[{"id":"PVT_kwDOUser","number":3,"title":"개인 정리","closed":false}]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let (projects, truncated) = service.list_projects().await.unwrap();
+
+        assert!(!truncated);
+        assert!(projects.is_empty());
+    }
+
+    #[tokio::test]
+    async fn project_listing_tolerates_null_nodes_and_missing_fields() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":"hyeeun","organizations":{"nodes":[null,{"login":"Mockly-Company","projectsV2":{"nodes":[null,{"id":"","number":0,"title":"","closed":false},{"id":"PVT_kwDOExample","number":1,"closed":true},{"id":"PVT_kwDOValid","number":2,"title":"유효","closed":false}]}}]},"projectsV2":{"nodes":[]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let (projects, truncated) = service.list_projects().await.unwrap();
+
+        assert!(!truncated);
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, "PVT_kwDOValid");
+    }
+
+    #[tokio::test]
+    async fn project_listing_reports_truncation() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":"hyeeun","organizations":{"nodes":[]},"projectsV2":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let (projects, truncated) = service.list_projects().await.unwrap();
+
+        assert!(truncated);
+        assert!(projects.is_empty());
     }
 
     #[tokio::test]
