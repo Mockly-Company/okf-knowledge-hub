@@ -282,12 +282,12 @@ fn is_project_not_found(error: &AppError) -> bool {
 }
 
 fn map_status(status: &str) -> Option<BoardStatus> {
-    match status.trim() {
-        "Backlog" => Some(BoardStatus::Backlog),
-        "Ready" => Some(BoardStatus::Ready),
-        "In progress" => Some(BoardStatus::InProgress),
-        "In review" => Some(BoardStatus::InReview),
-        "Done" => Some(BoardStatus::Done),
+    match status.trim().to_ascii_lowercase().as_str() {
+        "backlog" => Some(BoardStatus::Backlog),
+        "ready" => Some(BoardStatus::Ready),
+        "in progress" => Some(BoardStatus::InProgress),
+        "in review" => Some(BoardStatus::InReview),
+        "done" => Some(BoardStatus::Done),
         _ => None,
     }
 }
@@ -330,6 +330,15 @@ async fn save_cached_board(
     board: &ProjectBoard,
 ) -> CommandResult<()> {
     let path = project_board_cache_file(cache_root, cache_key);
+    // 이전에 크래시로 남은 tmp 파일을 best-effort로 정리한다.
+    if let Ok(mut entries) = tokio::fs::read_dir(cache_root).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with("board-") && name.ends_with(".tmp") {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
+    }
     let content = serde_json::to_string(board).map_err(|error| {
         AppError::new(
             ErrorCode::CacheUnavailable,
@@ -445,6 +454,7 @@ mod tests {
         assert_eq!(map_status("Done"), Some(BoardStatus::Done));
         assert_eq!(map_status("Todo"), None);
         assert_eq!(map_status("  In progress  "), Some(BoardStatus::InProgress));
+        assert_eq!(map_status("IN PROGRESS"), Some(BoardStatus::InProgress));
     }
 
     #[test]

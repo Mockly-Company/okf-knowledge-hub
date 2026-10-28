@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
 import { Select } from "@/components/ui/select";
-import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import {
   BOARD_LAYERS,
@@ -369,15 +368,6 @@ export function ProjectPage({
       ) : null}
         </>
       )}
-
-      <div className="mt-[var(--space-6)] flex justify-end">
-        <TabsList aria-label="Project 보기">
-          <TabsTrigger selected>Board</TabsTrigger>
-          <TabsTrigger selected={false} disabled>
-            List
-          </TabsTrigger>
-        </TabsList>
-      </div>
 
       {isUnlinked ? (
         <section
