@@ -33,27 +33,29 @@ const MAX_WALK_DEPTH = 50;
 function* walkIssues(
   issues: BoardIssue[],
   depth = 0,
-  seen = new Set<string>(),
+  path = new Set<string>(),
 ): Generator<BoardIssue> {
   if (depth > MAX_WALK_DEPTH) {
     return;
   }
   for (const issue of asIssueArray(issues)) {
-    // 오염된 캐시의 순환 참조에 대비해 같은 URL은 한 번만 펼친다.
+    // 오염 캐시의 순환 참조에 대비해 재귀 경로상의 URL만 건너뛴다.
+    // 형제 브랜치는 각자 경로 복사본을 받아 정상 중복이 숨겨지지 않는다.
     const key = `${issue.number}-${issue.url}`;
-    if (seen.has(key)) {
+    if (path.has(key)) {
       continue;
     }
-    seen.add(key);
+    const childPath = new Set(path);
+    childPath.add(key);
     yield issue;
-    yield* walkIssues(asIssueArray(issue.children), depth + 1, seen);
+    yield* walkIssues(asIssueArray(issue.children), depth + 1, childPath);
   }
 }
 
 function withoutDone(
   issues: BoardIssue[],
   depth = 0,
-  seen = new Set<string>(),
+  path = new Set<string>(),
 ): BoardIssue[] {
   if (depth > MAX_WALK_DEPTH) {
     return [];
@@ -61,11 +63,12 @@ function withoutDone(
   const kept: BoardIssue[] = [];
   for (const issue of asIssueArray(issues)) {
     const key = `${issue.number}-${issue.url}`;
-    if (seen.has(key)) {
+    if (path.has(key)) {
       continue;
     }
-    seen.add(key);
-    const children = withoutDone(asIssueArray(issue.children), depth + 1, seen);
+    const childPath = new Set(path);
+    childPath.add(key);
+    const children = withoutDone(asIssueArray(issue.children), depth + 1, childPath);
     if (issue.status === "done") {
       // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
       // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.

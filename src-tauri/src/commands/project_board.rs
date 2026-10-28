@@ -380,19 +380,25 @@ fn collect_issue_trees(items: &[GithubProjectItem], skipped: &mut u32) -> Vec<Bo
     let index: std::collections::HashMap<&str, &GithubProjectItem> =
         items.iter().map(|item| (item.url.as_str(), item)).collect();
     let mut rendered = std::collections::HashSet::new();
-    for item in items {
-        if child_urls.contains(&item.url) {
-            continue;
-        }
-        // 매핑 실패로 트리가 비어도 처리済み로 표시해 폴백 중복을 막는다.
+    // 한 항목을 트리로 펼쳐 issues에 넣고 rendered에 기록한다.
+    // 매핑 실패로 트리가 비어도 처리済み로 표시해 폴백 중복을 막는다.
+    let mut render_item = |item: &GithubProjectItem,
+                           rendered: &mut std::collections::HashSet<String>,
+                           issues: &mut Vec<BoardIssue>| {
         rendered.insert(item.url.clone());
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
         let trees = build_tree(item, &index, &mut visiting, 0, skipped);
         for tree in &trees {
-            record_rendered(tree, &mut rendered);
+            record_rendered(tree, rendered);
         }
         issues.extend(trees);
+    };
+    for item in items {
+        if child_urls.contains(&item.url) {
+            continue;
+        }
+        render_item(item, &mut rendered, &mut issues);
     }
     // 순환 참조(A↔B)면 양쪽 모두 자식 집합에 있어 루트 판별에서 제외된다.
     // 미렌더 노드를 루트로 승격해 통째로 사라지지 않게 한다.
@@ -401,14 +407,7 @@ fn collect_issue_trees(items: &[GithubProjectItem], skipped: &mut u32) -> Vec<Bo
         if rendered.contains(&item.url) {
             continue;
         }
-        rendered.insert(item.url.clone());
-        let mut visiting = std::collections::HashSet::new();
-        visiting.insert(item.url.clone());
-        let trees = build_tree(item, &index, &mut visiting, 0, skipped);
-        for tree in &trees {
-            record_rendered(tree, &mut rendered);
-        }
-        issues.extend(trees);
+        render_item(item, &mut rendered, &mut issues);
     }
     issues
 }
