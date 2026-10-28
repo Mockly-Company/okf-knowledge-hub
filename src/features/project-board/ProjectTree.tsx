@@ -12,6 +12,7 @@ import {
   MAX_ISSUE_TREE_DEPTH,
   asIssueArray,
   isIssueLike,
+  issueKey,
 } from "@/features/project-board/boardUtils";
 
 
@@ -47,15 +48,28 @@ function isSafeIssueUrl(url: string): boolean {
 function TreeNode({
   issue,
   depth,
+  path = new Set<string>(),
 }: {
   issue: BoardIssue;
   depth: number;
+  /** 조상 경로 URL 집합. 순환 감지용으로 자식에게 스냅샷을 전달한다. */
+  path?: Set<string>;
 }) {
   const [open, setOpen] = useState(depth === 0);
   // 비객체 원소가 렌더까지 오면 여기서 걸러낸다(TreeNode는 배열 가드 뒤단이다).
   if (!isIssueLike(issue)) {
     return null;
   }
+  // URL 사이클 오염 캐시(A→B→A' 등)에 대비해 경로상 중복은 렌더하지 않는다.
+  // React에서는 자식 컴포넌트 함수가 부모 반환 후에 실행되므로 공유 집합의
+  // push/pop 타이밍이 맞지 않아, 렌더되는 노드에만 스냅샷을 복사해 전달한다.
+  // walkIssues(데이터 집계 쪽)는 동기 제너레이터라 백트래킹을 유지한다.
+  const key = issueKey(issue);
+  if (path.has(key)) {
+    return null;
+  }
+  const childPath = new Set(path);
+  childPath.add(key);
   const role = roleLabel(depth, issue.kind);
   // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
   const children = asIssueArray(issue.children);
@@ -123,7 +137,7 @@ function TreeNode({
         >
           {children.map((child, index) => (
             <li key={`${child.number}-${child.url}-${index}`}>
-              <TreeNode issue={child} depth={depth + 1} />
+              <TreeNode issue={child} depth={depth + 1} path={childPath} />
             </li>
           ))}
         </ul>

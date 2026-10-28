@@ -71,16 +71,23 @@ function withoutDone(
     if (!release) {
       continue;
     }
-    const children = withoutDone(asIssueArray(issue.children), depth + 1, path);
-    release();
-    if (issue.status === "done") {
-      // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
-      // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.
-      if (children.length > 0) {
+    try {
+      const children = withoutDone(
+        asIssueArray(issue.children),
+        depth + 1,
+        path,
+      );
+      if (issue.status === "done") {
+        // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
+        // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.
+        if (children.length > 0) {
+          kept.push({ ...issue, children });
+        }
+      } else {
         kept.push({ ...issue, children });
       }
-    } else {
-      kept.push({ ...issue, children });
+    } finally {
+      release();
     }
   }
   return kept;
