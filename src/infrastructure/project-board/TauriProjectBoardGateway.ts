@@ -7,6 +7,7 @@ import type {
   ResolvedGithubProject,
 } from "@/features/project-board/model";
 import {
+  MAX_ISSUE_TREE_DEPTH,
   asIssueArray,
   isIssueLike,
 } from "@/features/project-board/boardUtils";
@@ -50,15 +51,13 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
   }
 }
 
-/** 정규화 재귀 깊이 상한. JSON에는 순환 참조가 있을 수 없지만 방어용으로 둔다. */
-const MAX_NORMALIZE_DEPTH = 50;
 
 /** 구 캐시의 누락 kind/children을 타입에 맞게 채우고 비객체 원소는 버린다. */
 function normalizeIssue(issue: BoardIssue, depth = 0): BoardIssue | null {
   if (!isIssueLike(issue)) {
     return null;
   }
-  if (depth > MAX_NORMALIZE_DEPTH) {
+  if (depth > MAX_ISSUE_TREE_DEPTH) {
     return { ...issue, children: [], kind: issue.kind ?? null };
   }
   const children: BoardIssue[] = [];

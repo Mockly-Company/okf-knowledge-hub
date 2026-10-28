@@ -18,7 +18,10 @@ import {
   type ResolvedGithubProject,
 } from "@/features/project-board/model";
 import { ProjectTree } from "@/features/project-board/ProjectTree";
-import { asIssueArray } from "@/features/project-board/boardUtils";
+import {
+  MAX_ISSUE_TREE_DEPTH,
+  asIssueArray,
+} from "@/features/project-board/boardUtils";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 type LayerFilter = "all" | BoardLayer;
@@ -26,8 +29,6 @@ type LayerFilter = "all" | BoardLayer;
 /** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
 const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 
-/** 프론트 재귀 깊이 상한. 백엔드 MAX_TREE_DEPTH(10)보다 여유 있게 둔다. */
-const MAX_WALK_DEPTH = 50;
 
 /** 레이어 뷰 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
 function* walkIssues(
@@ -35,7 +36,7 @@ function* walkIssues(
   depth = 0,
   path = new Set<string>(),
 ): Generator<BoardIssue> {
-  if (depth > MAX_WALK_DEPTH) {
+  if (depth > MAX_ISSUE_TREE_DEPTH) {
     return;
   }
   for (const issue of asIssueArray(issues)) {
@@ -45,10 +46,10 @@ function* walkIssues(
     if (path.has(key)) {
       continue;
     }
-    const childPath = new Set(path);
-    childPath.add(key);
+    path.add(key);
     yield issue;
-    yield* walkIssues(asIssueArray(issue.children), depth + 1, childPath);
+    yield* walkIssues(asIssueArray(issue.children), depth + 1, path);
+    path.delete(key);
   }
 }
 
@@ -57,7 +58,7 @@ function withoutDone(
   depth = 0,
   path = new Set<string>(),
 ): BoardIssue[] {
-  if (depth > MAX_WALK_DEPTH) {
+  if (depth > MAX_ISSUE_TREE_DEPTH) {
     return [];
   }
   const kept: BoardIssue[] = [];
@@ -66,9 +67,9 @@ function withoutDone(
     if (path.has(key)) {
       continue;
     }
-    const childPath = new Set(path);
-    childPath.add(key);
-    const children = withoutDone(asIssueArray(issue.children), depth + 1, childPath);
+    path.add(key);
+    const children = withoutDone(asIssueArray(issue.children), depth + 1, path);
+    path.delete(key);
     if (issue.status === "done") {
       // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
       // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.

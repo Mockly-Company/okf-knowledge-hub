@@ -8,6 +8,9 @@ const STATUS_SET: ReadonlySet<string> = new Set(
   BOARD_STATUSES.map((status) => status.id as string),
 );
 
+/** 프론트 재귀 깊이 상한. 백엔드 MAX_TREE_DEPTH(10)보다 여유 있게 둔다. */
+export const MAX_ISSUE_TREE_DEPTH = 50;
+
 /** 런타임에 외부 입력(캐시·API 응답)이 섞여 들어올 수 있어 형태를 검증한다. */
 export function isIssueLike(value: unknown): value is BoardIssue {
   if (typeof value !== "object" || value === null) {
