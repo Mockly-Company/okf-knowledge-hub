@@ -28,7 +28,28 @@ async fn load_workspace_root(
         return Err(workspace_missing_error());
     }
     let repository_root = std::path::PathBuf::from(&current.path);
-    let source = tokio::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
+    // 크래시로 남았을 수 있는 workspace.yml 임시 파일을 best-effort로 정리한다.
+    // 진행 중인 다른 작업을 건드리지 않도록 1시간 초과분만 지운다.
+    let okf_dir = repository_root.join(".okf");
+    if let Ok(mut entries) = tokio::fs::read_dir(&okf_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("workspace.yml.tmp.") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .await
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > 3600);
+            if stale {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
+    }
+    let source = tokio::fs::read_to_string(okf_dir.join("workspace.yml"))
         .await
         .map_err(|_| workspace_file_error(&current.path))?;
     let document =
@@ -330,11 +351,22 @@ async fn save_cached_board(
     board: &ProjectBoard,
 ) -> CommandResult<()> {
     let path = project_board_cache_file(cache_root, cache_key);
-    // 이전에 크래시로 남은 tmp 파일을 best-effort로 정리한다.
+    // 크래시로 남았을 수 있는 오래된 tmp(1시간 초과)만 best-effort로 정리한다.
+    // 진행 중인 동시 sync의 tmp를 지우지 않도록 mtime을 확인한다.
     if let Ok(mut entries) = tokio::fs::read_dir(cache_root).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with("board-") && name.ends_with(".tmp") {
+            if !name.starts_with("board-") || !name.ends_with(".tmp") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .await
+                .ok()
+                .and_then(|metadata| metadata.modified().ok())
+                .and_then(|modified| modified.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > 3600);
+            if stale {
                 let _ = tokio::fs::remove_file(entry.path()).await;
             }
         }
