@@ -15,9 +15,9 @@ use crate::workspace::model::{GithubProjectRef, GithubWorkspaceConfig, Workspace
 
 pub const PROJECT_BOARD_CACHE_DIR_NAME: &str = "project-board";
 
-async fn workspace_project_required(
+async fn load_linked_project(
     services: &AppServices,
-) -> CommandResult<(std::path::PathBuf, String)> {
+) -> CommandResult<(std::path::PathBuf, GithubProjectRef, WorkspaceDocument)> {
     let settings = services.local_settings.clone();
     let current = settings
         .load_current()
@@ -32,8 +32,13 @@ async fn workspace_project_required(
         .map_err(|_| workspace_file_error(&current.path))?;
     let document =
         WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(&current.path))?;
-    match document.config.github.and_then(|github| github.project) {
-        Some(project) => Ok((repository_root, project.id)),
+    match document
+        .config
+        .github
+        .as_ref()
+        .and_then(|github| github.project.clone())
+    {
+        Some(project) => Ok((repository_root, project, document)),
         None => Err(AppError::new(
             ErrorCode::WorkspaceInvalid,
             "GitHub Project가 연결되지 않았습니다.",
@@ -76,7 +81,8 @@ pub async fn get_project_board(
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
     // 읽기는 파일시스템을 변경하지 않는다. 디렉터리는 저장 시점에 만든다.
-    let (_repository_root, project_key) = workspace_project_required(&state).await?;
+    let (_repository_root, project, _document) = load_linked_project(&state).await?;
+    let project_key = project.id.clone();
     let cache_root = app
         .path()
         .app_data_dir()
@@ -95,27 +101,6 @@ fn service_unavailable() -> AppError {
 
 fn invalid_project_url_error(reason: String) -> AppError {
     AppError::new(ErrorCode::WorkspaceInvalid, reason).with_recovery(RecoveryAction::Retry)
-}
-
-fn current_repository_root(services: &AppServices) -> CommandResult<std::path::PathBuf> {
-    let settings = services.local_settings.clone();
-    let current = settings
-        .load_current()
-        .map_err(|_| settings_unavailable_error())?
-        .ok_or_else(workspace_missing_error)?;
-    if current.status != CurrentWorkspaceStatus::Connected {
-        return Err(workspace_missing_error());
-    }
-    Ok(std::path::PathBuf::from(&current.path))
-}
-
-async fn read_workspace_document(
-    repository_root: &std::path::Path,
-) -> CommandResult<WorkspaceDocument> {
-    let source = tokio::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
-        .await
-        .map_err(|_| workspace_file_error(repository_root))?;
-    WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(repository_root))
 }
 
 /// 로그인한 계정이 볼 수 있는 GitHub Projects 목록을 가져온다.
@@ -173,7 +158,7 @@ pub async fn link_github_project(
     project: ResolvedGithubProject,
 ) -> CommandResult<()> {
     let _access = state.acquire_authenticated_command().await?;
-    let repository_root = current_repository_root(&state)?;
+    let (repository_root, _stored_project, mut document) = load_linked_project(&state).await?;
     // 프론트가 보낸 값을 그대로 저장하지 않고 GitHub에 재조회해 검증한다.
     // id·owner·number가 어긋나면 다른 프로젝트를 가리킬 수 있다.
     // 스코프가 어긋났을 수 있어 반대 스코프로 한 번 더 시도한다.
@@ -204,7 +189,6 @@ pub async fn link_github_project(
             "Project 정보가 일치하지 않습니다. 다시 불러와 연결해 주세요.".to_owned(),
         ));
     }
-    let mut document = read_workspace_document(&repository_root).await?;
     let mut github = document
         .config
         .github
@@ -383,20 +367,7 @@ pub async fn sync_project_board(
     state: State<'_, AppServices>,
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
-    let repository_root = current_repository_root(&state)?;
-    let document = read_workspace_document(&repository_root).await?;
-    let project = document
-        .config
-        .github
-        .and_then(|github| github.project)
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::WorkspaceInvalid,
-                "GitHub Project가 연결되지 않았습니다.",
-            )
-            .with_recovery(RecoveryAction::OpenWorkspaceFile)
-            .with_detail("path", ".okf/workspace.yml")
-        })?;
+    let (_repository_root, project, _document) = load_linked_project(&state).await?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
     let (first_scope, fallback_scope) = resolve_project_scope(&project);
     let (items, truncated, dropped) = match github

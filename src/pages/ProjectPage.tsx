@@ -14,7 +14,6 @@ import {
   BOARD_STATUSES,
   type BoardIssue,
   type BoardLayer,
-  type BoardStatus,
   type ProjectBoard,
   type ResolvedGithubProject,
 } from "@/features/project-board/model";
@@ -61,19 +60,6 @@ function formatFetchedAt(iso: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(time));
-}
-
-function issuesFor(
-  board: ProjectBoard | null,
-  layer: BoardLayer,
-  status: BoardStatus,
-): BoardIssue[] {
-  if (!board) {
-    return [];
-  }
-  return board.issues.filter(
-    (issue) => issue.layer === layer && issue.status === status,
-  );
 }
 
 function BoardColumn({
@@ -276,6 +262,20 @@ export function ProjectPage({
       ),
     [filter],
   );
+
+  const groupedIssues = useMemo(() => {
+    const grouped = new Map<string, BoardIssue[]>();
+    for (const issue of board?.issues ?? []) {
+      const key = `${issue.layer}:${issue.status}`;
+      const list = grouped.get(key);
+      if (list) {
+        list.push(issue);
+      } else {
+        grouped.set(key, [issue]);
+      }
+    }
+    return grouped;
+  }, [board]);
 
   return (
     <section
@@ -510,7 +510,7 @@ export function ProjectPage({
                       key={id}
                       layerName={layer.name}
                       statusName={name}
-                      issues={issuesFor(board, layer.id, id)}
+                      issues={groupedIssues.get(`${layer.id}:${id}`) ?? []}
                       canAddIssue={id === "backlog"}
                     />
                   ))}
