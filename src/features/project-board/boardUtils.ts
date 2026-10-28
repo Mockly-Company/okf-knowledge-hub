@@ -11,9 +11,9 @@ const STATUS_SET: ReadonlySet<string> = new Set(
 /** 프론트 재귀 깊이 상한. 백엔드 MAX_TREE_DEPTH(10)보다 여유 있게 둔다. */
 export const MAX_ISSUE_TREE_DEPTH = 50;
 
-/** 이슈 식별 키. 순환 방어 경로 집합과 React key에 함께 쓴다. */
+/** 이슈 식별 키. 백엔드 visiting/path(url 기준)와 일치시킨다. */
 export function issueKey(issue: BoardIssue): string {
-  return `${issue.number}-${issue.url}`;
+  return issue.url.trim();
 }
 
 /**

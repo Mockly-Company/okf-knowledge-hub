@@ -9,7 +9,9 @@ import type {
 import {
   MAX_ISSUE_TREE_DEPTH,
   asIssueArray,
+  enterPath,
   isIssueLike,
+  issueKey,
 } from "@/features/project-board/boardUtils";
 
 type InvokeDesktop = <T>(
@@ -53,21 +55,34 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
 
 
 /** 구 캐시의 누락 kind/children을 타입에 맞게 채우고 비객체 원소는 버린다. */
-function normalizeIssue(issue: BoardIssue, depth = 0): BoardIssue | null {
+function normalizeIssue(
+  issue: BoardIssue,
+  depth = 0,
+  path = new Set<string>(),
+): BoardIssue | null {
   if (!isIssueLike(issue)) {
     return null;
   }
-  if (depth > MAX_ISSUE_TREE_DEPTH) {
-    return { ...issue, children: [], kind: issue.kind ?? null };
+  // URL 사이클 오염 캐시는 별개 객체로 오므로 identity가 아닌 URL 경로로 끊는다.
+  const release = enterPath(path, issueKey(issue));
+  if (!release) {
+    return null;
   }
-  const children: BoardIssue[] = [];
-  for (const child of asIssueArray(issue.children)) {
-    const normalized = normalizeIssue(child, depth + 1);
-    if (normalized) {
-      children.push(normalized);
+  try {
+    if (depth > MAX_ISSUE_TREE_DEPTH) {
+      return { ...issue, children: [], kind: issue.kind ?? null };
     }
+    const children: BoardIssue[] = [];
+    for (const child of asIssueArray(issue.children)) {
+      const normalized = normalizeIssue(child, depth + 1, path);
+      if (normalized) {
+        children.push(normalized);
+      }
+    }
+    return { ...issue, children, kind: issue.kind ?? null };
+  } finally {
+    release();
   }
-  return { ...issue, children, kind: issue.kind ?? null };
 }
 
 function normalizeBoard(board: ProjectBoard): ProjectBoard {
@@ -82,5 +97,13 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
       issues.push(normalized);
     }
   }
-  return { ...board, issues };
+  return {
+    issues,
+    fetchedAt: typeof board.fetchedAt === "string" ? board.fetchedAt : null,
+    skipped:
+      typeof board.skipped === "number" && Number.isFinite(board.skipped)
+        ? board.skipped
+        : 0,
+    truncated: board.truncated === true,
+  };
 }
