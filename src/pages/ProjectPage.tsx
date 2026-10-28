@@ -21,6 +21,8 @@ import { ProjectTree } from "@/features/project-board/ProjectTree";
 import {
   MAX_ISSUE_TREE_DEPTH,
   asIssueArray,
+  enterPath,
+  issueKey,
 } from "@/features/project-board/boardUtils";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
@@ -41,15 +43,17 @@ function* walkIssues(
   }
   for (const issue of asIssueArray(issues)) {
     // 오염 캐시의 순환 참조에 대비해 재귀 경로상의 URL만 건너뛴다.
-    // 형제 브랜치는 각자 경로 복사본을 받아 정상 중복이 숨겨지지 않는다.
-    const key = `${issue.number}-${issue.url}`;
-    if (path.has(key)) {
+    // 백트래킹으로 형제 브랜치와 경로 집합을 공유해 할당을 아낀다.
+    const release = enterPath(path, issueKey(issue));
+    if (!release) {
       continue;
     }
-    path.add(key);
-    yield issue;
-    yield* walkIssues(asIssueArray(issue.children), depth + 1, path);
-    path.delete(key);
+    try {
+      yield issue;
+      yield* walkIssues(asIssueArray(issue.children), depth + 1, path);
+    } finally {
+      release();
+    }
   }
 }
 
@@ -63,13 +67,12 @@ function withoutDone(
   }
   const kept: BoardIssue[] = [];
   for (const issue of asIssueArray(issues)) {
-    const key = `${issue.number}-${issue.url}`;
-    if (path.has(key)) {
+    const release = enterPath(path, issueKey(issue));
+    if (!release) {
       continue;
     }
-    path.add(key);
     const children = withoutDone(asIssueArray(issue.children), depth + 1, path);
-    path.delete(key);
+    release();
     if (issue.status === "done") {
       // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
       // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.

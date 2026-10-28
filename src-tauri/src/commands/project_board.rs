@@ -309,6 +309,27 @@ const MAX_TREE_DEPTH: usize = 10;
 /// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 가져오며 초과분은 잘린다.
 /// GitHub subIssues 커넥션에 별도 페이지네이션을 하지 않으므로
 /// 자식이 20개를 넘는 에픽은 초과분이 보드에서 빠진다.
+/// 깊이 제한으로 잘린 서브트리 전체 노드 수를 센다. 직속 자식만 세면
+/// 손자 이하는 누락돼 `skipped`가 과소 집계되므로 재귀적으로 센다.
+/// `seen`에는 조상 경로를 미리 넣어 순환을 끊는다(미렌더라 중복 가산 우려 없음).
+fn count_descendants(
+    item: &GithubProjectItem,
+    index: &std::collections::HashMap<&str, &GithubProjectItem>,
+    seen: &mut std::collections::HashSet<String>,
+) -> u32 {
+    let mut count = 0u32;
+    for sub in &item.sub_issues {
+        if !seen.insert(sub.url.clone()) {
+            continue;
+        }
+        count += 1;
+        if let Some(found) = index.get(sub.url.as_str()) {
+            count += count_descendants(found, index, seen);
+        }
+    }
+    count
+}
+
 fn build_tree(
     item: &GithubProjectItem,
     index: &std::collections::HashMap<&str, &GithubProjectItem>,
@@ -317,8 +338,9 @@ fn build_tree(
     skipped: &mut u32,
 ) -> Vec<BoardIssue> {
     let mut child_issues = if depth >= MAX_TREE_DEPTH {
-        // 깊이 제한으로 잘라낸 직속 자식 수를 skipped에 반영한다.
-        *skipped += item.sub_issues.len() as u32;
+        // 깊이 제한으로 잘라낸 서브트리 전체를 skipped에 반영한다.
+        let mut seen = visiting.clone();
+        *skipped += count_descendants(item, index, &mut seen);
         Vec::new()
     } else {
         let mut collected = Vec::new();
