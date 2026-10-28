@@ -333,16 +333,10 @@ fn map_area(area: &str) -> Option<BoardLayer> {
     }
 }
 
-fn fetched_now() -> CommandResult<String> {
+fn fetched_now() -> Option<String> {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|_| {
-            AppError::new(
-                ErrorCode::GithubUnavailable,
-                "Project 보드를 가져오지 못했습니다.",
-            )
-            .with_recovery(RecoveryAction::Retry)
-        })
+        .ok()
 }
 
 async fn save_cached_board(
@@ -458,7 +452,7 @@ pub async fn sync_project_board(
     }
     let board = ProjectBoard {
         issues,
-        fetched_at: Some(fetched_now()?),
+        fetched_at: fetched_now(),
         skipped,
         truncated,
     };

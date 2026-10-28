@@ -1042,7 +1042,11 @@ impl GithubHttpClient {
                     .flat_map(|connection| connection.nodes)
                     .flatten()
                 {
-                    if node.closed || node.id.is_empty() || node.number <= 0 {
+                    if node.closed
+                        || node.id.is_empty()
+                        || node.title.is_empty()
+                        || node.number <= 0
+                    {
                         continue;
                     }
                     projects.push(GithubProjectListItem {
@@ -1074,7 +1078,7 @@ impl GithubHttpClient {
                 .flat_map(|connection| connection.nodes)
                 .flatten()
             {
-                if node.closed || node.id.is_empty() || node.number <= 0 {
+                if node.closed || node.id.is_empty() || node.title.is_empty() || node.number <= 0 {
                     continue;
                 }
                 projects.push(GithubProjectListItem {
