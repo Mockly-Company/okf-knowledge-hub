@@ -64,7 +64,7 @@ function TreeNode({
         className="grid gap-[var(--space-2)]"
       >
         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-          <span className="font-[number:var(--font-weight-control)]">
+          <span className="font-medium">
             {role} #{issue.number} {issue.title}
           </span>
           <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
@@ -97,7 +97,7 @@ function TreeNode({
             )}
           </Button>
         ) : null}
-        <span className="font-[number:var(--font-weight-control)]">
+        <span className="font-medium">
           {isSafeIssueUrl(issue.url) ? (
             <a href={issue.url} target="_blank" rel="noreferrer noopener">
               {role} #{issue.number} {issue.title}

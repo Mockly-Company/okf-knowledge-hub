@@ -357,6 +357,62 @@ fn build_tree(
     }
 }
 
+fn record_rendered(issue: &BoardIssue, rendered: &mut std::collections::HashSet<String>) {
+    // build_tree 결과(깊이 ≤ MAX_TREE_DEPTH)만 넣지만 반복문으로 상한 없이 안전하게 기록한다.
+    // 루트가 이미 기록돼 있어도 자식은 항상 순회한다(호출자가 루트를 미리 표시해 두므로).
+    let mut stack = vec![issue];
+    while let Some(current) = stack.pop() {
+        stack.extend(current.children.iter());
+        rendered.insert(current.url.clone());
+    }
+}
+
+/// 평탄한 수집 항목을 트리 보드로 묶는다. `skipped`에 매핑 실패·누락분을 가산한다.
+/// 순환 참조(A↔B)로 루트 판별에서 제외된 노드는 폴백 루프로 승격해 살린다.
+fn collect_issue_trees(items: &[GithubProjectItem], skipped: &mut u32) -> Vec<BoardIssue> {
+    let mut issues = Vec::new();
+    let mut child_urls = std::collections::HashSet::new();
+    for item in items {
+        for sub in &item.sub_issues {
+            child_urls.insert(sub.url.clone());
+        }
+    }
+    let index: std::collections::HashMap<&str, &GithubProjectItem> =
+        items.iter().map(|item| (item.url.as_str(), item)).collect();
+    let mut rendered = std::collections::HashSet::new();
+    for item in items {
+        if child_urls.contains(&item.url) {
+            continue;
+        }
+        // 매핑 실패로 트리가 비어도 처리済み로 표시해 폴백 중복을 막는다.
+        rendered.insert(item.url.clone());
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(item.url.clone());
+        let trees = build_tree(item, &index, &mut visiting, 0, skipped);
+        for tree in &trees {
+            record_rendered(tree, &mut rendered);
+        }
+        issues.extend(trees);
+    }
+    // 순환 참조(A↔B)면 양쪽 모두 자식 집합에 있어 루트 판별에서 제외된다.
+    // 미렌더 노드를 루트로 승격해 통째로 사라지지 않게 한다.
+    // build_tree 내부 visiting 검사가 순환을 끊으므로 무한 재귀는 없다.
+    for item in items {
+        if rendered.contains(&item.url) {
+            continue;
+        }
+        rendered.insert(item.url.clone());
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(item.url.clone());
+        let trees = build_tree(item, &index, &mut visiting, 0, skipped);
+        for tree in &trees {
+            record_rendered(tree, &mut rendered);
+        }
+        issues.extend(trees);
+    }
+    issues
+}
+
 fn map_status(status: &str) -> Option<BoardStatus> {
     match status.trim().to_ascii_lowercase().as_str() {
         "backlog" => Some(BoardStatus::Backlog),
@@ -492,57 +548,8 @@ pub async fn sync_project_board(
         }
         Err(error) => return Err(error),
     };
-    let mut issues = Vec::new();
     let mut skipped = dropped;
-    let mut child_urls = std::collections::HashSet::new();
-    for item in &items {
-        for sub in &item.sub_issues {
-            child_urls.insert(sub.url.clone());
-        }
-    }
-    let index: std::collections::HashMap<&str, &GithubProjectItem> =
-        items.iter().map(|item| (item.url.as_str(), item)).collect();
-    fn record_rendered(issue: &BoardIssue, rendered: &mut std::collections::HashSet<String>) {
-        // build_tree 결과(깊이 ≤ MAX_TREE_DEPTH)만 넣지만 반복문으로 상한 없이 안전하게 기록한다.
-        let mut stack = vec![issue];
-        while let Some(current) = stack.pop() {
-            if !rendered.insert(current.url.clone()) {
-                continue;
-            }
-            stack.extend(current.children.iter());
-        }
-    }
-    let mut rendered = std::collections::HashSet::new();
-    for item in &items {
-        if child_urls.contains(&item.url) {
-            continue;
-        }
-        // 매핑 실패로 트리가 비어도 처리済み로 표시해 폴백 중복을 막는다.
-        rendered.insert(item.url.clone());
-        let mut visiting = std::collections::HashSet::new();
-        visiting.insert(item.url.clone());
-        let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
-        for tree in &trees {
-            record_rendered(tree, &mut rendered);
-        }
-        issues.extend(trees);
-    }
-    // 순환 참조(A↔B)면 양쪽 모두 자식 집합에 있어 루트 판별에서 제외된다.
-    // 미렌더 노트를 루트로 승격해 통째로 사라지지 않게 한다.
-    // build_tree 내부 visiting 검사가 순환을 끊으므로 무한 재귀는 없다.
-    for item in &items {
-        if rendered.contains(&item.url) {
-            continue;
-        }
-        rendered.insert(item.url.clone());
-        let mut visiting = std::collections::HashSet::new();
-        visiting.insert(item.url.clone());
-        let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
-        for tree in &trees {
-            record_rendered(tree, &mut rendered);
-        }
-        issues.extend(trees);
-    }
+    let issues = collect_issue_trees(&items, &mut skipped);
     let board = ProjectBoard {
         issues,
         fetched_at: fetched_now(),
@@ -563,7 +570,7 @@ pub async fn sync_project_board(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tree, map_layer, map_status};
+    use super::{build_tree, collect_issue_trees, map_layer, map_status};
     use crate::github::model::{GithubProjectItem, GithubSubIssue};
     use crate::project_board::{BoardLayer, BoardStatus};
 
@@ -680,52 +687,15 @@ mod tests {
     #[test]
     fn sync_renders_cyclic_items_instead_of_dropping_them() {
         // A<->B 순환: 양쪽 모두 자식 집합에 포함돼 루트 판별에서 제외된다.
-        // 폴백 렌더가 둘 중 하나를 루트로 승격해야 통째로 사라지지 않는다.
+        // 프로덕션 collect_issue_trees를 직접 호출해 폴백 승격을 검증한다.
         let items = [
             sample_item(1, "https://example.test/1", &["https://example.test/2"]),
             sample_item(2, "https://example.test/2", &["https://example.test/1"]),
         ];
-        let mut child_urls = std::collections::HashSet::new();
-        for item in &items {
-            for sub in &item.sub_issues {
-                child_urls.insert(sub.url.clone());
-            }
-        }
-        let index: std::collections::HashMap<&str, &GithubProjectItem> =
-            items.iter().map(|item| (item.url.as_str(), item)).collect();
-        let mut issues = Vec::new();
         let mut skipped = 0u32;
-        // 1차 루트 판별에서는 A<->B 모두 제외돼 issues가 비어 있다.
-        for item in &items {
-            if child_urls.contains(&item.url) {
-                continue;
-            }
-            let mut visiting = std::collections::HashSet::new();
-            visiting.insert(item.url.clone());
-            issues.extend(build_tree(item, &index, &mut visiting, 0, &mut skipped));
-        }
-        assert!(issues.is_empty());
-        // 폴백 렌더(미렌더 노드 승격) 후에는 통째로 사라지지 않는다.
-        // 프로덕션과 동일하게 자식까지 rendered에 기록하고 중복 루트가 없음을 확인한다.
-        let mut rendered = std::collections::HashSet::<String>::new();
-        for item in &items {
-            if rendered.contains(&item.url) {
-                continue;
-            }
-            let mut visiting = std::collections::HashSet::new();
-            visiting.insert(item.url.clone());
-            let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
-            for tree in &trees {
-                let mut stack = vec![tree];
-                while let Some(current) = stack.pop() {
-                    if !rendered.insert(current.url.clone()) {
-                        continue;
-                    }
-                    stack.extend(current.children.iter());
-                }
-            }
-            issues.extend(trees);
-        }
+        let issues = collect_issue_trees(&items, &mut skipped);
+
+        // 둘 중 하나가 루트로 승격되고 다른 쪽은 그 자식으로 한 번만 렌더된다.
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].children.len(), 1);
     }

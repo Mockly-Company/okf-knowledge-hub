@@ -980,6 +980,7 @@ impl GithubHttpClient {
                     .find(|(field, _)| field == "타입")
                     .map(|(_, name)| name.clone());
                 let mut sub_page_truncated = false;
+                let mut sub_page_dropped = 0u32;
                 let sub_issues = content
                     .sub_issues
                     .map(|connection| {
@@ -994,7 +995,11 @@ impl GithubHttpClient {
                                 (Some(number), Some(title), Some(url)) => {
                                     Some(GithubSubIssue { number, title, url })
                                 }
-                                _ => None,
+                                // 필드 결손 서브이슈도 조용히 버리지 않고 누락 수에 합친다.
+                                _ => {
+                                    sub_page_dropped += 1;
+                                    None
+                                }
                             })
                             .collect()
                     })
@@ -1002,6 +1007,7 @@ impl GithubHttpClient {
                 if sub_page_truncated {
                     sub_truncated = true;
                 }
+                dropped += sub_page_dropped;
                 items.push(GithubProjectItem {
                     number,
                     title,
