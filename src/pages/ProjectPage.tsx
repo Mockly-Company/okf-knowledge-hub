@@ -203,14 +203,7 @@ export function ProjectPage({
         typeof error === "object" && error !== null && "message" in error
           ? String((error as { message: string }).message)
           : "Project 보드를 가져오지 못했습니다.";
-      const reason =
-        typeof error === "object" &&
-        error !== null &&
-        "details" in error &&
-        typeof (error as { details?: unknown }).details === "object" &&
-        (error as { details: Record<string, string> }).details !== null
-          ? (error as { details: Record<string, string> }).details.reason
-          : undefined;
+      const reason = errorDetail(error, "reason");
       setLoadError(reason ? `${message} (원인: ${reason})` : message);
     } finally {
       setIsSyncing(false);
@@ -329,7 +322,7 @@ export function ProjectPage({
         }
       />
 
-      {isUnlinked || (isLoading && board === null) ? null : (
+      {isUnlinked || loadError || board === null ? null : (
         <>
           <div
             className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"

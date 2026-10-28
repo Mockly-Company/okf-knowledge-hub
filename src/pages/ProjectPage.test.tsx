@@ -175,6 +175,9 @@ describe("ProjectPage", () => {
     expect(
       await screen.findByText("Project 보드를 불러오지 못했습니다."),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "레이어 필터" }),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
     await waitFor(() => expect(attempts).toBe(2));
   });

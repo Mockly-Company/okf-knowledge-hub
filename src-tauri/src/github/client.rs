@@ -185,9 +185,9 @@ struct GithubProjectItemsConnection {
 
 #[derive(Deserialize)]
 struct GithubProjectPageInfo {
-    #[serde(rename = "hasNextPage")]
+    #[serde(rename = "hasNextPage", default)]
     has_next_page: bool,
-    #[serde(rename = "endCursor")]
+    #[serde(rename = "endCursor", default)]
     end_cursor: Option<String>,
 }
 
