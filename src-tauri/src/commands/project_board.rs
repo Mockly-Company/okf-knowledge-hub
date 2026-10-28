@@ -282,7 +282,7 @@ fn is_project_not_found(error: &AppError) -> bool {
 }
 
 fn map_status(status: &str) -> Option<BoardStatus> {
-    match status {
+    match status.trim() {
         "Backlog" => Some(BoardStatus::Backlog),
         "Ready" => Some(BoardStatus::Ready),
         "In progress" => Some(BoardStatus::InProgress),
@@ -426,7 +426,10 @@ pub async fn sync_project_board(
         .app_data_dir()
         .map_err(|_| settings_unavailable_error())?
         .join(PROJECT_BOARD_CACHE_DIR_NAME);
-    save_cached_board(&cache_root, &project.id, &board).await?;
+    // 캐시 저장은 best-effort다. 실패해도 갓 가져온 보드는 반환한다.
+    if let Err(error) = save_cached_board(&cache_root, &project.id, &board).await {
+        eprintln!("warning: failed to persist project board cache: {error:?}");
+    }
     Ok(board)
 }
 
@@ -441,6 +444,7 @@ mod tests {
         assert_eq!(map_status("In progress"), Some(BoardStatus::InProgress));
         assert_eq!(map_status("Done"), Some(BoardStatus::Done));
         assert_eq!(map_status("Todo"), None);
+        assert_eq!(map_status("  In progress  "), Some(BoardStatus::InProgress));
     }
 
     #[test]

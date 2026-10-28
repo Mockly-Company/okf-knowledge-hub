@@ -433,7 +433,7 @@ export function ProjectPage({
               ) : null}
               {isProjectListTruncated ? (
                 <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-                  목록이 잘렸을 수 있습니다. (최대 100개까지 표시)
+                  목록이 잘렸을 수 있습니다. (조직·개인별 최대 100개까지 표시)
                 </p>
               ) : null}
               {projectOptions.map((option) => (
