@@ -28,6 +28,11 @@ const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 /** 프론트 재귀 깊이 상한. 백엔드 MAX_TREE_DEPTH(10)보다 여유 있게 둔다. */
 const MAX_WALK_DEPTH = 50;
 
+/** 오염된 캐시의 비배열 children은 빈 배열로 취급한다. */
+function asIssueArray(value: unknown): BoardIssue[] {
+  return Array.isArray(value) ? (value as BoardIssue[]) : [];
+}
+
 /** 레이어 뷰 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
 function* walkIssues(
   issues: BoardIssue[],
@@ -37,7 +42,7 @@ function* walkIssues(
   if (depth > MAX_WALK_DEPTH) {
     return;
   }
-  for (const issue of issues) {
+  for (const issue of asIssueArray(issues)) {
     // 오염된 캐시의 순환 참조에 대비해 같은 URL은 한 번만 펼친다.
     const key = `${issue.number}-${issue.url}`;
     if (seen.has(key)) {
@@ -45,7 +50,7 @@ function* walkIssues(
     }
     seen.add(key);
     yield issue;
-    yield* walkIssues(issue.children ?? [], depth + 1, seen);
+    yield* walkIssues(asIssueArray(issue.children), depth + 1, seen);
   }
 }
 
@@ -58,13 +63,13 @@ function withoutDone(
     return [];
   }
   const kept: BoardIssue[] = [];
-  for (const issue of issues) {
+  for (const issue of asIssueArray(issues)) {
     const key = `${issue.number}-${issue.url}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    const children = withoutDone(issue.children ?? [], depth + 1, seen);
+    const children = withoutDone(asIssueArray(issue.children), depth + 1, seen);
     if (issue.status === "done") {
       // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
       // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.

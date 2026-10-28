@@ -503,11 +503,13 @@ pub async fn sync_project_board(
     let index: std::collections::HashMap<&str, &GithubProjectItem> =
         items.iter().map(|item| (item.url.as_str(), item)).collect();
     fn record_rendered(issue: &BoardIssue, rendered: &mut std::collections::HashSet<String>) {
-        if !rendered.insert(issue.url.clone()) {
-            return;
-        }
-        for child in &issue.children {
-            record_rendered(child, rendered);
+        // build_tree 결과(깊이 ≤ MAX_TREE_DEPTH)만 넣지만 반복문으로 상한 없이 안전하게 기록한다.
+        let mut stack = vec![issue];
+        while let Some(current) = stack.pop() {
+            if !rendered.insert(current.url.clone()) {
+                continue;
+            }
+            stack.extend(current.children.iter());
         }
     }
     let mut rendered = std::collections::HashSet::new();
@@ -701,6 +703,7 @@ mod tests {
         }
         assert!(issues.is_empty());
         // 폴백 렌더(미렌더 노드 승격) 후에는 통째로 사라지지 않는다.
+        // 프로덕션과 동일하게 자식까지 rendered에 기록하고 중복 루트가 없음을 확인한다.
         let mut rendered = std::collections::HashSet::<String>::new();
         for item in &items {
             if rendered.contains(&item.url) {
@@ -710,10 +713,17 @@ mod tests {
             visiting.insert(item.url.clone());
             let trees = build_tree(item, &index, &mut visiting, 0, &mut skipped);
             for tree in &trees {
-                rendered.insert(tree.url.clone());
+                let mut stack = vec![tree];
+                while let Some(current) = stack.pop() {
+                    if !rendered.insert(current.url.clone()) {
+                        continue;
+                    }
+                    stack.extend(current.children.iter());
+                }
             }
             issues.extend(trees);
         }
-        assert!(!issues.is_empty());
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].children.len(), 1);
     }
 }

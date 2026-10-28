@@ -11,6 +11,11 @@ import {
 /** TreeNode 재귀 깊이 상한. ProjectPage의 MAX_WALK_DEPTH(50)와 맞춘다. */
 const MAX_TREE_NODE_DEPTH = 50;
 
+/** 오염된 캐시의 비배열 children은 빈 배열로 취급한다. */
+function asIssueArray(value: unknown): BoardIssue[] {
+  return Array.isArray(value) ? (value as BoardIssue[]) : [];
+}
+
 /** Project `타입` 필드 값 → 트리 역할명. 모르는 값은 원값을 그대로 보여준다. */
 const KIND_ROLE: Record<string, string> = {
   기능: "스토리",
@@ -49,8 +54,8 @@ function TreeNode({
 }) {
   const [open, setOpen] = useState(depth === 0);
   const role = roleLabel(depth, issue.kind);
-  // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 깊게 중첩될 수 있다.
-  const children = issue.children ?? [];
+  // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
+  const children = asIssueArray(issue.children);
   if (depth > MAX_TREE_NODE_DEPTH) {
     return (
       <article
