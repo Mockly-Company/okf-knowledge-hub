@@ -30,6 +30,8 @@ export interface ProjectBoard {
   fetchedAt: string | null;
   /** 레이어/상태를 판별할 수 없어 제외한 항목 수. */
   skipped: number;
+  /** 페이지 상한에 걸려 일부 항목을 가져오지 못했는지 여부. */
+  truncated: boolean;
 }
 
 export interface ResolvedGithubProject {
@@ -38,6 +40,12 @@ export interface ResolvedGithubProject {
   number: number;
   title: string;
   scope: "organization" | "user";
+}
+
+/** 연결 후보 Project 목록과 잘림 여부. */
+export interface ProjectList {
+  projects: ResolvedGithubProject[];
+  truncated: boolean;
 }
 
 export const BOARD_LAYERS: ReadonlyArray<{

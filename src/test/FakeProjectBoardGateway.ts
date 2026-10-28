@@ -2,6 +2,7 @@ import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardG
 import type {
   BoardIssue,
   ProjectBoard,
+  ProjectList,
   ResolvedGithubProject,
 } from "@/features/project-board/model";
 
@@ -24,6 +25,8 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     },
   ];
 
+  listTruncated = false;
+
   resolveResult: ResolvedGithubProject | Error = {
     id: "PVT_kwDOFake",
     owner: "Mockly-Company",
@@ -34,24 +37,45 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
 
   loadError: Error | null = null;
 
-  constructor(public board: ProjectBoard = { issues: [], fetchedAt: null, skipped: 0 }) {}
+  constructor(public board: ProjectBoard = { issues: [], fetchedAt: null, skipped: 0, truncated: false }) {}
 
   static empty(): FakeProjectBoardGateway {
-    return new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0 });
+    return new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
   }
 
   static withIssues(issues: BoardIssue[], fetchedAt: string | null = null) {
-    return new FakeProjectBoardGateway({ issues, fetchedAt, skipped: 0 });
+    return new FakeProjectBoardGateway({ issues, fetchedAt, skipped: 0, truncated: false });
   }
 
-  private boardResult: ProjectBoard | { code: string; message: string } | null =
-    null;
+  private boardResult:
+    | ProjectBoard
+    | { code: string; message: string; details?: Record<string, string> }
+    | null = null;
 
   static unlinked(): FakeProjectBoardGateway {
-    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0 });
+    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
     gateway.boardResult = {
       code: "workspace_invalid",
       message: "GitHub Project가 연결되지 않았습니다.",
+    };
+    return gateway;
+  }
+
+  static missingWorkspace(): FakeProjectBoardGateway {
+    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
+    gateway.boardResult = {
+      code: "workspace_missing",
+      message: "워크스페이스가 연결되지 않았습니다.",
+    };
+    return gateway;
+  }
+
+  static corruptWorkspaceFile(): FakeProjectBoardGateway {
+    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
+    gateway.boardResult = {
+      code: "workspace_invalid",
+      message: "워크스페이스 파일을 읽을 수 없습니다.",
+      details: { reason: "workspace_file_unreadable", path: ".okf/workspace.yml" },
     };
     return gateway;
   }
@@ -84,12 +108,12 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     return this.resolveResult;
   }
 
-  async listGithubProjects(): Promise<ResolvedGithubProject[]> {
+  async listGithubProjects(): Promise<ProjectList> {
     this.calls.push({ method: "listGithubProjects" });
     if (this.projectList instanceof Error) {
       throw this.projectList;
     }
-    return this.projectList;
+    return { projects: this.projectList, truncated: this.listTruncated };
   }
 
   async linkGithubProject(project: ResolvedGithubProject): Promise<void> {

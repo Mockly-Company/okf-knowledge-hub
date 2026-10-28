@@ -21,6 +21,7 @@ pub enum ErrorCode {
     WorkspaceInvalid,
     WorkspaceVersionUnsupported,
     WorkspaceChangedSincePreview,
+    CacheUnavailable,
     DocumentPathInvalid,
     DocumentHistoryInvalid,
     DocumentAssetTooLarge,

@@ -10,14 +10,14 @@ describe("TauriProjectBoardGateway", () => {
       args?: Record<string, unknown>,
     ): Promise<T> => {
       calls.push({ command, args });
-      return { issues: [], fetchedAt: null, skipped: 0 } as T;
+      return { issues: [], fetchedAt: null, skipped: 0, truncated: false } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
 
     const board = await gateway.getProjectBoard();
 
     expect(calls).toEqual([{ command: "get_project_board", args: undefined }]);
-    expect(board).toEqual({ issues: [], fetchedAt: null, skipped: 0 });
+    expect(board).toEqual({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
   });
 
   it("maps the sync command", async () => {
@@ -31,6 +31,8 @@ describe("TauriProjectBoardGateway", () => {
       return {
         issues: [],
         fetchedAt: "2026-10-25T12:00:00+09:00",
+        skipped: 0,
+        truncated: false,
       } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
@@ -48,22 +50,26 @@ describe("TauriProjectBoardGateway", () => {
     ): Promise<T> => {
       expect(command).toBe("list_github_projects");
       expect(args).toBeUndefined();
-      return [
-        {
-          id: "PVT_kwDOExample",
-          owner: "Mockly-Company",
-          number: 1,
-          title: "Mockly",
-          scope: "organization",
-        },
-      ] as T;
+      return {
+        projects: [
+          {
+            id: "PVT_kwDOExample",
+            owner: "Mockly-Company",
+            number: 1,
+            title: "Mockly",
+            scope: "organization",
+          },
+        ],
+        truncated: true,
+      } as T;
     };
     const gateway = new TauriProjectBoardGateway(invoke);
 
-    const projects = await gateway.listGithubProjects();
+    const list = await gateway.listGithubProjects();
 
-    expect(projects).toHaveLength(1);
-    expect(projects[0].title).toBe("Mockly");
+    expect(list.projects).toHaveLength(1);
+    expect(list.projects[0].title).toBe("Mockly");
+    expect(list.truncated).toBe(true);
   });
 
   it("maps project resolve and link commands", async () => {

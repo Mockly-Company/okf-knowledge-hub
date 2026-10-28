@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import type {
   ProjectBoard,
+  ProjectList,
   ResolvedGithubProject,
 } from "@/features/project-board/model";
 
@@ -31,8 +32,8 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
     });
   }
 
-  listGithubProjects(): Promise<ResolvedGithubProject[]> {
-    return this.invokeCommand<ResolvedGithubProject[]>("list_github_projects");
+  listGithubProjects(): Promise<ProjectList> {
+    return this.invokeCommand<ProjectList>("list_github_projects");
   }
 
   linkGithubProject(project: ResolvedGithubProject): Promise<void> {

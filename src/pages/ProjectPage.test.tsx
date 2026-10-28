@@ -47,18 +47,8 @@ describe("ProjectPage", () => {
             url: "https://example.test/issues/12",
             layer: "planning",
             status: "in_progress",
-            children: [
-              {
-                number: 13,
-                title: "하위 작업",
-                url: "https://example.test/issues/13",
-                layer: "planning",
-                status: "backlog",
-                children: [],
-                kind: "작업",
-              },
-            ],
-            kind: "기능",
+            children: [],
+            kind: null,
           },
           {
             number: 34,
@@ -95,9 +85,12 @@ describe("ProjectPage", () => {
       }),
     ).toBeInTheDocument();
 
-    expect(
-      screen.getByText("마지막 새로고침 2026-10-25T12:00:00+09:00"),
-    ).toBeInTheDocument();
+    const fetchedAt = screen.getByRole("time");
+    expect(fetchedAt).toHaveAttribute(
+      "datetime",
+      "2026-10-25T12:00:00+09:00",
+    );
+    expect(fetchedAt).toHaveTextContent("2026. 10. 25.");
   });
 
   it("filters swimlanes by layer", async () => {
@@ -125,7 +118,7 @@ describe("ProjectPage", () => {
           layer: "planning",
           status: "in_progress",
           children: [],
-          kind: "기능",
+          kind: null,
         },
       ],
       "2026-10-25T12:00:00+09:00",
@@ -188,6 +181,9 @@ describe("ProjectPage", () => {
     expect(
       await screen.findByText("Project 보드를 불러오지 못했습니다."),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "레이어 필터" }),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
     await waitFor(() => expect(attempts).toBe(2));
   });
@@ -223,7 +219,101 @@ describe("ProjectPage", () => {
     await waitFor(() =>
       expect(
         gateway.calls.filter((call) => call.method === "getProjectBoard"),
-      ).toHaveLength(2),
+      ).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+      ).toHaveLength(1),
+    );
+  });
+
+  it("notes items excluded for missing layer or status", async () => {
+    const gateway = FakeProjectBoardGateway.empty();
+    gateway.board = { issues: [], fetchedAt: null, skipped: 3, truncated: false };
+    render(<ProjectPage gateway={gateway} />);
+
+    expect(
+      await screen.findByText(
+        "3개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다. Project의 영역 값과 상태 값을 확인해 주세요.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("notes truncation when the board hits the page cap", async () => {
+    const gateway = FakeProjectBoardGateway.empty();
+    gateway.board = { issues: [], fetchedAt: null, skipped: 0, truncated: true };
+    render(<ProjectPage gateway={gateway} />);
+
+    expect(
+      await screen.findByText(
+        "보드 항목이 많아 일부만 표시됩니다. (최대 500개)",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("hides swimlanes until a project is connected", async () => {
+    const gateway = FakeProjectBoardGateway.unlinked();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    expect(
+      screen.queryByRole("region", { name: "기획 레이어" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "레이어 필터" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("treats a missing workspace as unconnected", async () => {
+    const gateway = FakeProjectBoardGateway.missingWorkspace();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    expect(
+      screen.queryByRole("region", { name: "기획 레이어" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "레이어 필터" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a load error instead of the connect UI for a corrupt workspace file", async () => {
+    const gateway = FakeProjectBoardGateway.corruptWorkspaceFile();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByText("Project 보드를 불러오지 못했습니다.");
+    expect(
+      screen.queryByRole("textbox", { name: "Project URL" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lets users pick a project from the fetched list", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.unlinked();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
+
+    const choice = await screen.findByRole("radio", {
+      name: "Mockly · Mockly-Company #1",
+    });
+    await user.click(choice);
+    await user.click(
+      screen.getByRole("button", { name: "이 프로젝트 연결" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "listGithubProjects")
+          .length,
+      ).toBeGreaterThanOrEqual(1),
+    );
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "linkGithubProject"),
+      ).toHaveLength(1),
     );
   });
 
@@ -252,6 +342,7 @@ describe("ProjectPage", () => {
       within(lane).getByRole("article", { name: "Issue #7 분류 전 이슈" }),
     ).toBeInTheDocument();
   });
+
   it("switches between layer and tree views", async () => {
     const user = userEvent.setup();
     render(
@@ -296,9 +387,7 @@ describe("ProjectPage", () => {
       screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
     ).toBeInTheDocument();
 
-    await user.click(
-      screen.getByRole("button", { name: "기획서 초안 접기" }),
-    );
+    await user.click(screen.getByRole("button", { name: "기획서 초안 접기" }));
     expect(
       screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
     ).not.toBeInTheDocument();
@@ -320,16 +409,13 @@ describe("ProjectPage", () => {
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "프로젝트 변경" }));
+    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
 
-    const combo = await screen.findByRole("combobox", { name: "Project 목록" });
-    await user.click(combo);
-    const choice = await screen.findByRole("option", {
+    const choice = await screen.findByRole("radio", {
       name: "Mockly · Mockly-Company #1",
     });
     await user.click(choice);
-    await user.click(
-      screen.getByRole("button", { name: "이 프로젝트 연결" }),
-    );
+    await user.click(screen.getByRole("button", { name: "이 프로젝트 연결" }));
 
     await waitFor(() =>
       expect(
@@ -341,24 +427,6 @@ describe("ProjectPage", () => {
         screen.queryByRole("region", { name: "GitHub Project 연결" }),
       ).not.toBeInTheDocument(),
     );
-  });
-
-  it("explains why a project URL cannot be resolved", async () => {
-    const user = userEvent.setup();
-    const gateway = FakeProjectBoardGateway.unlinked();
-    gateway.resolveResult = new Error("GitHub Project URL 형식을 확인해 주세요.");
-    render(<ProjectPage gateway={gateway} />);
-
-    await screen.findByRole("textbox", { name: "Project URL" });
-    await user.type(
-      screen.getByRole("textbox", { name: "Project URL" }),
-      "not a project url",
-    );
-    await user.click(screen.getByRole("button", { name: "불러오기" }));
-
-    expect(
-      await screen.findByRole("alert"),
-    ).toHaveTextContent("GitHub Project URL 형식을 확인해 주세요.");
   });
 
   it("hides done work unless the toggle is off", async () => {
@@ -396,9 +464,29 @@ describe("ProjectPage", () => {
       screen.queryByRole("article", { name: "Issue #1 끝난 에픽" }),
     ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: "완료 항목 숨기기" }));
+    await user.click(
+      screen.getByRole("checkbox", { name: "완료 항목 숨기기" }),
+    );
     expect(
       await screen.findByRole("article", { name: "Issue #1 끝난 에픽" }),
     ).toBeInTheDocument();
+  });
+
+  it("explains why a project URL cannot be resolved", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.unlinked();
+    gateway.resolveResult = new Error("GitHub Project URL 형식을 확인해 주세요.");
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("textbox", { name: "Project URL" });
+    await user.type(
+      screen.getByRole("textbox", { name: "Project URL" }),
+      "not a project url",
+    );
+    await user.click(screen.getByRole("button", { name: "불러오기" }));
+
+    expect(
+      await screen.findByRole("alert"),
+    ).toHaveTextContent("GitHub Project URL 형식을 확인해 주세요.");
   });
 });

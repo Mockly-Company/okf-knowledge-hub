@@ -4,6 +4,7 @@ use serde_yaml_ng::Value;
 use uuid::Uuid;
 
 use crate::error::{AppError, ErrorCode};
+use crate::project_board::ProjectOwnerScope;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceConfigV1 {
@@ -70,6 +71,9 @@ pub struct GithubProjectRef {
     pub id: String,
     pub owner: String,
     pub number: u64,
+    /// 연결 시 확인된 조직/사용자 구분. 없으면 조직 우선으로 재시도한다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ProjectOwnerScope>,
     #[serde(flatten)]
     pub extra: IndexMap<String, Value>,
 }

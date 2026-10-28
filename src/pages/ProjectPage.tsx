@@ -6,15 +6,14 @@ import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Radio } from "@/components/ui/radio";
 import { Select } from "@/components/ui/select";
-import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import {
   BOARD_LAYERS,
   BOARD_STATUSES,
   type BoardIssue,
   type BoardLayer,
-  type BoardStatus,
   type ProjectBoard,
   type ResolvedGithubProject,
 } from "@/features/project-board/model";
@@ -23,28 +22,8 @@ import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriPr
 
 type LayerFilter = "all" | BoardLayer;
 
-const sharedGateway = new TauriProjectBoardGateway();
-
-function issuesFor(
-  flatIssues: BoardIssue[],
-  layer: BoardLayer,
-  status: BoardStatus,
-  hideDone: boolean,
-): BoardIssue[] {
-  if (flatIssues.length === 0) {
-    return [];
-  }
-  return flatIssues.filter(
-    (issue) =>
-      issue.layer === layer &&
-      issue.status === status &&
-      (!hideDone || issue.status !== "done"),
-  );
-}
-
-function flattenIssues(issues: BoardIssue[]): BoardIssue[] {
-  return issues.flatMap((issue) => [issue, ...flattenIssues(issue.children)]);
-}
+/** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
+const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 
 function withoutDone(issues: BoardIssue[]): BoardIssue[] {
   const kept: BoardIssue[] = [];
@@ -63,6 +42,48 @@ function withoutDone(issues: BoardIssue[]): BoardIssue[] {
   return kept;
 }
 
+/** 손상된 workspace.yml은 미연결이 아니라 로드 에러로 보여야 한다. */
+function errorDetail(error: unknown, key: string): string | undefined {
+  if (typeof error !== "object" || error === null || !("details" in error)) {
+    return undefined;
+  }
+  const details = (error as { details?: unknown }).details;
+  if (typeof details !== "object" || details === null) {
+    return undefined;
+  }
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isUnlinkedError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  return (
+    typeof code === "string" &&
+    UNLINKED_CODES.has(code) &&
+    errorDetail(error, "reason") !== "workspace_file_unreadable"
+  );
+}
+
+const sharedGateway = new TauriProjectBoardGateway();
+
+const fetchedAtFormatter = new Intl.DateTimeFormat("ko-KR", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function formatFetchedAt(iso: string): string {
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) {
+    return iso;
+  }
+  return fetchedAtFormatter.format(new Date(time));
+}
+
+const EMPTY_ISSUES: BoardIssue[] = [];
+
 function BoardColumn({
   layerName,
   statusName,
@@ -80,7 +101,9 @@ function BoardColumn({
       aria-label={`${layerName} ${statusName}`}
     >
       <header className="flex h-[var(--control-height)] items-center gap-[var(--space-2)] px-[var(--space-1)]">
-        <span aria-hidden="true">{statusName}</span>
+        <h3 className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)]">
+          {statusName}
+        </h3>
         <StatusBadge tone="neutral">{String(issues.length)}</StatusBadge>
       </header>
       <div className="grid gap-[var(--space-3)] pt-[var(--space-2)]">
@@ -91,7 +114,7 @@ function BoardColumn({
         ) : (
           issues.map((issue) => (
             <article
-              key={issue.url}
+              key={`${issue.number}-${issue.url}`}
               className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
               aria-label={`Issue #${issue.number} ${issue.title}`}
             >
@@ -151,6 +174,7 @@ export function ProjectPage({
   const [projectOptions, setProjectOptions] = useState<
     ResolvedGithubProject[] | null
   >(null);
+  const [isProjectListTruncated, setIsProjectListTruncated] = useState(false);
   const [linkError, setLinkError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [isListing, setIsListing] = useState(false);
@@ -168,13 +192,9 @@ export function ProjectPage({
     try {
       setBoard(await gateway.getProjectBoard());
     } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        (error as { code?: string }).code === "workspace_invalid"
-      ) {
+      if (isUnlinkedError(error)) {
         setIsUnlinked(true);
-        setBoard({ issues: [], fetchedAt: null, skipped: 0 });
+        setBoard({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
       } else {
         setLoadError("Project 보드를 불러오지 못했습니다.");
       }
@@ -186,22 +206,20 @@ export function ProjectPage({
   const refresh = useCallback(async () => {
     setIsSyncing(true);
     setLoadError(null);
+    setIsUnlinked(false);
     try {
       setBoard(await gateway.syncProjectBoard());
       setIsUnlinked(false);
     } catch (error) {
+      if (isUnlinkedError(error)) {
+        setIsUnlinked(true);
+        return;
+      }
       const message =
         typeof error === "object" && error !== null && "message" in error
           ? String((error as { message: string }).message)
           : "Project 보드를 가져오지 못했습니다.";
-      const reason =
-        typeof error === "object" &&
-        error !== null &&
-        "details" in error &&
-        typeof (error as { details?: unknown }).details === "object" &&
-        (error as { details: Record<string, string> }).details !== null
-          ? (error as { details: Record<string, string> }).details.reason
-          : undefined;
+      const reason = errorDetail(error, "reason");
       setLoadError(reason ? `${message} (원인: ${reason})` : message);
     } finally {
       setIsSyncing(false);
@@ -234,7 +252,9 @@ export function ProjectPage({
     setLinkError(null);
     setListFailed(false);
     try {
-      setProjectOptions(await gateway.listGithubProjects());
+      const list = await gateway.listGithubProjects();
+      setProjectOptions(list.projects);
+      setIsProjectListTruncated(list.truncated);
     } catch (error) {
       setListFailed(true);
       setLinkError(
@@ -255,7 +275,7 @@ export function ProjectPage({
     try {
       await gateway.linkGithubProject(resolved);
       setShowLinkPanel(false);
-      await load();
+      await refresh();
     } catch (error) {
       setLinkError(
         typeof error === "object" && error !== null && "message" in error
@@ -265,7 +285,7 @@ export function ProjectPage({
     } finally {
       setIsLinking(false);
     }
-  }, [gateway, load, resolved]);
+  }, [gateway, refresh, resolved]);
 
   useEffect(() => {
     if (panelVisible && projectOptions === null && !isListing && !listFailed) {
@@ -280,10 +300,22 @@ export function ProjectPage({
       ),
     [filter],
   );
-  const flatIssues = useMemo(
-    () => flattenIssues(board?.issues ?? []),
-    [board?.issues],
-  );
+  const groupedIssues = useMemo(() => {
+    const grouped = new Map<string, BoardIssue[]>();
+    for (const issue of board?.issues ?? []) {
+      if (hideDone && issue.status === "done") {
+        continue;
+      }
+      const key = `${issue.layer}:${issue.status}`;
+      const list = grouped.get(key);
+      if (list) {
+        list.push(issue);
+      } else {
+        grouped.set(key, [issue]);
+      }
+    }
+    return grouped;
+  }, [board, hideDone]);
 
   return (
     <section
@@ -299,15 +331,22 @@ export function ProjectPage({
               className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
               aria-live="polite"
             >
-              {board?.fetchedAt
-                ? `마지막 새로고침 ${board.fetchedAt}`
-                : "아직 불러오지 않음"}
+              {board?.fetchedAt ? (
+                <>
+                  마지막 새로고침{" "}
+                  <time dateTime={board.fetchedAt}>
+                    {formatFetchedAt(board.fetchedAt)}
+                  </time>
+                </>
+              ) : (
+                "아직 불러오지 않음"
+              )}
             </span>
             <Button
               type="button"
               variant="secondary"
               onClick={() => void refresh()}
-              disabled={isLoading || isSyncing}
+              disabled={isLoading || isSyncing || isUnlinked}
               loading={isSyncing}
             >
               <RefreshCw aria-hidden="true" strokeWidth={1.75} />
@@ -335,12 +374,14 @@ export function ProjectPage({
         }
       />
 
-      {view === "layers" ? (
-        <div
-          className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
-          role="group"
-          aria-label="레이어 필터"
-        >
+      {isUnlinked || board === null ? null : (
+        <>
+          {view === "layers" ? (
+            <div
+              className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
+              role="group"
+              aria-label="레이어 필터"
+            >
         <Button
           type="button"
           variant={filter === "all" ? "primary" : "secondary"}
@@ -402,13 +443,14 @@ export function ProjectPage({
             완료 항목 숨기기
           </label>
         </div>
-        <TabsList aria-label="Project 보기">
-          <TabsTrigger selected>Board</TabsTrigger>
-          <TabsTrigger selected={false} disabled>
-            List
-          </TabsTrigger>
-        </TabsList>
       </div>
+      {board && board.truncated ? (
+        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+          보드 항목이 많아 일부만 표시됩니다. (최대 500개)
+        </p>
+      ) : null}
+        </>
+      )}
 
       {isUnlinked || showLinkPanel ? (
         <section
@@ -440,25 +482,54 @@ export function ProjectPage({
               불러오기
             </Button>
           </div>
-          <FormField label="Project 목록">
-            <Select
-              value={resolved?.id ?? ""}
-              disabled={isListing || projectOptions === null}
-              onValueChange={(value) => {
-                setResolved(
-                  projectOptions?.find((option) => option.id === value) ?? null,
-                );
-                setLinkError(null);
-              }}
+          <div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void listProjects()}
+              disabled={isListing}
+              loading={isListing}
             >
-              <option value="">선택하세요</option>
-              {(projectOptions ?? []).map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.title} · {option.owner} #{option.number}
-                </option>
+              목록에서 고르기
+            </Button>
+          </div>
+          {projectOptions ? (
+            <div
+              role="radiogroup"
+              aria-label="GitHub Project 목록"
+              className="grid gap-[var(--space-2)]"
+            >
+              {projectOptions.length === 0 ? (
+                <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+                  볼 수 있는 Project가 없습니다.
+                </p>
+              ) : null}
+              {isProjectListTruncated ? (
+                <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+                  목록이 잘렸을 수 있습니다. (조직 최대 20개·목록별 최대 100개까지 표시)
+                </p>
+              ) : null}
+              {projectOptions.map((option) => (
+                <label
+                  key={option.id}
+                  className="flex cursor-pointer items-center gap-[var(--space-2)]"
+                >
+                  <Radio
+                    name="github-project-choice"
+                    value={option.id}
+                    checked={resolved?.id === option.id}
+                    onChange={() => {
+                      setResolved(option);
+                      setLinkError(null);
+                    }}
+                  />
+                  <span>
+                    {option.title} · {option.owner} #{option.number}
+                  </span>
+                </label>
               ))}
-            </Select>
-          </FormField>
+            </div>
+          ) : null}
           {listFailed ? (
             <div>
               <Button
@@ -499,18 +570,24 @@ export function ProjectPage({
 
       {isLoading && board === null ? (
         <p role="status">Project 불러오는 중</p>
-      ) : loadError ? (
-        <div role="alert" className="grid gap-[var(--space-3)]">
-          <p className="m-0">{loadError}</p>
-          <div>
-            <Button type="button" variant="secondary" onClick={() => void load()}>
-              다시 시도
-            </Button>
-          </div>
-        </div>
-      ) : view === "tree" ? (
-        <ProjectTree issues={hideDone && board ? withoutDone(board.issues) : (board?.issues ?? [])} />
       ) : (
+        <>
+          {loadError ? (
+            <div role="alert" className="grid gap-[var(--space-3)]">
+              <p className="m-0">{loadError}</p>
+              <div>
+                <Button type="button" variant="secondary" onClick={() => void load()}>
+                  다시 시도
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {!isUnlinked && board ? (
+            view === "tree" ? (
+              <ProjectTree
+                issues={hideDone ? withoutDone(board.issues) : board.issues}
+              />
+            ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
             <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">
@@ -528,7 +605,7 @@ export function ProjectPage({
                       key={id}
                       layerName={layer.name}
                       statusName={name}
-                      issues={issuesFor(flatIssues, layer.id, id, hideDone)}
+                      issues={groupedIssues.get(`${layer.id}:${id}`) ?? EMPTY_ISSUES}
                       canAddIssue={id === "backlog"}
                     />
                   ))}
@@ -537,6 +614,9 @@ export function ProjectPage({
             </section>
           ))}
         </div>
+          )
+        ) : null}
+        </>
       )}
     </section>
   );
