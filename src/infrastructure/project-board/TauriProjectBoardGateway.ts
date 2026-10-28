@@ -71,6 +71,10 @@ function normalizeIssue(issue: BoardIssue, depth = 0): BoardIssue | null {
 }
 
 function normalizeBoard(board: ProjectBoard): ProjectBoard {
+  // invoke 반환이 런타임 오염으로 null이면 빈 보드로 취급한다.
+  if (typeof board !== "object" || board === null) {
+    return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
+  }
   const issues: BoardIssue[] = [];
   for (const issue of asIssueArray(board.issues)) {
     const normalized = normalizeIssue(issue);

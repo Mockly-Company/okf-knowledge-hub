@@ -121,8 +121,8 @@ function TreeNode({
           className="m-0 grid list-none gap-[var(--space-2)] pl-[var(--space-6)]"
           aria-label={`${issue.title} 하위 항목`}
         >
-          {children.map((child) => (
-            <li key={`${child.number}-${child.url}`}>
+          {children.map((child, index) => (
+            <li key={`${child.number}-${child.url}-${index}`}>
               <TreeNode issue={child} depth={depth + 1} />
             </li>
           ))}
@@ -144,9 +144,9 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       role="region"
       aria-label="계층 보기"
     >
-      {issues.map((issue) => (
+      {issues.map((issue, index) => (
         <div
-          key={`${issue.number}-${issue.url}`}
+          key={`${issue.number}-${issue.url}-${index}`}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
         >
           <TreeNode issue={issue} depth={0} />

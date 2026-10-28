@@ -212,8 +212,9 @@ struct GithubProjectItemContent {
 struct GithubSubIssuesConnection {
     #[serde(rename = "pageInfo", default)]
     page_info: Option<GithubProjectPageInfo>,
+    /// 명시적 `null`도 허용한다. 바깥 content 파싱까지 깨지지 않게 한다.
     #[serde(default)]
-    nodes: Vec<Option<GithubSubIssueNode>>,
+    nodes: Option<Vec<Option<GithubSubIssueNode>>>,
 }
 
 #[derive(Deserialize)]
@@ -989,6 +990,7 @@ impl GithubHttpClient {
                         }
                         connection
                             .nodes
+                            .unwrap_or_default()
                             .into_iter()
                             .flatten()
                             .filter_map(|node| match (node.number, node.title, node.url) {
