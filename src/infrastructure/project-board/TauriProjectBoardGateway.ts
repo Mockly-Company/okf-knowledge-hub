@@ -46,14 +46,23 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
   }
 }
 
+/** 정규화 재귀 깊이 상한. JSON에는 순환 참조가 있을 수 없지만 방어용으로 둔다. */
+const MAX_NORMALIZE_DEPTH = 50;
+
 /**
  * 백엔드는 kind=None이면 필드를 생략하므로 구 캐시에는 kind/children이
  * 없을 수 있다. 프론트 타입(kind: string|null, children: 필수)에 맞춰 정규화한다.
+ * JSON 파싱 결과에는 순환 참조가 있을 수 없지만 깊이 상한으로 방어한다.
  */
-function normalizeIssue(issue: BoardIssue): BoardIssue {
+function normalizeIssue(issue: BoardIssue, depth = 0): BoardIssue {
+  if (depth > MAX_NORMALIZE_DEPTH) {
+    return { ...issue, children: [], kind: issue.kind ?? null };
+  }
   return {
     ...issue,
-    children: (issue.children ?? []).map(normalizeIssue),
+    children: (issue.children ?? []).map((child) =>
+      normalizeIssue(child, depth + 1),
+    ),
     kind: issue.kind ?? null,
   };
 }
@@ -61,6 +70,6 @@ function normalizeIssue(issue: BoardIssue): BoardIssue {
 function normalizeBoard(board: ProjectBoard): ProjectBoard {
   return {
     ...board,
-    issues: (board.issues ?? []).map(normalizeIssue),
+    issues: (board.issues ?? []).map((issue) => normalizeIssue(issue)),
   };
 }

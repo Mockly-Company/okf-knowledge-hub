@@ -210,6 +210,8 @@ struct GithubProjectItemContent {
 
 #[derive(Deserialize)]
 struct GithubSubIssuesConnection {
+    #[serde(rename = "pageInfo", default)]
+    page_info: Option<GithubProjectPageInfo>,
     #[serde(default)]
     nodes: Vec<Option<GithubSubIssueNode>>,
 }
@@ -438,7 +440,7 @@ fn project_permission_error() -> AppError {
 
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage}}nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -887,6 +889,7 @@ impl GithubHttpClient {
         };
         let mut items = Vec::new();
         let mut dropped = 0u32;
+        let mut sub_truncated = false;
         let mut after: Option<String> = None;
         let query = project_items_query(root);
         for _ in 0..5 {
@@ -971,9 +974,13 @@ impl GithubHttpClient {
                     .iter()
                     .find(|(field, _)| field == "타입")
                     .map(|(_, name)| name.clone());
+                let mut sub_page_truncated = false;
                 let sub_issues = content
                     .sub_issues
                     .map(|connection| {
+                        if connection.page_info.is_some_and(|page| page.has_next_page) {
+                            sub_page_truncated = true;
+                        }
                         connection
                             .nodes
                             .into_iter()
@@ -987,6 +994,9 @@ impl GithubHttpClient {
                             .collect()
                     })
                     .unwrap_or_default();
+                if sub_page_truncated {
+                    sub_truncated = true;
+                }
                 items.push(GithubProjectItem {
                     number,
                     title,
@@ -999,12 +1009,13 @@ impl GithubHttpClient {
                 });
             }
             // 5페이지·500개를 넘기면 나머지는 버린다. 잘림·누락 수는 호출자가 노출한다.
+            // 서브이슈 잘림(subIssues hasNextPage)도 보드 잘림으로 합친다.
             match connection.page_info {
                 Some(page) if page.has_next_page => match page.end_cursor {
                     Some(cursor) => after = Some(cursor),
                     None => return Ok((items, true, dropped)),
                 },
-                _ => return Ok((items, false, dropped)),
+                _ => return Ok((items, sub_truncated, dropped)),
             }
         }
         Ok((items, true, dropped))

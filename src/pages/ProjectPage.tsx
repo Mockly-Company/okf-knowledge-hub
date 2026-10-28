@@ -25,18 +25,46 @@ type LayerFilter = "all" | BoardLayer;
 /** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
 const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 
+/** 프론트 재귀 깊이 상한. 백엔드 MAX_TREE_DEPTH(10)보다 여유 있게 둔다. */
+const MAX_WALK_DEPTH = 50;
+
 /** 레이어 뷰 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
-function* walkIssues(issues: BoardIssue[]): Generator<BoardIssue> {
+function* walkIssues(
+  issues: BoardIssue[],
+  depth = 0,
+  seen = new Set<string>(),
+): Generator<BoardIssue> {
+  if (depth > MAX_WALK_DEPTH) {
+    return;
+  }
   for (const issue of issues) {
+    // 오염된 캐시의 순환 참조에 대비해 같은 URL은 한 번만 펼친다.
+    const key = `${issue.number}-${issue.url}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
     yield issue;
-    yield* walkIssues(issue.children ?? []);
+    yield* walkIssues(issue.children ?? [], depth + 1, seen);
   }
 }
 
-function withoutDone(issues: BoardIssue[]): BoardIssue[] {
+function withoutDone(
+  issues: BoardIssue[],
+  depth = 0,
+  seen = new Set<string>(),
+): BoardIssue[] {
+  if (depth > MAX_WALK_DEPTH) {
+    return [];
+  }
   const kept: BoardIssue[] = [];
   for (const issue of issues) {
-    const children = withoutDone(issue.children);
+    const key = `${issue.number}-${issue.url}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const children = withoutDone(issue.children ?? [], depth + 1, seen);
     if (issue.status === "done") {
       // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
       // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.

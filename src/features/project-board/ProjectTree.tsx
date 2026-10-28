@@ -27,9 +27,14 @@ function roleLabel(depth: number, kind: string | null): string {
   return "서브태스크";
 }
 
-/** 외부 URL은 https만 링크로 렌더한다. 캐시 변조·오염 응답의 javascript: 스킴 차단. */
+/** 외부 URL은 http(s)만 링크로 렌더한다. 캐시 변조·오염 응답의 javascript: 스킴 차단. */
 function isSafeIssueUrl(url: string): boolean {
-  return url.startsWith("https://");
+  try {
+    const protocol = new URL(url.trim()).protocol.toLowerCase();
+    return protocol === "https:" || protocol === "http:";
+  } catch {
+    return false;
+  }
 }
 
 function TreeNode({

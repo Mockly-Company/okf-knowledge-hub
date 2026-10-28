@@ -317,6 +317,8 @@ fn build_tree(
     skipped: &mut u32,
 ) -> Vec<BoardIssue> {
     let mut child_issues = if depth >= MAX_TREE_DEPTH {
+        // 깊이 제한으로 잘라낸 직속 자식 수를 skipped에 반영한다.
+        *skipped += item.sub_issues.len() as u32;
         Vec::new()
     } else {
         let mut collected = Vec::new();
@@ -324,8 +326,12 @@ fn build_tree(
             if !visiting.insert(sub.url.clone()) {
                 continue;
             }
-            if let Some(found) = index.get(sub.url.as_str()) {
-                collected.extend(build_tree(found, index, visiting, depth + 1, skipped));
+            match index.get(sub.url.as_str()) {
+                Some(found) => {
+                    collected.extend(build_tree(found, index, visiting, depth + 1, skipped));
+                }
+                // 목록에 없는 자식(프로젝트 밖·페이지 상한 누락)은 조용히 버리지 않고 센다.
+                None => *skipped += 1,
             }
             visiting.remove(&sub.url);
         }
