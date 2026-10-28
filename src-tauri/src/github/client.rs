@@ -130,9 +130,13 @@ struct GithubProjectV2Connection {
 
 #[derive(Deserialize)]
 struct GithubProjectV2ListItem {
+    #[serde(default)]
     id: String,
+    #[serde(default)]
     number: i64,
+    #[serde(default)]
     title: String,
+    #[serde(default)]
     closed: bool,
 }
 
@@ -194,8 +198,8 @@ struct GithubProjectPageInfo {
 #[derive(Deserialize)]
 struct GithubProjectItemNode {
     content: Option<GithubProjectItemContent>,
-    #[serde(rename = "fieldValues")]
-    field_values: GithubProjectFieldValues,
+    #[serde(rename = "fieldValues", default)]
+    field_values: Option<GithubProjectFieldValues>,
 }
 
 #[derive(Deserialize)]
@@ -874,6 +878,7 @@ impl GithubHttpClient {
         let mut items = Vec::new();
         let mut dropped = 0u32;
         let mut after: Option<String> = None;
+        let query = project_items_query(root);
         for _ in 0..5 {
             let mut variables = serde_json::Map::new();
             variables.insert("login".to_owned(), serde_json::Value::from(owner));
@@ -883,7 +888,6 @@ impl GithubHttpClient {
                 // 거부하므로, 첫 페이지는 키 자체를 빼고 보낸다.
                 variables.insert("after".to_owned(), serde_json::Value::from(cursor));
             }
-            let query = project_items_query(root);
             let response = self
                 .send(
                     HttpMethod::Post,
@@ -938,7 +942,8 @@ impl GithubHttpClient {
                     .unwrap_or_default();
                 let single_selects = node
                     .field_values
-                    .nodes
+                    .map(|fields| fields.nodes)
+                    .unwrap_or_default()
                     .into_iter()
                     .flatten()
                     .filter(|value| value.kind == "ProjectV2ItemFieldSingleSelectValue")
@@ -1037,7 +1042,7 @@ impl GithubHttpClient {
                     .flat_map(|connection| connection.nodes)
                     .flatten()
                 {
-                    if node.closed {
+                    if node.closed || node.id.is_empty() || node.number <= 0 {
                         continue;
                     }
                     projects.push(GithubProjectListItem {
@@ -1069,7 +1074,7 @@ impl GithubHttpClient {
                 .flat_map(|connection| connection.nodes)
                 .flatten()
             {
-                if node.closed {
+                if node.closed || node.id.is_empty() || node.number <= 0 {
                     continue;
                 }
                 projects.push(GithubProjectListItem {
@@ -1723,7 +1728,7 @@ mod tests {
         let transport = RecordingTransport::with_responses(vec![
             response(
                 200,
-                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":{"nodes":[]}}]}}}}}"#,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":null}]}}}}}"#,
             ),
             response(
                 200,
@@ -1793,6 +1798,22 @@ mod tests {
 
         assert!(!truncated);
         assert!(projects.is_empty());
+    }
+
+    #[tokio::test]
+    async fn project_listing_tolerates_null_nodes_and_missing_fields() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"viewer":{"login":"hyeeun","organizations":{"nodes":[null,{"login":"Mockly-Company","projectsV2":{"nodes":[null,{"id":"","number":0,"title":"","closed":false},{"id":"PVT_kwDOExample","number":1,"closed":true},{"id":"PVT_kwDOValid","number":2,"title":"유효","closed":false}]}}]},"projectsV2":{"nodes":[]}}}}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+
+        let (projects, truncated) = service.list_projects().await.unwrap();
+
+        assert!(!truncated);
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, "PVT_kwDOValid");
     }
 
     #[tokio::test]

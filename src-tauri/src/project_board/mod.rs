@@ -6,6 +6,7 @@ pub use model::{
 };
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 
@@ -43,8 +44,6 @@ pub fn project_board_cache_file(cache_root: &Path, cache_key: &str) -> PathBuf {
     let (stem, digest) = cache_file_parts(cache_key);
     cache_root.join(format!("board-{stem}-{digest}.json"))
 }
-
-use std::sync::atomic::{AtomicU64, Ordering};
 
 static CACHE_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
