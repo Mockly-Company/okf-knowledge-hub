@@ -207,7 +207,8 @@ struct GithubProjectItemContent {
 
 #[derive(Deserialize)]
 struct GithubProjectLabelConnection {
-    nodes: Vec<GithubProjectLabel>,
+    #[serde(default)]
+    nodes: Vec<Option<GithubProjectLabel>>,
 }
 
 #[derive(Deserialize)]
@@ -926,6 +927,7 @@ impl GithubHttpClient {
                         connection
                             .nodes
                             .into_iter()
+                            .flatten()
                             .map(|label| label.name)
                             .collect()
                     })

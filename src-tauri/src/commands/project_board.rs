@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
@@ -185,26 +187,28 @@ pub async fn link_github_project(
     // id·owner·number가 어긋나면 다른 프로젝트를 가리킬 수 있다.
     // 스코프가 어긋났을 수 있어 반대 스코프로 한 번 더 시도한다.
     let github = state.github.clone().ok_or_else(service_unavailable)?;
-    let verified = match github
+    let (verified, verified_scope) = match github
         .resolve_project(project.scope, &project.owner, project.number)
         .await
     {
-        Ok(summary) => summary,
+        Ok(summary) => (summary, project.scope),
         Err(error) if is_project_not_found(&error) => {
             let fallback = match project.scope {
                 ProjectOwnerScope::Organization => ProjectOwnerScope::User,
                 ProjectOwnerScope::User => ProjectOwnerScope::Organization,
             };
-            github
-                .resolve_project(fallback, &project.owner, project.number)
-                .await?
+            (
+                github
+                    .resolve_project(fallback, &project.owner, project.number)
+                    .await?,
+                fallback,
+            )
         }
         Err(error) => return Err(error),
     };
-    if verified.id != project.id
-        || verified.owner != project.owner
-        || verified.number != project.number
-    {
+    // owner/number는 조회 키이므로 서버가 그대로 돌려준다. 위조 판별은
+    // 서버가 발급한 id 비교가 담당한다.
+    if verified.id != project.id {
         return Err(invalid_project_url_error(
             "Project 정보가 일치하지 않습니다. 다시 불러와 연결해 주세요.".to_owned(),
         ));
@@ -222,28 +226,60 @@ pub async fn link_github_project(
         id: project.id,
         owner: project.owner,
         number: project.number,
+        scope: Some(verified_scope),
         extra: Default::default(),
     });
     document.config.github = Some(github);
     let content = document.to_yaml()?;
-    tokio::fs::write(repository_root.join(".okf").join("workspace.yml"), content)
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::WorkspaceInvalid,
-                "워크스페이스 파일을 저장할 수 없습니다.",
-            )
-            .with_recovery(RecoveryAction::OpenWorkspaceFile)
-            .with_detail("path", repository_root.display().to_string())
-            .with_detail("reason", error.to_string())
-        })?;
+    // 크래시 시 반만 쓰인 workspace.yml이 남지 않도록 임시 파일에 쓰고 교체한다.
+    let tmp_path = repository_root.join(".okf").join(format!(
+        "workspace.yml.tmp.{}.{}",
+        std::process::id(),
+        workspace_tmp_seq()
+    ));
+    if let Err(error) = tokio::fs::write(&tmp_path, content).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "워크스페이스 파일을 저장할 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::OpenWorkspaceFile)
+        .with_detail("path", repository_root.display().to_string())
+        .with_detail("reason", error.to_string()));
+    }
+    if let Err(error) = tokio::fs::rename(
+        &tmp_path,
+        repository_root.join(".okf").join("workspace.yml"),
+    )
+    .await
+    {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "워크스페이스 파일을 저장할 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::OpenWorkspaceFile)
+        .with_detail("path", repository_root.display().to_string())
+        .with_detail("reason", error.to_string()));
+    }
     Ok(())
 }
 
-fn resolve_project_scope(_project: &GithubProjectRef) -> (ProjectOwnerScope, ProjectOwnerScope) {
-    // workspace.yml에는 조직/사용자 구분을 저장하지 않으므로
-    // 조직을 먼저 시도하고, 없을 때만 사용자로 다시 시도한다.
-    (ProjectOwnerScope::Organization, ProjectOwnerScope::User)
+static WORKSPACE_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+fn workspace_tmp_seq() -> u64 {
+    WORKSPACE_TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+fn resolve_project_scope(project: &GithubProjectRef) -> (ProjectOwnerScope, ProjectOwnerScope) {
+    // 연결 시 확인된 스코프를 workspace.yml에 저장해 두므로
+    // 저장된 스코프를 먼저 시도하고, 없을 때만 조직→사용자 순으로 재시도한다.
+    let first = project.scope.unwrap_or(ProjectOwnerScope::Organization);
+    let fallback = match first {
+        ProjectOwnerScope::Organization => ProjectOwnerScope::User,
+        ProjectOwnerScope::User => ProjectOwnerScope::Organization,
+    };
+    (first, fallback)
 }
 
 fn is_project_not_found(error: &AppError) -> bool {
