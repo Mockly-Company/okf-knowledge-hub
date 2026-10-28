@@ -51,15 +51,17 @@ function isUnlinkedError(error: unknown): boolean {
 
 const sharedGateway = new TauriProjectBoardGateway();
 
+const fetchedAtFormatter = new Intl.DateTimeFormat("ko-KR", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 function formatFetchedAt(iso: string): string {
   const time = new Date(iso).getTime();
   if (Number.isNaN(time)) {
     return iso;
   }
-  return new Intl.DateTimeFormat("ko-KR", {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(time));
+  return fetchedAtFormatter.format(new Date(time));
 }
 
 const EMPTY_ISSUES: BoardIssue[] = [];

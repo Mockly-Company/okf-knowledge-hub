@@ -15,9 +15,10 @@ use crate::workspace::model::{GithubProjectRef, GithubWorkspaceConfig, Workspace
 
 pub const PROJECT_BOARD_CACHE_DIR_NAME: &str = "project-board";
 
-async fn load_linked_project(
+/// workspace 문서까지만 읽는다. 연결 여부와 무관하다.
+async fn load_workspace_root(
     services: &AppServices,
-) -> CommandResult<(std::path::PathBuf, GithubProjectRef, WorkspaceDocument)> {
+) -> CommandResult<(std::path::PathBuf, WorkspaceDocument)> {
     let settings = services.local_settings.clone();
     let current = settings
         .load_current()
@@ -32,6 +33,13 @@ async fn load_linked_project(
         .map_err(|_| workspace_file_error(&current.path))?;
     let document =
         WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(&current.path))?;
+    Ok((repository_root, document))
+}
+
+async fn load_linked_project(
+    services: &AppServices,
+) -> CommandResult<(std::path::PathBuf, GithubProjectRef, WorkspaceDocument)> {
+    let (repository_root, document) = load_workspace_root(services).await?;
     match document
         .config
         .github
@@ -53,21 +61,7 @@ async fn load_linked_project(
 async fn load_workspace_document(
     services: &AppServices,
 ) -> CommandResult<(std::path::PathBuf, WorkspaceDocument)> {
-    let settings = services.local_settings.clone();
-    let current = settings
-        .load_current()
-        .map_err(|_| settings_unavailable_error())?
-        .ok_or_else(workspace_missing_error)?;
-    if current.status != CurrentWorkspaceStatus::Connected {
-        return Err(workspace_missing_error());
-    }
-    let repository_root = std::path::PathBuf::from(&current.path);
-    let source = tokio::fs::read_to_string(repository_root.join(".okf").join("workspace.yml"))
-        .await
-        .map_err(|_| workspace_file_error(&current.path))?;
-    let document =
-        WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(&current.path))?;
-    Ok((repository_root, document))
+    load_workspace_root(services).await
 }
 
 fn settings_unavailable_error() -> AppError {
