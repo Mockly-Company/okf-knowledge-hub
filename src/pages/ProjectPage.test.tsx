@@ -269,6 +269,16 @@ describe("ProjectPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows a load error instead of the connect UI for a corrupt workspace file", async () => {
+    const gateway = FakeProjectBoardGateway.corruptWorkspaceFile();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByText("Project 보드를 불러오지 못했습니다.");
+    expect(
+      screen.queryByRole("textbox", { name: "Project URL" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("lets users pick a project from the fetched list", async () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.unlinked();

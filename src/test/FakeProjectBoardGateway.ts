@@ -47,8 +47,10 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     return new FakeProjectBoardGateway({ issues, fetchedAt, skipped: 0, truncated: false });
   }
 
-  private boardResult: ProjectBoard | { code: string; message: string } | null =
-    null;
+  private boardResult:
+    | ProjectBoard
+    | { code: string; message: string; details?: Record<string, string> }
+    | null = null;
 
   static unlinked(): FakeProjectBoardGateway {
     const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
@@ -64,6 +66,16 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     gateway.boardResult = {
       code: "workspace_missing",
       message: "워크스페이스가 연결되지 않았습니다.",
+    };
+    return gateway;
+  }
+
+  static corruptWorkspaceFile(): FakeProjectBoardGateway {
+    const gateway = new FakeProjectBoardGateway({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
+    gateway.boardResult = {
+      code: "workspace_invalid",
+      message: "워크스페이스 파일을 읽을 수 없습니다.",
+      details: { reason: "workspace_file_unreadable", path: ".okf/workspace.yml" },
     };
     return gateway;
   }

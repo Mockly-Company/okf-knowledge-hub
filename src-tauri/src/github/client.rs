@@ -109,6 +109,7 @@ struct GithubProjectsViewer {
 struct GithubOrganizationConnection {
     #[serde(rename = "pageInfo", default)]
     page_info: Option<GithubProjectPageInfo>,
+    #[serde(default)]
     nodes: Vec<Option<GithubOrganizationNode>>,
 }
 
@@ -123,6 +124,7 @@ struct GithubOrganizationNode {
 struct GithubProjectV2Connection {
     #[serde(rename = "pageInfo", default)]
     page_info: Option<GithubProjectPageInfo>,
+    #[serde(default)]
     nodes: Vec<Option<GithubProjectV2ListItem>>,
 }
 
@@ -175,8 +177,9 @@ struct GithubProjectV2Items {
 
 #[derive(Deserialize)]
 struct GithubProjectItemsConnection {
-    #[serde(rename = "pageInfo")]
+    #[serde(rename = "pageInfo", default)]
     page_info: Option<GithubProjectPageInfo>,
+    #[serde(default)]
     nodes: Vec<Option<GithubProjectItemNode>>,
 }
 
@@ -218,6 +221,7 @@ struct GithubProjectLabel {
 
 #[derive(Deserialize)]
 struct GithubProjectFieldValues {
+    #[serde(default)]
     nodes: Vec<Option<GithubProjectFieldValue>>,
 }
 

@@ -66,6 +66,7 @@ fn workspace_file_error(path: &std::path::Path) -> AppError {
     )
     .with_recovery(RecoveryAction::OpenWorkspaceFile)
     .with_detail("path", path.display().to_string())
+    .with_detail("reason", "workspace_file_unreadable")
 }
 
 #[tauri::command]

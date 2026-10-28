@@ -25,6 +25,31 @@ type LayerFilter = "all" | BoardLayer;
 /** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
 const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 
+/** 손상된 workspace.yml은 미연결이 아니라 로드 에러로 보여야 한다. */
+function errorDetail(error: unknown, key: string): string | undefined {
+  if (typeof error !== "object" || error === null || !("details" in error)) {
+    return undefined;
+  }
+  const details = (error as { details?: unknown }).details;
+  if (typeof details !== "object" || details === null) {
+    return undefined;
+  }
+  const value = (details as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function isUnlinkedError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  return (
+    typeof code === "string" &&
+    UNLINKED_CODES.has(code) &&
+    errorDetail(error, "reason") !== "workspace_file_unreadable"
+  );
+}
+
 const sharedGateway = new TauriProjectBoardGateway();
 
 function formatFetchedAt(iso: string): string {
@@ -68,7 +93,9 @@ function BoardColumn({
       aria-label={`${layerName} ${statusName}`}
     >
       <header className="flex h-[var(--control-height)] items-center gap-[var(--space-2)] px-[var(--space-1)]">
-        <span aria-hidden="true">{statusName}</span>
+        <h3 className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)]">
+          {statusName}
+        </h3>
         <StatusBadge tone="neutral">{String(issues.length)}</StatusBadge>
       </header>
       <div className="grid gap-[var(--space-3)] pt-[var(--space-2)]">
@@ -79,7 +106,7 @@ function BoardColumn({
         ) : (
           issues.map((issue) => (
             <article
-              key={issue.url}
+              key={`${issue.number}-${issue.url}`}
               className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
               aria-label={`Issue #${issue.number} ${issue.title}`}
             >
@@ -150,11 +177,7 @@ export function ProjectPage({
     try {
       setBoard(await gateway.getProjectBoard());
     } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        UNLINKED_CODES.has((error as { code?: string }).code ?? "")
-      ) {
+      if (isUnlinkedError(error)) {
         setIsUnlinked(true);
         setBoard({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
       } else {
@@ -172,11 +195,7 @@ export function ProjectPage({
       setBoard(await gateway.syncProjectBoard());
       setIsUnlinked(false);
     } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        UNLINKED_CODES.has((error as { code?: string }).code ?? "")
-      ) {
+      if (isUnlinkedError(error)) {
         setIsUnlinked(true);
         return;
       }
