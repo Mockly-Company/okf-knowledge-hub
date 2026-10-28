@@ -191,6 +191,7 @@ export function ProjectPage({
   const refresh = useCallback(async () => {
     setIsSyncing(true);
     setLoadError(null);
+    setIsUnlinked(false);
     try {
       setBoard(await gateway.syncProjectBoard());
       setIsUnlinked(false);
@@ -322,7 +323,7 @@ export function ProjectPage({
         }
       />
 
-      {isUnlinked || loadError || board === null ? null : (
+      {isUnlinked || board === null ? null : (
         <>
           <div
             className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
@@ -479,16 +480,19 @@ export function ProjectPage({
 
       {isLoading && board === null ? (
         <p role="status">Project 불러오는 중</p>
-      ) : loadError ? (
-        <div role="alert" className="grid gap-[var(--space-3)]">
-          <p className="m-0">{loadError}</p>
-          <div>
-            <Button type="button" variant="secondary" onClick={() => void load()}>
-              다시 시도
-            </Button>
-          </div>
-        </div>
-      ) : isUnlinked ? null : (
+      ) : (
+        <>
+          {loadError ? (
+            <div role="alert" className="grid gap-[var(--space-3)]">
+              <p className="m-0">{loadError}</p>
+              <div>
+                <Button type="button" variant="secondary" onClick={() => void load()}>
+                  다시 시도
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {!isUnlinked && board ? (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
             <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">
@@ -515,6 +519,8 @@ export function ProjectPage({
             </section>
           ))}
         </div>
+          ) : null}
+        </>
       )}
     </section>
   );
