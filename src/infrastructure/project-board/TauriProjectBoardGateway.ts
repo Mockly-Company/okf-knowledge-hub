@@ -76,11 +76,17 @@ function normalizeIssue(
       // 오염 캐시의 비정상 깊이는 여기서 자른다. 조용히 버리면 UI 카운터와
       // 어긋나므로 경고하고 호출자가 truncated를 세우도록 cuts에 기록한다.
       // (백엔드는 동일 절단을 skipped에 합산한다.)
+      // 잘린 노드임을 플래그로 남겨 TreeNode가 "하위 항목 생략됨"을 표시한다.
       stats.cuts += 1;
       console.warn(
         `[project-board] issue tree truncated at depth ${depth}: #${issue.number} ${issue.url}`,
       );
-      return { ...issue, children: [], kind: issue.kind ?? null };
+      return {
+        ...issue,
+        children: [],
+        kind: issue.kind ?? null,
+        childrenTruncated: true,
+      };
     }
     const children: BoardIssue[] = [];
     // asIssueArray는 탈락분을 조용히 버리므로, skipped 합산을 위해 여기서 직접 센다.

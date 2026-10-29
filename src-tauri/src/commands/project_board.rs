@@ -353,14 +353,15 @@ fn build_tree(
     depth: usize,
     skipped: &mut u32,
     truncated: &mut bool,
+    rendered: &mut std::collections::HashSet<String>,
 ) -> Vec<BoardIssue> {
     let cut = depth >= MAX_TREE_DEPTH;
     let mut child_issues = if cut {
         // 깊이 제한으로 잘라낸 서브트리 전체를 skipped에 반영한다.
-        // 조상 경로를 시드로 넣어 순환을 끊고, 고유 URL 기준으로 한 번씩만 센다.
-        // 예산을 초과하면 truncated를 세운다(초과분은 셀 수 없으므로).
-        let mut seen = visiting.clone();
-        let (sub_count, capped) = count_descendants(item, index, &mut seen, depth);
+        // 잘린 URL을 rendered에 직접 기록해 폴백 루프가 같은 꼬리를
+        // 루트로 다시 펼쳐 제한을 우회하지 못하게 한다.
+        // (clone이 아니라 실집합을 써야 폴백이 건너뛴다.)
+        let (sub_count, capped) = count_descendants(item, index, rendered, depth);
         *skipped += sub_count;
         if capped {
             *truncated = true;
@@ -381,6 +382,7 @@ fn build_tree(
                         depth + 1,
                         skipped,
                         truncated,
+                        rendered,
                     ));
                 }
                 // 목록에 없는 자식(프로젝트 밖·페이지 상한 누락)은 조용히 버리지 않고 센다.
@@ -448,7 +450,7 @@ fn collect_issue_trees(
         rendered.insert(item.url.clone());
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
-        let trees = build_tree(item, &index, &mut visiting, 0, skipped, truncated);
+        let trees = build_tree(item, &index, &mut visiting, 0, skipped, truncated, rendered);
         for tree in &trees {
             record_rendered(tree, rendered);
         }
@@ -695,6 +697,7 @@ mod tests {
         visiting.insert(items[0].url.clone());
         let mut skipped = 0u32;
         let mut case_truncated = false;
+        let mut case_rendered = std::collections::HashSet::new();
         let roots = build_tree(
             &items[0],
             &index,
@@ -702,6 +705,7 @@ mod tests {
             0,
             &mut skipped,
             &mut case_truncated,
+            &mut case_rendered,
         );
         assert_eq!(skipped, 0);
         assert_eq!(roots.len(), 1);
@@ -725,6 +729,7 @@ mod tests {
         visiting.insert(items[0].url.clone());
         let mut skipped = 0u32;
         let mut case_truncated = false;
+        let mut case_rendered = std::collections::HashSet::new();
         let roots = build_tree(
             &items[0],
             &index,
@@ -732,6 +737,7 @@ mod tests {
             super::MAX_TREE_DEPTH,
             &mut skipped,
             &mut case_truncated,
+            &mut case_rendered,
         );
         assert_eq!(roots.len(), 1);
         let root = &roots[0];
@@ -752,6 +758,7 @@ mod tests {
         visiting.insert(items[0].url.clone());
         let mut skipped = 0u32;
         let mut case_truncated = false;
+        let mut case_rendered = std::collections::HashSet::new();
         let roots = build_tree(
             &items[0],
             &index,
@@ -759,6 +766,7 @@ mod tests {
             0,
             &mut skipped,
             &mut case_truncated,
+            &mut case_rendered,
         );
         assert_eq!(skipped, 1);
         assert_eq!(roots.len(), 1);
