@@ -408,8 +408,10 @@ fn build_tree(
         // (clone이 아니라 실집합을 써야 폴백이 건너뛴다.)
         let (sub_count, sub_capped) = count_descendants(item, ctx.index, ctx.rendered);
         *ctx.skipped += sub_count;
+        // 깊이 절단 자체가 숨김이므로 전역 배너를 세운다.
+        // (잘린 서브트리 수와 무관하게 잘림 사실 자체를 표시한다.)
+        *ctx.truncated = true;
         if sub_capped {
-            *ctx.truncated = true;
             *ctx.capped = true;
         }
         // 깊이 절단은 잘린 노드 자체에 플래그가 있어 부모까지 올리지 않는다.
@@ -867,6 +869,8 @@ mod tests {
         let root = &roots[0];
 
         assert!(root.children.is_empty());
+        // 깊이 절단은 잘림이므로 전역 배너 조건이 선다.
+        assert!(case_truncated);
     }
 
     #[test]
