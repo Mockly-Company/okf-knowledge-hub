@@ -104,8 +104,13 @@ function TreeNodeInner({
 
   // 트리 키보드 패턴(방향키 펼침/접기). 포커스 이동은 Tab 순서(토글 버튼·링크)를
   // 그대로 쓰고, treeitem 자체에는 tabIndex를 두지 않아 탭 정지를 늘리지 않는다.
-  // 자식의 Button/링크에서 발생한 키 이벤트가 버블링돼 여기서 처리된다.
+  // 자식 노드의 Button/링크에서 발생한 키는 해당 노드의 핸들러에서만 처리하고
+  // 조상까지 버블링되지 않게 한다(안 그러면 조상이 전부 닫히고 포커스가 사라진다).
   const handleTreeKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    const item = (event.target as HTMLElement).closest('[role="treeitem"]');
+    if (item !== event.currentTarget) {
+      return;
+    }
     if (children.length === 0) {
       return;
     }
