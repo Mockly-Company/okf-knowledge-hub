@@ -704,9 +704,29 @@ pub async fn sync_project_board(
         }
         Err(error) => return Err(error),
     };
-    let mut skipped = dropped;
-    let mut board_truncated = truncated;
-    let issues = collect_issue_trees(&items, &mut skipped, &mut board_truncated);
+    let skipped = dropped;
+    let board_truncated = truncated;
+    // 트리 조립은 CPU 바운드 작업이라 별도 블로킹 스레드로 분리한다.
+    // 대량·다이아몬드 보드에서 Tokio 워커를 장시간 점유하지 않게 한다.
+    // (items 소유권을 넘겨 'static 조건을 만족한다.)
+    let (issues, skipped, board_truncated) = tokio::task::spawn_blocking(
+        move || {
+            let mut skipped = skipped;
+            let mut board_truncated = board_truncated;
+            let issues =
+                collect_issue_trees(&items, &mut skipped, &mut board_truncated);
+            (issues, skipped, board_truncated)
+        },
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::CacheUnavailable,
+            "Project 보드를 만들지 못했습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("reason", format!("{error:?}"))
+    })?;
     let board = ProjectBoard {
         issues,
         fetched_at: fetched_now(),

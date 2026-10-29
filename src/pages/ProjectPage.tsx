@@ -124,8 +124,12 @@ function withoutDone(
       const rawChildren = asIssueArray(issue.children);
       // 깊이 절단으로 잘린 자식은 부모에 생략 플래그를 남긴다.
       // (백엔드 build_tree·게이트웨이 normalizeIssue와 동일한 규칙.)
+      // 절단은 배너 조건에도 합친다.
       const cut =
         depth + 1 > MAX_ISSUE_TREE_DEPTH && rawChildren.length > 0;
+      if (cut) {
+        budget.capped = true;
+      }
       const children = cut
         ? []
         : withoutDone(rawChildren, depth + 1, path, budget);
@@ -417,6 +421,11 @@ export function ProjectPage({
     [filter],
   );
   const { grouped: groupedIssues, capped: walkCapped } = useMemo(() => {
+    // 계층 뷰에서는 레이어 셀이 렌더되지 않으므로 집계를 건너뛴다.
+    // (walkIssues 전체 순회 + emitted Set 비용을 아낀다.)
+    if (view !== "layers" || !board) {
+      return { grouped: new Map<string, BoardIssue[]>(), capped: false };
+    }
     const grouped = new Map<string, BoardIssue[]>();
     // 다이아몬드 공유 자식은 여러 부모 경로에서 walk되므로 같은 셀에
     // 두 번 펼치지 않도록 레이어:상태:URL 기준으로 한 번만 집계한다.
@@ -440,7 +449,7 @@ export function ProjectPage({
       }
     }
     return { grouped, capped: budget.capped };
-  }, [board, hideDone]);
+  }, [board, hideDone, view]);
 
   // 트리 펼침 상태(useState)가 무관한 렌더에 리셋되지 않도록 메모한다.
   const { issues: treeIssues, capped: treeCapped } = useMemo(() => {
