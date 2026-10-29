@@ -72,6 +72,12 @@ function TreeNodeInner({
   const role = roleLabel(depth, issue.kind);
   // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
   const children = asIssueArray(issue.children);
+  // treeitem의 aria-label이 내부 콘텐츠를 가리므로 상태·레이어·타입을
+  // 라벨에 포함해 스크린리더에 전달한다(뱃지 텍스트는 label 뒤에 가려진다).
+  const itemLabel =
+    `${role} #${issue.number} ${issue.title}, ` +
+    `${statusName(issue.status)}, ${layerName(issue.layer)}` +
+    (issue.kind ? `, ${issue.kind}` : "");
   // WAI-ARIA tree 패턴: treeitem은 레벨·펼침·집합 위치를 노출한다.
   // 펼침 토글은 포커스 가능한 Button이라 키보드 조작이 가능하다.
   const treeitemProps = {
@@ -85,7 +91,7 @@ function TreeNodeInner({
     return (
       // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
       <div
-        aria-label={`${role} #${issue.number} ${issue.title}`}
+        aria-label={`${itemLabel}, 하위 항목 생략됨`}
         className="grid gap-[var(--space-2)]"
         {...treeitemProps}
       >
@@ -127,7 +133,7 @@ function TreeNodeInner({
     // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
     // 루트 카드는 tree 직계 소유 구조를 깨지 않도록 treeitem 루트에 직접 입힌다.
     <div
-      aria-label={`${role} #${issue.number} ${issue.title}`}
+      aria-label={itemLabel}
       className={className ?? "grid gap-[var(--space-2)]"}
       {...treeitemProps}
       onKeyDown={handleTreeKeys}

@@ -83,8 +83,14 @@ function normalizeIssue(
       return { ...issue, children: [], kind: issue.kind ?? null };
     }
     const children: BoardIssue[] = [];
-    for (const child of asIssueArray(issue.children)) {
-      const normalized = normalizeIssue(child, depth + 1, path, stats);
+    // asIssueArray는 탈락분을 조용히 버리므로, skipped 합산을 위해 여기서 직접 센다.
+    const rawChildren = Array.isArray(issue.children) ? issue.children : [];
+    for (const raw of rawChildren) {
+      if (!isIssueLike(raw)) {
+        stats.dropped += 1;
+        continue;
+      }
+      const normalized = normalizeIssue(raw, depth + 1, path, stats);
       if (normalized) {
         children.push(normalized);
       }
@@ -102,8 +108,14 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   }
   const stats = { cuts: 0, dropped: 0 };
   const issues: BoardIssue[] = [];
-  for (const issue of asIssueArray(board.issues)) {
-    const normalized = normalizeIssue(issue, 0, new Set<string>(), stats);
+  // asIssueArray는 탈락분을 조용히 버리므로, skipped 합산을 위해 여기서 직접 센다.
+  const topLevel = Array.isArray(board.issues) ? board.issues : [];
+  for (const raw of topLevel) {
+    if (!isIssueLike(raw)) {
+      stats.dropped += 1;
+      continue;
+    }
+    const normalized = normalizeIssue(raw, 0, new Set<string>(), stats);
     if (normalized) {
       issues.push(normalized);
     }

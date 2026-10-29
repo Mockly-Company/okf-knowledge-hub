@@ -95,6 +95,8 @@ describe("TauriProjectBoardGateway", () => {
 
     expect(board.issues).toHaveLength(1);
     expect(board.issues[0].children).toEqual([]);
+    // 비객체 원소 4개(최상위 null·42, 자식 null·"oops")가 skipped에 합산된다.
+    expect(board.skipped).toBe(4);
   });
 
   it("maps the project list command", async () => {
