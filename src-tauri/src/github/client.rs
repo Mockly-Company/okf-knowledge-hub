@@ -948,6 +948,9 @@ impl GithubHttpClient {
                     dropped += 1;
                     continue;
                 };
+                // 프론트 issueKey(url.trim())와 키 기준을 일치시킨다.
+                // 앞뒤 공백 오염 시 순환 검사가 어긋나지 않게 경계에서 정규화한다.
+                let url = url.trim().to_owned();
                 let labels = content
                     .labels
                     .map(|connection| {
@@ -994,9 +997,11 @@ impl GithubHttpClient {
                             .into_iter()
                             .flatten()
                             .filter_map(|node| match (node.number, node.title, node.url) {
-                                (Some(number), Some(title), Some(url)) => {
-                                    Some(GithubSubIssue { number, title, url })
-                                }
+                                (Some(number), Some(title), Some(url)) => Some(GithubSubIssue {
+                                    number,
+                                    title,
+                                    url: url.trim().to_owned(),
+                                }),
                                 // 필드 결손 서브이슈도 조용히 버리지 않고 누락 수에 합친다.
                                 _ => {
                                     sub_page_dropped += 1;

@@ -152,7 +152,9 @@ function TreeNode({
 }
 
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
-  if (issues.length === 0) {
+  // hideDone=false 등 정규화를 우회하는 경로에서도 안전하도록 최상위도 검증한다.
+  const safeIssues = asIssueArray(issues);
+  if (safeIssues.length === 0) {
     return (
       <p className="m-0 text-[var(--text-muted)]">연결된 Issue 없음</p>
     );
@@ -163,7 +165,7 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       role="region"
       aria-label="계층 보기"
     >
-      {issues.map((issue) => (
+      {safeIssues.map((issue) => (
         <div
           key={`${issue.number}-${issue.url}`}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
