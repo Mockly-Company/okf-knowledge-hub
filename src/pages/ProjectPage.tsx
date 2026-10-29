@@ -50,6 +50,9 @@ function* walkIssues(
   budget: { count: number; capped: boolean } = { count: 0, capped: false },
 ): Generator<BoardIssue> {
   if (depth > MAX_ISSUE_TREE_DEPTH) {
+    // 깊이 절단도 잘림이므로 배너 조건에 합친다.
+    // (백엔드·게이트웨이가 truncated를 세우는 것과 같은 취지.)
+    budget.capped = true;
     return;
   }
   for (const issue of asIssueArray(issues)) {
@@ -89,6 +92,8 @@ function withoutDone(
   budget: { count: number; capped: boolean } = { count: 0, capped: false },
 ): BoardIssue[] {
   if (depth > MAX_ISSUE_TREE_DEPTH) {
+    // 깊이 절단도 잘림이므로 배너 조건에 합친다.
+    budget.capped = true;
     return [];
   }
   const kept: BoardIssue[] = [];
@@ -721,7 +726,8 @@ export function ProjectPage({
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
             <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">
-              <h2 className="m-0 mb-[var(--space-3)]" title={layer.label}>
+              {/* 미지정 레인은 매핑 라벨이 없어 title을 붙이지 않는다. */}
+              <h2 className="m-0 mb-[var(--space-3)]" title={layer.label ?? undefined}>
                 {layer.name}
               </h2>
               <section

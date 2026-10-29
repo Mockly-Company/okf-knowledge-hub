@@ -59,6 +59,7 @@ export const BOARD_LAYERS: ReadonlyArray<{
   { id: "design", name: "디자인", label: "layer:design" },
   { id: "frontend", name: "프론트엔드", label: "layer:frontend" },
   { id: "backend", name: "백엔드", label: "layer:backend" },
+  // 미지정 레인은 매핑되는 layer: 라벨이 없다(Rust BoardLayer::Unassigned.label() == None과 동일).
   { id: "unassigned", name: "미지정" },
 ];
 
