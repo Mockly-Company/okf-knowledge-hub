@@ -1,4 +1,4 @@
-import { memo, useCallback, useId, useState, type KeyboardEvent } from "react";
+import { memo, useId, useState, type FocusEvent, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -59,8 +59,6 @@ const TreeNode = memo(
     setSize,
     posInSet,
     className,
-    focusedKey,
-    onFocusKey,
   }: {
     issue: BoardIssue;
     depth: number;
@@ -69,14 +67,8 @@ const TreeNode = memo(
     /** 형제 집합 크기와 순서. treeitem의 aria-setsize/posinset에 쓴다. */
     setSize?: number;
     posInSet?: number;
-    /** roving 포커스 식별자. 위치+URL 조합으로 다이아몬드 중복 URL을 구분한다. */
-    focusId?: string;
     /** 루트 카드처럼 tree 구조 밖에 스타일 래퍼를 둘 수 없을 때 쓴다. */
     className?: string;
-    /** 현재 roving 포커스가 있는 노드 키. Tab 정지는 이 노드에만 둔다. */
-    focusedKey?: string | null;
-    /** 포커스를 받은 노드 키를 올린다. useCallback 안정 참조를 전달한다. */
-    onFocusKey?: (key: string) => void;
   }) {
   const [open, setOpen] = useState(depth === 0);
   // useId는 early return보다 앞에서 호출한다(훅 순서 규칙).
@@ -96,19 +88,28 @@ const TreeNode = memo(
   }
   const childPath = new Set(path);
   childPath.add(key);
-  // roving 식별자는 위치(깊이·형제 순서)+경로 조합으로 만든다. 같은 URL이
-  // 다이아몬드로 중복 렌더돼도 서로 다른 노드로 구분돼 Tab 정지가 겹치지 않는다.
-  const focusId = `${depth}:${posInSet ?? 0}:${[...childPath].join(">")}`;
-  /** roving tabindex: Tab 정지는 포커스 중인 노드 하나에만 둔다.
-   * 초기값(포커스 없음)은 첫 루트에 둔다. 화살표·포커스 이동 시 갱신된다. */
-  const focused =
-    focusedKey === undefined || focusedKey === null
-      ? depth === 0 && posInSet === 1
-      : focusedKey === focusId;
-  const handleFocus = () => {
-    if (focusedKey !== focusId) {
-      onFocusKey?.(focusId);
+  // roving tabindex는 React state 없이 DOM에서 직접 관리한다.
+  // 전역 포커스 키를 props로 내리면 포커스 이동 때마다 전체 memo가 무효화되므로,
+  // onFocus/onBlur에서 tabIndex만 imperative로 갱신한다.
+  // (첫 루트만 초기 Tab 정지. 리렌더는 prop 변경 시에만 일어나 tabIndex를 덮지 않는다.)
+  // onFocus는 focusin 기반이라 자식 Button/링크 포커스에도 버블링되므로
+  // treeitem 자체에 온 경우만 처리한다.
+  const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) {
+      return;
     }
+    event.currentTarget.tabIndex = 0;
+  };
+  const handleBlur = (event: FocusEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+    const next = event.relatedTarget as Node | null;
+    // 서브트리 내부 이동이면 Tab 정지를 유지하고, 완전히 벗어날 때만 제거한다.
+    if (next && event.currentTarget.contains(next)) {
+      return;
+    }
+    event.currentTarget.tabIndex = -1;
   };
   const role = roleLabel(depth, issue.kind);
   // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
@@ -130,7 +131,7 @@ const TreeNode = memo(
     "aria-setsize": setSize,
     "aria-posinset": posInSet,
     "aria-labelledby": `${titleId} ${descId}`,
-    tabIndex: focused ? 0 : -1,
+    tabIndex: depth === 0 && posInSet === 1 ? 0 : -1,
   };
   // 트리 키보드 패턴(방향키 펼침/접기 + 이동). 포커스 이동은 roving tabindex를
   // 갱신하고, treeitem 자체에는 tabIndex를 두지 않아 탭 정지를 늘리지 않는다.
@@ -217,6 +218,7 @@ const TreeNode = memo(
         className="grid gap-[var(--space-2)]"
         {...treeitemProps}
         onFocus={handleFocus}
+        onBlur={handleBlur}
         onKeyDown={handleTreeKeys}
       >
         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
@@ -247,6 +249,7 @@ const TreeNode = memo(
       {...treeitemProps}
       onKeyDown={handleTreeKeys}
       onFocus={handleFocus}
+        onBlur={handleBlur}
     >
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         {children.length > 0 ? (
@@ -312,8 +315,6 @@ const TreeNode = memo(
                   path={childPath}
                   setSize={children.length}
                   posInSet={index + 1}
-                  focusedKey={focusedKey}
-                  onFocusKey={onFocusKey}
                 />
               </li>
             );
@@ -329,8 +330,6 @@ const TreeNode = memo(
     prev.setSize === next.setSize &&
     prev.posInSet === next.posInSet &&
     prev.className === next.className &&
-    prev.focusedKey === next.focusedKey &&
-    prev.onFocusKey === next.onFocusKey &&
     samePath(prev.path, next.path),
 );
 
@@ -359,11 +358,6 @@ function samePath(a?: Set<string>, b?: Set<string>): boolean {
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
   // hideDone=false 등 정규화를 우회하는 경로에서도 안전하도록 최상위도 검증한다.
   const safeIssues = asIssueArray(issues);
-  // roving tabindex 상태: Tab 정지는 포커스 중인 노드 하나에만 둔다.
-  const [focusKey, setFocusKey] = useState<string | null>(null);
-  const handleFocusKey = useCallback((key: string) => {
-    setFocusKey((current) => (current === key ? current : key));
-  }, []);
   if (safeIssues.length === 0) {
     return (
       <p className="m-0 text-[var(--text-muted)]">연결된 Issue 없음</p>
@@ -383,8 +377,6 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
           setSize={safeIssues.length}
           posInSet={index + 1}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
-          focusedKey={focusKey}
-          onFocusKey={handleFocusKey}
         />
       ))}
     </div>
