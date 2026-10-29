@@ -53,17 +53,28 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
   }
 }
 
-/** 절단된 서브트리의 숨은 노드 수를 센다(백엔드 count_descendants와 같은 단위). */
-function countHiddenNodes(issue: BoardIssue, path: Set<string>): number {
+/** 절단 집계의 추가 탐사 깊이. 백엔드 상수와 같은 취지의 총량 상한이다. */
+const MAX_HIDDEN_EXTRA_DEPTH = 100;
+
+/** 절단된 서브트리의 숨은 노드 수를 센다(백엔드 count_descendants와 같은 단위).
+ * 잘린 노드는 렌더되지 않으므로 다이아몬드 공유 서브트리도 고유 URL 기준으로
+ * 한 번만 센다. 전역 seen + 깊이 상한으로 순환·폭주를 막는다. */
+function countHiddenNodes(
+  issue: BoardIssue,
+  seen = new Set<string>(),
+  depth = 0,
+): number {
+  if (depth > MAX_ISSUE_TREE_DEPTH + MAX_HIDDEN_EXTRA_DEPTH) {
+    return 0;
+  }
   let count = 0;
   for (const child of asIssueArray(issue.children)) {
     const key = issueKey(child);
-    if (path.has(key)) {
+    if (seen.has(key)) {
       continue;
     }
-    path.add(key);
-    count += 1 + countHiddenNodes(child, path);
-    path.delete(key);
+    seen.add(key);
+    count += 1 + countHiddenNodes(child, seen, depth + 1);
   }
   return count;
 }

@@ -309,41 +309,54 @@ const MAX_TREE_DEPTH: usize = 10;
 /// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 가져오며 초과분은 잘린다.
 /// GitHub subIssues 커넥션에 별도 페이지네이션을 하지 않으므로
 /// 자식이 20개를 넘는 에픽은 초과분이 보드에서 빠진다.
-/// 서브이슈 조회 상한(`SUB_ISSUES_FIRST`)을 초과한 잘림을 셀 때의 추가 탐사 깊이.
-/// `build_tree`가 `MAX_TREE_DEPTH`에서 잘라도 카운터는 이 예산만큼 더 내려가
-/// 잘린 서브트리 전체를 집계한다. 오염 체인 폭주 방지를 위한 상한이다.
-const MAX_COUNT_EXTRA_DEPTH: usize = 100;
+/// 서브이슈 조회 상한(`SUB_ISSUES_FIRST`)을 초과한 잘림을 셀 때의 노드 예산.
+/// 재귀 대신 명시적 스택으로 순회하므로 스택 오버플로 걱정은 없고,
+/// 이 예산은 오염 캐시 폭주 시 HashSet 폭증을 막는 총량 상한이다.
+const MAX_COUNT_NODES: usize = 100_000;
 
 /// 깊이 제한으로 잘린 서브트리 전체 노드 수를 센다. 직속 자식만 세면
-/// 손자 이하는 누락돼 `skipped`가 과소 집계되므로 재귀적으로 센다.
+/// 손자 이하는 누락돼 `skipped`가 과소 집계되므로 전부 센다.
 /// 잘린 노드는 렌더되지 않으므로 서로 다른 경로에서 공유되는 다이아몬드
-/// 서브트리도 서로 다른 숨김으로 보지 않고 고유 URL 기준으로 한 번만 센다.
-/// (집계 기준: 렌더 행 수가 아니라 고유 숨김 URL 수.)
-/// 깊이 예산을 초과하면 탐사를 멈추고 capped=true를 돌려 호출자가
-/// `truncated`를 세우도록 한다(예산 초과분은 셀 수 없으므로 0으로 두지 않는다).
+/// 서브트리도 고유 URL 기준으로 한 번만 센다(집계 기준: 고유 숨김 URL 수).
+/// 센 URL은 `seen`(호출자의 rendered 집합)에 그대로 남겨 폴백 루프가
+/// 잘린 꼬리를 루트로 다시 승격해 깊이 제한을 우회하지 못하게 한다.
+/// 명시적 스택 순회라 깊은 체인에서도 스택 오버플로가 없고,
+/// 노드 예산을 초과하면 중단하고 capped=true를 돌려 호출자가
+/// `truncated`를 세운다(예산 초과분은 셀 수 없으므로 0으로 두지 않는다).
 fn count_descendants(
     item: &GithubProjectItem,
     index: &std::collections::HashMap<&str, &GithubProjectItem>,
     seen: &mut std::collections::HashSet<String>,
-    depth: usize,
 ) -> (u32, bool) {
-    if depth > MAX_TREE_DEPTH + MAX_COUNT_EXTRA_DEPTH {
-        return (0, true);
-    }
     let mut count = 0u32;
-    let mut capped = false;
+    let mut stack: Vec<&GithubProjectItem> = Vec::new();
     for sub in &item.sub_issues {
         if !seen.insert(sub.url.clone()) {
             continue;
         }
         count += 1;
+        if count as usize >= MAX_COUNT_NODES {
+            return (count, true);
+        }
         if let Some(found) = index.get(sub.url.as_str()) {
-            let (sub_count, sub_capped) = count_descendants(found, index, seen, depth + 1);
-            count += sub_count;
-            capped = capped || sub_capped;
+            stack.push(found);
         }
     }
-    (count, capped)
+    while let Some(current) = stack.pop() {
+        for sub in &current.sub_issues {
+            if !seen.insert(sub.url.clone()) {
+                continue;
+            }
+            count += 1;
+            if count as usize >= MAX_COUNT_NODES {
+                return (count, true);
+            }
+            if let Some(found) = index.get(sub.url.as_str()) {
+                stack.push(found);
+            }
+        }
+    }
+    (count, false)
 }
 
 fn build_tree(
@@ -361,7 +374,7 @@ fn build_tree(
         // 잘린 URL을 rendered에 직접 기록해 폴백 루프가 같은 꼬리를
         // 루트로 다시 펼쳐 제한을 우회하지 못하게 한다.
         // (clone이 아니라 실집합을 써야 폴백이 건너뛴다.)
-        let (sub_count, capped) = count_descendants(item, index, rendered, depth);
+        let (sub_count, capped) = count_descendants(item, index, rendered);
         *skipped += sub_count;
         if capped {
             *truncated = true;
@@ -795,15 +808,12 @@ mod tests {
             items.iter().map(|item| (item.url.as_str(), item)).collect();
         let mut seen = std::collections::HashSet::new();
         // R, A, B, D 중 R 제외 3개가 아니라 A, B, D = 3개. D는 한 번만 센다.
-        assert_eq!(
-            count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH),
-            (3, false)
-        );
+        assert_eq!(count_descendants(&items[0], &index, &mut seen), (3, false));
     }
 
     #[test]
-    fn count_descendants_is_bounded_by_depth_budget() {
-        // 비정상 깊이 체인도 MAX_TREE_DEPTH + MAX_COUNT_EXTRA_DEPTH에서 멈춘다.
+    fn count_descendants_counts_long_chains_without_recursion_limit() {
+        // 300 체인도 명시적 스택으로 끝까지 센다. capped는 노드 예산 초과 때만 선다.
         let urls: Vec<String> = (0..300)
             .map(|i| format!("https://example.test/{i}"))
             .collect();
@@ -821,10 +831,9 @@ mod tests {
         let index: std::collections::HashMap<&str, &GithubProjectItem> =
             items.iter().map(|item| (item.url.as_str(), item)).collect();
         let mut seen = std::collections::HashSet::new();
-        let (counted, capped) =
-            count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH);
-        assert_eq!(counted, (super::MAX_COUNT_EXTRA_DEPTH + 1) as u32);
-        assert!(capped);
+        let (counted, capped) = count_descendants(&items[0], &index, &mut seen);
+        assert_eq!(counted, 299);
+        assert!(!capped);
     }
 
     #[test]
