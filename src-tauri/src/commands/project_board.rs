@@ -371,6 +371,9 @@ fn build_tree(
         let mut collected = Vec::new();
         for sub in &item.sub_issues {
             if !visiting.insert(sub.url.clone()) {
+                // 순환으로 잘린 간선도 숨겨진 항목이므로 skipped에 합산한다.
+                // 인덱스 누락(None 분기)과 동일하게 조용히 버리지 않는다.
+                *skipped += 1;
                 continue;
             }
             match index.get(sub.url.as_str()) {
@@ -707,7 +710,8 @@ mod tests {
             &mut case_truncated,
             &mut case_rendered,
         );
-        assert_eq!(skipped, 0);
+        // 순환 간선(2 → 1)은 렌더되지 않으므로 skipped에 1건으로 합산된다.
+        assert_eq!(skipped, 1);
         assert_eq!(roots.len(), 1);
         let root = &roots[0];
 
