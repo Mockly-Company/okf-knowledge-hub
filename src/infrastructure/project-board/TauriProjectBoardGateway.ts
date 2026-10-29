@@ -60,11 +60,15 @@ const MAX_HIDDEN_NODES = 100_000;
  * 잘린 노드는 렌더되지 않으므로 다이아몬드 공유 서브트리도 고유 URL 기준으로
  * 한 번만 센다. 명시적 스택 순회라 깊은 체인에서도 스택 오버플로가 없고,
  * 노드 예산을 초과하면 중단한다(초과분은 셀 수 없으므로 호출자가 truncated로 표시).
- * 비객체 오염 원소도 숨은 항목 수에 포함한다. 정상 경로의 dropped 합산과는
- * 겹치지 않는다(절단 시 자식 정규화 루프를 타지 않으므로 중복 가산이 없다). */
+ * seen은 호출자가 쥔 전역 집합을 그대로 쓴다. 절단마다 새 집합을 만들면
+ * 다이아몬드 공유 서브트리가 분기마다 중복 집계되고, 이미 순회한 자식을
+ * 잘린 경우 다시 스택 순회해 이중 비용이 든다.
+ * 비객체 오염 원소와 isIssueLike 탈락분도 숨은 항목 수에 포함한다.
+ * 정상 경로의 dropped 합산과는 겹치지 않는다(절단 시 자식 정규화 루프를
+ * 타지 않으므로 중복 가산이 없다). */
 function countHiddenNodes(
   issue: BoardIssue,
-  seen = new Set<string>(),
+  seen: Set<string>,
 ): { count: number; capped: boolean } {
   let count = 0;
   const stack: unknown[] = Array.isArray(issue.children)
@@ -72,7 +76,8 @@ function countHiddenNodes(
     : [];
   while (stack.length > 0) {
     const current = stack.pop();
-    if (typeof current !== "object" || current === null) {
+    if (typeof current !== "object" || current === null || !isIssueLike(current)) {
+      // 자식 정규화 루프를 타지 않는 절단 경로 전용 집계이므로 여기서 센다.
       count += 1;
     } else {
       const key = issueKey(current);
@@ -99,12 +104,13 @@ function normalizeIssue(
   issue: BoardIssue,
   depth = 0,
   path = new Set<string>(),
-  stats: { cuts: number; dropped: number; hidden: number; nodes: number } = {
-    cuts: 0,
-    dropped: 0,
-    hidden: 0,
-    nodes: 0,
-  },
+  stats: {
+    cuts: number;
+    dropped: number;
+    hidden: number;
+    nodes: number;
+    counted: Set<string>;
+  } = { cuts: 0, dropped: 0, hidden: 0, nodes: 0, counted: new Set<string>() },
 ): BoardIssue | null {
   if (!isIssueLike(issue)) {
     stats.dropped += 1;
@@ -114,8 +120,13 @@ function normalizeIssue(
   const release = enterPath(path, issueKey(issue));
   if (!release) {
     stats.dropped += 1;
+    // 탈락한 URL도 집계済み로 표시해 이후 절단 집계에서 숨김으로 중복 가산되지 않게 한다.
+    stats.counted.add(issueKey(issue));
     return null;
   }
+  // 렌더되거나 절단되는 노드는 집계済み로 표시해 이후 절단 집계에서
+  // 숨김으로 중복 가산되지 않게 한다.
+  stats.counted.add(issueKey(issue));
   try {
     // 정규화 자체에도 총량 예산을 둔다. 다이아몬드 공유가 많은 오염 캐시는
     // 깊이 상한에 걸리지 않아도 재귀가 기하급수 팽창할 수 있다.
@@ -124,8 +135,14 @@ function normalizeIssue(
     stats.nodes += 1;
     if (stats.nodes > MAX_HIDDEN_NODES) {
       stats.cuts += 1;
-      const hidden = countHiddenNodes(issue, new Set(path));
+      // 절단 집계용 전역 집합을 재사용한다. 절단마다 새 집합을 만들면
+      // 다이아몬드 공유 서브트리가 분기마다 중복 집계되고 이미 순회한
+      // 자식을 잘린 경우 다시 스택 순회해 이중 비용이 든다.
+      const hidden = countHiddenNodes(issue, stats.counted);
       stats.hidden += hidden.count;
+      if (hidden.capped) {
+        stats.cuts += 1;
+      }
       return {
         ...issue,
         children: [],
@@ -140,7 +157,7 @@ function normalizeIssue(
       // 노드 예산 초과분은 셀 수 없으므로 truncated로 표시한다.
       // 잘린 노드임을 플래그로 남겨 TreeNode가 "하위 항목 생략됨"을 표시한다.
       stats.cuts += 1;
-      const hidden = countHiddenNodes(issue, new Set(path));
+      const hidden = countHiddenNodes(issue, stats.counted);
       stats.hidden += hidden.count;
       if (hidden.capped) {
         stats.cuts += 1;
@@ -187,7 +204,13 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   if (typeof board !== "object" || board === null) {
     return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
   }
-  const stats = { cuts: 0, dropped: 0, hidden: 0, nodes: 0 };
+  const stats = {
+    cuts: 0,
+    dropped: 0,
+    hidden: 0,
+    nodes: 0,
+    counted: new Set<string>(),
+  };
   const issues: BoardIssue[] = [];
   // asIssueArray는 탈락분을 조용히 버리므로, skipped 합산을 위해 여기서 직접 센다.
   const topLevel = Array.isArray(board.issues) ? board.issues : [];

@@ -99,6 +99,67 @@ describe("TauriProjectBoardGateway", () => {
     expect(board.skipped).toBe(4);
   });
 
+  it("counts a shared cut subtree only once across branches", async () => {
+    // 두 에픽이 50 깊이 이후에 같은 하위 체인을 공유하는 다이아몬드 오염 캐시.
+    // 절단 집계용 전역 집합이 없으면 공유 구간이 분기마다 중복 가산된다.
+    const sharedTail = (start: number): unknown[] => {
+      const leaf = {
+        number: start + 9,
+        title: `공유 ${start + 9}`,
+        url: `https://example.test/issues/shared-${start + 9}`,
+        layer: "planning",
+        status: "backlog",
+        children: [],
+        kind: null,
+      };
+      let current: unknown = leaf;
+      for (let n = start + 8; n >= start; n--) {
+        current = {
+          number: n,
+          title: `공유 ${n}`,
+          url: `https://example.test/issues/shared-${n}`,
+          layer: "planning",
+          status: "backlog",
+          children: [current],
+          kind: null,
+        };
+      }
+      return [current];
+    };
+    const chainTo = (prefix: string, length: number, tail: unknown[]): unknown => {
+      let head: unknown = tail;
+      for (let n = length - 1; n >= 0; n--) {
+        head = {
+          number: 1000 + n,
+          title: `${prefix} ${n}`,
+          url: `https://example.test/issues/${prefix}-${n}`,
+          layer: "planning",
+          status: "backlog",
+          children: Array.isArray(head) ? head : [head],
+          kind: null,
+        };
+      }
+      return head;
+    };
+    const tail = sharedTail(9000);
+    const invoke = async <T>(): Promise<T> => {
+      return {
+        issues: [chainTo("a", 51, tail), chainTo("b", 51, tail)],
+        fetchedAt: null,
+        skipped: 0,
+        truncated: false,
+      } as T;
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    const board = await gateway.getProjectBoard();
+
+    expect(board.truncated).toBe(true);
+    // 잘린 노드 자체는 flagged 리프로 렌더되므로, 숨김 집계는 자손만 센다.
+    // 공유 꼬리 S1..S9 9개가 두 분기에 걸쳐 있어도 한 번만 합산된다(중복이면 18).
+    expect(board.skipped).toBe(9);
+  });
+
   it("maps the project list command", async () => {
     const invoke = async <T>(
       command: string,

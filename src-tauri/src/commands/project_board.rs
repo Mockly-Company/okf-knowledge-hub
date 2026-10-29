@@ -369,7 +369,8 @@ struct TreeBuildCtx<'a> {
     capped: &'a mut bool,
     /// 방문한 노드 총수. rendered 크기와 달리 재귀 중에도 증가하므로
     /// 단일 에픽의 폭 방향 기하급수 팽창을 렌더 중에 차단한다.
-    count: usize,
+    /// 루트마다 리셋하지 않고 전체 동기화에서 공유한다.
+    count: &'a mut usize,
 }
 
 fn build_tree(
@@ -387,9 +388,9 @@ fn build_tree(
     // (전역 배너는 truncated로 표시한다. capped는 폴백 건너뛰기에 쓴다.)
     // 진입한 노드는 rendered에도 기록해 폴백 루프가 미완성 꼬리를
     // 루트로 다시 펼치지 못하게 한다.
-    ctx.count += 1;
+    *ctx.count += 1;
     ctx.rendered.insert(item.url.clone());
-    if ctx.count > MAX_COUNT_NODES {
+    if *ctx.count > MAX_COUNT_NODES {
         *ctx.truncated = true;
         *ctx.capped = true;
         *ctx.skipped += 1;
@@ -424,8 +425,7 @@ fn build_tree(
             }
             match ctx.index.get(sub.url.as_str()) {
                 Some(found) => {
-                    let (trees, cut_child) =
-                        build_tree(found, visiting, depth + 1, ctx);
+                    let (trees, cut_child) = build_tree(found, visiting, depth + 1, ctx);
                     child_cut = child_cut || cut_child;
                     collected.extend(trees);
                 }
@@ -493,6 +493,9 @@ fn collect_issue_trees(
     // 한 항목을 트리로 펼쳐 issues에 넣고 rendered에 기록한다.
     // 매핑 실패로 트리가 비어도 처리済み로 표시해 폴백 중복을 막는다.
     let mut capped_any = false;
+    // 총량 카운터는 루프 밖에서 한 번 만들어 전체 동기화에서 공유한다.
+    // 루트마다 리셋하면 루트 수만큼 예산이 곱해져 총량 제한이 무력화된다.
+    let mut total_count: usize = 0;
     for item in items {
         // 루트 판별 + 완전 중복 URL 루트는 한 번만 펼친다.
         // 공유 자식은 각 부모 밑에 그대로 렌더한다(계층 정보 유지).
@@ -504,6 +507,7 @@ fn collect_issue_trees(
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
         // ctx는 반복마다 만들어 빌림이 다음 반복으로 새지 않게 한다.
+        // 카운터만 바깥 권역을 재빌림해 누적한다.
         let (trees, _) = {
             let mut ctx = TreeBuildCtx {
                 index: &index,
@@ -511,7 +515,7 @@ fn collect_issue_trees(
                 truncated: &mut *truncated,
                 rendered: &mut rendered,
                 capped: &mut capped_any,
-                count: 0,
+                count: &mut total_count,
             };
             build_tree(item, &mut visiting, 0, &mut ctx)
         };
@@ -543,7 +547,7 @@ fn collect_issue_trees(
                 truncated: &mut *truncated,
                 rendered: &mut rendered,
                 capped: &mut capped_any,
-                count: 0,
+                count: &mut total_count,
             };
             build_tree(item, &mut visiting, 0, &mut ctx)
         };
@@ -714,7 +718,7 @@ pub async fn sync_project_board(
 #[cfg(test)]
 mod tests {
     use super::{
-        TreeBuildCtx, build_tree, collect_issue_trees, count_descendants, map_layer, map_status,
+        build_tree, collect_issue_trees, count_descendants, map_layer, map_status, TreeBuildCtx,
     };
     use crate::github::model::{GithubProjectItem, GithubSubIssue};
     use crate::project_board::{BoardLayer, BoardStatus};
@@ -779,13 +783,14 @@ mod tests {
         let mut case_truncated = false;
         let mut case_rendered = std::collections::HashSet::new();
         let mut case_capped = false;
+        let mut case_count: usize = 0;
         let mut case_ctx = TreeBuildCtx {
             index: &index,
             skipped: &mut skipped,
             truncated: &mut case_truncated,
             rendered: &mut case_rendered,
             capped: &mut case_capped,
-            count: 0,
+            count: &mut case_count,
         };
         let (roots, _) = build_tree(&items[0], &mut visiting, 0, &mut case_ctx);
         // 순환 간선(2 → 1)은 렌더되지 않으므로 skipped에 1건으로 합산된다.
@@ -813,15 +818,21 @@ mod tests {
         let mut case_truncated = false;
         let mut case_rendered = std::collections::HashSet::new();
         let mut case_capped = false;
+        let mut case_count: usize = 0;
         let mut case_ctx = TreeBuildCtx {
             index: &index,
             skipped: &mut skipped,
             truncated: &mut case_truncated,
             rendered: &mut case_rendered,
             capped: &mut case_capped,
-            count: 0,
+            count: &mut case_count,
         };
-        let (roots, _) = build_tree(&items[0], &mut visiting, super::MAX_TREE_DEPTH, &mut case_ctx);
+        let (roots, _) = build_tree(
+            &items[0],
+            &mut visiting,
+            super::MAX_TREE_DEPTH,
+            &mut case_ctx,
+        );
         assert_eq!(roots.len(), 1);
         let root = &roots[0];
 
@@ -843,13 +854,14 @@ mod tests {
         let mut case_truncated = false;
         let mut case_rendered = std::collections::HashSet::new();
         let mut case_capped = false;
+        let mut case_count: usize = 0;
         let mut case_ctx = TreeBuildCtx {
             index: &index,
             skipped: &mut skipped,
             truncated: &mut case_truncated,
             rendered: &mut case_rendered,
             capped: &mut case_capped,
-            count: 0,
+            count: &mut case_count,
         };
         let (roots, _) = build_tree(&items[0], &mut visiting, 0, &mut case_ctx);
         assert_eq!(skipped, 1);
