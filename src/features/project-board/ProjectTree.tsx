@@ -285,9 +285,12 @@ const TreeNode = memo(
             {description}
           </span>
           <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
-          <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
-            하위 항목 생략됨
-          </span>
+          {/* 자식이 없는 리프는 잘린 것이 없으므로 표시하지 않는다(백엔드 기준과 동일). */}
+          {issue.childrenTruncated || children.length > 0 ? (
+            <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+              하위 항목 생략됨
+            </span>
+          ) : null}
         </div>
       </div>
     );

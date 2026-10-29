@@ -220,7 +220,13 @@ function normalizeIssue(
       // 잘린 하위 노드 수는 백엔드와 같은 단위(고유 숨김 URL 수)로 skipped에 합치고,
       // 노드 예산 초과분은 셀 수 없으므로 truncated로 표시한다.
       // 잘린 노드임을 플래그로 남겨 TreeNode가 "하위 항목 생략됨"을 표시한다.
-      warnTruncated(stats, issue, "depth limit", depth);
+      // 자식이 없는 리프는 잘린 것이 없으므로 생략 표시·경고를 하지 않는다
+      // (백엔드 `cut && !sub_issues.is_empty()`와 같은 기준).
+      const hasChildren =
+        Array.isArray(issue.children) && issue.children.length > 0;
+      if (hasChildren) {
+        warnTruncated(stats, issue, "depth limit", depth);
+      }
       const hidden = countHiddenNodes(issue, stats.counted);
       stats.hidden += hidden.count;
       if (hidden.capped) {
@@ -230,7 +236,7 @@ function normalizeIssue(
         ...issue,
         children: [],
         kind: typeof issue.kind === "string" ? issue.kind : null,
-        childrenTruncated: true,
+        childrenTruncated: hasChildren,
       };
     }
     const children: BoardIssue[] = [];
