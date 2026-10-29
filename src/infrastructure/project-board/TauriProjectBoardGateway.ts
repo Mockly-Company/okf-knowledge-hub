@@ -172,6 +172,10 @@ function normalizeIssue(
       ...issue,
       children,
       kind: typeof issue.kind === "string" ? issue.kind : null,
+      // 백엔드가 세운 절단 플래그는 그대로 유지한다. 무조건 false로 두면
+      // 실제 절단이 있었는데도 표시가 사라진다. 오염된 비불리언 값만 false로
+      // 정규화해 구 캐시의 이상치가 다음 세대에 남지 않게 한다.
+      childrenTruncated: issue.childrenTruncated === true,
     };
   } finally {
     release();

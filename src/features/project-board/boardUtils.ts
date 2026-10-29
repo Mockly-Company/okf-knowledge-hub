@@ -31,6 +31,11 @@ export function safeHref(url: unknown): string | null {
     if (parsed.protocol.toLowerCase() !== "https:") {
       return null;
     }
+    // userinfo가 있으면 사용자 확인 없이 자격증명이 새나갈 수 있으므로 거부한다.
+    // (예: https://id:pw@github.com/... → github.com으로 가지만 정보가 노출됨)
+    if (parsed.username !== "" || parsed.password !== "") {
+      return null;
+    }
     // 서브도메인 와일드카드까지 허용하면 피싱 표면이 넓어지므로,
     // Issue URL 호스트(github.com)와 정확히 일치할 때만 허용한다.
     if (parsed.hostname.toLowerCase() !== "github.com") {

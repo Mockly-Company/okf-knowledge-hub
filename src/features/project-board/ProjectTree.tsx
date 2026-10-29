@@ -98,7 +98,9 @@ const TreeNode = memo(
   // 개별 노드는 자신의 위치 키와 비교해 Tab 정지 여부만 판단한다.
   // memo 비교도 동일 위치키 기준으로만 무효화돼 포커스 이동 시
   // 이전·현재 2개 노드만 다시 렌더된다(전체 무효화 방지).
-  const focusId = `${depth}:${posInSet ?? 0}:${key}`;
+  // 포커스 식별자에 조상 경로까지 넣어 다이아몬드 중복 URL을 구분한다.
+  // (동일 URL이 다른 부모 밑에 같은 깊이·순서로 있어도 ID가 겹치지 않는다.)
+  const focusId = `${depth}:${posInSet ?? 0}:${[...childPath].join(">")}`;
   const focused =
     focusedKey === undefined || focusedKey === null
       ? depth === 0 && posInSet === 1
@@ -342,9 +344,11 @@ const TreeNode = memo(
 function focusIdOf(p: {
   depth?: number;
   posInSet?: number;
+  path?: Set<string>;
   issue: BoardIssue;
 }): string {
-  return `${p.depth}:${p.posInSet ?? 0}:${issueKey(p.issue)}`;
+  const trail = [...(p.path ?? []), issueKey(p.issue)].join(">");
+  return `${p.depth}:${p.posInSet ?? 0}:${trail}`;
 }
 
 function isNodeFocused(p: {

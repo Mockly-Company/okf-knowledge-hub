@@ -367,6 +367,9 @@ struct TreeBuildCtx<'a> {
     truncated: &'a mut bool,
     rendered: &'a mut std::collections::HashSet<String>,
     capped: &'a mut bool,
+    /// 방문한 노드 총수. rendered 크기와 달리 재귀 중에도 증가하므로
+    /// 단일 에픽의 폭 방향 기하급수 팽창을 렌더 중에 차단한다.
+    count: usize,
 }
 
 fn build_tree(
@@ -376,12 +379,17 @@ fn build_tree(
     ctx: &mut TreeBuildCtx,
 ) -> (Vec<BoardIssue>, bool) {
     // 전체 노드 총량 예산. 다이아몬드 공유를 중복 렌더하므로 넓은 트리에서
-    // rendered가 예산을 넘으면 더 펼치지 않고 잘라낸다.
-    // (깊이 제한과 달리 폭 방향 팽창을 막는다.)
+    // 방문 카운터가 예산을 넘으면 더 펼치지 않고 잘라낸다.
+    // (깊이 제한과 달리 폭 방향 팽창을 막는다. rendered 크기가 아니라
+    // 카운터 기준이라 재귀 중에도 발동한다.)
     // 잘린 항목 자체도 숨겨지므로 skipped에 1건을 합치고,
     // 호출자가 부모에 children_truncated를 세울 수 있게 true를 돌려준다.
-    // (전역 배너는 truncated로 표시한다.)
-    if ctx.rendered.len() >= MAX_COUNT_NODES {
+    // (전역 배너는 truncated로 표시한다. capped는 폴백 건너뛰기에 쓴다.)
+    // 진입한 노드는 rendered에도 기록해 폴백 루프가 미완성 꼬리를
+    // 루트로 다시 펼치지 못하게 한다.
+    ctx.count += 1;
+    ctx.rendered.insert(item.url.clone());
+    if ctx.count > MAX_COUNT_NODES {
         *ctx.truncated = true;
         *ctx.capped = true;
         *ctx.skipped += 1;
@@ -503,6 +511,7 @@ fn collect_issue_trees(
                 truncated: &mut *truncated,
                 rendered: &mut rendered,
                 capped: &mut capped_any,
+                count: 0,
             };
             build_tree(item, &mut visiting, 0, &mut ctx)
         };
@@ -534,6 +543,7 @@ fn collect_issue_trees(
                 truncated: &mut *truncated,
                 rendered: &mut rendered,
                 capped: &mut capped_any,
+                count: 0,
             };
             build_tree(item, &mut visiting, 0, &mut ctx)
         };
@@ -775,6 +785,7 @@ mod tests {
             truncated: &mut case_truncated,
             rendered: &mut case_rendered,
             capped: &mut case_capped,
+            count: 0,
         };
         let (roots, _) = build_tree(&items[0], &mut visiting, 0, &mut case_ctx);
         // 순환 간선(2 → 1)은 렌더되지 않으므로 skipped에 1건으로 합산된다.
@@ -808,6 +819,7 @@ mod tests {
             truncated: &mut case_truncated,
             rendered: &mut case_rendered,
             capped: &mut case_capped,
+            count: 0,
         };
         let (roots, _) = build_tree(&items[0], &mut visiting, super::MAX_TREE_DEPTH, &mut case_ctx);
         assert_eq!(roots.len(), 1);
@@ -837,6 +849,7 @@ mod tests {
             truncated: &mut case_truncated,
             rendered: &mut case_rendered,
             capped: &mut case_capped,
+            count: 0,
         };
         let (roots, _) = build_tree(&items[0], &mut visiting, 0, &mut case_ctx);
         assert_eq!(skipped, 1);
