@@ -109,12 +109,16 @@ function withoutDone(
     }
     try {
       budget.count += 1;
-      // walkIssues와 같은 총량 상한. 초과분은 펼치지 않고 잘린 것으로 표시한다.
+      // walkIssues와 같은 총량 상한. 초과분은 펼치지 않고 중단한다.
       // 계속 돌면 잘린 플레이스홀더 자체가 O(N) DOM이 되므로, 초과 지점부터는
       // 남은 형제를 펼치지 않고 중단한다(중단은 capped 플래그로 배너에 알린다).
+      // hideDone 필터를 우회하지 않도록 done 항목은 플레이스홀더도 남기지 않는다.
+      // (withoutDone은 hideDone=true일 때만 호출된다.)
       if (budget.count > MAX_WALK_NODES) {
         budget.capped = true;
-        kept.push({ ...issue, children: [], childrenTruncated: true });
+        if (issue.status !== "done") {
+          kept.push({ ...issue, children: [], childrenTruncated: true });
+        }
         break;
       }
       const rawChildren = asIssueArray(issue.children);

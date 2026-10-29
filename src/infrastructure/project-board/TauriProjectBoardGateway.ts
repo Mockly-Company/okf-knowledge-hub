@@ -71,9 +71,20 @@ function countHiddenNodes(
   seen: Set<string>,
 ): { count: number; capped: boolean } {
   let count = 0;
-  const stack: unknown[] = Array.isArray(issue.children)
-    ? [...issue.children]
-    : [];
+  const stack: unknown[] = [];
+  // 스프레드 push(...kids)는 인자 개수 상한에 걸려 대량 오염 자식에서
+  // throw(RangeError)로 보드 로드가 통째로 깨진다. 루프로 나눠 푸시한다.
+  const pushKids = (kids: unknown) => {
+    if (!Array.isArray(kids)) {
+      return;
+    }
+    for (const kid of kids) {
+      stack.push(kid);
+    }
+  };
+  if (Array.isArray(issue.children)) {
+    pushKids(issue.children);
+  }
   while (stack.length > 0) {
     const current = stack.pop();
     if (typeof current !== "object" || current === null || !isIssueLike(current)) {
@@ -89,10 +100,7 @@ function countHiddenNodes(
       }
       seen.add(key);
       count += 1;
-      const kids = (current as BoardIssue).children;
-      if (Array.isArray(kids)) {
-        stack.push(...kids);
-      }
+      pushKids((current as BoardIssue).children);
     }
     if (count >= MAX_HIDDEN_NODES) {
       return { count, capped: true };

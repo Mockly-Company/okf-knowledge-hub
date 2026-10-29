@@ -66,6 +66,7 @@ const TreeNode = memo(
     setSize,
     posInSet,
     className,
+    focusId,
     focusedKey,
     onFocusKey,
   }: {
@@ -78,6 +79,8 @@ const TreeNode = memo(
     posInSet?: number;
     /** 루트 카드처럼 tree 구조 밖에 스타일 래퍼를 둘 수 없을 때 쓴다. */
     className?: string;
+    /** 노드 고유 ID. 부모가 형제 키(siblingKeys)로 미리 계산해 내려준다. */
+    focusId: string;
     /** ProjectTree가 쥔 roving 포커스 키. Tab 정지는 일치하는 노드 하나에만 둔다. */
     focusedKey?: string | null;
     /** 포커스를 받은 노드 키를 올린다. useCallback 안정 참조를 전달한다. */
@@ -102,16 +105,11 @@ const TreeNode = memo(
   const childPath = new Set(path);
   childPath.add(key);
   // roving tabindex는 ProjectTree가 쥔 focusedKey 하나로 관리한다.
-  // 개별 노드는 자신의 위치 키와 비교해 Tab 정지 여부만 판단한다.
-  // memo 비교도 동일 위치키 기준으로만 무효화돼 포커스 이동 시
-  // 이전·현재 2개 노드만 다시 렌더된다(전체 무효화 방지).
-  // 포커스 식별자에 조상 경로까지 넣어 다이아몬드 중복 URL을 구분한다.
-  // (동일 URL이 다른 부모 밑에 같은 깊이·순서로 있어도 ID가 겹치지 않는다.)
-  const focusId = `${depth}:${posInSet ?? 0}:${[...childPath].join("\u0000")}`;
-  const focused =
-    focusedKey === undefined || focusedKey === null
-      ? depth === 0 && posInSet === 1
-      : focusedKey === focusId;
+  // 개별 노드는 전달받은 고유 ID와 비교해 Tab 정지 여부만 판단한다.
+  // ID 계산은 부모가 렌더 시 한 번만 하고 자식에게 내려주므로,
+  // memo 비교·본문 모두 문자열 조립을 반복하지 않는다.
+  // (동일 URL이 다이아몬드로 중복 렌더돼도 ID가 겹치지 않는다.)
+  const focused = isNodeFocused(focusedKey, focusId, depth, posInSet);
   const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
     // focusin 버블링으로 자식 Button/링크 포커스가 올라오면 무시한다.
     // treeitem 자체에 온 포커스만 roving 키로 삼는다.
@@ -321,6 +319,9 @@ const TreeNode = memo(
         >
           {siblingKeys(children).map((childKey, index) => {
             const child = children[index];
+            // 부모 focusId에 형제 고유 키를 이어붙인다. 동일 URL이 다이아몬드로
+            // 중복 렌더돼도 서로 다른 ID가 보장된다.
+            const childFocusId = `${focusId}/${childKey}`;
             return (
               <li key={childKey} role="presentation">
                 <TreeNode
@@ -329,6 +330,7 @@ const TreeNode = memo(
                   path={childPath}
                   setSize={children.length}
                   posInSet={index + 1}
+                  focusId={childFocusId}
                   focusedKey={focusedKey}
                   onFocusKey={onFocusKey}
                 />
@@ -346,7 +348,9 @@ const TreeNode = memo(
     prev.setSize === next.setSize &&
     prev.posInSet === next.posInSet &&
     prev.className === next.className &&
-    isNodeFocused(prev) === isNodeFocused(next) &&
+    prev.focusId === next.focusId &&
+    isNodeFocused(prev.focusedKey, prev.focusId, prev.depth, prev.posInSet) ===
+      isNodeFocused(next.focusedKey, next.focusId, next.depth, next.posInSet) &&
     samePath(prev.path, next.path),
 );
 
@@ -358,26 +362,16 @@ const TreeNode = memo(
  * 포커스는 문자열 키 전체가 아니라 "이 노드가 포커스됐는지" 불리언으로만
  * 비교한다. 덕분에 포커스 이동 시 이전·현재 2개 노드만 다시 렌더된다.
  */
-function focusIdOf(p: {
-  depth?: number;
-  posInSet?: number;
-  path?: Set<string>;
-  issue: BoardIssue;
-}): string {
-  const trail = [...(p.path ?? []), issueKey(p.issue)].join("\u0000");
-  return `${p.depth}:${p.posInSet ?? 0}:${trail}`;
-}
-
-function isNodeFocused(p: {
-  focusedKey?: string | null;
-  depth?: number;
-  posInSet?: number;
-  issue: BoardIssue;
-}): boolean {
-  if (p.focusedKey === undefined || p.focusedKey === null) {
-    return p.depth === 0 && p.posInSet === 1;
+function isNodeFocused(
+  focusedKey: string | null | undefined,
+  focusId: string,
+  depth?: number,
+  posInSet?: number,
+): boolean {
+  if (focusedKey === undefined || focusedKey === null) {
+    return depth === 0 && posInSet === 1;
   }
-  return p.focusedKey === focusIdOf(p);
+  return focusedKey === focusId;
 }
 
 function samePath(a?: Set<string>, b?: Set<string>): boolean {
@@ -424,6 +418,7 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
           setSize={safeIssues.length}
           posInSet={index + 1}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+          focusId={rootKey}
           focusedKey={focusKey}
           onFocusKey={handleFocusKey}
         />
