@@ -408,9 +408,11 @@ fn build_tree(
         // (clone이 아니라 실집합을 써야 폴백이 건너뛴다.)
         let (sub_count, sub_capped) = count_descendants(item, ctx.index, ctx.rendered);
         *ctx.skipped += sub_count;
-        // 깊이 절단 자체가 숨김이므로 전역 배너를 세운다.
-        // (잘린 서브트리 수와 무관하게 잘림 사실 자체를 표시한다.)
-        *ctx.truncated = true;
+        // 자식이 없는 리프는 잘릴 게 없으므로 배너를 세우지 않는다.
+        // (childrenTruncated 가드와 동일한 기준.)
+        if !item.sub_issues.is_empty() {
+            *ctx.truncated = true;
+        }
         if sub_capped {
             *ctx.capped = true;
         }
@@ -711,15 +713,12 @@ pub async fn sync_project_board(
     // 트리 조립은 CPU 바운드 작업이라 별도 블로킹 스레드로 분리한다.
     // 대량·다이아몬드 보드에서 Tokio 워커를 장시간 점유하지 않게 한다.
     // (items 소유권을 넘겨 'static 조건을 만족한다.)
-    let (issues, skipped, board_truncated) = tokio::task::spawn_blocking(
-        move || {
-            let mut skipped = skipped;
-            let mut board_truncated = board_truncated;
-            let issues =
-                collect_issue_trees(&items, &mut skipped, &mut board_truncated);
-            (issues, skipped, board_truncated)
-        },
-    )
+    let (issues, skipped, board_truncated) = tokio::task::spawn_blocking(move || {
+        let mut skipped = skipped;
+        let mut board_truncated = board_truncated;
+        let issues = collect_issue_trees(&items, &mut skipped, &mut board_truncated);
+        (issues, skipped, board_truncated)
+    })
     .await
     .map_err(|error| {
         AppError::new(
