@@ -154,14 +154,32 @@ function TreeNodeInner({
 }
 
 /**
- * 무관한 상태 변경(새로고침 시간 등)으로 부모가 리렌더돼도 같은 이슈 노드는
- * 다시 렌더하지 않는다. 비교에서 path는 제외한다: path는 렌더 위치에서
- * 파생되는 순환 방지용 스냅샷이라 동일 이슈·깊이면 결과가 같고,
- * 오염 사이클은 깊이 상한과 경로 검사가 이중으로 막는다.
+ * 무관한 상태 변경(새로고침 시간 등)으로 부모가 리렌더돼도 같은 위치의
+ * 같은 이슈 노드는 다시 렌더하지 않는다. path도 내용 기준으로 비교한다:
+ * 순환·공유 노드는 위치(조상 경로)에 따라 렌더 결과가 달라지므로
+ * path를 무시하면 오판한다. 집합 복사를 피하려고 크기·포함 여부만 본다.
  */
+function samePath(a?: Set<string>, b?: Set<string>): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b || a.size !== b.size) {
+    return false;
+  }
+  for (const key of a) {
+    if (!b.has(key)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 const TreeNode = memo(
   TreeNodeInner,
-  (prev, next) => prev.issue === next.issue && prev.depth === next.depth,
+  (prev, next) =>
+    prev.issue === next.issue &&
+    prev.depth === next.depth &&
+    samePath(prev.path, next.path),
 );
 
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {

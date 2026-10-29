@@ -429,7 +429,10 @@ fn collect_issue_trees(items: &[GithubProjectItem], skipped: &mut u32) -> Vec<Bo
         issues.extend(trees);
     };
     for item in items {
-        if child_urls.contains(&item.url) {
+        // 루트 판별 + 완전 중복 URL 루트는 한 번만 펼친다.
+        // 공유 자식은 각 부모 밑에 그대로 렌더한다(계층 정보 유지).
+        // 레이어 뷰(flat)는 emitted로 중복 제거하지만 트리 뷰는 구조가 정보다.
+        if child_urls.contains(&item.url) || rendered.contains(&item.url) {
             continue;
         }
         render_item(item, &mut rendered, &mut issues);
