@@ -152,33 +152,45 @@ const TreeNode = memo(
     if (item !== event.currentTarget) {
       return;
     }
-    // 같은 트리 안의 treeitem을 DOM 순서대로 모아 roving 포커스를 이동하고,
-    // 이동한 노드를 Tab 정지로 승격한다.
+    // 같은 트리 안의 treeitem 사이를 roving 포커스로 이동한다.
+    // 매 키 입력마다 querySelectorAll로 전체를 수집하면 대량 트리에서 버벅이므로,
+    // lazy TreeWalker로 현재 위치에서 한 걸음씩만 이동한다.
     // WAI-ARIA tree 패턴을 따라 양 끝에서는 정지한다(순환하지 않는다).
-    const moveFocus = (delta: 1 | -1) => {
+    const treeWalker = () => {
       const tree = event.currentTarget.closest('[role="tree"]');
       if (!tree) {
+        return null;
+      }
+      const walker = document.createTreeWalker(tree, NodeFilter.SHOW_ELEMENT, {
+        acceptNode(node) {
+          return node instanceof HTMLElement &&
+              node.getAttribute("role") === "treeitem"
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_SKIP;
+        },
+      });
+      walker.currentNode = event.currentTarget;
+      return walker;
+    };
+    const moveFocus = (delta: 1 | -1) => {
+      const walker = treeWalker();
+      if (!walker) {
         return;
       }
-      const items = Array.from(
-        tree.querySelectorAll('[role="treeitem"]'),
-      );
-      const at = items.indexOf(event.currentTarget);
-      const next = items[at + delta] as HTMLElement | undefined;
-      if (!next) {
-        return;
-      }
-      next.focus();
+      const next = (
+        delta === 1 ? walker.nextNode() : walker.previousNode()
+      ) as HTMLElement | null;
+      next?.focus();
     };
     const focusEdge = (edge: "first" | "last") => {
-      const tree = event.currentTarget.closest('[role="tree"]');
-      if (!tree) {
+      const walker = treeWalker();
+      if (!walker) {
         return;
       }
-      const items = tree.querySelectorAll('[role="treeitem"]');
-      const target =
-        edge === "first" ? items.item(0) : items.item(items.length - 1);
-      (target as HTMLElement | null)?.focus();
+      const target = (
+        edge === "first" ? walker.firstChild() : walker.lastChild()
+      ) as HTMLElement | null;
+      target?.focus();
     };
     switch (event.key) {
       case "ArrowRight":

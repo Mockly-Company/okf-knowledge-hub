@@ -391,9 +391,13 @@ fn build_tree(
     *ctx.count += 1;
     ctx.rendered.insert(item.url.clone());
     if *ctx.count > MAX_COUNT_NODES {
+        // 총량 초과분도 가능 범위에서 count_descendants로 합산한다
+        // (깊이 절단과 같은 고유 URL 단위). 잘린 항목 자체도 숨겨지므로 1건을 더한다.
+        // 셀 수 없는 초과분은 truncated로 표시한다.
+        let (sub_count, _) = count_descendants(item, ctx.index, ctx.rendered);
+        *ctx.skipped += sub_count + 1;
         *ctx.truncated = true;
         *ctx.capped = true;
-        *ctx.skipped += 1;
         return (Vec::new(), true);
     }
     let cut = depth >= MAX_TREE_DEPTH;

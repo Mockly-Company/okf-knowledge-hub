@@ -110,18 +110,47 @@ function countHiddenNodes(
 }
 
 
+type NormalizeStats = {
+  cuts: number;
+  dropped: number;
+  hidden: number;
+  nodes: number;
+  warned: number;
+  counted: Set<string>;
+};
+
+/**
+ * 절단 경고는 처음 몇 건만 상세히 남기고, 나머지는 합산 한 줄로 남긴다.
+ * 대량 오염 캐시에서 수백~수천 로그가 쏟아지는 것을 막는다.
+ */
+function warnTruncated(
+  stats: NormalizeStats,
+  issue: BoardIssue,
+  reason: string,
+  depth: number,
+) {
+  stats.cuts += 1;
+  if (stats.warned < 3) {
+    stats.warned += 1;
+    console.warn(
+      `[project-board] issue tree truncated (${reason}) at depth ${depth}: #${issue.number} ${issue.url}`,
+    );
+  }
+}
+
 /** 구 캐시의 누락 kind/children을 타입에 맞게 채우고 비객체 원소는 버린다. */
 function normalizeIssue(
   issue: BoardIssue,
   depth = 0,
   path = new Set<string>(),
-  stats: {
-    cuts: number;
-    dropped: number;
-    hidden: number;
-    nodes: number;
-    counted: Set<string>;
-  } = { cuts: 0, dropped: 0, hidden: 0, nodes: 0, counted: new Set<string>() },
+  stats: NormalizeStats = {
+    cuts: 0,
+    dropped: 0,
+    hidden: 0,
+    nodes: 0,
+    warned: 0,
+    counted: new Set<string>(),
+  },
 ): BoardIssue | null {
   if (!isIssueLike(issue)) {
     stats.dropped += 1;
@@ -145,7 +174,7 @@ function normalizeIssue(
     // try/finally 안에 두어 조기 반환해도 경로 집합이 누수되지 않게 한다.
     stats.nodes += 1;
     if (stats.nodes > MAX_HIDDEN_NODES) {
-      stats.cuts += 1;
+      warnTruncated(stats, issue, "node budget", depth);
       // 절단 집계용 전역 집합을 재사용한다. 절단마다 새 집합을 만들면
       // 다이아몬드 공유 서브트리가 분기마다 중복 집계되고 이미 순회한
       // 자식을 잘린 경우 다시 스택 순회해 이중 비용이 든다.
@@ -167,15 +196,12 @@ function normalizeIssue(
       // 잘린 하위 노드 수는 백엔드와 같은 단위(고유 숨김 URL 수)로 skipped에 합치고,
       // 노드 예산 초과분은 셀 수 없으므로 truncated로 표시한다.
       // 잘린 노드임을 플래그로 남겨 TreeNode가 "하위 항목 생략됨"을 표시한다.
-      stats.cuts += 1;
+      warnTruncated(stats, issue, "depth limit", depth);
       const hidden = countHiddenNodes(issue, stats.counted);
       stats.hidden += hidden.count;
       if (hidden.capped) {
         stats.cuts += 1;
       }
-      console.warn(
-        `[project-board] issue tree truncated at depth ${depth}: #${issue.number} ${issue.url}`,
-      );
       return {
         ...issue,
         children: [],
@@ -215,11 +241,12 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   if (typeof board !== "object" || board === null) {
     return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
   }
-  const stats = {
+  const stats: NormalizeStats = {
     cuts: 0,
     dropped: 0,
     hidden: 0,
     nodes: 0,
+    warned: 0,
     counted: new Set<string>(),
   };
   const issues: BoardIssue[] = [];
@@ -241,6 +268,13 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
     board.skipped >= 0
       ? board.skipped
       : 0;
+  // 상세 경고는 처음 몇 건만 찍었으므로, 합산은 한 줄로 요약한다.
+  if (stats.cuts > stats.warned) {
+    console.warn(
+      `[project-board] issue tree truncated ${stats.cuts} time(s), ` +
+        `hidden ${stats.hidden}, dropped ${stats.dropped} (showing first ${stats.warned} details above)`,
+    );
+  }
   return {
     issues,
     fetchedAt: typeof board.fetchedAt === "string" ? board.fetchedAt : null,
