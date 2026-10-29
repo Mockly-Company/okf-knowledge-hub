@@ -300,6 +300,7 @@ mod tests {
         let json = serde_json::to_string(&board).expect("board serializes");
         assert!(json.contains("\"fetchedAt\""));
         assert!(json.contains("\"children\""));
+        assert!(json.contains("\"childrenTruncated\""));
         let restored: ProjectBoard = serde_json::from_str(&json).expect("board parses");
         assert_eq!(restored, board);
     }

@@ -398,6 +398,53 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps a tab stop on the parent after collapsing a focused child", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 12,
+              title: "기획서 초안",
+              url: "https://example.test/issues/12",
+              layer: "planning",
+              status: "in_progress",
+              children: [
+                {
+                  number: 13,
+                  title: "하위 작업",
+                  url: "https://example.test/issues/13",
+                  layer: "planning",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                },
+              ],
+              kind: "기능",
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    await screen.findByRole("region", { name: "기획 레이어" });
+    await user.click(screen.getByRole("button", { name: "계층별" }));
+    const root = await screen.findByRole("treeitem", {
+      name: "에픽 #12 기획서 초안 상태: In progress, 영역: 기획, 유형: 기능",
+    });
+    const child = screen.getByRole("treeitem", {
+      name: "태스크 #13 하위 작업 상태: Backlog, 영역: 기획, 유형: 작업",
+    });
+    child.focus();
+    await waitFor(() => expect(child).toHaveAttribute("tabindex", "0"));
+
+    await user.click(screen.getByRole("button", { name: "기획서 초안 접기" }));
+
+    await waitFor(() => expect(root).toHaveAttribute("tabindex", "0"));
+  });
+
   it("lets linked workspaces switch projects from the list", async () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.empty();

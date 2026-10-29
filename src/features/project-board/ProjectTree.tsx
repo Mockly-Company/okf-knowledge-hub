@@ -73,6 +73,7 @@ const TreeNode = memo(
     focusId,
     focusedKey,
     onFocusKey,
+    onCollapse,
   }: {
     issue: BoardIssue;
     depth: number;
@@ -89,8 +90,17 @@ const TreeNode = memo(
     focusedKey?: string | null;
     /** 포커스를 받은 노드 키를 올린다. useCallback 안정 참조를 전달한다. */
     onFocusKey?: (key: string) => void;
+    /** 접힌 노드 키를 올린다. 포커스가 숨은 자손에 있으면 이 노드로 옮긴다. */
+    onCollapse?: (key: string) => void;
   }) {
   const [open, setOpen] = useState(depth === 0);
+  // 접으면 숨은 자손이 roving 탭 정지를 쥔 채 사라지지 않게 부모에 알린다.
+  const setExpanded = (next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      onCollapse?.(focusId);
+    }
+  };
   // useId는 early return보다 앞에서 호출한다(훅 순서 규칙).
   const titleId = useId();
   const descId = useId();
@@ -233,7 +243,7 @@ const TreeNode = memo(
       case "ArrowLeft":
         if (children.length > 0) {
           event.preventDefault();
-          setOpen(false);
+          setExpanded(false);
         }
         break;
       case "ArrowDown":
@@ -258,7 +268,7 @@ const TreeNode = memo(
         // Button/링크에 포커스가 있으면 네이티브 동작에 맡긴다.
         if (event.target === event.currentTarget && children.length > 0) {
           event.preventDefault();
-          setOpen((value) => !value);
+          setExpanded(!open);
         }
         break;
       default:
@@ -314,7 +324,7 @@ const TreeNode = memo(
           <Button
             type="button"
             variant="ghost"
-            onClick={() => setOpen((value) => !value)}
+            onClick={() => setExpanded(!open)}
             aria-expanded={open}
             aria-label={`${issue.title} ${open ? "접기" : "펼치기"}`}
           >
@@ -379,6 +389,7 @@ const TreeNode = memo(
                   focusId={childFocusId}
                   focusedKey={focusedKey}
                   onFocusKey={onFocusKey}
+                  onCollapse={onCollapse}
                 />
               </li>
             );
@@ -445,6 +456,18 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
   const handleFocusKey = useCallback((key: string) => {
     setFocusKey((current) => (current === key ? current : key));
   }, []);
+  const handleCollapse = useCallback((key: string) => {
+    setFocusKey((current) =>
+      current !== null && current.startsWith(`${key}/`) ? key : current,
+    );
+  }, []);
+  // 동기화·필터로 데이터가 바뀌면 포커스 노드가 사라졌을 수 있어 첫 루트로 되돌린다.
+  // (사라진 키를 쥐고 있으면 모든 treeitem이 tabIndex=-1이 돼 Tab으로 진입할 수 없다.)
+  const [focusIssues, setFocusIssues] = useState(issues);
+  if (focusIssues !== issues) {
+    setFocusIssues(issues);
+    setFocusKey(null);
+  }
   if (safeIssues.length === 0) {
     return (
       <p className="m-0 text-[var(--text-muted)]">연결된 Issue 없음</p>
@@ -467,6 +490,7 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
           focusId={rootKey}
           focusedKey={focusKey}
           onFocusKey={handleFocusKey}
+          onCollapse={handleCollapse}
         />
       ))}
     </div>
