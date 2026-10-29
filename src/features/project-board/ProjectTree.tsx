@@ -141,7 +141,9 @@ function TreeNode({
           aria-label={`${issue.title} 하위 항목`}
         >
           {children.map((child) => (
-            <li key={`${child.number}-${child.url}`}>
+            // 키는 trim 기준 issueKey와 일치시킨다. number까지만 쓰고 index는
+            // 순서 변경 시 펼침 상태가 엉뚱한 노드에 재사용되므로 넣지 않는다.
+            <li key={`${child.number}-${issueKey(child)}`}>
               <TreeNode issue={child} depth={depth + 1} path={childPath} />
             </li>
           ))}
@@ -167,7 +169,7 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
     >
       {safeIssues.map((issue) => (
         <div
-          key={`${issue.number}-${issue.url}`}
+          key={`${issue.number}-${issueKey(issue)}`}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
         >
           <TreeNode issue={issue} depth={0} />

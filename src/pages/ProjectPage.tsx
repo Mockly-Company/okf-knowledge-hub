@@ -353,10 +353,18 @@ export function ProjectPage({
   );
   const groupedIssues = useMemo(() => {
     const grouped = new Map<string, BoardIssue[]>();
+    // 다이아몬드 공유 자식은 여러 부모 경로에서 walk되므로 같은 셀에
+    // 두 번 펼치지 않도록 레이어:상태:URL 기준으로 한 번만 집계한다.
+    const emitted = new Set<string>();
     for (const issue of walkIssues(board?.issues ?? [])) {
       if (hideDone && issue.status === "done") {
         continue;
       }
+      const dedupeKey = `${issue.layer}:${issue.status}:${issueKey(issue)}`;
+      if (emitted.has(dedupeKey)) {
+        continue;
+      }
+      emitted.add(dedupeKey);
       const key = `${issue.layer}:${issue.status}`;
       const list = grouped.get(key);
       if (list) {

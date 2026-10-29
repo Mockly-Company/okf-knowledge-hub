@@ -995,17 +995,27 @@ impl GithubHttpClient {
                             .nodes
                             .unwrap_or_default()
                             .into_iter()
-                            .flatten()
-                            .filter_map(|node| match (node.number, node.title, node.url) {
-                                (Some(number), Some(title), Some(url)) => Some(GithubSubIssue {
-                                    number,
-                                    title,
-                                    url: url.trim().to_owned(),
-                                }),
-                                // 필드 결손 서브이슈도 조용히 버리지 않고 누락 수에 합친다.
-                                _ => {
+                            .filter_map(|node| match node {
+                                // 명시적 null 원소도 누락 수에 합쳐 조용히 버리지 않는다.
+                                None => {
                                     sub_page_dropped += 1;
                                     None
+                                }
+                                Some(node) => {
+                                    match (node.number, node.title, node.url) {
+                                        (Some(number), Some(title), Some(url)) => {
+                                            Some(GithubSubIssue {
+                                                number,
+                                                title,
+                                                url: url.trim().to_owned(),
+                                            })
+                                        }
+                                        // 필드 결손 서브이슈도 조용히 버리지 않고 누락 수에 합친다.
+                                        _ => {
+                                            sub_page_dropped += 1;
+                                            None
+                                        }
+                                    }
                                 }
                             })
                             .collect()
