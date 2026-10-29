@@ -1137,7 +1137,8 @@ impl GithubHttpClient {
                 .and_then(|data| data.node)
                 .and_then(|node| node.sub_issues)
             else {
-                return Ok(false);
+                // 노드가 삭제됐거나 볼 수 없으면 더 받을 하위가 없으므로 잘림으로 세지 않는다.
+                return Ok(true);
             };
             collect_sub_issues(connection.nodes, out, dropped);
             match connection.page_info {
