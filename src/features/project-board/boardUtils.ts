@@ -47,6 +47,7 @@ export function isIssueLike(value: unknown): value is BoardIssue {
   return (
     typeof candidate.number === "number" &&
     typeof candidate.url === "string" &&
+    candidate.url.trim().length > 0 &&
     typeof candidate.title === "string" &&
     LAYER_SET.has(candidate.layer as BoardLayer) &&
     STATUS_SET.has(candidate.status as BoardStatus) &&

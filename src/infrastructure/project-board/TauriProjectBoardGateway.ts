@@ -101,7 +101,9 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
     issues,
     fetchedAt: typeof board.fetchedAt === "string" ? board.fetchedAt : null,
     skipped:
-      typeof board.skipped === "number" && Number.isFinite(board.skipped)
+      typeof board.skipped === "number" &&
+      Number.isInteger(board.skipped) &&
+      board.skipped >= 0
         ? board.skipped
         : 0,
     truncated: board.truncated === true,
