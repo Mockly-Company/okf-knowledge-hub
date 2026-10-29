@@ -14,8 +14,8 @@ export const MAX_ISSUE_TREE_DEPTH = 50;
 /**
  * 렌더에 쓸 안전한 href를 돌려준다. 검증과 렌더에 같은 값을 써야
  * 앞뒤 공백 오염 시 링크가 깨지거나 검증과 동작이 달라지지 않는다.
- * GitHub Issue URL은 항상 https이므로 https만 허용한다(혼합 콘텐츠·피싱 표면 축소).
- * http를 포함한 그 외 스킴(javascript: 등)은 null(호출자는 텍스트로 폴백).
+ * GitHub Issue URL만 쓰이는 맥락이므로 https + github.com 호스트만 허용한다.
+ * (혼합 콘텐츠·임의 호스트 피싱 표면 축소. 그 외는 텍스트로 폴백.)
  * 비문자열 오염 입력에도 throw 없이 null을 돌려준다.
  */
 export function safeHref(url: unknown): string | null {
@@ -27,8 +27,14 @@ export function safeHref(url: unknown): string | null {
     return null;
   }
   try {
-    const protocol = new URL(trimmed).protocol.toLowerCase();
-    return protocol === "https:" ? trimmed : null;
+    const parsed = new URL(trimmed);
+    if (parsed.protocol.toLowerCase() !== "https:") {
+      return null;
+    }
+    if (!/(^|\.)github\.com$/.test(parsed.hostname.toLowerCase())) {
+      return null;
+    }
+    return trimmed;
   } catch {
     return null;
   }

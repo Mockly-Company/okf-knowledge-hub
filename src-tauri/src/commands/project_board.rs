@@ -368,6 +368,14 @@ fn build_tree(
     truncated: &mut bool,
     rendered: &mut std::collections::HashSet<String>,
 ) -> Vec<BoardIssue> {
+    // 전체 노드 총량 예산. 다이아몬드 공유를 중복 렌더하므로 넓은 트리에서
+    // rendered가 예산을 넘으면 더 펼치지 않고 잘라낸다.
+    // (깊이 제한과 달리 폭 방향 팽창을 막는다. 초과분은 셀 수 없으므로
+    // truncated만 세운다.)
+    if rendered.len() >= MAX_COUNT_NODES {
+        *truncated = true;
+        return Vec::new();
+    }
     let cut = depth >= MAX_TREE_DEPTH;
     let mut child_issues = if cut {
         // 깊이 제한으로 잘라낸 서브트리 전체를 skipped에 반영한다.
