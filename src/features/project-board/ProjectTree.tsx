@@ -69,6 +69,8 @@ const TreeNode = memo(
     /** 형제 집합 크기와 순서. treeitem의 aria-setsize/posinset에 쓴다. */
     setSize?: number;
     posInSet?: number;
+    /** roving 포커스 식별자. 위치+URL 조합으로 다이아몬드 중복 URL을 구분한다. */
+    focusId?: string;
     /** 루트 카드처럼 tree 구조 밖에 스타일 래퍼를 둘 수 없을 때 쓴다. */
     className?: string;
     /** 현재 roving 포커스가 있는 노드 키. Tab 정지는 이 노드에만 둔다. */
@@ -89,22 +91,25 @@ const TreeNode = memo(
   // push/pop 타이밍이 맞지 않아, 렌더되는 노드에만 스냅샷을 복사해 전달한다.
   // walkIssues(데이터 집계 쪽)는 동기 제너레이터라 백트래킹을 유지한다.
   const key = issueKey(issue);
-  /** roving tabindex: Tab 정지는 포커스 중인 노드 하나에만 둔다.
-   * 초기값(포커스 없음)은 첫 루트에 둔다. 화살표·포커스 이동 시 갱신된다. */
-  const focused =
-    focusedKey === undefined || focusedKey === null
-      ? depth === 0 && posInSet === 1
-      : focusedKey === key;
-  const handleFocus = () => {
-    if (focusedKey !== key) {
-      onFocusKey?.(key);
-    }
-  };
   if (path.has(key)) {
     return null;
   }
   const childPath = new Set(path);
   childPath.add(key);
+  // roving 식별자는 위치(깊이·형제 순서)+경로 조합으로 만든다. 같은 URL이
+  // 다이아몬드로 중복 렌더돼도 서로 다른 노드로 구분돼 Tab 정지가 겹치지 않는다.
+  const focusId = `${depth}:${posInSet ?? 0}:${[...childPath].join(">")}`;
+  /** roving tabindex: Tab 정지는 포커스 중인 노드 하나에만 둔다.
+   * 초기값(포커스 없음)은 첫 루트에 둔다. 화살표·포커스 이동 시 갱신된다. */
+  const focused =
+    focusedKey === undefined || focusedKey === null
+      ? depth === 0 && posInSet === 1
+      : focusedKey === focusId;
+  const handleFocus = () => {
+    if (focusedKey !== focusId) {
+      onFocusKey?.(focusId);
+    }
+  };
   const role = roleLabel(depth, issue.kind);
   // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
   const children = asIssueArray(issue.children);
@@ -127,37 +132,18 @@ const TreeNode = memo(
     "aria-labelledby": `${titleId} ${descId}`,
     tabIndex: focused ? 0 : -1,
   };
-  if (depth > MAX_ISSUE_TREE_DEPTH) {
-    return (
-      // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
-      <div className="grid gap-[var(--space-2)]" {...treeitemProps} onFocus={handleFocus}>
-        <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-          <span id={titleId} className="font-medium">
-            {role} #{issue.number} {issue.title}
-          </span>
-          <span id={descId} className="sr-only">
-            {description}
-          </span>
-          <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
-          <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
-            하위 항목 생략됨
-          </span>
-        </div>
-      </div>
-    );
-  }
-
-  // 트리 키보드 패턴(방향키 펼침/접기). 포커스 이동은 Tab 순서(토글 버튼·링크)를
-  // 그대로 쓰고, treeitem 자체에는 tabIndex를 두지 않아 탭 정지를 늘리지 않는다.
+  // 트리 키보드 패턴(방향키 펼침/접기 + 이동). 포커스 이동은 roving tabindex를
+  // 갱신하고, treeitem 자체에는 tabIndex를 두지 않아 탭 정지를 늘리지 않는다.
   // 자식 노드의 Button/링크에서 발생한 키는 해당 노드의 핸들러에서만 처리하고
   // 조상까지 버블링되지 않게 한다(안 그러면 조상이 전부 닫히고 포커스가 사라진다).
+  // 절단 플레이스홀더 분기보다 위에 정의해 해당 노드에서도 방향키 탐색이 끊기지 않게 한다.
   const handleTreeKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     const item = (event.target as HTMLElement).closest('[role="treeitem"]');
     if (item !== event.currentTarget) {
       return;
     }
-    // 같은 트리 안의 treeitem을 DOM 순서대로 모아 roving 포커스를 이동한다.
-    // treeitem 자체는 tabIndex를 두지 않아 Tab 정지를 늘리지 않는다.
+    // 같은 트리 안의 treeitem을 DOM 순서대로 모아 roving 포커스를 이동하고,
+    // 이동한 노드를 Tab 정지로 승격한다.
     const moveFocus = (delta: number) => {
       const tree = event.currentTarget.closest('[role="tree"]');
       if (!tree) {
@@ -224,7 +210,33 @@ const TreeNode = memo(
         break;
     }
   };
+  if (depth > MAX_ISSUE_TREE_DEPTH) {
+    return (
+      // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
+      <div
+        className="grid gap-[var(--space-2)]"
+        {...treeitemProps}
+        onFocus={handleFocus}
+        onKeyDown={handleTreeKeys}
+      >
+        <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+          <span id={titleId} className="font-medium">
+            {role} #{issue.number} {issue.title}
+          </span>
+          <span id={descId} className="sr-only">
+            {description}
+          </span>
+          <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+          <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+            하위 항목 생략됨
+          </span>
+        </div>
+      </div>
+    );
+  }
 
+  // 자식 노드의 Button/링크에서 발생한 키는 해당 노드의 핸들러에서만 처리하고
+  // 조상까지 버블링되지 않게 한다(안 그러면 조상이 전부 닫히고 포커스가 사라진다).
   return (
     // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
     // 루트 카드는 tree 직계 소유 구조를 깨지 않도록 treeitem 루트에 직접 입힌다.

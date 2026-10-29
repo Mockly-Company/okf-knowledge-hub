@@ -105,10 +105,11 @@ function normalizeIssue(
   issue: BoardIssue,
   depth = 0,
   path = new Set<string>(),
-  stats: { cuts: number; dropped: number; hidden: number } = {
+  stats: { cuts: number; dropped: number; hidden: number; nodes: number } = {
     cuts: 0,
     dropped: 0,
     hidden: 0,
+    nodes: 0,
   },
 ): BoardIssue | null {
   if (!isIssueLike(issue)) {
@@ -120,6 +121,19 @@ function normalizeIssue(
   if (!release) {
     stats.dropped += 1;
     return null;
+  }
+  // 정규화 자체에도 총량 예산을 둔다. 다이아몬드 공유가 많은 오염 캐시는
+  // 깊이 상한에 걸리지 않아도 재귀가 기하급수 팽창할 수 있다.
+  // (백엔드 MAX_COUNT_NODES와 같은 취지의 총량 상한.)
+  stats.nodes += 1;
+  if (stats.nodes > MAX_HIDDEN_NODES) {
+    stats.cuts += 1;
+    return {
+      ...issue,
+      children: [],
+      kind: typeof issue.kind === "string" ? issue.kind : null,
+      childrenTruncated: true,
+    };
   }
   try {
     if (depth > MAX_ISSUE_TREE_DEPTH) {
@@ -172,7 +186,7 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   if (typeof board !== "object" || board === null) {
     return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
   }
-  const stats = { cuts: 0, dropped: 0, hidden: 0 };
+  const stats = { cuts: 0, dropped: 0, hidden: 0, nodes: 0 };
   const issues: BoardIssue[] = [];
   // asIssueArray는 탈락분을 조용히 버리므로, skipped 합산을 위해 여기서 직접 센다.
   const topLevel = Array.isArray(board.issues) ? board.issues : [];

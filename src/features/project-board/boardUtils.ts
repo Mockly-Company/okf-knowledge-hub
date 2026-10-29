@@ -31,7 +31,9 @@ export function safeHref(url: unknown): string | null {
     if (parsed.protocol.toLowerCase() !== "https:") {
       return null;
     }
-    if (!/(^|\.)github\.com$/.test(parsed.hostname.toLowerCase())) {
+    // 서브도메인 와일드카드까지 허용하면 피싱 표면이 넓어지므로,
+    // Issue URL 호스트(github.com)와 정확히 일치할 때만 허용한다.
+    if (parsed.hostname.toLowerCase() !== "github.com") {
       return null;
     }
     return trimmed;
