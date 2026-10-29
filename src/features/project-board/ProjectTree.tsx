@@ -1,4 +1,11 @@
-import { memo, useCallback, useId, useState, type KeyboardEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useId,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+} from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -100,12 +107,17 @@ const TreeNode = memo(
   // 이전·현재 2개 노드만 다시 렌더된다(전체 무효화 방지).
   // 포커스 식별자에 조상 경로까지 넣어 다이아몬드 중복 URL을 구분한다.
   // (동일 URL이 다른 부모 밑에 같은 깊이·순서로 있어도 ID가 겹치지 않는다.)
-  const focusId = `${depth}:${posInSet ?? 0}:${[...childPath].join(">")}`;
+  const focusId = `${depth}:${posInSet ?? 0}:${[...childPath].join("\u0000")}`;
   const focused =
     focusedKey === undefined || focusedKey === null
       ? depth === 0 && posInSet === 1
       : focusedKey === focusId;
-  const handleFocus = () => {
+  const handleFocus = (event: FocusEvent<HTMLDivElement>) => {
+    // focusin 버블링으로 자식 Button/링크 포커스가 올라오면 무시한다.
+    // treeitem 자체에 온 포커스만 roving 키로 삼는다.
+    if (event.target !== event.currentTarget) {
+      return;
+    }
     if (focusedKey !== focusId) {
       onFocusKey?.(focusId);
     }
@@ -347,7 +359,7 @@ function focusIdOf(p: {
   path?: Set<string>;
   issue: BoardIssue;
 }): string {
-  const trail = [...(p.path ?? []), issueKey(p.issue)].join(">");
+  const trail = [...(p.path ?? []), issueKey(p.issue)].join("\u0000");
   return `${p.depth}:${p.posInSet ?? 0}:${trail}`;
 }
 

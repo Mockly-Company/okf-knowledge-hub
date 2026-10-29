@@ -35,15 +35,19 @@ const ProjectTree = lazy(() =>
 
 type LayerFilter = "all" | BoardLayer;
 
+/** 프론트 집계 순회 총량 상한. 백엔드 MAX_COUNT_NODES와 같은 취지다. */
+const MAX_WALK_NODES = 100_000;
+
 /** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
 const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
 
 
-/** 레이어 뷰 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
+/** 레이어 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
 function* walkIssues(
   issues: BoardIssue[],
   depth = 0,
   path = new Set<string>(),
+  budget: { count: number; capped: boolean } = { count: 0, capped: false },
 ): Generator<BoardIssue> {
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return;
@@ -58,8 +62,15 @@ function* walkIssues(
       continue;
     }
     try {
+      budget.count += 1;
+      // 백엔드 MAX_COUNT_NODES와 같은 취지의 총량 상한. 다이아몬드 공유를
+      // 매번 펼치면 집계 자체가 기하급수 팽창하므로 여기서 멈춘다.
+      if (budget.count > MAX_WALK_NODES) {
+        budget.capped = true;
+        return;
+      }
       yield issue;
-      yield* walkIssues(asIssueArray(issue.children), depth + 1, path);
+      yield* walkIssues(asIssueArray(issue.children), depth + 1, path, budget);
     } finally {
       release();
     }
@@ -70,6 +81,7 @@ function withoutDone(
   issues: BoardIssue[],
   depth = 0,
   path = new Set<string>(),
+  budget: { count: number; capped: boolean } = { count: 0, capped: false },
 ): BoardIssue[] {
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return [];
@@ -81,6 +93,13 @@ function withoutDone(
       continue;
     }
     try {
+      budget.count += 1;
+      // walkIssues와 같은 총량 상한. 초과분은 펼치지 않고 잘린 것으로 표시한다.
+      if (budget.count > MAX_WALK_NODES) {
+        budget.capped = true;
+        kept.push({ ...issue, children: [], childrenTruncated: true });
+        continue;
+      }
       const rawChildren = asIssueArray(issue.children);
       // 깊이 절단으로 잘린 자식은 부모에 생략 플래그를 남긴다.
       // (백엔드 build_tree·게이트웨이 normalizeIssue와 동일한 규칙.)
@@ -88,7 +107,7 @@ function withoutDone(
         depth + 1 > MAX_ISSUE_TREE_DEPTH && rawChildren.length > 0;
       const children = cut
         ? []
-        : withoutDone(rawChildren, depth + 1, path);
+        : withoutDone(rawChildren, depth + 1, path, budget);
       const flagged = cut ? { childrenTruncated: true as const } : {};
       if (issue.status === "done") {
         // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
@@ -376,12 +395,13 @@ export function ProjectPage({
       ),
     [filter],
   );
-  const groupedIssues = useMemo(() => {
+  const { grouped: groupedIssues, capped: walkCapped } = useMemo(() => {
     const grouped = new Map<string, BoardIssue[]>();
     // 다이아몬드 공유 자식은 여러 부모 경로에서 walk되므로 같은 셀에
     // 두 번 펼치지 않도록 레이어:상태:URL 기준으로 한 번만 집계한다.
     const emitted = new Set<string>();
-    for (const issue of walkIssues(board?.issues ?? [])) {
+    const budget = { count: 0, capped: false };
+    for (const issue of walkIssues(board?.issues ?? [], 0, new Set<string>(), budget)) {
       if (hideDone && issue.status === "done") {
         continue;
       }
@@ -398,17 +418,20 @@ export function ProjectPage({
         grouped.set(key, [issue]);
       }
     }
-    return grouped;
+    return { grouped, capped: budget.capped };
   }, [board, hideDone]);
 
   // 트리 펼침 상태(useState)가 무관한 렌더에 리셋되지 않도록 메모한다.
-  const treeIssues = useMemo(
-    () =>
-      view === "tree" && hideDone && board
-        ? withoutDone(board.issues)
-        : (board?.issues ?? []),
-    [hideDone, board, view],
-  );
+  const { issues: treeIssues, capped: treeCapped } = useMemo(() => {
+    if (view === "tree" && hideDone && board) {
+      const budget = { count: 0, capped: false };
+      return {
+        issues: withoutDone(board.issues, 0, new Set<string>(), budget),
+        capped: budget.capped,
+      };
+    }
+    return { issues: board?.issues ?? [], capped: false };
+  }, [hideDone, board, view]);
 
   return (
     <section
@@ -537,7 +560,7 @@ export function ProjectPage({
           </label>
         </div>
       </div>
-      {board && board.truncated ? (
+      {board && (board.truncated || walkCapped || treeCapped) ? (
         <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
           보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈 최대 20개)
         </p>
