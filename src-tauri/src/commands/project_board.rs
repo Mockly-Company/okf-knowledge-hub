@@ -359,82 +359,98 @@ fn count_descendants(
     (count, false)
 }
 
+/// 트리 펼치기에 필요한 공유 상태를 묶는다.
+/// 은 루트별 순회 경로라 별도 인자로 둔다.
+struct TreeBuildCtx<'a> {
+    index: &'a std::collections::HashMap<&'a str, &'a GithubProjectItem>,
+    skipped: &'a mut u32,
+    truncated: &'a mut bool,
+    rendered: &'a mut std::collections::HashSet<String>,
+    capped: &'a mut bool,
+}
+
 fn build_tree(
     item: &GithubProjectItem,
-    index: &std::collections::HashMap<&str, &GithubProjectItem>,
     visiting: &mut std::collections::HashSet<String>,
     depth: usize,
-    skipped: &mut u32,
-    truncated: &mut bool,
-    rendered: &mut std::collections::HashSet<String>,
-) -> Vec<BoardIssue> {
+    ctx: &mut TreeBuildCtx,
+) -> (Vec<BoardIssue>, bool) {
     // 전체 노드 총량 예산. 다이아몬드 공유를 중복 렌더하므로 넓은 트리에서
     // rendered가 예산을 넘으면 더 펼치지 않고 잘라낸다.
-    // (깊이 제한과 달리 폭 방향 팽창을 막는다. 초과분은 셀 수 없으므로
-    // truncated만 세운다.)
-    if rendered.len() >= MAX_COUNT_NODES {
-        *truncated = true;
-        return Vec::new();
+    // (깊이 제한과 달리 폭 방향 팽창을 막는다.)
+    // 잘린 항목 자체도 숨겨지므로 skipped에 1건을 합치고,
+    // 호출자가 부모에 children_truncated를 세울 수 있게 true를 돌려준다.
+    // (전역 배너는 truncated로 표시한다.)
+    if ctx.rendered.len() >= MAX_COUNT_NODES {
+        *ctx.truncated = true;
+        *ctx.capped = true;
+        *ctx.skipped += 1;
+        return (Vec::new(), true);
     }
     let cut = depth >= MAX_TREE_DEPTH;
-    let mut child_issues = if cut {
+    let (mut child_issues, child_cut) = if cut {
         // 깊이 제한으로 잘라낸 서브트리 전체를 skipped에 반영한다.
         // 잘린 URL을 rendered에 직접 기록해 폴백 루프가 같은 꼬리를
         // 루트로 다시 펼쳐 제한을 우회하지 못하게 한다.
         // (clone이 아니라 실집합을 써야 폴백이 건너뛴다.)
-        let (sub_count, capped) = count_descendants(item, index, rendered);
-        *skipped += sub_count;
-        if capped {
-            *truncated = true;
+        let (sub_count, sub_capped) = count_descendants(item, ctx.index, ctx.rendered);
+        *ctx.skipped += sub_count;
+        if sub_capped {
+            *ctx.truncated = true;
+            *ctx.capped = true;
         }
-        Vec::new()
+        // 깊이 절단은 잘린 노드 자체에 플래그가 있어 부모까지 올리지 않는다.
+        (Vec::new(), false)
     } else {
         let mut collected = Vec::new();
+        // 자식 서브트리에서 예산 절단이 일어나면 부모에도 플래그를 올려
+        // 잘린 자식이 통째로 렌더되지 않는 위치를 표시한다.
+        // (깊이 절단은 잘린 노드 자체에 플래그가 있어 부모까지 올리지 않는다.)
+        let mut child_cut = false;
         for sub in &item.sub_issues {
             if !visiting.insert(sub.url.clone()) {
                 // 순환으로 잘린 간선도 숨겨진 항목이므로 skipped에 합산한다.
                 // 인덱스 누락(None 분기)과 동일하게 조용히 버리지 않는다.
-                *skipped += 1;
+                *ctx.skipped += 1;
                 continue;
             }
-            match index.get(sub.url.as_str()) {
+            match ctx.index.get(sub.url.as_str()) {
                 Some(found) => {
-                    collected.extend(build_tree(
-                        found,
-                        index,
-                        visiting,
-                        depth + 1,
-                        skipped,
-                        truncated,
-                        rendered,
-                    ));
+                    let (trees, cut_child) =
+                        build_tree(found, visiting, depth + 1, ctx);
+                    child_cut = child_cut || cut_child;
+                    collected.extend(trees);
                 }
                 // 목록에 없는 자식(프로젝트 밖·페이지 상한 누락)은 조용히 버리지 않고 센다.
-                None => *skipped += 1,
+                None => *ctx.skipped += 1,
             }
             visiting.remove(&sub.url);
         }
-        collected
+        (collected, child_cut)
     };
     // 레이어를 판별할 수 없으면 미지정 레인에 모아 triage 대상으로 둔다.
     let layer = map_layer(item.area.as_deref(), &item.labels).unwrap_or(BoardLayer::Unassigned);
     match item.status.as_deref().and_then(map_status) {
-        Some(status) => vec![BoardIssue {
-            number: item.number,
-            title: item.title.clone(),
-            url: item.url.clone(),
-            layer,
-            status,
-            children: std::mem::take(&mut child_issues),
-            kind: item.kind.clone(),
-            // 깊이 제한으로 잘린 노드는 프론트가 "하위 항목 생략됨"으로 표시한다.
-            // 자식이 없으면 잘릴 게 없으므로 리프로 둔다.
-            children_truncated: cut && !item.sub_issues.is_empty(),
-        }],
+        Some(status) => (
+            vec![BoardIssue {
+                number: item.number,
+                title: item.title.clone(),
+                url: item.url.clone(),
+                layer,
+                status,
+                children: std::mem::take(&mut child_issues),
+                kind: item.kind.clone(),
+                // 깊이 제한으로 잘린 노드는 프론트가 "하위 항목 생략됨"으로 표시한다.
+                // 자식이 없으면 잘릴 게 없으므로 리프로 둔다.
+                // 예산 절단으로 통째로 빠진 자식이 있으면 부모에도 표시한다.
+                children_truncated: (cut && !item.sub_issues.is_empty()) || child_cut,
+            }],
+            child_cut,
+        ),
         // 상태를 판별할 수 없는 부모는 버리되 유효한 자식은 루트로 승격해 살린다.
         None => {
-            *skipped += 1;
-            child_issues
+            *ctx.skipped += 1;
+            (child_issues, child_cut)
         }
     }
 }
@@ -468,18 +484,7 @@ fn collect_issue_trees(
     let mut rendered = std::collections::HashSet::new();
     // 한 항목을 트리로 펼쳐 issues에 넣고 rendered에 기록한다.
     // 매핑 실패로 트리가 비어도 처리済み로 표시해 폴백 중복을 막는다.
-    let mut render_item = |item: &GithubProjectItem,
-                           rendered: &mut std::collections::HashSet<String>,
-                           issues: &mut Vec<BoardIssue>| {
-        rendered.insert(item.url.clone());
-        let mut visiting = std::collections::HashSet::new();
-        visiting.insert(item.url.clone());
-        let trees = build_tree(item, &index, &mut visiting, 0, skipped, truncated, rendered);
-        for tree in &trees {
-            record_rendered(tree, rendered);
-        }
-        issues.extend(trees);
-    };
+    let mut capped_any = false;
     for item in items {
         // 루트 판별 + 완전 중복 URL 루트는 한 번만 펼친다.
         // 공유 자식은 각 부모 밑에 그대로 렌더한다(계층 정보 유지).
@@ -487,16 +492,55 @@ fn collect_issue_trees(
         if child_urls.contains(&item.url) || rendered.contains(&item.url) {
             continue;
         }
-        render_item(item, &mut rendered, &mut issues);
+        rendered.insert(item.url.clone());
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(item.url.clone());
+        // ctx는 반복마다 만들어 빌림이 다음 반복으로 새지 않게 한다.
+        let (trees, _) = {
+            let mut ctx = TreeBuildCtx {
+                index: &index,
+                skipped: &mut *skipped,
+                truncated: &mut *truncated,
+                rendered: &mut rendered,
+                capped: &mut capped_any,
+            };
+            build_tree(item, &mut visiting, 0, &mut ctx)
+        };
+        for tree in &trees {
+            record_rendered(tree, &mut rendered);
+        }
+        issues.extend(trees);
     }
     // 순환 참조(A↔B)면 양쪽 모두 자식 집합에 있어 루트 판별에서 제외된다.
     // 미렌더 노드를 루트로 승격해 통째로 사라지지 않게 한다.
     // build_tree 내부 visiting 검사가 순환을 끊으므로 무한 재귀는 없다.
+    // 단, 노드 예산 초과(capped)로 꼬리가 미기록 상태면 폴백을 건너뛴다.
+    // 미기록 꼬리를 루트로 승격하면 깊이·총량 제한을 우회해 렌더가 이어진다.
+    // (truncated는 예산 초과 시점에 이미 세웠다.)
+    if capped_any {
+        return issues;
+    }
     for item in items {
         if rendered.contains(&item.url) {
             continue;
         }
-        render_item(item, &mut rendered, &mut issues);
+        rendered.insert(item.url.clone());
+        let mut visiting = std::collections::HashSet::new();
+        visiting.insert(item.url.clone());
+        let (trees, _) = {
+            let mut ctx = TreeBuildCtx {
+                index: &index,
+                skipped: &mut *skipped,
+                truncated: &mut *truncated,
+                rendered: &mut rendered,
+                capped: &mut capped_any,
+            };
+            build_tree(item, &mut visiting, 0, &mut ctx)
+        };
+        for tree in &trees {
+            record_rendered(tree, &mut rendered);
+        }
+        issues.extend(trees);
     }
     issues
 }
@@ -659,7 +703,9 @@ pub async fn sync_project_board(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tree, collect_issue_trees, count_descendants, map_layer, map_status};
+    use super::{
+        TreeBuildCtx, build_tree, collect_issue_trees, count_descendants, map_layer, map_status,
+    };
     use crate::github::model::{GithubProjectItem, GithubSubIssue};
     use crate::project_board::{BoardLayer, BoardStatus};
 
@@ -722,15 +768,15 @@ mod tests {
         let mut skipped = 0u32;
         let mut case_truncated = false;
         let mut case_rendered = std::collections::HashSet::new();
-        let roots = build_tree(
-            &items[0],
-            &index,
-            &mut visiting,
-            0,
-            &mut skipped,
-            &mut case_truncated,
-            &mut case_rendered,
-        );
+        let mut case_capped = false;
+        let mut case_ctx = TreeBuildCtx {
+            index: &index,
+            skipped: &mut skipped,
+            truncated: &mut case_truncated,
+            rendered: &mut case_rendered,
+            capped: &mut case_capped,
+        };
+        let (roots, _) = build_tree(&items[0], &mut visiting, 0, &mut case_ctx);
         // 순환 간선(2 → 1)은 렌더되지 않으므로 skipped에 1건으로 합산된다.
         assert_eq!(skipped, 1);
         assert_eq!(roots.len(), 1);
@@ -755,15 +801,15 @@ mod tests {
         let mut skipped = 0u32;
         let mut case_truncated = false;
         let mut case_rendered = std::collections::HashSet::new();
-        let roots = build_tree(
-            &items[0],
-            &index,
-            &mut visiting,
-            super::MAX_TREE_DEPTH,
-            &mut skipped,
-            &mut case_truncated,
-            &mut case_rendered,
-        );
+        let mut case_capped = false;
+        let mut case_ctx = TreeBuildCtx {
+            index: &index,
+            skipped: &mut skipped,
+            truncated: &mut case_truncated,
+            rendered: &mut case_rendered,
+            capped: &mut case_capped,
+        };
+        let (roots, _) = build_tree(&items[0], &mut visiting, super::MAX_TREE_DEPTH, &mut case_ctx);
         assert_eq!(roots.len(), 1);
         let root = &roots[0];
 
@@ -784,15 +830,15 @@ mod tests {
         let mut skipped = 0u32;
         let mut case_truncated = false;
         let mut case_rendered = std::collections::HashSet::new();
-        let roots = build_tree(
-            &items[0],
-            &index,
-            &mut visiting,
-            0,
-            &mut skipped,
-            &mut case_truncated,
-            &mut case_rendered,
-        );
+        let mut case_capped = false;
+        let mut case_ctx = TreeBuildCtx {
+            index: &index,
+            skipped: &mut skipped,
+            truncated: &mut case_truncated,
+            rendered: &mut case_rendered,
+            capped: &mut case_capped,
+        };
+        let (roots, _) = build_tree(&items[0], &mut visiting, 0, &mut case_ctx);
         assert_eq!(skipped, 1);
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].number, 2);
