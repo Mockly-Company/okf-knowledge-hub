@@ -84,7 +84,7 @@ function normalizeIssue(
       return {
         ...issue,
         children: [],
-        kind: issue.kind ?? null,
+        kind: typeof issue.kind === "string" ? issue.kind : null,
         childrenTruncated: true,
       };
     }
@@ -101,7 +101,11 @@ function normalizeIssue(
         children.push(normalized);
       }
     }
-    return { ...issue, children, kind: issue.kind ?? null };
+    return {
+      ...issue,
+      children,
+      kind: typeof issue.kind === "string" ? issue.kind : null,
+    };
   } finally {
     release();
   }

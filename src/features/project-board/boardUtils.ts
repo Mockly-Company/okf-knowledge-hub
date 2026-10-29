@@ -74,8 +74,9 @@ export function isIssueLike(value: unknown): value is BoardIssue {
     candidate.url.trim().length > 0 &&
     typeof candidate.title === "string" &&
     LAYER_SET.has(candidate.layer as BoardLayer) &&
-    STATUS_SET.has(candidate.status as BoardStatus) &&
-    (candidate.kind == null || typeof candidate.kind === "string")
+    STATUS_SET.has(candidate.status as BoardStatus)
+    // kind는 표시용 힌트라 여기서 검증하지 않는다. 오염값은 정규화 단계에서
+    // null로 강제한다(하나의 오염 필드 때문에 이슈 전체를 버리지 않는다).
   );
 }
 
