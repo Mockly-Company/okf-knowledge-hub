@@ -49,6 +49,10 @@ function* walkIssues(
   path = new Set<string>(),
   budget: { count: number; capped: boolean } = { count: 0, capped: false },
 ): Generator<BoardIssue> {
+  // 빈 입력은 잘린 것이 없으므로 배너를 세우지 않는다(리프 기준 통일).
+  if (asIssueArray(issues).length === 0) {
+    return;
+  }
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     // 깊이 절단도 잘림이므로 배너 조건에 합친다.
     // (백엔드·게이트웨이가 truncated를 세우는 것과 같은 취지.)
@@ -91,6 +95,9 @@ function withoutDone(
   path = new Set<string>(),
   budget: { count: number; capped: boolean } = { count: 0, capped: false },
 ): BoardIssue[] {
+  if (asIssueArray(issues).length === 0) {
+    return [];
+  }
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     // 깊이 절단도 잘림이므로 배너 조건에 합친다.
     budget.capped = true;
@@ -117,7 +124,12 @@ function withoutDone(
       if (budget.count > MAX_WALK_NODES) {
         budget.capped = true;
         if (issue.status !== "done") {
-          kept.push({ ...issue, children: [], childrenTruncated: true });
+          // 자식이 없는 리프는 잘린 것이 없으므로 생략 표시를 하지 않는다.
+          kept.push({
+            ...issue,
+            children: [],
+            childrenTruncated: asIssueArray(issue.children).length > 0,
+          });
         }
         break;
       }

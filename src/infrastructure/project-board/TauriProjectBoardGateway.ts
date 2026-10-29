@@ -197,8 +197,14 @@ function normalizeIssue(
     // (백엔드 MAX_COUNT_NODES와 같은 취지의 총량 상한.)
     // try/finally 안에 두어 조기 반환해도 경로 집합이 누수되지 않게 한다.
     stats.nodes += 1;
+    // 자식이 없는 리프는 잘린 것이 없으므로 생략 표시·경고를 하지 않는다
+    // (백엔드 `cut && !sub_issues.is_empty()`와 같은 기준).
+    const hasChildren =
+      Array.isArray(issue.children) && issue.children.length > 0;
     if (stats.nodes > MAX_HIDDEN_NODES) {
-      warnTruncated(stats, issue, "node budget", depth);
+      if (hasChildren) {
+        warnTruncated(stats, issue, "node budget", depth);
+      }
       // 절단 집계용 전역 집합을 재사용한다. 절단마다 새 집합을 만들면
       // 다이아몬드 공유 서브트리가 분기마다 중복 집계되고 이미 순회한
       // 자식을 잘린 경우 다시 스택 순회해 이중 비용이 든다.
@@ -211,7 +217,7 @@ function normalizeIssue(
         ...issue,
         children: [],
         kind: typeof issue.kind === "string" ? issue.kind : null,
-        childrenTruncated: true,
+        childrenTruncated: hasChildren,
       };
     }
     if (depth > MAX_ISSUE_TREE_DEPTH) {
@@ -220,10 +226,6 @@ function normalizeIssue(
       // 잘린 하위 노드 수는 백엔드와 같은 단위(고유 숨김 URL 수)로 skipped에 합치고,
       // 노드 예산 초과분은 셀 수 없으므로 truncated로 표시한다.
       // 잘린 노드임을 플래그로 남겨 TreeNode가 "하위 항목 생략됨"을 표시한다.
-      // 자식이 없는 리프는 잘린 것이 없으므로 생략 표시·경고를 하지 않는다
-      // (백엔드 `cut && !sub_issues.is_empty()`와 같은 기준).
-      const hasChildren =
-        Array.isArray(issue.children) && issue.children.length > 0;
       if (hasChildren) {
         warnTruncated(stats, issue, "depth limit", depth);
       }
