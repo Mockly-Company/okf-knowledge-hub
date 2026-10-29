@@ -227,9 +227,12 @@ const TreeNode = memo(
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return (
       // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
+      // 절단 플레이스홀더에는 펼침 토글이 없으므로 aria-expanded를 생략한다.
+      // (있다면 확장 가능하다는 오해를 준다.)
       <div
         className="grid gap-[var(--space-2)]"
         {...treeitemProps}
+        aria-expanded={undefined}
         onFocus={handleFocus}
         onKeyDown={handleTreeKeys}
       >

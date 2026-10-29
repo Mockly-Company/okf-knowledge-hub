@@ -78,6 +78,9 @@ function countHiddenNodes(
     const current = stack.pop();
     if (typeof current !== "object" || current === null || !isIssueLike(current)) {
       // 자식 정규화 루프를 타지 않는 절단 경로 전용 집계이므로 여기서 센다.
+      // 정상 경로의 dropped 합산과는 겹치지 않는다(절단 시 해당 루프를 타지 않음).
+      // 비객체 원소는 식별 키가 없어 고유 URL 기준 중복 제거 대상이 아니다.
+      // JSON에는 공유 참조가 없어 각 슬롯이 별개 항목이므로 슬롯마다 센다.
       count += 1;
     } else {
       const key = issueKey(current);

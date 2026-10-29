@@ -53,6 +53,11 @@ function* walkIssues(
     return;
   }
   for (const issue of asIssueArray(issues)) {
+    // 초과 이후에는 형제 루프를 즉시 중단한다. 현재 호출의 return만으로는
+    // 바깥 재귀 레벨의 for가 다음 형제로 계속 진행해 상한이 무력화된다.
+    if (budget.capped) {
+      return;
+    }
     // 오염 캐시의 순환 참조에 대비해 재귀 경로상의 URL만 건너뛴다.
     // 집계(walkIssues)는 렌더와 달리 항상 전체 순회하므로, withoutDone과 같은
     // enterPath push/pop 백트래킹을 공유 집합에 적용한다. 집합은 이 집계 호출
@@ -88,6 +93,11 @@ function withoutDone(
   }
   const kept: BoardIssue[] = [];
   for (const issue of asIssueArray(issues)) {
+    // 하위에서 예산이 초과됐으면 형제 순회를 중단한다.
+    // (walkIssues의 상향 전파와 동일한 규칙.)
+    if (budget.capped) {
+      break;
+    }
     const release = enterPath(path, issueKey(issue));
     if (!release) {
       continue;
