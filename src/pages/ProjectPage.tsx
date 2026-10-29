@@ -44,17 +44,19 @@ function* walkIssues(
   }
   for (const issue of asIssueArray(issues)) {
     // 오염 캐시의 순환 참조에 대비해 재귀 경로상의 URL만 건너뛴다.
-    // ProjectTree와 같은 스냅샷 규칙을 쓴다: 자식에게 경로 복사본을 전달해
-    // 조기 break/throw·서스펜스 중단 시에도 공유 집합이 오염되지 않는다.
-    // (집계는 전체 순회라 복사 비용이 렌더보다 작고 안전을 우선한다.)
-    const key = issueKey(issue);
-    if (path.has(key)) {
+    // 집계(walkIssues)는 렌더와 달리 항상 전체 순회하므로, withoutDone과 같은
+    // enterPath push/pop 백트래킹을 공유 집합에 적용한다. 집합은 이 집계 호출
+    // 전용이라 조기 종료돼도 다음 집계가 새 집합을 만들어 오염되지 않는다.
+    const release = enterPath(path, issueKey(issue));
+    if (!release) {
       continue;
     }
-    const childPath = new Set(path);
-    childPath.add(key);
-    yield issue;
-    yield* walkIssues(asIssueArray(issue.children), depth + 1, childPath);
+    try {
+      yield issue;
+      yield* walkIssues(asIssueArray(issue.children), depth + 1, path);
+    } finally {
+      release();
+    }
   }
 }
 

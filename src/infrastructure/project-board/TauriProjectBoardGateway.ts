@@ -59,14 +59,16 @@ function normalizeIssue(
   issue: BoardIssue,
   depth = 0,
   path = new Set<string>(),
-  stats: { cuts: number } = { cuts: 0 },
+  stats: { cuts: number; dropped: number } = { cuts: 0, dropped: 0 },
 ): BoardIssue | null {
   if (!isIssueLike(issue)) {
+    stats.dropped += 1;
     return null;
   }
   // URL 사이클 오염 캐시는 별개 객체로 오므로 identity가 아닌 URL 경로로 끊는다.
   const release = enterPath(path, issueKey(issue));
   if (!release) {
+    stats.dropped += 1;
     return null;
   }
   try {
@@ -98,7 +100,7 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   if (typeof board !== "object" || board === null) {
     return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
   }
-  const stats = { cuts: 0 };
+  const stats = { cuts: 0, dropped: 0 };
   const issues: BoardIssue[] = [];
   for (const issue of asIssueArray(board.issues)) {
     const normalized = normalizeIssue(issue, 0, new Set<string>(), stats);
@@ -106,15 +108,18 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
       issues.push(normalized);
     }
   }
+  const backendSkipped =
+    typeof board.skipped === "number" &&
+    Number.isInteger(board.skipped) &&
+    board.skipped >= 0
+      ? board.skipped
+      : 0;
   return {
     issues,
     fetchedAt: typeof board.fetchedAt === "string" ? board.fetchedAt : null,
-    skipped:
-      typeof board.skipped === "number" &&
-      Number.isInteger(board.skipped) &&
-      board.skipped >= 0
-        ? board.skipped
-        : 0,
+    // 프론트에서 추가로 정화한 탈락분도 skipped에 합쳐 카운터를 맞춘다.
+    // (백엔드는 동일 탈락을 skipped에 가산한다.)
+    skipped: backendSkipped + stats.dropped,
     // 정규화 단계에서 잘린 하위 트리가 있으면 잘림으로 표시한다.
     truncated: board.truncated === true || stats.cuts > 0,
   };

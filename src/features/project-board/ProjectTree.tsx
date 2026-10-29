@@ -42,6 +42,7 @@ function TreeNodeInner({
   path = new Set<string>(),
   setSize,
   posInSet,
+  className,
 }: {
   issue: BoardIssue;
   depth: number;
@@ -50,6 +51,8 @@ function TreeNodeInner({
   /** 형제 집합 크기와 순서. treeitem의 aria-setsize/posinset에 쓴다. */
   setSize?: number;
   posInSet?: number;
+  /** 루트 카드처럼 tree 구조 밖에 스타일 래퍼를 둘 수 없을 때 쓴다. */
+  className?: string;
 }) {
   const [open, setOpen] = useState(depth === 0);
   // 비객체 원소가 렌더까지 오면 여기서 걸러낸다(TreeNode는 배열 가드 뒤단이다).
@@ -117,9 +120,10 @@ function TreeNodeInner({
 
   return (
     // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
+    // 루트 카드는 tree 직계 소유 구조를 깨지 않도록 treeitem 루트에 직접 입힌다.
     <div
       aria-label={`${role} #${issue.number} ${issue.title}`}
-      className="grid gap-[var(--space-2)]"
+      className={className ?? "grid gap-[var(--space-2)]"}
       {...treeitemProps}
       onKeyDown={handleTreeKeys}
     >
@@ -214,6 +218,7 @@ const TreeNode = memo(
     prev.depth === next.depth &&
     prev.setSize === next.setSize &&
     prev.posInSet === next.posInSet &&
+    prev.className === next.className &&
     samePath(prev.path, next.path),
 );
 
@@ -232,18 +237,14 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       aria-label="계층 보기"
     >
       {safeIssues.map((issue, index) => (
-        <div
+        <TreeNode
           key={`${issueKey(issue)}#${issue.number}-${index}`}
+          issue={issue}
+          depth={0}
+          setSize={safeIssues.length}
+          posInSet={index + 1}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
-          role="presentation"
-        >
-          <TreeNode
-            issue={issue}
-            depth={0}
-            setSize={safeIssues.length}
-            posInSet={index + 1}
-          />
-        </div>
+        />
       ))}
     </div>
   );
