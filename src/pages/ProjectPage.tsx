@@ -81,19 +81,31 @@ function withoutDone(
       continue;
     }
     try {
-      const children = withoutDone(
-        asIssueArray(issue.children),
-        depth + 1,
-        path,
-      );
+      const rawChildren = asIssueArray(issue.children);
+      // 깊이 절단으로 잘린 자식은 부모에 생략 플래그를 남긴다.
+      // (백엔드 build_tree·게이트웨이 normalizeIssue와 동일한 규칙.)
+      const cut =
+        depth + 1 > MAX_ISSUE_TREE_DEPTH && rawChildren.length > 0;
+      const children = cut
+        ? []
+        : withoutDone(rawChildren, depth + 1, path);
+      const flagged = cut ? { childrenTruncated: true as const } : {};
       if (issue.status === "done") {
         // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
         // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.
         if (children.length > 0) {
-          kept.push({ ...issue, children });
+          kept.push({ ...issue, children, ...flagged });
         }
+      } else if (
+        !cut &&
+        children.length === rawChildren.length &&
+        children.every((child, index) => child === rawChildren[index])
+      ) {
+        // 자식에 변함이 없으면 원본 참조를 유지해 TreeNode memo가 동작한다.
+        // (얕은 복사를 남발하면 hideDone=true 기본값에서 memo가 무효화된다.)
+        kept.push(issue);
       } else {
-        kept.push({ ...issue, children });
+        kept.push({ ...issue, children, ...flagged });
       }
     } finally {
       release();

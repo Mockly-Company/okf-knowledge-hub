@@ -1,4 +1,4 @@
-import { memo, useState, type KeyboardEvent } from "react";
+import { memo, useId, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -71,6 +71,11 @@ const TreeNode = memo(
     className?: string;
   }) {
   const [open, setOpen] = useState(depth === 0);
+  // useId는 early return보다 앞에서 호출한다(훅 순서 규칙).
+  const titleId = useId();
+  const descId = useId();
+  /** roving 포커스 진입점(첫 루트)만 Tab 순서에 둔다. */
+  const tabbable = depth === 0 && posInSet === 1;
   // 비객체 원소가 렌더까지 오면 여기서 걸러낸다(TreeNode는 배열 가드 뒤단이다).
   if (!isIssueLike(issue)) {
     return null;
@@ -88,34 +93,35 @@ const TreeNode = memo(
   const role = roleLabel(depth, issue.kind);
   // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
   const children = asIssueArray(issue.children);
-  // treeitem의 aria-label이 내부 콘텐츠를 가리므로 상태·레이어·타입을
-  // 라벨에 포함해 스크린리더에 전달한다(뱃지 텍스트는 label 뒤에 가려진다).
-  const itemLabel =
-    `${role} #${issue.number} ${issue.title}, ` +
-    `${statusName(issue.status)}, ${layerName(issue.layer)}` +
-    (issue.kind ? `, ${issue.kind}` : "");
+  // treeitem의 이름은 콘텐츠에서 유도하고, 상태·레이어·타입 보충 정보는
+  // aria-labelledby로 연결된 설명에서 전달한다.
+  // (aria-label을 직접 주면 내부 토글 Button·링크 이름이 가려진다.)
+  const description =
+    `상태: ${statusName(issue.status)}, 영역: ${layerName(issue.layer)}` +
+    (issue.kind ? `, 유형: ${issue.kind}` : "") +
+    (issue.childrenTruncated ? ", 하위 항목 생략됨" : "");
   // WAI-ARIA tree 패턴: treeitem은 레벨·펼침·집합 위치를 노출한다.
   // 펼침 토글은 포커스 가능한 Button이라 키보드 조작이 가능하다.
+  // roving 포커스 진입점(첫 루트)만 Tab 순서에 넣고 나머지는 -1로 둔다.
   const treeitemProps = {
     role: "treeitem" as const,
     "aria-level": depth + 1,
     "aria-expanded": children.length > 0 ? open : undefined,
     "aria-setsize": setSize,
     "aria-posinset": posInSet,
-    // Tab 순서에는 넣지 않고 ArrowUp/Down/Home/End roving 포커스만 받는다.
-    tabIndex: -1 as const,
+    "aria-labelledby": `${titleId} ${descId}`,
+    tabIndex: tabbable ? 0 : -1,
   };
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return (
       // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
-      <div
-        aria-label={`${itemLabel}, 하위 항목 생략됨`}
-        className="grid gap-[var(--space-2)]"
-        {...treeitemProps}
-      >
+      <div className="grid gap-[var(--space-2)]" {...treeitemProps}>
         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-          <span className="font-medium">
+          <span id={titleId} className="font-medium">
             {role} #{issue.number} {issue.title}
+          </span>
+          <span id={descId} className="sr-only">
+            {description}
           </span>
           <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
           <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
@@ -207,8 +213,9 @@ const TreeNode = memo(
   return (
     // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
     // 루트 카드는 tree 직계 소유 구조를 깨지 않도록 treeitem 루트에 직접 입힌다.
+    // 이름은 콘텐츠에서 유도하고 보충 정보는 aria-labelledby로 연결한다.
+    // (aria-label을 직접 주면 내부 토글 Button·링크 이름이 가려진다.)
     <div
-      aria-label={itemLabel}
       className={className ?? "grid gap-[var(--space-2)]"}
       {...treeitemProps}
       onKeyDown={handleTreeKeys}
@@ -229,7 +236,7 @@ const TreeNode = memo(
             )}
           </Button>
         ) : null}
-        <span className="font-medium">
+        <span id={titleId} className="font-medium">
           {(() => {
             // 검증과 렌더에 같은 값을 쓴다. trim하지 않은 원본을 href에 넣으면
             // 앞뒤 공백 오염 시 링크가 깨지거나 검증과 동작이 달라진다.
@@ -244,6 +251,9 @@ const TreeNode = memo(
               </span>
             );
           })()}
+        </span>
+        <span id={descId} className="sr-only">
+          {description}
         </span>
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
         <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">

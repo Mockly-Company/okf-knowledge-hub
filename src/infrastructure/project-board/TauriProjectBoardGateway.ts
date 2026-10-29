@@ -53,13 +53,32 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
   }
 }
 
+/** 절단된 서브트리의 숨은 노드 수를 센다(백엔드 count_descendants와 같은 단위). */
+function countHiddenNodes(issue: BoardIssue, path: Set<string>): number {
+  let count = 0;
+  for (const child of asIssueArray(issue.children)) {
+    const key = issueKey(child);
+    if (path.has(key)) {
+      continue;
+    }
+    path.add(key);
+    count += 1 + countHiddenNodes(child, path);
+    path.delete(key);
+  }
+  return count;
+}
+
 
 /** 구 캐시의 누락 kind/children을 타입에 맞게 채우고 비객체 원소는 버린다. */
 function normalizeIssue(
   issue: BoardIssue,
   depth = 0,
   path = new Set<string>(),
-  stats: { cuts: number; dropped: number } = { cuts: 0, dropped: 0 },
+  stats: { cuts: number; dropped: number; hidden: number } = {
+    cuts: 0,
+    dropped: 0,
+    hidden: 0,
+  },
 ): BoardIssue | null {
   if (!isIssueLike(issue)) {
     stats.dropped += 1;
@@ -75,9 +94,10 @@ function normalizeIssue(
     if (depth > MAX_ISSUE_TREE_DEPTH) {
       // 오염 캐시의 비정상 깊이는 여기서 자른다. 조용히 버리면 UI 카운터와
       // 어긋나므로 경고하고 호출자가 truncated를 세우도록 cuts에 기록한다.
-      // (백엔드는 동일 절단을 skipped에 합산한다.)
+      // 잘린 하위 노드 수는 백엔드와 같은 단위(고유 숨김 URL 수)로 skipped에 합친다.
       // 잘린 노드임을 플래그로 남겨 TreeNode가 "하위 항목 생략됨"을 표시한다.
       stats.cuts += 1;
+      stats.hidden += countHiddenNodes(issue, new Set(path));
       console.warn(
         `[project-board] issue tree truncated at depth ${depth}: #${issue.number} ${issue.url}`,
       );
@@ -116,7 +136,7 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   if (typeof board !== "object" || board === null) {
     return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
   }
-  const stats = { cuts: 0, dropped: 0 };
+  const stats = { cuts: 0, dropped: 0, hidden: 0 };
   const issues: BoardIssue[] = [];
   // asIssueArray는 탈락분을 조용히 버리므로, skipped 합산을 위해 여기서 직접 센다.
   const topLevel = Array.isArray(board.issues) ? board.issues : [];
@@ -139,9 +159,9 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   return {
     issues,
     fetchedAt: typeof board.fetchedAt === "string" ? board.fetchedAt : null,
-    // 프론트에서 추가로 정화한 탈락분도 skipped에 합쳐 카운터를 맞춘다.
-    // (백엔드는 동일 탈락을 skipped에 가산한다.)
-    skipped: backendSkipped + stats.dropped,
+    // 프론트에서 추가로 정화한 탈락분과 절단 하위 노드도 skipped에 합쳐 카운터를 맞춘다.
+    // (백엔드는 동일 탈락·절단을 skipped에 가산한다.)
+    skipped: backendSkipped + stats.dropped + stats.hidden,
     // 정규화 단계에서 잘린 하위 트리가 있으면 잘림으로 표시한다.
     truncated: board.truncated === true || stats.cuts > 0,
   };
