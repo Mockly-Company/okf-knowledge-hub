@@ -36,24 +36,40 @@ function roleLabel(depth: number, kind: string | null): string {
   return "서브태스크";
 }
 
-function TreeNodeInner({
-  issue,
-  depth,
-  path = new Set<string>(),
-  setSize,
-  posInSet,
-  className,
-}: {
-  issue: BoardIssue;
-  depth: number;
-  /** 조상 경로 URL 집합. 순환 감지용으로 자식에게 스냅샷을 전달한다. */
-  path?: Set<string>;
-  /** 형제 집합 크기와 순서. treeitem의 aria-setsize/posinset에 쓴다. */
-  setSize?: number;
-  posInSet?: number;
-  /** 루트 카드처럼 tree 구조 밖에 스타일 래퍼를 둘 수 없을 때 쓴다. */
-  className?: string;
-}) {
+/**
+ * 동일 URL·number 형제(다이아몬드 공유·오염 중복)에 안정적인 키를 부여한다.
+ * 전체 index를 쓰면 순서 변경 시 펼침 상태가 엇갈리므로, 같은 base가
+ * 형제 안에서 몇 번째로 등장하는지만 접미사로 붙인다(고유 항목은 위치와 무관).
+ */
+function siblingKeys(list: BoardIssue[]): string[] {
+  const seen = new Map<string, number>();
+  return list.map((item) => {
+    const base = `${issueKey(item)}#${item.number}`;
+    const occ = seen.get(base) ?? 0;
+    seen.set(base, occ + 1);
+    return occ === 0 ? base : `${base}#${occ + 1}`;
+  });
+}
+
+const TreeNode = memo(
+  function TreeNode({
+    issue,
+    depth,
+    path = new Set<string>(),
+    setSize,
+    posInSet,
+    className,
+  }: {
+    issue: BoardIssue;
+    depth: number;
+    /** 조상 경로 URL 집합. 순환 감지용으로 자식에게 스냅샷을 전달한다. */
+    path?: Set<string>;
+    /** 형제 집합 크기와 순서. treeitem의 aria-setsize/posinset에 쓴다. */
+    setSize?: number;
+    posInSet?: number;
+    /** 루트 카드처럼 tree 구조 밖에 스타일 래퍼를 둘 수 없을 때 쓴다. */
+    className?: string;
+  }) {
   const [open, setOpen] = useState(depth === 0);
   // 비객체 원소가 렌더까지 오면 여기서 걸러낸다(TreeNode는 배열 가드 뒤단이다).
   if (!isIssueLike(issue)) {
@@ -86,6 +102,8 @@ function TreeNodeInner({
     "aria-expanded": children.length > 0 ? open : undefined,
     "aria-setsize": setSize,
     "aria-posinset": posInSet,
+    // Tab 순서에는 넣지 않고 ArrowUp/Down/Home/End roving 포커스만 받는다.
+    tabIndex: -1 as const,
   };
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return (
@@ -117,15 +135,72 @@ function TreeNodeInner({
     if (item !== event.currentTarget) {
       return;
     }
-    if (children.length === 0) {
-      return;
-    }
-    if (event.key === "ArrowRight") {
-      event.preventDefault();
-      setOpen(true);
-    } else if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      setOpen(false);
+    // 같은 트리 안의 treeitem을 DOM 순서대로 모아 roving 포커스를 이동한다.
+    // treeitem 자체는 tabIndex를 두지 않아 Tab 정지를 늘리지 않는다.
+    const moveFocus = (delta: number) => {
+      const tree = event.currentTarget.closest('[role="tree"]');
+      if (!tree) {
+        return;
+      }
+      const items = Array.from(
+        tree.querySelectorAll('[role="treeitem"]'),
+      );
+      const at = items.indexOf(event.currentTarget);
+      const next = items[(at + delta + items.length) % items.length] as
+        | HTMLElement
+        | undefined;
+      next?.focus();
+    };
+    const focusEdge = (edge: "first" | "last") => {
+      const tree = event.currentTarget.closest('[role="tree"]');
+      if (!tree) {
+        return;
+      }
+      const items = tree.querySelectorAll('[role="treeitem"]');
+      const target =
+        edge === "first" ? items.item(0) : items.item(items.length - 1);
+      (target as HTMLElement | null)?.focus();
+    };
+    switch (event.key) {
+      case "ArrowRight":
+        if (children.length > 0) {
+          event.preventDefault();
+          setOpen(true);
+        }
+        break;
+      case "ArrowLeft":
+        if (children.length > 0) {
+          event.preventDefault();
+          setOpen(false);
+        }
+        break;
+      case "ArrowDown":
+        event.preventDefault();
+        moveFocus(1);
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        moveFocus(-1);
+        break;
+      case "Home":
+        event.preventDefault();
+        focusEdge("first");
+        break;
+      case "End":
+        event.preventDefault();
+        focusEdge("last");
+        break;
+      case "Enter":
+      case " ":
+        // 포커스가 treeitem 자체에 있을 때만 토글한다.
+        // Button/링크에 포커스가 있으면 네이티브 동작에 맡긴다.
+        if (event.target === event.currentTarget && children.length > 0) {
+          event.preventDefault();
+          setOpen((value) => !value);
+        }
+        break;
+      default:
+        break;
     }
   };
 
@@ -189,24 +264,33 @@ function TreeNodeInner({
           aria-label={`${issue.title} 하위 항목`}
           role="group"
         >
-          {children.map((child, index) => (
-            // 키는 trim 기준 issueKey와 number를 우선하고, 동일 URL 형제 중복에
-            // 대비해 index를 최후 fallback으로 붙인다(중복 key 경고 방지).
-            <li key={`${issueKey(child)}#${child.number}-${index}`} role="presentation">
-              <TreeNode
-                issue={child}
-                depth={depth + 1}
-                path={childPath}
-                setSize={children.length}
-                posInSet={index + 1}
-              />
-            </li>
-          ))}
+          {siblingKeys(children).map((childKey, index) => {
+            const child = children[index];
+            return (
+              <li key={childKey} role="presentation">
+                <TreeNode
+                  issue={child}
+                  depth={depth + 1}
+                  path={childPath}
+                  setSize={children.length}
+                  posInSet={index + 1}
+                />
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>
   );
-}
+  },
+  (prev, next) =>
+    prev.issue === next.issue &&
+    prev.depth === next.depth &&
+    prev.setSize === next.setSize &&
+    prev.posInSet === next.posInSet &&
+    prev.className === next.className &&
+    samePath(prev.path, next.path),
+);
 
 /**
  * 무관한 상태 변경(새로고침 시간 등)으로 부모가 리렌더돼도 같은 위치의
@@ -229,16 +313,6 @@ function samePath(a?: Set<string>, b?: Set<string>): boolean {
   return true;
 }
 
-const TreeNode = memo(
-  TreeNodeInner,
-  (prev, next) =>
-    prev.issue === next.issue &&
-    prev.depth === next.depth &&
-    prev.setSize === next.setSize &&
-    prev.posInSet === next.posInSet &&
-    prev.className === next.className &&
-    samePath(prev.path, next.path),
-);
 
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
   // hideDone=false 등 정규화를 우회하는 경로에서도 안전하도록 최상위도 검증한다.
@@ -254,10 +328,10 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       role="tree"
       aria-label="계층 보기"
     >
-      {safeIssues.map((issue, index) => (
+      {siblingKeys(safeIssues).map((rootKey, index) => (
         <TreeNode
-          key={`${issueKey(issue)}#${issue.number}-${index}`}
-          issue={issue}
+          key={rootKey}
+          issue={safeIssues[index]}
           depth={0}
           setSize={safeIssues.length}
           posInSet={index + 1}
