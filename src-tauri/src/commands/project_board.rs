@@ -354,7 +354,8 @@ fn build_tree(
     skipped: &mut u32,
     truncated: &mut bool,
 ) -> Vec<BoardIssue> {
-    let mut child_issues = if depth >= MAX_TREE_DEPTH {
+    let cut = depth >= MAX_TREE_DEPTH;
+    let mut child_issues = if cut {
         // 깊이 제한으로 잘라낸 서브트리 전체를 skipped에 반영한다.
         // 조상 경로를 시드로 넣어 순환을 끊고, 고유 URL 기준으로 한 번씩만 센다.
         // 예산을 초과하면 truncated를 세운다(초과분은 셀 수 없으므로).
@@ -400,6 +401,8 @@ fn build_tree(
             status,
             children: std::mem::take(&mut child_issues),
             kind: item.kind.clone(),
+            // 깊이 제한으로 잘린 노드는 프론트가 "하위 항목 생략됨"으로 표시한다.
+            children_truncated: cut,
         }],
         // 상태를 판별할 수 없는 부모는 버리되 유효한 자식은 루트로 승격해 살린다.
         None => {

@@ -164,6 +164,13 @@ function TreeNodeInner({
           {layerName(issue.layer)}
           {issue.kind ? ` · ${issue.kind}` : null}
         </span>
+        {/* 백엔드 깊이 제한으로 잘린 노드는 펼침 버튼이 없어 리프로 보이므로,
+            전역 배너와 별개로 해당 에픽 위치에 생략을 표시한다. */}
+        {issue.childrenTruncated ? (
+          <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+            하위 항목 생략됨
+          </span>
+        ) : null}
       </div>
       {open && children.length > 0 ? (
         <ul

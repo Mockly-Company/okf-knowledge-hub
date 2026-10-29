@@ -101,6 +101,10 @@ pub struct BoardIssue {
     /// 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시.
+    /// 구 캐시에는 없어 `false`로 읽힌다.
+    #[serde(default)]
+    pub children_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -284,8 +288,10 @@ mod tests {
                     status: BoardStatus::Backlog,
                     children: Vec::new(),
                     kind: Some("작업".to_owned()),
+                    children_truncated: false,
                 }],
                 kind: Some("기능".to_owned()),
+                children_truncated: false,
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
             skipped: 0,
