@@ -1,4 +1,4 @@
-import { memo, useId, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useId, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -59,6 +59,8 @@ const TreeNode = memo(
     setSize,
     posInSet,
     className,
+    focusedKey,
+    onFocusKey,
   }: {
     issue: BoardIssue;
     depth: number;
@@ -69,13 +71,15 @@ const TreeNode = memo(
     posInSet?: number;
     /** 루트 카드처럼 tree 구조 밖에 스타일 래퍼를 둘 수 없을 때 쓴다. */
     className?: string;
+    /** 현재 roving 포커스가 있는 노드 키. Tab 정지는 이 노드에만 둔다. */
+    focusedKey?: string | null;
+    /** 포커스를 받은 노드 키를 올린다. useCallback 안정 참조를 전달한다. */
+    onFocusKey?: (key: string) => void;
   }) {
   const [open, setOpen] = useState(depth === 0);
   // useId는 early return보다 앞에서 호출한다(훅 순서 규칙).
   const titleId = useId();
   const descId = useId();
-  /** roving 포커스 진입점(첫 루트)만 Tab 순서에 둔다. */
-  const tabbable = depth === 0 && posInSet === 1;
   // 비객체 원소가 렌더까지 오면 여기서 걸러낸다(TreeNode는 배열 가드 뒤단이다).
   if (!isIssueLike(issue)) {
     return null;
@@ -85,6 +89,17 @@ const TreeNode = memo(
   // push/pop 타이밍이 맞지 않아, 렌더되는 노드에만 스냅샷을 복사해 전달한다.
   // walkIssues(데이터 집계 쪽)는 동기 제너레이터라 백트래킹을 유지한다.
   const key = issueKey(issue);
+  /** roving tabindex: Tab 정지는 포커스 중인 노드 하나에만 둔다.
+   * 초기값(포커스 없음)은 첫 루트에 둔다. 화살표·포커스 이동 시 갱신된다. */
+  const focused =
+    focusedKey === undefined || focusedKey === null
+      ? depth === 0 && posInSet === 1
+      : focusedKey === key;
+  const handleFocus = () => {
+    if (focusedKey !== key) {
+      onFocusKey?.(key);
+    }
+  };
   if (path.has(key)) {
     return null;
   }
@@ -110,12 +125,12 @@ const TreeNode = memo(
     "aria-setsize": setSize,
     "aria-posinset": posInSet,
     "aria-labelledby": `${titleId} ${descId}`,
-    tabIndex: tabbable ? 0 : -1,
+    tabIndex: focused ? 0 : -1,
   };
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return (
       // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
-      <div className="grid gap-[var(--space-2)]" {...treeitemProps}>
+      <div className="grid gap-[var(--space-2)]" {...treeitemProps} onFocus={handleFocus}>
         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
           <span id={titleId} className="font-medium">
             {role} #{issue.number} {issue.title}
@@ -219,6 +234,7 @@ const TreeNode = memo(
       className={className ?? "grid gap-[var(--space-2)]"}
       {...treeitemProps}
       onKeyDown={handleTreeKeys}
+      onFocus={handleFocus}
     >
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         {children.length > 0 ? (
@@ -284,6 +300,8 @@ const TreeNode = memo(
                   path={childPath}
                   setSize={children.length}
                   posInSet={index + 1}
+                  focusedKey={focusedKey}
+                  onFocusKey={onFocusKey}
                 />
               </li>
             );
@@ -299,6 +317,8 @@ const TreeNode = memo(
     prev.setSize === next.setSize &&
     prev.posInSet === next.posInSet &&
     prev.className === next.className &&
+    prev.focusedKey === next.focusedKey &&
+    prev.onFocusKey === next.onFocusKey &&
     samePath(prev.path, next.path),
 );
 
@@ -327,6 +347,11 @@ function samePath(a?: Set<string>, b?: Set<string>): boolean {
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
   // hideDone=false 등 정규화를 우회하는 경로에서도 안전하도록 최상위도 검증한다.
   const safeIssues = asIssueArray(issues);
+  // roving tabindex 상태: Tab 정지는 포커스 중인 노드 하나에만 둔다.
+  const [focusKey, setFocusKey] = useState<string | null>(null);
+  const handleFocusKey = useCallback((key: string) => {
+    setFocusKey((current) => (current === key ? current : key));
+  }, []);
   if (safeIssues.length === 0) {
     return (
       <p className="m-0 text-[var(--text-muted)]">연결된 Issue 없음</p>
@@ -346,6 +371,8 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
           setSize={safeIssues.length}
           posInSet={index + 1}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+          focusedKey={focusKey}
+          onFocusKey={handleFocusKey}
         />
       ))}
     </div>
