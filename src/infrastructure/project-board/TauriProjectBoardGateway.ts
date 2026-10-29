@@ -82,18 +82,38 @@ function countHiddenNodes(
       stack.push(kid);
     }
   };
+  // 동일 참조 순환에 대비한 방문 집합. URL이 없어 키로 식별할 수 없는
+  // 비정상 노드도 여기서 걸러 무한 스택 증가를 막는다.
+  const seenObjects = new Set<object>();
   if (Array.isArray(issue.children)) {
     pushKids(issue.children);
   }
   while (stack.length > 0) {
+    // 스택 자체가 예산을 초과하면 중단한다(단일 노드의 대량 자식 대비).
+    if (stack.length > MAX_HIDDEN_NODES) {
+      return { count, capped: true };
+    }
     const current = stack.pop();
-    if (typeof current !== "object" || current === null || !isIssueLike(current)) {
+    if (typeof current !== "object" || current === null) {
       // 자식 정규화 루프를 타지 않는 절단 경로 전용 집계이므로 여기서 센다.
       // 정상 경로의 dropped 합산과는 겹치지 않는다(절단 시 해당 루프를 타지 않음).
-      // 비객체 원소는 식별 키가 없어 고유 URL 기준 중복 제거 대상이 아니다.
-      // JSON에는 공유 참조가 없어 각 슬롯이 별개 항목이므로 슬롯마다 센다.
+      // null·원시값은 식별 키가 없지만 JSON에는 공유 참조가 없어
+      // 각 슬롯이 별개 항목이므로 슬롯마다 센다.
       count += 1;
-    } else {
+      continue;
+    }
+    if (seenObjects.has(current)) {
+      continue;
+    }
+    seenObjects.add(current);
+    if (!isIssueLike(current)) {
+      // 비정상 객체도 자식을 달고 있을 수 있다. 자식은 숨겨진 항목이므로
+      // 계속 세되, 식별 가능한 하위 노드는 아래 분기에서 중복 제거한다.
+      count += 1;
+      pushKids((current as { children?: unknown }).children);
+      continue;
+    }
+    {
       const key = issueKey(current);
       if (seen.has(key)) {
         continue;

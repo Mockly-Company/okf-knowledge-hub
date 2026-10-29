@@ -156,9 +156,9 @@ const TreeNode = memo(
     // 매 키 입력마다 querySelectorAll로 전체를 수집하면 대량 트리에서 버벅이므로,
     // lazy TreeWalker로 현재 위치에서 한 걸음씩만 이동한다.
     // WAI-ARIA tree 패턴을 따라 양 끝에서는 정지한다(순환하지 않는다).
-    const treeWalker = () => {
+    const treeWalkerFrom = (node: Node | null) => {
       const tree = event.currentTarget.closest('[role="tree"]');
-      if (!tree) {
+      if (!tree || !node) {
         return null;
       }
       const walker = document.createTreeWalker(tree, NodeFilter.SHOW_ELEMENT, {
@@ -169,11 +169,14 @@ const TreeNode = memo(
             : NodeFilter.FILTER_SKIP;
         },
       });
-      walker.currentNode = event.currentTarget;
+      walker.currentNode = node;
       return walker;
     };
+    // Home/End는 트리 루트에서 시작해 처음/마지막 treeitem으로 이동한다.
+    // (currentTarget 기준 firstChild/lastChild는 현재 노드의 자식으로 가서
+    // 중간 노드에서 Home/End가 엉뚱한 자손으로 가거나 동작하지 않는다.)
     const moveFocus = (delta: 1 | -1) => {
-      const walker = treeWalker();
+      const walker = treeWalkerFrom(event.currentTarget);
       if (!walker) {
         return;
       }
@@ -183,13 +186,28 @@ const TreeNode = memo(
       next?.focus();
     };
     const focusEdge = (edge: "first" | "last") => {
-      const walker = treeWalker();
+      const tree = event.currentTarget.closest('[role="tree"]');
+      if (!tree) {
+        return;
+      }
+      const walker = treeWalkerFrom(tree);
       if (!walker) {
         return;
       }
-      const target = (
-        edge === "first" ? walker.firstChild() : walker.lastChild()
-      ) as HTMLElement | null;
+      if (edge === "first") {
+        (walker.firstChild() as HTMLElement | null)?.focus();
+        return;
+      }
+      // 마지막 자식을 따라 내려가며 같은 트리 안의 마지막 treeitem을 찾는다.
+      // nextNode 전체 순회와 달리 깊이만큼만 내려가 O(depth)로 끝난다.
+      let target = walker.lastChild() as HTMLElement | null;
+      let child: HTMLElement | null;
+      while (
+        target &&
+        (child = walker.lastChild() as HTMLElement | null)
+      ) {
+        target = child;
+      }
       target?.focus();
     };
     switch (event.key) {
