@@ -137,7 +137,8 @@ function withoutDone(
       if (issue.status === "done") {
         // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
         // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.
-        if (children.length > 0) {
+        // 깊이 절단된 부모는 숨은 자식이 남아 있을 수 있어 생략 표시와 함께 남긴다.
+        if (children.length > 0 || cut) {
           kept.push({ ...issue, children, ...flagged });
         }
       } else if (
@@ -593,8 +594,11 @@ export function ProjectPage({
       {board && (board.truncated || walkCapped || treeCapped) ? (
         <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
           보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈
-          최대 20개
-          {walkCapped || treeCapped ? "·화면 집계 상한" : ""})
+          최대 520개
+          {walkCapped || treeCapped
+            ? "·화면 표시 상한, 화면에서 생략된 항목은 제외 개수에 포함되지 않음"
+            : ""}
+          )
         </p>
       ) : null}
         </>

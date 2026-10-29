@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useId,
+  useMemo,
   useState,
   type FocusEvent,
   type KeyboardEvent,
@@ -58,11 +59,14 @@ function siblingKeys(list: BoardIssue[]): string[] {
   });
 }
 
+/** 루트 노드의 기본 조상 경로. 렌더마다 새 집합을 만들지 않게 공유한다. */
+const EMPTY_PATH: ReadonlySet<string> = new Set<string>();
+
 const TreeNode = memo(
   function TreeNode({
     issue,
     depth,
-    path = new Set<string>(),
+    path = EMPTY_PATH,
     setSize,
     posInSet,
     className,
@@ -73,7 +77,7 @@ const TreeNode = memo(
     issue: BoardIssue;
     depth: number;
     /** 조상 경로 URL 집합. 순환 감지용으로 자식에게 스냅샷을 전달한다. */
-    path?: Set<string>;
+    path?: ReadonlySet<string>;
     /** 형제 집합 크기와 순서. treeitem의 aria-setsize/posinset에 쓴다. */
     setSize?: number;
     posInSet?: number;
@@ -90,6 +94,20 @@ const TreeNode = memo(
   // useId는 early return보다 앞에서 호출한다(훅 순서 규칙).
   const titleId = useId();
   const descId = useId();
+  // 자식 경로 스냅샷과 형제 키는 렌더마다 다시 만들지 않고 입력이 바뀔 때만 계산한다.
+  // (훅이라 early return보다 앞에 둔다.)
+  const key = issueKey(issue);
+  const childPath = useMemo(() => {
+    const next = new Set(path);
+    next.add(key);
+    return next;
+  }, [path, key]);
+  // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
+  const children = useMemo(
+    () => asIssueArray((issue as BoardIssue | null | undefined)?.children),
+    [issue],
+  );
+  const childKeys = useMemo(() => siblingKeys(children), [children]);
   // 비객체 원소가 렌더까지 오면 여기서 걸러낸다(TreeNode는 배열 가드 뒤단이다).
   if (!isIssueLike(issue)) {
     return null;
@@ -98,12 +116,9 @@ const TreeNode = memo(
   // React에서는 자식 컴포넌트 함수가 부모 반환 후에 실행되므로 공유 집합의
   // push/pop 타이밍이 맞지 않아, 렌더되는 노드에만 스냅샷을 복사해 전달한다.
   // walkIssues(데이터 집계 쪽)는 동기 제너레이터라 백트래킹을 유지한다.
-  const key = issueKey(issue);
   if (path.has(key)) {
     return null;
   }
-  const childPath = new Set(path);
-  childPath.add(key);
   // roving tabindex는 ProjectTree가 쥔 focusedKey 하나로 관리한다.
   // 개별 노드는 전달받은 고유 ID와 비교해 Tab 정지 여부만 판단한다.
   // ID 계산은 부모가 렌더 시 한 번만 하고 자식에게 내려주므로,
@@ -121,8 +136,6 @@ const TreeNode = memo(
     }
   };
   const role = roleLabel(depth, issue.kind);
-  // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
-  const children = asIssueArray(issue.children);
   // treeitem의 이름은 콘텐츠에서 유도하고, 상태·레이어·타입 보충 정보는
   // aria-labelledby로 연결된 설명에서 전달한다.
   // (aria-label을 직접 주면 내부 토글 Button·링크 이름이 가려진다.)
@@ -347,7 +360,7 @@ const TreeNode = memo(
           aria-label={`${issue.title} 하위 항목`}
           role="group"
         >
-          {siblingKeys(children).map((childKey, index) => {
+          {childKeys.map((childKey, index) => {
             const child = children[index];
             // 부모 focusId에 형제 고유 키를 이어붙인다. 동일 URL이 다이아몬드로
             // 중복 렌더돼도 서로 다른 ID가 보장된다.
@@ -404,7 +417,7 @@ function isNodeFocused(
   return focusedKey === focusId;
 }
 
-function samePath(a?: Set<string>, b?: Set<string>): boolean {
+function samePath(a?: ReadonlySet<string>, b?: ReadonlySet<string>): boolean {
   if (a === b) {
     return true;
   }

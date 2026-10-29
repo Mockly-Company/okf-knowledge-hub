@@ -306,10 +306,7 @@ fn is_project_not_found(error: &AppError) -> bool {
 /// 순환 참조가 `visiting` 검사를 우회해도 스택 오버플로를 막는다.
 const MAX_TREE_DEPTH: usize = 10;
 
-/// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 가져오며 초과분은 잘린다.
-/// GitHub subIssues 커넥션에 별도 페이지네이션을 하지 않으므로
-/// 자식이 20개를 넘는 에픽은 초과분이 보드에서 빠진다.
-/// 서브이슈 조회 상한(`SUB_ISSUES_FIRST`)을 초과한 잘림을 셀 때의 노드 예산.
+/// 깊이 제한으로 잘린 서브트리를 셀 때의 노드 예산.
 /// 재귀 대신 명시적 스택으로 순회하므로 스택 오버플로 걱정은 없고,
 /// 이 예산은 오염 캐시 폭주 시 HashSet 폭증을 막는 총량 상한이다.
 const MAX_COUNT_NODES: usize = 100_000;

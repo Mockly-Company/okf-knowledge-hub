@@ -79,6 +79,10 @@ function countHiddenNodes(
       return;
     }
     for (const kid of kids) {
+      // 푸시 중에도 예산을 확인해 대량 오염 자식이 검사 전에 스택을 키우지 않게 한다.
+      if (stack.length > MAX_HIDDEN_NODES) {
+        return;
+      }
       stack.push(kid);
     }
   };
@@ -297,7 +301,12 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   }
   return {
     issues,
-    fetchedAt: typeof board.fetchedAt === "string" ? board.fetchedAt : null,
+    // 오염 캐시의 임의 문자열이 날짜로 표시되지 않게 파싱 가능한 값만 남긴다.
+    fetchedAt:
+      typeof board.fetchedAt === "string" &&
+      !Number.isNaN(Date.parse(board.fetchedAt))
+        ? board.fetchedAt
+        : null,
     // 프론트에서 추가로 정화한 탈락분과 절단 하위 노드도 skipped에 합쳐 카운터를 맞춘다.
     // (백엔드는 동일 탈락·절단을 skipped에 가산한다.)
     skipped: backendSkipped + stats.dropped + stats.hidden,

@@ -247,7 +247,7 @@ describe("ProjectPage", () => {
 
     expect(
       await screen.findByText(
-        "보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈 최대 20개)",
+        "보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈 최대 520개)",
       ),
     ).toBeInTheDocument();
   });

@@ -18,10 +18,15 @@ use crate::github::model::{
 use crate::project_board::model::ProjectOwnerScope;
 
 pub const INITIALIZATION_DRAFT_PR_BODY: &str = "## Summary\n\n- Initialize this repository as an OkHub knowledge workspace\n\n## Why\n\n- Share OKF documents and workspace metadata through Git\n\n## Changes\n\n- Add `.okf/workspace.yml`\n- Add the initial document and template roots when missing\n\n## Test Plan\n\n- Validate `.okf/workspace.yml` in OkHub\n- Confirm the configured document root stays inside the repository\n\n## Review Notes\n\n- This change contains workspace metadata only";
-/// Issue당 함께 가져오는 서브이슈 수. GitHub subIssues 커넥션은 별도 페이지네이션 없이
-/// 첫 페이지만 조회하므로, 이 값을 초과하는 자식은 보드에서 잘린다.
-/// 에픽 규모가 커지면 서브이슈 전용 후속 조회가 필요하다.
+/// 보드 조회에서 Issue당 함께 가져오는 서브이슈 수. 초과분은 `node(id)` 후속 조회로
+/// 이어서 가져온다(`SUB_ISSUES_FOLLOW_UP_PAGES`·`SUB_ISSUES_FOLLOW_UP_BUDGET` 상한).
 pub const SUB_ISSUES_FIRST: usize = 20;
+/// 서브이슈 후속 조회의 페이지 크기.
+const SUB_ISSUES_FOLLOW_UP_FIRST: usize = 100;
+/// Issue 하나당 서브이슈 후속 조회 최대 페이지 수(첫 20개 + 최대 500개).
+const SUB_ISSUES_FOLLOW_UP_PAGES: usize = 5;
+/// 동기화 한 번에 쓰는 서브이슈 후속 조회 요청 총량. 초과분은 잘림으로 표시한다.
+const SUB_ISSUES_FOLLOW_UP_BUDGET: usize = 50;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -200,10 +205,30 @@ struct GithubProjectItemNode {
 struct GithubProjectItemContent {
     #[serde(rename = "__typename")]
     kind: String,
+    /// 서브이슈 후속 조회용 node ID. Issue에만 있다.
+    #[serde(default)]
+    id: Option<String>,
     number: Option<u64>,
     title: Option<String>,
     url: Option<String>,
     labels: Option<GithubProjectLabelConnection>,
+    #[serde(rename = "subIssues", default)]
+    sub_issues: Option<GithubSubIssuesConnection>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesResponse {
+    data: Option<GithubSubIssuesData>,
+    errors: Option<Vec<GithubProjectLookupError>>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesData {
+    node: Option<GithubSubIssuesOwner>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesOwner {
     #[serde(rename = "subIssues", default)]
     sub_issues: Option<GithubSubIssuesConnection>,
 }
@@ -440,14 +465,45 @@ fn project_permission_error() -> AppError {
 }
 
 /// 보드 동기화용 projectV2.items 조회문.
-/// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 조회하고 초과분은 잘린다
-/// (subIssues 커넥션에 별도 페이지네이션을 하지 않음).
-/// 잘림은 `subIssues.pageInfo.hasNextPage`로 감지해 보드 `truncated`에 합친다.
-/// 에픽 규모가 커지면 서브이슈 전용 후속 조회가 필요하다.
+/// 서브이슈는 첫 `SUB_ISSUES_FIRST`개를 함께 조회하고, 초과분은
+/// `sub_issues_query`로 이어서 가져온다.
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage}}nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{id number title url labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
+}
+
+/// 첫 페이지 이후 서브이슈를 이어서 가져오는 조회문.
+fn sub_issues_query() -> String {
+    format!(
+        "query($id:ID!,$after:String!){{node(id:$id){{... on Issue{{subIssues(first:{SUB_ISSUES_FOLLOW_UP_FIRST},after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}}}}}}",
+    )
+}
+
+/// 서브이슈 노드를 모델로 옮긴다. null·필드 결손·빈 URL 원소는 `dropped`에 센다.
+fn collect_sub_issues(
+    nodes: Option<Vec<Option<GithubSubIssueNode>>>,
+    out: &mut Vec<GithubSubIssue>,
+    dropped: &mut u32,
+) {
+    for node in nodes.unwrap_or_default() {
+        let Some(GithubSubIssueNode {
+            number: Some(number),
+            title: Some(title),
+            url: Some(url),
+        }) = node
+        else {
+            *dropped += 1;
+            continue;
+        };
+        // 프론트 issueKey(url.trim())와 키 기준을 일치시킨다.
+        let url = url.trim().to_owned();
+        if url.is_empty() {
+            *dropped += 1;
+            continue;
+        }
+        out.push(GithubSubIssue { number, title, url });
+    }
 }
 
 fn project_not_found_error() -> AppError {
@@ -880,7 +936,8 @@ impl GithubHttpClient {
 
     /// 프로젝트 보드 동기화용으로 Issue/PR 목록을 가져온다.
     /// `Status` 단일 선택 필드 값과 `layer:*` 라벨을 함께 반환한다.
-    /// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 가져오며 초과분은 잘린다.
+    /// 서브이슈는 첫 `SUB_ISSUES_FIRST`개 이후를 후속 조회로 이어 받고,
+    /// 후속 조회 상한에 걸리면 잘림으로 표시한다.
     /// 두 번째 값은 페이지 상한(5페이지)에 걸려 잘렸는지, 세 번째 값은
     /// 내용이 없어 버린 항목 수다.
     pub async fn list_project_items(
@@ -896,6 +953,7 @@ impl GithubHttpClient {
         let mut items = Vec::new();
         let mut dropped = 0u32;
         let mut sub_truncated = false;
+        let mut follow_up_budget = SUB_ISSUES_FOLLOW_UP_BUDGET;
         let mut after: Option<String> = None;
         let query = project_items_query(root);
         for _ in 0..5 {
@@ -988,51 +1046,33 @@ impl GithubHttpClient {
                     .iter()
                     .find(|(field, _)| field == "타입")
                     .map(|(_, name)| name.clone());
-                let mut sub_page_truncated = false;
-                let mut sub_page_dropped = 0u32;
-                let sub_issues = content
-                    .sub_issues
-                    .map(|connection| {
-                        if connection.page_info.is_some_and(|page| page.has_next_page) {
-                            sub_page_truncated = true;
+                let mut sub_issues = Vec::new();
+                if let Some(connection) = content.sub_issues {
+                    collect_sub_issues(connection.nodes, &mut sub_issues, &mut dropped);
+                    let next = connection
+                        .page_info
+                        .filter(|page| page.has_next_page)
+                        .map(|page| page.end_cursor);
+                    if let Some(cursor) = next {
+                        let complete = match (content.id.as_deref(), cursor) {
+                            (Some(id), Some(cursor)) => {
+                                self.fetch_remaining_sub_issues(
+                                    id,
+                                    cursor,
+                                    &mut follow_up_budget,
+                                    &mut sub_issues,
+                                    &mut dropped,
+                                )
+                                .await?
+                            }
+                            // 이어 받을 근거(node ID·커서)가 없으면 잘림으로 표시한다.
+                            _ => false,
+                        };
+                        if !complete {
+                            sub_truncated = true;
                         }
-                        connection
-                            .nodes
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter_map(|node| match node {
-                                // 명시적 null 원소도 누락 수에 합쳐 조용히 버리지 않는다.
-                                None => {
-                                    sub_page_dropped += 1;
-                                    None
-                                }
-                                Some(node) => {
-                                    match (node.number, node.title, node.url) {
-                                        (Some(number), Some(title), Some(url)) => {
-                                            let url = url.trim().to_owned();
-                                            // trim 후 빈 URL은 무효하므로 누락으로 센다.
-                                            if url.is_empty() {
-                                                sub_page_dropped += 1;
-                                                None
-                                            } else {
-                                                Some(GithubSubIssue { number, title, url })
-                                            }
-                                        }
-                                        // 필드 결손 서브이슈도 조용히 버리지 않고 누락 수에 합친다.
-                                        _ => {
-                                            sub_page_dropped += 1;
-                                            None
-                                        }
-                                    }
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                if sub_page_truncated {
-                    sub_truncated = true;
+                    }
                 }
-                dropped += sub_page_dropped;
                 items.push(GithubProjectItem {
                     number,
                     title,
@@ -1055,6 +1095,60 @@ impl GithubHttpClient {
             }
         }
         Ok((items, true, dropped))
+    }
+
+    /// 첫 페이지 이후 서브이슈를 `out`에 이어 붙인다. 끝까지 받았으면 `true`,
+    /// 페이지·요청 예산에 걸려 남은 것이 있으면 `false`를 돌려준다.
+    async fn fetch_remaining_sub_issues(
+        &self,
+        issue_id: &str,
+        mut cursor: String,
+        budget: &mut usize,
+        out: &mut Vec<GithubSubIssue>,
+        dropped: &mut u32,
+    ) -> Result<bool, AppError> {
+        let query = sub_issues_query();
+        for _ in 0..SUB_ISSUES_FOLLOW_UP_PAGES {
+            if *budget == 0 {
+                return Ok(false);
+            }
+            *budget -= 1;
+            let response = self
+                .send(
+                    HttpMethod::Post,
+                    &["graphql"],
+                    &[],
+                    Some(serde_json::json!({
+                        "query": query,
+                        "variables": { "id": issue_id, "after": cursor },
+                    })),
+                )
+                .await?;
+            if !(200..300).contains(&response.status) {
+                return Err(map_project_error(response.status));
+            }
+            let body: GithubSubIssuesResponse =
+                deserialize_response(response).map_err(|_| github_unavailable_error())?;
+            if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
+                return Err(map_project_lookup_errors(&errors));
+            }
+            let Some(connection) = body
+                .data
+                .and_then(|data| data.node)
+                .and_then(|node| node.sub_issues)
+            else {
+                return Ok(false);
+            };
+            collect_sub_issues(connection.nodes, out, dropped);
+            match connection.page_info {
+                Some(page) if page.has_next_page => match page.end_cursor {
+                    Some(next) => cursor = next,
+                    None => return Ok(false),
+                },
+                _ => return Ok(true),
+            }
+        }
+        Ok(false)
     }
 
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
@@ -1861,6 +1955,52 @@ mod tests {
         assert_eq!(bodies.len(), 2);
         assert!(!bodies[0].contains("\"after\""));
         assert!(bodies[1].contains("\"after\":\"cursor-1\""));
+    }
+
+    #[tokio::test]
+    async fn project_items_fetch_remaining_sub_issues_after_first_page() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"content":{"__typename":"Issue","id":"I_epic","number":1,"title":"에픽","url":"https://example.test/issues/1","labels":{"nodes":[]},"subIssues":{"pageInfo":{"hasNextPage":true,"endCursor":"s1"},"nodes":[{"number":2,"title":"a","url":"https://example.test/issues/2"}]}},"fieldValues":{"nodes":[]}}]}}}}}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"node":{"subIssues":{"pageInfo":{"hasNextPage":true,"endCursor":"s2"},"nodes":[{"number":3,"title":"b","url":"https://example.test/issues/3"},null]}}}}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"node":{"subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":4,"title":"c","url":"https://example.test/issues/4"}]}}}}"#,
+            ),
+        ]);
+        let service = client(tokens, transport.clone());
+
+        let (items, truncated, dropped) = service
+            .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert!(!truncated);
+        assert_eq!(dropped, 1);
+        let numbers: Vec<_> = items[0].sub_issues.iter().map(|sub| sub.number).collect();
+        assert_eq!(numbers, vec![2, 3, 4]);
+        let bodies: Vec<_> = transport
+            .requests()
+            .iter()
+            .map(|request| request.body.clone().unwrap().to_string())
+            .collect();
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies[1].contains("\"id\":\"I_epic\""));
+        assert!(bodies[1].contains("\"after\":\"s1\""));
+        assert!(bodies[2].contains("\"after\":\"s2\""));
+    }
+
+    #[test]
+    fn sub_issues_query_is_balanced_graphql() {
+        let query = super::sub_issues_query();
+        assert_eq!(query.matches('{').count(), query.matches('}').count());
+        assert!(query.contains("after:$after"));
     }
 
     #[tokio::test]
