@@ -44,17 +44,17 @@ function* walkIssues(
   }
   for (const issue of asIssueArray(issues)) {
     // 오염 캐시의 순환 참조에 대비해 재귀 경로상의 URL만 건너뛴다.
-    // 백트래킹으로 형제 브랜치와 경로 집합을 공유해 할당을 아낀다.
-    const release = enterPath(path, issueKey(issue));
-    if (!release) {
+    // ProjectTree와 같은 스냅샷 규칙을 쓴다: 자식에게 경로 복사본을 전달해
+    // 조기 break/throw·서스펜스 중단 시에도 공유 집합이 오염되지 않는다.
+    // (집계는 전체 순회라 복사 비용이 렌더보다 작고 안전을 우선한다.)
+    const key = issueKey(issue);
+    if (path.has(key)) {
       continue;
     }
-    try {
-      yield issue;
-      yield* walkIssues(asIssueArray(issue.children), depth + 1, path);
-    } finally {
-      release();
-    }
+    const childPath = new Set(path);
+    childPath.add(key);
+    yield issue;
+    yield* walkIssues(asIssueArray(issue.children), depth + 1, childPath);
   }
 }
 

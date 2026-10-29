@@ -70,6 +70,11 @@ function normalizeIssue(
   }
   try {
     if (depth > MAX_ISSUE_TREE_DEPTH) {
+      // 오염 캐시의 비정상 깊이는 여기서 자른다. 조용히 버리면 UI 카운터와
+      // 어긋나므로 경고를 남긴다(백엔드는 skipped에 합산한다).
+      console.warn(
+        `[project-board] issue tree truncated at depth ${depth}: #${issue.number} ${issue.url}`,
+      );
       return { ...issue, children: [], kind: issue.kind ?? null };
     }
     const children: BoardIssue[] = [];
