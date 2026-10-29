@@ -156,7 +156,8 @@ const TreeNode = memo(
     }
     // 같은 트리 안의 treeitem을 DOM 순서대로 모아 roving 포커스를 이동하고,
     // 이동한 노드를 Tab 정지로 승격한다.
-    const moveFocus = (delta: number) => {
+    // WAI-ARIA tree 패턴을 따라 양 끝에서는 정지한다(순환하지 않는다).
+    const moveFocus = (delta: 1 | -1) => {
       const tree = event.currentTarget.closest('[role="tree"]');
       if (!tree) {
         return;
@@ -165,10 +166,11 @@ const TreeNode = memo(
         tree.querySelectorAll('[role="treeitem"]'),
       );
       const at = items.indexOf(event.currentTarget);
-      const next = items[(at + delta + items.length) % items.length] as
-        | HTMLElement
-        | undefined;
-      next?.focus();
+      const next = items[at + delta] as HTMLElement | undefined;
+      if (!next) {
+        return;
+      }
+      next.focus();
     };
     const focusEdge = (edge: "first" | "last") => {
       const tree = event.currentTarget.closest('[role="tree"]');

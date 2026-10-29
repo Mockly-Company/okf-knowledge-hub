@@ -12,10 +12,22 @@ const STATUS_SET: ReadonlySet<string> = new Set(
 export const MAX_ISSUE_TREE_DEPTH = 50;
 
 /**
+ * 외부 링크로 렌더를 허용하는 호스트 allowlist.
+ * 이 앱의 GitHub 연동은 github.com 전용이다(parse_project_url 참조).
+ * GitHub Enterprise 등 다른 호스트를 지원하게 되면 여기와
+ * parse_project_url의 호스트 검사를 함께 확장해야 한다.
+ * 와일드카드·서브도메인 허용은 피싱 표면을 넓히므로 두지 않는다.
+ */
+export const ALLOWED_PROJECT_HOSTS: ReadonlySet<string> = new Set([
+  "github.com",
+]);
+
+/**
  * 렌더에 쓸 안전한 href를 돌려준다. 검증과 렌더에 같은 값을 써야
  * 앞뒤 공백 오염 시 링크가 깨지거나 검증과 동작이 달라지지 않는다.
- * GitHub Issue URL만 쓰이는 맥락이므로 https + github.com 호스트만 허용한다.
- * (혼합 콘텐츠·임의 호스트 피싱 표면 축소. 그 외는 텍스트로 폴백.)
+ * https + ALLOWED_PROJECT_HOSTS 일치 때만 허용한다.
+ * userinfo(`user:pass@host`)가 있으면 자격증명 노출 우려가 있어 거부한다.
+ * 허용되지 않으면 null(호출자는 텍스트로 폴백).
  * 비문자열 오염 입력에도 throw 없이 null을 돌려준다.
  */
 export function safeHref(url: unknown): string | null {
@@ -37,8 +49,8 @@ export function safeHref(url: unknown): string | null {
       return null;
     }
     // 서브도메인 와일드카드까지 허용하면 피싱 표면이 넓어지므로,
-    // Issue URL 호스트(github.com)와 정확히 일치할 때만 허용한다.
-    if (parsed.hostname.toLowerCase() !== "github.com") {
+    // Issue URL 호스트와 정확히 일치할 때만 허용한다(ALLOWED_PROJECT_HOSTS 참조).
+    if (!ALLOWED_PROJECT_HOSTS.has(parsed.hostname.toLowerCase())) {
       return null;
     }
     return trimmed;

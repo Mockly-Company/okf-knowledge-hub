@@ -530,7 +530,13 @@ fn collect_issue_trees(
     // 단, 노드 예산 초과(capped)로 꼬리가 미기록 상태면 폴백을 건너뛴다.
     // 미기록 꼬리를 루트로 승격하면 깊이·총량 제한을 우회해 렌더가 이어진다.
     // (truncated는 예산 초과 시점에 이미 세웠다.)
+    // 건너뛴 미렌더 항목도 숨겨진 것이므로 skipped에 합산한다.
+    // (어떤 에픽이 빠졌는지 개별 표시 대신 truncated 배너 + skipped 수로 알린다.)
     if capped_any {
+        *skipped += items
+            .iter()
+            .filter(|item| !rendered.contains(&item.url))
+            .count() as u32;
         return issues;
     }
     for item in items {

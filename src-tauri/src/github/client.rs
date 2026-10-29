@@ -950,7 +950,12 @@ impl GithubHttpClient {
                 };
                 // 프론트 issueKey(url.trim())와 키 기준을 일치시킨다.
                 // 앞뒤 공백 오염 시 순환 검사가 어긋나지 않게 경계에서 정규화한다.
+                // trim 후 빈 문자열은 유효 항목이 아니므로 누락으로 센다.
                 let url = url.trim().to_owned();
+                if url.is_empty() {
+                    dropped += 1;
+                    continue;
+                }
                 let labels = content
                     .labels
                     .map(|connection| {
@@ -1004,11 +1009,14 @@ impl GithubHttpClient {
                                 Some(node) => {
                                     match (node.number, node.title, node.url) {
                                         (Some(number), Some(title), Some(url)) => {
-                                            Some(GithubSubIssue {
-                                                number,
-                                                title,
-                                                url: url.trim().to_owned(),
-                                            })
+                                            let url = url.trim().to_owned();
+                                            // trim 후 빈 URL은 무효하므로 누락으로 센다.
+                                            if url.is_empty() {
+                                                sub_page_dropped += 1;
+                                                None
+                                            } else {
+                                                Some(GithubSubIssue { number, title, url })
+                                            }
                                         }
                                         // 필드 결손 서브이슈도 조용히 버리지 않고 누락 수에 합친다.
                                         _ => {
