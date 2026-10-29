@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, type KeyboardEvent } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -80,7 +80,8 @@ function TreeNodeInner({
   };
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return (
-      <article
+      // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
+      <div
         aria-label={`${role} #${issue.number} ${issue.title}`}
         className="grid gap-[var(--space-2)]"
         {...treeitemProps}
@@ -94,15 +95,33 @@ function TreeNodeInner({
             하위 항목 생략됨
           </span>
         </div>
-      </article>
+      </div>
     );
   }
 
+  // 트리 키보드 패턴(방향키 펼침/접기). 포커스 이동은 Tab 순서(토글 버튼·링크)를
+  // 그대로 쓰고, treeitem 자체에는 tabIndex를 두지 않아 탭 정지를 늘리지 않는다.
+  // 자식의 Button/링크에서 발생한 키 이벤트가 버블링돼 여기서 처리된다.
+  const handleTreeKeys = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (children.length === 0) {
+      return;
+    }
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setOpen(true);
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setOpen(false);
+    }
+  };
+
   return (
-    <article
+    // article 대신 div: treeitem 안에 랜드마크가 중첩되면 스크린리더에 중복으로 읽힌다.
+    <div
       aria-label={`${role} #${issue.number} ${issue.title}`}
       className="grid gap-[var(--space-2)]"
       {...treeitemProps}
+      onKeyDown={handleTreeKeys}
     >
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         {children.length > 0 ? (
@@ -149,9 +168,9 @@ function TreeNodeInner({
           role="group"
         >
           {children.map((child, index) => (
-            // 키는 trim 기준 issueKey와 일치시킨다. number까지만 쓰고 index는
-            // 순서 변경 시 펼침 상태가 엉뚱한 노드에 재사용되므로 넣지 않는다.
-            <li key={`${child.number}-${issueKey(child)}`} role="presentation">
+            // 키는 trim 기준 issueKey와 number를 우선하고, 동일 URL 형제 중복에
+            // 대비해 index를 최후 fallback으로 붙인다(중복 key 경고 방지).
+            <li key={`${issueKey(child)}#${child.number}-${index}`} role="presentation">
               <TreeNode
                 issue={child}
                 depth={depth + 1}
@@ -163,7 +182,7 @@ function TreeNodeInner({
           ))}
         </ul>
       ) : null}
-    </article>
+    </div>
   );
 }
 
@@ -214,7 +233,7 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
     >
       {safeIssues.map((issue, index) => (
         <div
-          key={`${issue.number}-${issueKey(issue)}`}
+          key={`${issueKey(issue)}#${issue.number}-${index}`}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
           role="presentation"
         >

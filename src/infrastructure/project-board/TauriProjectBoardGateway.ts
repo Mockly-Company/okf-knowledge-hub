@@ -59,6 +59,7 @@ function normalizeIssue(
   issue: BoardIssue,
   depth = 0,
   path = new Set<string>(),
+  stats: { cuts: number } = { cuts: 0 },
 ): BoardIssue | null {
   if (!isIssueLike(issue)) {
     return null;
@@ -71,7 +72,9 @@ function normalizeIssue(
   try {
     if (depth > MAX_ISSUE_TREE_DEPTH) {
       // 오염 캐시의 비정상 깊이는 여기서 자른다. 조용히 버리면 UI 카운터와
-      // 어긋나므로 경고를 남긴다(백엔드는 skipped에 합산한다).
+      // 어긋나므로 경고하고 호출자가 truncated를 세우도록 cuts에 기록한다.
+      // (백엔드는 동일 절단을 skipped에 합산한다.)
+      stats.cuts += 1;
       console.warn(
         `[project-board] issue tree truncated at depth ${depth}: #${issue.number} ${issue.url}`,
       );
@@ -79,7 +82,7 @@ function normalizeIssue(
     }
     const children: BoardIssue[] = [];
     for (const child of asIssueArray(issue.children)) {
-      const normalized = normalizeIssue(child, depth + 1, path);
+      const normalized = normalizeIssue(child, depth + 1, path, stats);
       if (normalized) {
         children.push(normalized);
       }
@@ -95,9 +98,10 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
   if (typeof board !== "object" || board === null) {
     return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
   }
+  const stats = { cuts: 0 };
   const issues: BoardIssue[] = [];
   for (const issue of asIssueArray(board.issues)) {
-    const normalized = normalizeIssue(issue);
+    const normalized = normalizeIssue(issue, 0, new Set<string>(), stats);
     if (normalized) {
       issues.push(normalized);
     }
@@ -111,6 +115,7 @@ function normalizeBoard(board: ProjectBoard): ProjectBoard {
       board.skipped >= 0
         ? board.skipped
         : 0,
-    truncated: board.truncated === true,
+    // 정규화 단계에서 잘린 하위 트리가 있으면 잘림으로 표시한다.
+    truncated: board.truncated === true || stats.cuts > 0,
   };
 }

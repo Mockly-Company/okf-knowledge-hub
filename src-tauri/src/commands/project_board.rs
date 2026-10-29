@@ -318,27 +318,32 @@ const MAX_COUNT_EXTRA_DEPTH: usize = 100;
 /// 손자 이하는 누락돼 `skipped`가 과소 집계되므로 재귀적으로 센다.
 /// 잘린 노드는 렌더되지 않으므로 서로 다른 경로에서 공유되는 다이아몬드
 /// 서브트리도 서로 다른 숨김으로 보지 않고 고유 URL 기준으로 한 번만 센다.
-/// 깊이 상한을 둬 비정상 체인에서 스택 오버플로를 막는다.
+/// (집계 기준: 렌더 행 수가 아니라 고유 숨김 URL 수.)
+/// 깊이 예산을 초과하면 탐사를 멈추고 capped=true를 돌려 호출자가
+/// `truncated`를 세우도록 한다(예산 초과분은 셀 수 없으므로 0으로 두지 않는다).
 fn count_descendants(
     item: &GithubProjectItem,
     index: &std::collections::HashMap<&str, &GithubProjectItem>,
     seen: &mut std::collections::HashSet<String>,
     depth: usize,
-) -> u32 {
+) -> (u32, bool) {
     if depth > MAX_TREE_DEPTH + MAX_COUNT_EXTRA_DEPTH {
-        return 0;
+        return (0, true);
     }
     let mut count = 0u32;
+    let mut capped = false;
     for sub in &item.sub_issues {
         if !seen.insert(sub.url.clone()) {
             continue;
         }
         count += 1;
         if let Some(found) = index.get(sub.url.as_str()) {
-            count += count_descendants(found, index, seen, depth + 1);
+            let (sub_count, sub_capped) = count_descendants(found, index, seen, depth + 1);
+            count += sub_count;
+            capped = capped || sub_capped;
         }
     }
-    count
+    (count, capped)
 }
 
 fn build_tree(
@@ -347,12 +352,18 @@ fn build_tree(
     visiting: &mut std::collections::HashSet<String>,
     depth: usize,
     skipped: &mut u32,
+    truncated: &mut bool,
 ) -> Vec<BoardIssue> {
     let mut child_issues = if depth >= MAX_TREE_DEPTH {
         // 깊이 제한으로 잘라낸 서브트리 전체를 skipped에 반영한다.
         // 조상 경로를 시드로 넣어 순환을 끊고, 고유 URL 기준으로 한 번씩만 센다.
+        // 예산을 초과하면 truncated를 세운다(초과분은 셀 수 없으므로).
         let mut seen = visiting.clone();
-        *skipped += count_descendants(item, index, &mut seen, depth);
+        let (sub_count, capped) = count_descendants(item, index, &mut seen, depth);
+        *skipped += sub_count;
+        if capped {
+            *truncated = true;
+        }
         Vec::new()
     } else {
         let mut collected = Vec::new();
@@ -362,7 +373,14 @@ fn build_tree(
             }
             match index.get(sub.url.as_str()) {
                 Some(found) => {
-                    collected.extend(build_tree(found, index, visiting, depth + 1, skipped));
+                    collected.extend(build_tree(
+                        found,
+                        index,
+                        visiting,
+                        depth + 1,
+                        skipped,
+                        truncated,
+                    ));
                 }
                 // 목록에 없는 자식(프로젝트 밖·페이지 상한 누락)은 조용히 버리지 않고 센다.
                 None => *skipped += 1,
@@ -403,7 +421,11 @@ fn record_rendered(issue: &BoardIssue, rendered: &mut std::collections::HashSet<
 
 /// 평탄한 수집 항목을 트리 보드로 묶는다. `skipped`에 매핑 실패·누락분을 가산한다.
 /// 순환 참조(A↔B)로 루트 판별에서 제외된 노드는 폴백 루프로 승격해 살린다.
-fn collect_issue_trees(items: &[GithubProjectItem], skipped: &mut u32) -> Vec<BoardIssue> {
+fn collect_issue_trees(
+    items: &[GithubProjectItem],
+    skipped: &mut u32,
+    truncated: &mut bool,
+) -> Vec<BoardIssue> {
     let mut issues = Vec::new();
     let mut child_urls = std::collections::HashSet::new();
     for item in items {
@@ -422,7 +444,7 @@ fn collect_issue_trees(items: &[GithubProjectItem], skipped: &mut u32) -> Vec<Bo
         rendered.insert(item.url.clone());
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(item.url.clone());
-        let trees = build_tree(item, &index, &mut visiting, 0, skipped);
+        let trees = build_tree(item, &index, &mut visiting, 0, skipped, truncated);
         for tree in &trees {
             record_rendered(tree, rendered);
         }
@@ -585,12 +607,13 @@ pub async fn sync_project_board(
         Err(error) => return Err(error),
     };
     let mut skipped = dropped;
-    let issues = collect_issue_trees(&items, &mut skipped);
+    let mut board_truncated = truncated;
+    let issues = collect_issue_trees(&items, &mut skipped, &mut board_truncated);
     let board = ProjectBoard {
         issues,
         fetched_at: fetched_now(),
         skipped,
-        truncated,
+        truncated: board_truncated,
     };
     let cache_root = app
         .path()
@@ -606,9 +629,7 @@ pub async fn sync_project_board(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        build_tree, collect_issue_trees, count_descendants, map_layer, map_status,
-    };
+    use super::{build_tree, collect_issue_trees, count_descendants, map_layer, map_status};
     use crate::github::model::{GithubProjectItem, GithubSubIssue};
     use crate::project_board::{BoardLayer, BoardStatus};
 
@@ -669,7 +690,15 @@ mod tests {
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(items[0].url.clone());
         let mut skipped = 0u32;
-        let roots = build_tree(&items[0], &index, &mut visiting, 0, &mut skipped);
+        let mut case_truncated = false;
+        let roots = build_tree(
+            &items[0],
+            &index,
+            &mut visiting,
+            0,
+            &mut skipped,
+            &mut case_truncated,
+        );
         assert_eq!(skipped, 0);
         assert_eq!(roots.len(), 1);
         let root = &roots[0];
@@ -691,12 +720,14 @@ mod tests {
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(items[0].url.clone());
         let mut skipped = 0u32;
+        let mut case_truncated = false;
         let roots = build_tree(
             &items[0],
             &index,
             &mut visiting,
             super::MAX_TREE_DEPTH,
             &mut skipped,
+            &mut case_truncated,
         );
         assert_eq!(roots.len(), 1);
         let root = &roots[0];
@@ -716,7 +747,15 @@ mod tests {
         let mut visiting = std::collections::HashSet::new();
         visiting.insert(items[0].url.clone());
         let mut skipped = 0u32;
-        let roots = build_tree(&items[0], &index, &mut visiting, 0, &mut skipped);
+        let mut case_truncated = false;
+        let roots = build_tree(
+            &items[0],
+            &index,
+            &mut visiting,
+            0,
+            &mut skipped,
+            &mut case_truncated,
+        );
         assert_eq!(skipped, 1);
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].number, 2);
@@ -727,7 +766,11 @@ mod tests {
         // 집계 기준: 렌더 행 수가 아니라 고유 숨김 URL 수다.
         // 다이아몬드 공유 서브트리(R -> A,B -> D)는 D를 한 번만 센다.
         let items = [
-            sample_item(1, "https://example.test/r", &["https://example.test/a", "https://example.test/b"]),
+            sample_item(
+                1,
+                "https://example.test/r",
+                &["https://example.test/a", "https://example.test/b"],
+            ),
             sample_item(2, "https://example.test/a", &["https://example.test/d"]),
             sample_item(3, "https://example.test/b", &["https://example.test/d"]),
             sample_item(4, "https://example.test/d", &[]),
@@ -736,25 +779,36 @@ mod tests {
             items.iter().map(|item| (item.url.as_str(), item)).collect();
         let mut seen = std::collections::HashSet::new();
         // R, A, B, D 중 R 제외 3개가 아니라 A, B, D = 3개. D는 한 번만 센다.
-        assert_eq!(count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH), 3);
+        assert_eq!(
+            count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH),
+            (3, false)
+        );
     }
 
     #[test]
     fn count_descendants_is_bounded_by_depth_budget() {
         // 비정상 깊이 체인도 MAX_TREE_DEPTH + MAX_COUNT_EXTRA_DEPTH에서 멈춘다.
-        let urls: Vec<String> = (0..300).map(|i| format!("https://example.test/{i}")).collect();
+        let urls: Vec<String> = (0..300)
+            .map(|i| format!("https://example.test/{i}"))
+            .collect();
         let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
         let items: Vec<GithubProjectItem> = (0..300)
             .map(|i| {
-                let subs: &[&str] = if i + 1 < 300 { &url_refs[i + 1..i + 2] } else { &[] };
+                let subs: &[&str] = if i + 1 < 300 {
+                    &url_refs[i + 1..i + 2]
+                } else {
+                    &[]
+                };
                 sample_item(i as u64, &urls[i], subs)
             })
             .collect();
         let index: std::collections::HashMap<&str, &GithubProjectItem> =
             items.iter().map(|item| (item.url.as_str(), item)).collect();
         let mut seen = std::collections::HashSet::new();
-        let counted = count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH);
+        let (counted, capped) =
+            count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH);
         assert_eq!(counted, (super::MAX_COUNT_EXTRA_DEPTH + 1) as u32);
+        assert!(capped);
     }
 
     #[test]
@@ -766,7 +820,8 @@ mod tests {
             sample_item(2, "https://example.test/2", &["https://example.test/1"]),
         ];
         let mut skipped = 0u32;
-        let issues = collect_issue_trees(&items, &mut skipped);
+        let mut case_truncated = false;
+        let issues = collect_issue_trees(&items, &mut skipped, &mut case_truncated);
 
         // 둘 중 하나가 루트로 승격되고 다른 쪽은 그 자식으로 한 번만 렌더된다.
         assert_eq!(issues.len(), 1);
