@@ -114,15 +114,20 @@ function TreeNode({
           </Button>
         ) : null}
         <span className="font-medium">
-          {isSafeIssueUrl(issue.url) ? (
-            <a href={issue.url} target="_blank" rel="noreferrer noopener">
-              {role} #{issue.number} {issue.title}
-            </a>
-          ) : (
-            <span>
-              {role} #{issue.number} {issue.title}
-            </span>
-          )}
+          {(() => {
+            // 검증과 렌더에 같은 값을 쓴다. trim하지 않은 원본을 href에 넣으면
+            // 앞뒤 공백 오염 시 링크가 깨지거나 검증과 동작이 달라진다.
+            const safeUrl = issue.url.trim();
+            return isSafeIssueUrl(safeUrl) ? (
+              <a href={safeUrl} target="_blank" rel="noreferrer noopener">
+                {role} #{issue.number} {issue.title}
+              </a>
+            ) : (
+              <span>
+                {role} #{issue.number} {issue.title}
+              </span>
+            );
+          })()}
         </span>
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
         <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
@@ -135,8 +140,8 @@ function TreeNode({
           className="m-0 grid list-none gap-[var(--space-2)] pl-[var(--space-6)]"
           aria-label={`${issue.title} 하위 항목`}
         >
-          {children.map((child, index) => (
-            <li key={`${child.number}-${child.url}-${index}`}>
+          {children.map((child) => (
+            <li key={`${child.number}-${child.url}`}>
               <TreeNode issue={child} depth={depth + 1} path={childPath} />
             </li>
           ))}
@@ -158,9 +163,9 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
       role="region"
       aria-label="계층 보기"
     >
-      {issues.map((issue, index) => (
+      {issues.map((issue) => (
         <div
-          key={`${issue.number}-${issue.url}-${index}`}
+          key={`${issue.number}-${issue.url}`}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
         >
           <TreeNode issue={issue} depth={0} />

@@ -309,30 +309,36 @@ const MAX_TREE_DEPTH: usize = 10;
 /// 서브이슈는 `SUB_ISSUES_FIRST`개까지만 가져오며 초과분은 잘린다.
 /// GitHub subIssues 커넥션에 별도 페이지네이션을 하지 않으므로
 /// 자식이 20개를 넘는 에픽은 초과분이 보드에서 빠진다.
+/// 서브이슈 조회 상한(`SUB_ISSUES_FIRST`)을 초과한 잘림을 셀 때의 추가 탐사 깊이.
+/// `build_tree`가 `MAX_TREE_DEPTH`에서 잘라도 카운터는 이 예산만큼 더 내려가
+/// 잘린 서브트리 전체를 집계한다. 오염 체인 폭주 방지를 위한 상한이다.
+const MAX_COUNT_EXTRA_DEPTH: usize = 100;
+
 /// 깊이 제한으로 잘린 서브트리 전체 노드 수를 센다. 직속 자식만 세면
 /// 손자 이하는 누락돼 `skipped`가 과소 집계되므로 재귀적으로 센다.
 /// `build_tree`와 같은 경로 방식(insert 후 재귀, 끝나면 remove)으로
 /// 다이아몬드 구조도 호출 경로별 맥락과 일치하게 센다. 깊이 상한을 둬
 /// 비정상 체인에서 스택 오버플로를 막는다.
+/// `visiting`은 호출자의 진행 집합을 그대로 이어받아 clone을 피한다.
 fn count_descendants(
     item: &GithubProjectItem,
     index: &std::collections::HashMap<&str, &GithubProjectItem>,
-    path: &mut std::collections::HashSet<String>,
+    visiting: &mut std::collections::HashSet<String>,
     depth: usize,
 ) -> u32 {
-    if depth > MAX_TREE_DEPTH + 100 {
+    if depth > MAX_TREE_DEPTH + MAX_COUNT_EXTRA_DEPTH {
         return 0;
     }
     let mut count = 0u32;
     for sub in &item.sub_issues {
-        if !path.insert(sub.url.clone()) {
+        if !visiting.insert(sub.url.clone()) {
             continue;
         }
         count += 1;
         if let Some(found) = index.get(sub.url.as_str()) {
-            count += count_descendants(found, index, path, depth + 1);
+            count += count_descendants(found, index, visiting, depth + 1);
         }
-        path.remove(&sub.url);
+        visiting.remove(&sub.url);
     }
     count
 }
@@ -346,8 +352,8 @@ fn build_tree(
 ) -> Vec<BoardIssue> {
     let mut child_issues = if depth >= MAX_TREE_DEPTH {
         // 깊이 제한으로 잘라낸 서브트리 전체를 skipped에 반영한다.
-        let mut path = visiting.clone();
-        *skipped += count_descendants(item, index, &mut path, depth);
+        // 진행 집합을 그대로 이어받아 clone 없이 순회한다.
+        *skipped += count_descendants(item, index, visiting, depth);
         Vec::new()
     } else {
         let mut collected = Vec::new();
