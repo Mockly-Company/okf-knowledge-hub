@@ -402,7 +402,8 @@ fn build_tree(
             children: std::mem::take(&mut child_issues),
             kind: item.kind.clone(),
             // 깊이 제한으로 잘린 노드는 프론트가 "하위 항목 생략됨"으로 표시한다.
-            children_truncated: cut,
+            // 자식이 없으면 잘릴 게 없으므로 리프로 둔다.
+            children_truncated: cut && !item.sub_issues.is_empty(),
         }],
         // 상태를 판별할 수 없는 부모는 버리되 유효한 자식은 루트로 승격해 살린다.
         None => {
