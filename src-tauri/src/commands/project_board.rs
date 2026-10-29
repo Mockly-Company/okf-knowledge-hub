@@ -606,7 +606,9 @@ pub async fn sync_project_board(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_tree, collect_issue_trees, map_layer, map_status};
+    use super::{
+        build_tree, collect_issue_trees, count_descendants, map_layer, map_status,
+    };
     use crate::github::model::{GithubProjectItem, GithubSubIssue};
     use crate::project_board::{BoardLayer, BoardStatus};
 
@@ -718,6 +720,41 @@ mod tests {
         assert_eq!(skipped, 1);
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0].number, 2);
+    }
+
+    #[test]
+    fn count_descendants_counts_unique_hidden_nodes_once() {
+        // 집계 기준: 렌더 행 수가 아니라 고유 숨김 URL 수다.
+        // 다이아몬드 공유 서브트리(R -> A,B -> D)는 D를 한 번만 센다.
+        let items = [
+            sample_item(1, "https://example.test/r", &["https://example.test/a", "https://example.test/b"]),
+            sample_item(2, "https://example.test/a", &["https://example.test/d"]),
+            sample_item(3, "https://example.test/b", &["https://example.test/d"]),
+            sample_item(4, "https://example.test/d", &[]),
+        ];
+        let index: std::collections::HashMap<&str, &GithubProjectItem> =
+            items.iter().map(|item| (item.url.as_str(), item)).collect();
+        let mut seen = std::collections::HashSet::new();
+        // R, A, B, D 중 R 제외 3개가 아니라 A, B, D = 3개. D는 한 번만 센다.
+        assert_eq!(count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH), 3);
+    }
+
+    #[test]
+    fn count_descendants_is_bounded_by_depth_budget() {
+        // 비정상 깊이 체인도 MAX_TREE_DEPTH + MAX_COUNT_EXTRA_DEPTH에서 멈춘다.
+        let urls: Vec<String> = (0..300).map(|i| format!("https://example.test/{i}")).collect();
+        let url_refs: Vec<&str> = urls.iter().map(String::as_str).collect();
+        let items: Vec<GithubProjectItem> = (0..300)
+            .map(|i| {
+                let subs: &[&str] = if i + 1 < 300 { &url_refs[i + 1..i + 2] } else { &[] };
+                sample_item(i as u64, &urls[i], subs)
+            })
+            .collect();
+        let index: std::collections::HashMap<&str, &GithubProjectItem> =
+            items.iter().map(|item| (item.url.as_str(), item)).collect();
+        let mut seen = std::collections::HashSet::new();
+        let counted = count_descendants(&items[0], &index, &mut seen, super::MAX_TREE_DEPTH);
+        assert_eq!(counted, (super::MAX_COUNT_EXTRA_DEPTH + 1) as u32);
     }
 
     #[test]

@@ -23,6 +23,7 @@ import {
   asIssueArray,
   enterPath,
   issueKey,
+  safeHref,
 } from "@/features/project-board/boardUtils";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
@@ -165,7 +166,7 @@ function BoardColumn({
         ) : (
           issues.map((issue) => (
             <article
-              key={`${issue.number}-${issue.url}`}
+              key={`${issue.number}-${issueKey(issue)}`}
               className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
               aria-label={`Issue #${issue.number} ${issue.title}`}
             >
@@ -173,18 +174,22 @@ function BoardColumn({
                 #{issue.number}
               </div>
               <div>
-                {issue.url.startsWith("https://") ? (
-                  <a
-                    href={issue.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="text-inherit no-underline hover:underline"
-                  >
-                    {issue.title}
-                  </a>
-                ) : (
-                  <span>{issue.title}</span>
-                )}
+                {(() => {
+                  // 계층 보기와 같은 검증·렌더 규칙을 쓴다.
+                  const safeUrl = safeHref(issue.url);
+                  return safeUrl ? (
+                    <a
+                      href={safeUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="text-inherit no-underline hover:underline"
+                    >
+                      {issue.title}
+                    </a>
+                  ) : (
+                    <span>{issue.title}</span>
+                  );
+                })()}
               </div>
             </article>
           ))

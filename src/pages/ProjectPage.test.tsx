@@ -378,18 +378,18 @@ describe("ProjectPage", () => {
     await user.click(screen.getByRole("button", { name: "계층별" }));
 
     expect(
-      await screen.findByRole("region", { name: "계층 보기" }),
+      await screen.findByRole("tree", { name: "계층 보기" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("article", { name: "에픽 #12 기획서 초안" }),
+      screen.getByRole("treeitem", { name: "에픽 #12 기획서 초안" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
+      screen.queryByRole("treeitem", { name: "태스크 #13 하위 작업" }),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "기획서 초안 접기" }));
     expect(
-      screen.queryByRole("article", { name: "태스크 #13 하위 작업" }),
+      screen.queryByRole("treeitem", { name: "태스크 #13 하위 작업" }),
     ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "영역별" }));

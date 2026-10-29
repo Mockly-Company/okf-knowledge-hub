@@ -13,6 +13,7 @@ import {
   asIssueArray,
   isIssueLike,
   issueKey,
+  safeHref,
 } from "@/features/project-board/boardUtils";
 
 
@@ -35,25 +36,20 @@ function roleLabel(depth: number, kind: string | null): string {
   return "서브태스크";
 }
 
-/** 외부 URL은 http(s)만 링크로 렌더한다. 캐시 변조·오염 응답의 javascript: 스킴 차단. */
-function isSafeIssueUrl(url: string): boolean {
-  try {
-    const protocol = new URL(url.trim()).protocol.toLowerCase();
-    return protocol === "https:" || protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
 function TreeNodeInner({
   issue,
   depth,
   path = new Set<string>(),
+  setSize,
+  posInSet,
 }: {
   issue: BoardIssue;
   depth: number;
   /** 조상 경로 URL 집합. 순환 감지용으로 자식에게 스냅샷을 전달한다. */
   path?: Set<string>;
+  /** 형제 집합 크기와 순서. treeitem의 aria-setsize/posinset에 쓴다. */
+  setSize?: number;
+  posInSet?: number;
 }) {
   const [open, setOpen] = useState(depth === 0);
   // 비객체 원소가 렌더까지 오면 여기서 걸러낸다(TreeNode는 배열 가드 뒤단이다).
@@ -73,11 +69,21 @@ function TreeNodeInner({
   const role = roleLabel(depth, issue.kind);
   // 구 캐시에는 children이 없을 수 있고, 오염된 캐시는 비배열일 수 있다.
   const children = asIssueArray(issue.children);
+  // WAI-ARIA tree 패턴: treeitem은 레벨·펼침·집합 위치를 노출한다.
+  // 펼침 토글은 포커스 가능한 Button이라 키보드 조작이 가능하다.
+  const treeitemProps = {
+    role: "treeitem" as const,
+    "aria-level": depth + 1,
+    "aria-expanded": children.length > 0 ? open : undefined,
+    "aria-setsize": setSize,
+    "aria-posinset": posInSet,
+  };
   if (depth > MAX_ISSUE_TREE_DEPTH) {
     return (
       <article
         aria-label={`${role} #${issue.number} ${issue.title}`}
         className="grid gap-[var(--space-2)]"
+        {...treeitemProps}
       >
         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
           <span className="font-medium">
@@ -96,6 +102,7 @@ function TreeNodeInner({
     <article
       aria-label={`${role} #${issue.number} ${issue.title}`}
       className="grid gap-[var(--space-2)]"
+      {...treeitemProps}
     >
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         {children.length > 0 ? (
@@ -117,8 +124,8 @@ function TreeNodeInner({
           {(() => {
             // 검증과 렌더에 같은 값을 쓴다. trim하지 않은 원본을 href에 넣으면
             // 앞뒤 공백 오염 시 링크가 깨지거나 검증과 동작이 달라진다.
-            const safeUrl = issue.url.trim();
-            return isSafeIssueUrl(safeUrl) ? (
+            const safeUrl = safeHref(issue.url);
+            return safeUrl ? (
               <a href={safeUrl} target="_blank" rel="noreferrer noopener">
                 {role} #{issue.number} {issue.title}
               </a>
@@ -139,12 +146,19 @@ function TreeNodeInner({
         <ul
           className="m-0 grid list-none gap-[var(--space-2)] pl-[var(--space-6)]"
           aria-label={`${issue.title} 하위 항목`}
+          role="group"
         >
-          {children.map((child) => (
+          {children.map((child, index) => (
             // 키는 trim 기준 issueKey와 일치시킨다. number까지만 쓰고 index는
             // 순서 변경 시 펼침 상태가 엉뚱한 노드에 재사용되므로 넣지 않는다.
-            <li key={`${child.number}-${issueKey(child)}`}>
-              <TreeNode issue={child} depth={depth + 1} path={childPath} />
+            <li key={`${child.number}-${issueKey(child)}`} role="presentation">
+              <TreeNode
+                issue={child}
+                depth={depth + 1}
+                path={childPath}
+                setSize={children.length}
+                posInSet={index + 1}
+              />
             </li>
           ))}
         </ul>
@@ -179,6 +193,8 @@ const TreeNode = memo(
   (prev, next) =>
     prev.issue === next.issue &&
     prev.depth === next.depth &&
+    prev.setSize === next.setSize &&
+    prev.posInSet === next.posInSet &&
     samePath(prev.path, next.path),
 );
 
@@ -193,15 +209,21 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
   return (
     <div
       className="grid gap-[var(--space-4)]"
-      role="region"
+      role="tree"
       aria-label="계층 보기"
     >
-      {safeIssues.map((issue) => (
+      {safeIssues.map((issue, index) => (
         <div
           key={`${issue.number}-${issueKey(issue)}`}
           className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+          role="presentation"
         >
-          <TreeNode issue={issue} depth={0} />
+          <TreeNode
+            issue={issue}
+            depth={0}
+            setSize={safeIssues.length}
+            posInSet={index + 1}
+          />
         </div>
       ))}
     </div>

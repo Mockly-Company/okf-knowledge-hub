@@ -11,6 +11,21 @@ const STATUS_SET: ReadonlySet<string> = new Set(
 /** 프론트 재귀 깊이 상한. 백엔드 MAX_TREE_DEPTH(10)보다 여유 있게 둔다. */
 export const MAX_ISSUE_TREE_DEPTH = 50;
 
+/**
+ * 렌더에 쓸 안전한 href를 돌려준다. 검증과 렌더에 같은 값을 써야
+ * 앞뒤 공백 오염 시 링크가 깨지거나 검증과 동작이 달라지지 않는다.
+ * http(s)가 아니면 null(호출자는 텍스트로 폴백). javascript: 스킴 차단.
+ */
+export function safeHref(url: string): string | null {
+  const trimmed = url.trim();
+  try {
+    const protocol = new URL(trimmed).protocol.toLowerCase();
+    return protocol === "https:" || protocol === "http:" ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 이슈 식별 키. 백엔드 visiting/path(url 기준)와 일치시킨다. */
 export function issueKey(issue: BoardIssue): string {
   return issue.url.trim();
