@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -45,7 +45,7 @@ function isSafeIssueUrl(url: string): boolean {
   }
 }
 
-function TreeNode({
+function TreeNodeInner({
   issue,
   depth,
   path = new Set<string>(),
@@ -152,6 +152,17 @@ function TreeNode({
     </article>
   );
 }
+
+/**
+ * 무관한 상태 변경(새로고침 시간 등)으로 부모가 리렌더돼도 같은 이슈 노드는
+ * 다시 렌더하지 않는다. 비교에서 path는 제외한다: path는 렌더 위치에서
+ * 파생되는 순환 방지용 스냅샷이라 동일 이슈·깊이면 결과가 같고,
+ * 오염 사이클은 깊이 상한과 경로 검사가 이중으로 막는다.
+ */
+const TreeNode = memo(
+  TreeNodeInner,
+  (prev, next) => prev.issue === next.issue && prev.depth === next.depth,
+);
 
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
   // hideDone=false 등 정규화를 우회하는 경로에서도 안전하도록 최상위도 검증한다.

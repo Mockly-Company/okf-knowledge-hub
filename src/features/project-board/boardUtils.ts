@@ -46,6 +46,8 @@ export function isIssueLike(value: unknown): value is BoardIssue {
   const candidate = value as Record<string, unknown>;
   return (
     typeof candidate.number === "number" &&
+    Number.isInteger(candidate.number) &&
+    candidate.number >= 0 &&
     typeof candidate.url === "string" &&
     candidate.url.trim().length > 0 &&
     typeof candidate.title === "string" &&
