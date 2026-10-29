@@ -42,9 +42,11 @@ export function safeHref(url: unknown): string | null {
   }
 }
 
-/** 이슈 식별 키. 백엔드 visiting/path(url 기준)와 일치시킨다. */
-export function issueKey(issue: Pick<BoardIssue, "url">): string {
-  return typeof issue?.url === "string" ? issue.url.trim() : "";
+/** 이슈 식별 키. 백엔드 visiting/path(url 기준)와 일치시킨다.
+ * 오염 입력에도 throw하지 않는다(비문자열 url은 빈 문자열로 취급). */
+export function issueKey(issue: unknown): string {
+  const url = (issue as { url?: unknown } | null | undefined)?.url;
+  return typeof url === "string" ? url.trim() : "";
 }
 
 /**

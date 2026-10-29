@@ -59,41 +59,35 @@ const MAX_HIDDEN_NODES = 100_000;
 /** 절단된 서브트리의 숨은 노드 수를 센다(백엔드 count_descendants와 같은 단위).
  * 잘린 노드는 렌더되지 않으므로 다이아몬드 공유 서브트리도 고유 URL 기준으로
  * 한 번만 센다. 명시적 스택 순회라 깊은 체인에서도 스택 오버플로가 없고,
- * 노드 예산을 초과하면 중단한다(초과분은 셀 수 없으므로 호출자가 truncated로 표시). */
+ * 노드 예산을 초과하면 중단한다(초과분은 셀 수 없으므로 호출자가 truncated로 표시).
+ * 비객체 오염 원소도 숨은 항목 수에 포함한다. 정상 경로의 dropped 합산과는
+ * 겹치지 않는다(절단 시 자식 정규화 루프를 타지 않으므로 중복 가산이 없다). */
 function countHiddenNodes(
   issue: BoardIssue,
   seen = new Set<string>(),
 ): { count: number; capped: boolean } {
   let count = 0;
-  const stack: BoardIssue[] = [];
-  for (const child of asIssueArray(issue.children)) {
-    const key = issueKey(child);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    count += 1;
-    if (count >= MAX_HIDDEN_NODES) {
-      return { count, capped: true };
-    }
-    stack.push(child);
-  }
+  const stack: unknown[] = Array.isArray(issue.children)
+    ? [...issue.children]
+    : [];
   while (stack.length > 0) {
     const current = stack.pop();
-    if (!current) {
-      break;
-    }
-    for (const child of asIssueArray(current.children)) {
-      const key = issueKey(child);
+    if (typeof current !== "object" || current === null) {
+      count += 1;
+    } else {
+      const key = issueKey(current);
       if (seen.has(key)) {
         continue;
       }
       seen.add(key);
       count += 1;
-      if (count >= MAX_HIDDEN_NODES) {
-        return { count, capped: true };
+      const kids = (current as BoardIssue).children;
+      if (Array.isArray(kids)) {
+        stack.push(...kids);
       }
-      stack.push(child);
+    }
+    if (count >= MAX_HIDDEN_NODES) {
+      return { count, capped: true };
     }
   }
   return { count, capped: false };
@@ -122,20 +116,23 @@ function normalizeIssue(
     stats.dropped += 1;
     return null;
   }
-  // 정규화 자체에도 총량 예산을 둔다. 다이아몬드 공유가 많은 오염 캐시는
-  // 깊이 상한에 걸리지 않아도 재귀가 기하급수 팽창할 수 있다.
-  // (백엔드 MAX_COUNT_NODES와 같은 취지의 총량 상한.)
-  stats.nodes += 1;
-  if (stats.nodes > MAX_HIDDEN_NODES) {
-    stats.cuts += 1;
-    return {
-      ...issue,
-      children: [],
-      kind: typeof issue.kind === "string" ? issue.kind : null,
-      childrenTruncated: true,
-    };
-  }
   try {
+    // 정규화 자체에도 총량 예산을 둔다. 다이아몬드 공유가 많은 오염 캐시는
+    // 깊이 상한에 걸리지 않아도 재귀가 기하급수 팽창할 수 있다.
+    // (백엔드 MAX_COUNT_NODES와 같은 취지의 총량 상한.)
+    // try/finally 안에 두어 조기 반환해도 경로 집합이 누수되지 않게 한다.
+    stats.nodes += 1;
+    if (stats.nodes > MAX_HIDDEN_NODES) {
+      stats.cuts += 1;
+      const hidden = countHiddenNodes(issue, new Set(path));
+      stats.hidden += hidden.count;
+      return {
+        ...issue,
+        children: [],
+        kind: typeof issue.kind === "string" ? issue.kind : null,
+        childrenTruncated: true,
+      };
+    }
     if (depth > MAX_ISSUE_TREE_DEPTH) {
       // 오염 캐시의 비정상 깊이는 여기서 자른다. 조용히 버리면 UI 카운터와
       // 어긋나므로 경고하고 호출자가 truncated를 세우도록 cuts에 기록한다.

@@ -404,8 +404,10 @@ export function ProjectPage({
   // 트리 펼침 상태(useState)가 무관한 렌더에 리셋되지 않도록 메모한다.
   const treeIssues = useMemo(
     () =>
-      hideDone && board ? withoutDone(board.issues) : (board?.issues ?? []),
-    [hideDone, board],
+      view === "tree" && hideDone && board
+        ? withoutDone(board.issues)
+        : (board?.issues ?? []),
+    [hideDone, board, view],
   );
 
   return (
