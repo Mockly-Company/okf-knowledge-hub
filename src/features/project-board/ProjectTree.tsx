@@ -1,5 +1,7 @@
-import { ArrowRight } from "lucide-react";
+import { useId, useMemo, useState } from "react";
+import { ArrowRight, ChevronDown, ChevronRight } from "lucide-react";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
+import { Button } from "@/components/ui/button";
 import {
   layerName,
   statusName,
@@ -36,6 +38,9 @@ const PHASE_ORDER: BoardLayer[] = [
 ];
 
 const EMPTY_PATH: ReadonlySet<string> = new Set<string>();
+
+/** 에픽이 이 수 이하일 때만 처음부터 펼친다. 큰 보드는 접힌 채로 시작해 렌더량을 줄인다. */
+const EPIC_AUTO_EXPAND_LIMIT = 5;
 
 function sortByPhaseThenStatus(left: BoardIssue, right: BoardIssue): number {
   const phaseDiff =
@@ -210,20 +215,26 @@ function ChildCard({
   issue: BoardIssue;
   path: ReadonlySet<string>;
 }) {
-  const childPath = withKey(path, issue);
-  const ordered = childrenOf(issue, childPath);
-  const progress = epicProgress(issue, path, 1);
+  // 정렬·진행률 재귀는 이슈가 바뀔 때만 다시 계산한다.
+  const { childPath, ordered, progress } = useMemo(() => {
+    const nextPath = withKey(path, issue);
+    return {
+      childPath: nextPath,
+      ordered: childrenOf(issue, nextPath),
+      progress: epicProgress(issue, path, 1),
+    };
+  }, [issue, path]);
   return (
     <article
       aria-label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
       className="grid w-64 shrink-0 content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
     >
-      <div className="font-[number:var(--font-weight-control)]">
+      <h3 className="m-0 text-[length:inherit] font-[number:var(--font-weight-control)]">
         <IssueTitle
           issue={issue}
           label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
         />
-      </div>
+      </h3>
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
         <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
@@ -248,10 +259,23 @@ function ChildCard({
   );
 }
 
-function EpicCard({ issue }: { issue: BoardIssue }) {
-  const childPath = withKey(EMPTY_PATH, issue);
-  const ordered = childrenOf(issue, childPath);
-  const progress = epicProgress(issue);
+function EpicCard({
+  issue,
+  defaultOpen,
+}: {
+  issue: BoardIssue;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const flowId = useId();
+  const { childPath, ordered, progress } = useMemo(() => {
+    const nextPath = withKey(EMPTY_PATH, issue);
+    return {
+      childPath: nextPath,
+      ordered: childrenOf(issue, nextPath),
+      progress: epicProgress(issue),
+    };
+  }, [issue]);
   return (
     <article
       aria-label={`에픽 #${issue.number} ${issue.title}`}
@@ -259,12 +283,28 @@ function EpicCard({ issue }: { issue: BoardIssue }) {
     >
       <div className="grid gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-          <span className="font-[number:var(--font-weight-control)] text-[length:var(--font-h3-size,1rem)]">
+          {ordered.length > 0 ? (
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setOpen((value) => !value)}
+              aria-expanded={open}
+              aria-controls={flowId}
+              aria-label={`${issue.title} ${open ? "접기" : "펼치기"}`}
+            >
+              {open ? (
+                <ChevronDown aria-hidden="true" />
+              ) : (
+                <ChevronRight aria-hidden="true" />
+              )}
+            </Button>
+          ) : null}
+          <h2 className="m-0 font-[number:var(--font-weight-control)] text-[length:var(--font-h3-size,1rem)]">
             <IssueTitle
               issue={issue}
               label={`에픽 #${issue.number} ${issue.title}`}
             />
-          </span>
+          </h2>
           <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
           {issue.kind ? (
             <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
@@ -275,8 +315,9 @@ function EpicCard({ issue }: { issue: BoardIssue }) {
         </div>
         <ProgressBar progress={progress} />
       </div>
-      {ordered.length > 0 ? (
+      {open && ordered.length > 0 ? (
         <div
+          id={flowId}
           className="flex items-stretch gap-[var(--space-2)] overflow-x-auto pb-[var(--space-1)]"
           role="group"
           tabIndex={0}
@@ -300,16 +341,21 @@ function EpicCard({ issue }: { issue: BoardIssue }) {
 
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
   // hideDone=false 등 정규화를 우회하는 경로에서도 안전하도록 최상위도 검증한다.
-  const safeIssues = asIssueArray(issues);
-  if (safeIssues.length === 0) {
+  const { epics, singles } = useMemo(() => {
+    const safeIssues = asIssueArray(issues);
+    const hasChildren = (issue: BoardIssue) =>
+      asIssueArray(issue.children).length > 0;
+    return {
+      epics: safeIssues.filter(hasChildren),
+      singles: safeIssues.filter((issue) => !hasChildren(issue)),
+    };
+  }, [issues]);
+  if (epics.length === 0 && singles.length === 0) {
     return (
       <p className="m-0 text-[var(--text-muted)]">연결된 Issue 없음</p>
     );
   }
-  const hasChildren = (issue: BoardIssue) =>
-    asIssueArray(issue.children).length > 0;
-  const epics = safeIssues.filter(hasChildren);
-  const singles = safeIssues.filter((issue) => !hasChildren(issue));
+  const autoExpand = epics.length <= EPIC_AUTO_EXPAND_LIMIT;
   return (
     <div
       className="mt-[var(--space-4)] grid gap-[var(--space-4)]"
@@ -321,7 +367,7 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
         기획 → 디자인 → 백엔드 → 프론트 영역 순서대로 나열됩니다.
       </p>
       {siblingKeys(epics).map((key, index) => (
-        <EpicCard key={key} issue={epics[index]} />
+        <EpicCard key={key} issue={epics[index]} defaultOpen={autoExpand} />
       ))}
       {singles.length > 0 ? (
         <section aria-labelledby="singles-heading">

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { FormField } from "@/components/patterns/FormField";
 import { PageHeader } from "@/components/patterns/PageHeader";
@@ -24,14 +24,8 @@ import {
   issueKey,
   safeHref,
 } from "@/features/project-board/boardUtils";
+import { ProjectTree } from "@/features/project-board/ProjectTree";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
-
-/** 계층 트리는 기본(영역별) 뷰에 필요 없어 전환 시점에 lazy 로드한다. */
-const ProjectTree = lazy(() =>
-  import("@/features/project-board/ProjectTree").then((module) => ({
-    default: module.ProjectTree,
-  })),
-);
 
 type LayerFilter = "all" | BoardLayer;
 
@@ -748,11 +742,7 @@ export function ProjectPage({
           ) : null}
           {!isUnlinked && board ? (
             view === "tree" ? (
-              <Suspense
-                fallback={<p role="status">계층 보기 불러오는 중</p>}
-              >
-                <ProjectTree issues={treeIssues} />
-              </Suspense>
+              <ProjectTree issues={treeIssues} />
             ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
