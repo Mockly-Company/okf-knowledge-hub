@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BoardIssue } from "./model";
@@ -96,5 +96,26 @@ describe("ProjectTree", () => {
     expect(
       screen.queryByRole("list", { name: "항목 1 흐름 요약" }),
     ).not.toBeInTheDocument();
+  });
+  it("links a predecessor only within the same repository", () => {
+    const inRepo = (repo: string, number: number, dependsOn: number | null = null) => ({
+      ...issue(number),
+      title: `${repo} ${number}`,
+      url: `https://github.com/acme/${repo}/issues/${number}`,
+      dependsOn,
+    });
+    const epic = issue(1, [
+      inRepo("web", 12),
+      inRepo("api", 12),
+      inRepo("api", 13, 12),
+    ]);
+
+    render(<ProjectTree issues={[epic]} />);
+
+    const flow = screen.getByRole("list", { name: "항목 1 흐름 요약" });
+    const titles = within(flow)
+      .getAllByRole("heading")
+      .map((heading) => heading.textContent);
+    expect(titles).toEqual(["태스크 #12 api 12", "태스크 #13 api 13"]);
   });
 });

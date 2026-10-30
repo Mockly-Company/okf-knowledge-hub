@@ -20,6 +20,12 @@ async function showLayersView(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("region", { name: "기획 레이어" });
 }
 
+/** 흐름 단계(li)의 제목. 단계 카드의 첫 헤딩에서 `종류 #번호 ` 접두를 뺀다. */
+function stepTitle(item: HTMLElement): string {
+  const heading = within(item).getAllByRole("heading")[0];
+  return (heading.textContent ?? "").replace(/^.*?#\d+ /, "");
+}
+
 describe("ProjectPage", () => {
   it("renders one swimlane per layer with five status columns", async () => {
     const user = userEvent.setup();
@@ -522,7 +528,7 @@ describe("ProjectPage", () => {
     const tree = await screen.findByRole("region", { name: "계층 보기" });
     const flow = within(tree).getByRole("list", { name: "에픽 흐름 요약" });
     const chains = within(flow).getAllByRole("listitem");
-    expect(chains.map((chain) => chain.getAttribute("aria-label"))).toEqual([
+    expect(chains.map(stepTitle)).toEqual([
       "기획",
       "디자인",
       "기획 직후 작업",
@@ -606,7 +612,7 @@ describe("ProjectPage", () => {
     expect(
       within(card)
         .getAllByRole("listitem")
-        .map((item) => item.getAttribute("aria-label")),
+        .map(stepTitle),
     ).toEqual(["먼저 할 일", "나중 할 일"]);
   });
 
