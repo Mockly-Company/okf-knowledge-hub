@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
-import type { ResolvedGithubProject } from "@/features/project-board/model";
+import type { BoardIssue, ResolvedGithubProject } from "@/features/project-board/model";
+import { MAX_ISSUE_TREE_DEPTH } from "@/features/project-board/boardUtils";
 import { ProjectPage } from "./ProjectPage";
 
 afterEach(cleanup);
@@ -406,6 +407,42 @@ describe("ProjectPage", () => {
     await user.click(screen.getByRole("button", { name: "계층별" }));
     expect(
       await screen.findByRole("region", { name: "계층 보기" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the deepest node the gateway retains in the layer view", async () => {
+    const user = userEvent.setup();
+    // 게이트웨이는 depth > 상한 노드를 자식 없는 생략 노드로 남긴다(상한+1 깊이).
+    let deepest: BoardIssue = {
+      number: MAX_ISSUE_TREE_DEPTH + 2,
+      title: "가장 깊은 작업",
+      url: `https://example.test/issues/${MAX_ISSUE_TREE_DEPTH + 2}`,
+      layer: "backend",
+      status: "backlog",
+      children: [],
+      kind: null,
+      childrenTruncated: true,
+    };
+    for (let number = MAX_ISSUE_TREE_DEPTH + 1; number >= 1; number -= 1) {
+      deepest = {
+        number,
+        title: `단계 ${number}`,
+        url: `https://example.test/issues/${number}`,
+        layer: "backend",
+        status: "backlog",
+        children: [deepest],
+        kind: null,
+      };
+    }
+    render(
+      <ProjectPage gateway={FakeProjectBoardGateway.withIssues([deepest], null)} />,
+    );
+    await showLayersView(user);
+
+    expect(
+      screen.getByRole("article", {
+        name: `Issue #${MAX_ISSUE_TREE_DEPTH + 2} 가장 깊은 작업`,
+      }),
     ).toBeInTheDocument();
   });
 

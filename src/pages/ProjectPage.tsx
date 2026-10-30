@@ -29,6 +29,13 @@ import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriPr
 
 type LayerFilter = "all" | BoardLayer;
 
+/**
+ * 노드가 존재할 수 있는 가장 깊은 위치. 게이트웨이 normalizeIssue는 depth > 상한인
+ * 노드를 자식 없는 생략 노드로 남기므로, 집계·필터도 그 노드까지 포함해야
+ * 트리 렌더·카운터와 같은 결과가 된다.
+ */
+const LAST_NODE_DEPTH = MAX_ISSUE_TREE_DEPTH + 1;
+
 /** 프론트 집계 순회 총량 상한. 백엔드 MAX_COUNT_NODES와 같은 취지다. */
 const MAX_WALK_NODES = 100_000;
 
@@ -47,7 +54,7 @@ function* walkIssues(
   if (asIssueArray(issues).length === 0) {
     return;
   }
-  if (depth > MAX_ISSUE_TREE_DEPTH) {
+  if (depth > LAST_NODE_DEPTH) {
     // 깊이 절단도 잘림이므로 배너 조건에 합친다.
     // (백엔드·게이트웨이가 truncated를 세우는 것과 같은 취지.)
     budget.capped = true;
@@ -92,7 +99,7 @@ function withoutDone(
   if (asIssueArray(issues).length === 0) {
     return [];
   }
-  if (depth > MAX_ISSUE_TREE_DEPTH) {
+  if (depth > LAST_NODE_DEPTH) {
     // 깊이 절단도 잘림이므로 배너 조건에 합친다.
     budget.capped = true;
     return [];
@@ -131,8 +138,7 @@ function withoutDone(
       // 깊이 절단으로 잘린 자식은 부모에 생략 플래그를 남긴다.
       // (백엔드 build_tree·게이트웨이 normalizeIssue와 동일한 규칙.)
       // 절단은 배너 조건에도 합친다.
-      const cut =
-        depth + 1 > MAX_ISSUE_TREE_DEPTH && rawChildren.length > 0;
+      const cut = depth > MAX_ISSUE_TREE_DEPTH && rawChildren.length > 0;
       if (cut) {
         budget.capped = true;
       }
