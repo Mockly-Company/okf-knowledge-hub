@@ -5,7 +5,7 @@ import {
   Settings,
   SquareKanban,
 } from "lucide-react";
-import { useEffect, useState, type RefObject } from "react";
+import { useState, type RefObject } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { IconButton } from "@/components/ui/button";
 import { DocumentTree } from "@/features/documents/components/DocumentTree";
@@ -34,18 +34,18 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
     openNewDocument,
   } = useDocuments();
   const { account } = useWorkspaceConnection();
-  const [avatarFailed, setAvatarFailed] = useState(false);
+  // 실패한 아바타 URL을 기억한다. 계정·URL이 바뀌면 자연히 다시 시도한다.
+  // (effect로 플래그를 되돌리면 늦게 실행된 effect가 방금 난 실패를 지우는 경쟁이 생긴다.)
+  const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
   const accountUser =
     account.status === "authenticated" || account.status === "logging_out"
       ? account.user
       : null;
+  const avatarFailed =
+    accountUser !== null && failedAvatarUrl === accountUser.avatarUrl;
   const accountInitial = accountUser
     ? (Array.from(accountUser.login.trim())[0]?.toLocaleUpperCase() ?? "GH")
     : "GH";
-
-  useEffect(() => {
-    setAvatarFailed(false);
-  }, [accountUser?.id, accountUser?.avatarUrl]);
 
   return (
     <aside className="app-sidebar">
@@ -117,7 +117,7 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
                 <img
                   src={accountUser.avatarUrl}
                   alt=""
-                  onError={() => setAvatarFailed(true)}
+                  onError={() => setFailedAvatarUrl(accountUser.avatarUrl)}
                 />
               ) : (
                 accountInitial
