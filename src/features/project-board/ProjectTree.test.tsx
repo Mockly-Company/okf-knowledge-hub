@@ -118,4 +118,28 @@ describe("ProjectTree", () => {
       .map((heading) => heading.textContent);
     expect(titles).toEqual(["태스크 #12 api 12", "태스크 #13 api 13"]);
   });
+  it("renders polluted kind values without crashing", () => {
+    const epic = issue(1, [
+      { ...issue(2), kind: { bad: true } as unknown as string },
+    ]);
+
+    render(<ProjectTree issues={[epic]} />);
+
+    expect(
+      screen.getByRole("article", { name: "하위 항목 #2 항목 2" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not link predecessors across hosts with the same repo path", () => {
+    const epic = issue(1, [
+      { ...issue(12), url: "https://example.test/acme/app/issues/12" },
+      { ...issue(13), dependsOn: 12 },
+    ]);
+
+    render(<ProjectTree issues={[epic]} />);
+
+    expect(
+      screen.queryByRole("list", { name: "항목 1 흐름 요약" }),
+    ).not.toBeInTheDocument();
+  });
 });

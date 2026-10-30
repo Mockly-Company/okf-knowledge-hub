@@ -108,6 +108,13 @@ export function isIssueLike(value: unknown): value is BoardIssue {
   );
 }
 
+/** 선행 이슈 번호는 양의 정수만 받는다. 오염값은 null(순서 없음)로 둔다. */
+export function normalizeDependsOn(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : null;
+}
+
 /** 오염된 캐시의 비배열·비객체 원소는 버리고 유효한 이슈만 남긴다. */
 export function asIssueArray(value: unknown): BoardIssue[] {
   return Array.isArray(value) ? value.filter(isIssueLike) : [];

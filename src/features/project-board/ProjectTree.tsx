@@ -13,6 +13,7 @@ import {
   MAX_ISSUE_TREE_DEPTH,
   asIssueArray,
   issueKey,
+  normalizeDependsOn,
   safeHref,
 } from "@/features/project-board/boardUtils";
 
@@ -44,15 +45,11 @@ function sanitizeTree(
       const cut = depth > MAX_ISSUE_TREE_DEPTH;
       const childPath = new Set(path);
       childPath.add(issueKey(issue));
-      const dependsOn =
-        typeof issue.dependsOn === "number" &&
-        Number.isInteger(issue.dependsOn) &&
-        issue.dependsOn >= 0
-          ? issue.dependsOn
-          : null;
       return {
         ...issue,
-        dependsOn,
+        // 표시용 필드도 게이트웨이와 같은 규칙으로 강제한다(오염값이 렌더를 깨지 않게).
+        kind: typeof issue.kind === "string" ? issue.kind : null,
+        dependsOn: normalizeDependsOn(issue.dependsOn),
         children: cut ? [] : sanitizeTree(rawChildren, childPath, depth + 1),
         childrenTruncated:
           issue.childrenTruncated === true || (cut && rawChildren.length > 0),
@@ -244,10 +241,15 @@ function LayerGroup({
   );
 }
 
-/** 이슈가 속한 저장소 경로(`owner/repo`). 번호는 저장소마다 겹칠 수 있다. */
+/**
+ * 이슈가 속한 저장소(`host/owner/repo`). 번호는 저장소마다 겹칠 수 있다.
+ * 호스트까지 포함해 다른 호스트의 같은 경로 레포와 묶이지 않게 한다.
+ */
 function repoOf(issue: BoardIssue): string {
-  const match = /^https:\/\/[^/]+\/([^/]+\/[^/]+)\//i.exec(issueKey(issue));
-  return match ? match[1].toLowerCase() : "";
+  const key = issueKey(issue);
+  const match = /^https:\/\/([^/]+)\/([^/]+\/[^/]+)\//i.exec(key);
+  // 형식이 다르면 마지막 경로 조각(번호)만 뗀 URL을 범위로 쓴다.
+  return (match ? `${match[1]}/${match[2]}` : key.replace(/\/[^/]*$/, "")).toLowerCase();
 }
 
 /** 흐름 계산용 식별 키. `이전 단계: #N`은 같은 저장소의 N번을 뜻하므로 저장소로 범위를 묶는다. */
