@@ -1,8 +1,8 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BoardIssue } from "./model";
-import { ProjectTree, epicProgress } from "./ProjectTree";
+import { ProjectTree } from "./ProjectTree";
 
 afterEach(() => {
   cleanup();
@@ -30,7 +30,8 @@ describe("ProjectTree", () => {
     expect(
       screen.getByRole("article", { name: "에픽 #1 항목 1" }),
     ).toBeInTheDocument();
-    expect(epicProgress(root).total).toBe(2);
+    // 순환으로 다시 나온 A'와 그 아래는 잘리므로 에픽 진행률은 A·B 두 항목만 센다.
+    expect(screen.getAllByRole("progressbar")[0]).toHaveTextContent("0/2");
   });
 
   it("drops non-issue entries and links only safe GitHub URLs", () => {
@@ -73,7 +74,7 @@ describe("ProjectTree", () => {
 
     render(<ProjectTree issues={epics} />);
 
-    expect(screen.queryAllByRole("group")).toHaveLength(0);
+    expect(screen.queryAllByRole("article", { name: /^태스크/ })).toHaveLength(0);
     expect(screen.getAllByRole("button", { name: /펼치기$/ })).toHaveLength(6);
   });
 
@@ -83,5 +84,38 @@ describe("ProjectTree", () => {
     );
 
     expect(screen.getByText("하위 항목 생략됨")).toBeInTheDocument();
+  });
+  it("ignores non-integer dependsOn values from polluted caches", () => {
+    const polluted = issue(1, [
+      { ...issue(2), dependsOn: "3" as unknown as number },
+      issue(3),
+    ]);
+
+    render(<ProjectTree issues={[polluted]} />);
+
+    expect(
+      screen.queryByRole("list", { name: "항목 1 흐름 요약" }),
+    ).not.toBeInTheDocument();
+  });
+  it("links a predecessor only within the same repository", () => {
+    const inRepo = (repo: string, number: number, dependsOn: number | null = null) => ({
+      ...issue(number),
+      title: `${repo} ${number}`,
+      url: `https://github.com/acme/${repo}/issues/${number}`,
+      dependsOn,
+    });
+    const epic = issue(1, [
+      inRepo("web", 12),
+      inRepo("api", 12),
+      inRepo("api", 13, 12),
+    ]);
+
+    render(<ProjectTree issues={[epic]} />);
+
+    const flow = screen.getByRole("list", { name: "항목 1 흐름 요약" });
+    const titles = within(flow)
+      .getAllByRole("heading")
+      .map((heading) => heading.textContent);
+    expect(titles).toEqual(["태스크 #12 api 12", "태스크 #13 api 13"]);
   });
 });
