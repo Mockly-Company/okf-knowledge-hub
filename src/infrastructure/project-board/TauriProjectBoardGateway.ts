@@ -199,8 +199,9 @@ function normalizeIssue(
     stats.nodes += 1;
     // 자식이 없는 리프는 잘린 것이 없으므로 생략 표시·경고를 하지 않는다
     // (백엔드 `cut && !sub_issues.is_empty()`와 같은 기준).
-    const hasChildren =
-      Array.isArray(issue.children) && issue.children.length > 0;
+    // 유효한 이슈 자식만 본다. 오염 원소만 있으면 숨길 이슈가 없으므로 생략 표시하지 않는다
+    // (오염 원소 자체는 countHiddenNodes가 skipped에 센다).
+    const hasChildren = asIssueArray(issue.children).length > 0;
     if (stats.nodes > MAX_HIDDEN_NODES) {
       if (hasChildren) {
         warnTruncated(stats, issue, "node budget", depth);
