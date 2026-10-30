@@ -59,13 +59,28 @@ function sanitizeTree(
     });
 }
 
-export function epicProgress(issue: BoardIssue): EpicProgress {
+/**
+ * 에픽 진행률. 렌더 경로는 sanitizeTree를 거친 트리를 넘기지만, 외부에서
+ * 정리되지 않은 입력으로 불러도 끝나도록 순환·깊이 가드를 둔다.
+ */
+export function epicProgress(
+  issue: BoardIssue,
+  path: ReadonlySet<string> = new Set<string>(),
+  depth = 0,
+): EpicProgress {
   let done = issue.status === "done" ? 1 : 0;
   let total = 1;
-  for (const child of issue.children) {
-    const childProgress = epicProgress(child);
-    done += childProgress.done;
-    total += childProgress.total;
+  if (depth < MAX_ISSUE_TREE_DEPTH) {
+    const childPath = new Set(path);
+    childPath.add(issueKey(issue));
+    for (const child of asIssueArray(issue.children)) {
+      if (childPath.has(issueKey(child))) {
+        continue;
+      }
+      const childProgress = epicProgress(child, childPath, depth + 1);
+      done += childProgress.done;
+      total += childProgress.total;
+    }
   }
   return {
     done,
@@ -170,7 +185,7 @@ function LeafRow({ issue, depth }: { issue: BoardIssue; depth: number }) {
     <article
       aria-label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
       className="grid gap-[var(--space-1)] py-[var(--space-1)]"
-      style={{ marginLeft: `${depth * 12}px` }}
+      style={{ marginInlineStart: `${depth * 12}px` }}
     >
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         <span aria-hidden="true" className="text-[var(--text-muted)]">
@@ -210,12 +225,13 @@ function LayerGroup({
       ),
     [issues],
   );
+  const headingId = useId();
   if (ordered.length === 0) {
     return null;
   }
   return (
-    <section aria-label={`${name} 묶음`} className="grid min-w-0 gap-[var(--space-2)]">
-      <h3 className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--text-muted)]">
+    <section aria-labelledby={headingId} className="grid min-w-0 gap-[var(--space-2)]">
+      <h3 id={headingId} className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--text-muted)]">
         {name}
       </h3>
       <div className="grid gap-[var(--space-2)]">
@@ -225,6 +241,21 @@ function LayerGroup({
       </div>
     </section>
   );
+}
+
+/** 이슈가 속한 저장소 경로(`owner/repo`). 번호는 저장소마다 겹칠 수 있다. */
+function repoOf(issue: BoardIssue): string {
+  const match = /^https:\/\/[^/]+\/([^/]+\/[^/]+)\//i.exec(issueKey(issue));
+  return match ? match[1].toLowerCase() : "";
+}
+
+/** 흐름 계산용 식별 키. `이전 단계: #N`은 같은 저장소의 N번을 뜻하므로 저장소로 범위를 묶는다. */
+function flowKey(issue: BoardIssue): string {
+  return `${repoOf(issue)}#${issue.number}`;
+}
+
+function predecessorKey(issue: BoardIssue): string | null {
+  return issue.dependsOn != null ? `${repoOf(issue)}#${issue.dependsOn}` : null;
 }
 
 interface FlowStep {
@@ -238,28 +269,27 @@ function buildFlow(children: BoardIssue[]): {
   steps: FlowStep[];
   independent: BoardIssue[];
 } {
-  const byNumber = new Map(children.map((child) => [child.number, child]));
-  const chained = children.filter(
-    (issue) =>
-      (issue.dependsOn != null && byNumber.has(issue.dependsOn)) ||
-      children.some((other) => other.dependsOn === issue.number),
+  const byKey = new Map(children.map((child) => [flowKey(child), child]));
+  const predecessorOf = (issue: BoardIssue) => {
+    const key = predecessorKey(issue);
+    return key != null ? (byKey.get(key) ?? null) : null;
+  };
+  const hasDependent = new Set(
+    children
+      .map(predecessorKey)
+      .filter((key): key is string => key != null && byKey.has(key)),
   );
-  const chainedNumbers = new Set(chained.map((issue) => issue.number));
+  const chained = children.filter(
+    (issue) => predecessorOf(issue) != null || hasDependent.has(flowKey(issue)),
+  );
+  const chainedKeys = new Set(chained.map(flowKey));
   const depthOf = (issue: BoardIssue): number => {
     let depth = 0;
-    const seen = new Set<number>([issue.number]);
-    let current = issue;
-    while (
-      current.dependsOn != null &&
-      byNumber.has(current.dependsOn) &&
-      !seen.has(current.dependsOn)
-    ) {
-      seen.add(current.dependsOn);
-      const next = byNumber.get(current.dependsOn);
-      if (!next) {
-        break;
-      }
-      current = next;
+    const seen = new Set<string>([flowKey(issue)]);
+    let current = predecessorOf(issue);
+    while (current != null && !seen.has(flowKey(current))) {
+      seen.add(flowKey(current));
+      current = predecessorOf(current);
       depth += 1;
     }
     return depth;
@@ -267,10 +297,7 @@ function buildFlow(children: BoardIssue[]): {
   const steps = chained
     .map((issue) => ({
       issue,
-      predecessor:
-        issue.dependsOn != null
-          ? (byNumber.get(issue.dependsOn) ?? null)
-          : null,
+      predecessor: predecessorOf(issue),
       depth: depthOf(issue),
     }))
     .sort(
@@ -279,7 +306,7 @@ function buildFlow(children: BoardIssue[]): {
     );
   return {
     steps,
-    independent: children.filter((issue) => !chainedNumbers.has(issue.number)),
+    independent: children.filter((issue) => !chainedKeys.has(flowKey(issue))),
   };
 }
 
@@ -350,7 +377,7 @@ function FlowTreeRow({
 }) {
   const childKeys = siblingKeys(node.children.map((child) => child.issue));
   return (
-    <li aria-label={node.issue.title} className="relative grid">
+    <li className="relative grid">
       {isRoot ? null : <FlowElbow isLast={isLast} />}
       <div className={isRoot ? undefined : "pl-[28px]"}>
         <div className="grid gap-[var(--space-3)] pb-[var(--space-3)]">
@@ -377,59 +404,60 @@ function FlowTreeRow({
 }
 
 function buildForest(steps: FlowStep[]): FlowTreeNode[] {
-  const stepNumbers = new Set(steps.map((step) => step.issue.number));
-  const dependentsOf = new Map<number, BoardIssue[]>();
+  const stepKeys = new Set(steps.map((step) => flowKey(step.issue)));
+  const dependentsOf = new Map<string, BoardIssue[]>();
   for (const step of steps) {
-    if (step.predecessor != null && stepNumbers.has(step.predecessor.number)) {
-      const list = dependentsOf.get(step.predecessor.number) ?? [];
+    if (step.predecessor != null && stepKeys.has(flowKey(step.predecessor))) {
+      const key = flowKey(step.predecessor);
+      const list = dependentsOf.get(key) ?? [];
       list.push(step.issue);
-      dependentsOf.set(step.predecessor.number, list);
+      dependentsOf.set(key, list);
     }
   }
-  const depthOf = new Map(steps.map((step) => [step.issue.number, step.depth]));
+  const depthOf = new Map(steps.map((step) => [flowKey(step.issue), step.depth]));
   for (const list of dependentsOf.values()) {
     list.sort(
       (left, right) =>
-        (depthOf.get(left.number) ?? 0) - (depthOf.get(right.number) ?? 0) ||
+        (depthOf.get(flowKey(left)) ?? 0) - (depthOf.get(flowKey(right)) ?? 0) ||
         left.number - right.number,
     );
   }
   const buildNode = (
     issue: BoardIssue,
-    seen: Set<number>,
+    seen: Set<string>,
   ): FlowTreeNode => {
-    const children = (dependentsOf.get(issue.number) ?? []).filter(
-      (child) => !seen.has(child.number),
+    const children = (dependentsOf.get(flowKey(issue)) ?? []).filter(
+      (child) => !seen.has(flowKey(child)),
     );
     return {
       issue,
       children: children.map((child) =>
-        buildNode(child, new Set([...seen, child.number])),
+        buildNode(child, new Set([...seen, flowKey(child)])),
       ),
     };
   };
   let roots = steps
     .filter(
       (step) =>
-        step.predecessor == null || !stepNumbers.has(step.predecessor.number),
+        step.predecessor == null || !stepKeys.has(flowKey(step.predecessor)),
     )
     .map((step) => step.issue);
   if (roots.length === 0) {
     roots = steps.map((step) => step.issue);
   }
-  const rendered = new Set<number>();
+  const rendered = new Set<string>();
   const collect = (node: FlowTreeNode): void => {
-    rendered.add(node.issue.number);
+    rendered.add(flowKey(node.issue));
     for (const child of node.children) {
       collect(child);
     }
   };
   const forest: FlowTreeNode[] = [];
   for (const root of roots) {
-    if (rendered.has(root.number)) {
+    if (rendered.has(flowKey(root))) {
       continue;
     }
-    const node = buildNode(root, new Set([root.number]));
+    const node = buildNode(root, new Set([flowKey(root)]));
     collect(node);
     forest.push(node);
   }
@@ -576,12 +604,12 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
     const epicList = safeIssues.filter((issue) => issue.children.length > 0);
     const singleList = safeIssues.filter((issue) => issue.children.length === 0);
     const flow = buildFlow(singleList);
-    const stepNumbers = new Set(flow.steps.map((step) => step.issue.number));
+    const stepKeys = new Set(flow.steps.map((step) => flowKey(step.issue)));
     return {
       epics: epicList,
       singles: singleList,
       singleFlow: flow,
-      loneSingles: singleList.filter((issue) => !stepNumbers.has(issue.number)),
+      loneSingles: singleList.filter((issue) => !stepKeys.has(flowKey(issue))),
     };
   }, [issues]);
   if (epics.length === 0 && singles.length === 0) {
