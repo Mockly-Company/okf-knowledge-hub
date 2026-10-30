@@ -58,10 +58,10 @@ export const Default: StoryObj<typeof meta> = {
   ),
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByRole("region", { name: "기획 레이어" }),
+      await canvas.findByRole("region", { name: "계층 보기" }),
     ).toBeVisible();
     await expect(
-      await canvas.findByRole("article", { name: "Issue #12 기획서 초안" }),
+      await canvas.findByRole("article", { name: "에픽 #12 기획서 초안" }),
     ).toBeVisible();
   },
 };
@@ -74,7 +74,7 @@ export const Empty: StoryObj<typeof meta> = {
   ),
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByRole("region", { name: "백엔드 레이어" }),
+      await canvas.findByText("연결된 Issue 없음"),
     ).toBeVisible();
   },
 };
@@ -88,6 +88,25 @@ export const NotLinked: StoryObj<typeof meta> = {
   play: async ({ canvas }) => {
     await expect(
       await canvas.findByRole("region", { name: "GitHub Project 연결" }),
+    ).toBeVisible();
+  },
+};
+
+export const Layers: StoryObj<typeof meta> = {
+  render: () => (
+    <PageStoryFrame>
+      <ProjectPage gateway={boardGateway} />
+    </PageStoryFrame>
+  ),
+  play: async ({ canvas, userEvent }) => {
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "영역별" }),
+    );
+    await expect(
+      await canvas.findByRole("region", { name: "기획 레이어" }),
+    ).toBeVisible();
+    await expect(
+      await canvas.findByRole("article", { name: "Issue #12 기획서 초안" }),
     ).toBeVisible();
   },
 };
