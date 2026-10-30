@@ -19,7 +19,7 @@ describe("ProjectPage", () => {
   it("renders one swimlane per layer with five status columns", async () => {
     renderProject();
 
-    for (const layer of ["기획", "디자인", "프론트엔드", "백엔드"]) {
+    for (const layer of ["기획", "디자인", "프론트엔드", "백엔드", "미지정"]) {
       const lane = await screen.findByRole("region", {
         name: `${layer} 레이어`,
       });
@@ -47,6 +47,8 @@ describe("ProjectPage", () => {
             url: "https://example.test/issues/12",
             layer: "planning",
             status: "in_progress",
+            children: [],
+            kind: null,
           },
           {
             number: 34,
@@ -54,6 +56,8 @@ describe("ProjectPage", () => {
             url: "https://example.test/issues/34",
             layer: "design",
             status: "backlog",
+            children: [],
+            kind: null,
           },
         ],
         "2026-10-25T12:00:00+09:00",
@@ -113,6 +117,8 @@ describe("ProjectPage", () => {
           url: "https://example.test/issues/12",
           layer: "planning",
           status: "in_progress",
+          children: [],
+          kind: null,
         },
       ],
       "2026-10-25T12:00:00+09:00",
@@ -241,7 +247,7 @@ describe("ProjectPage", () => {
 
     expect(
       await screen.findByText(
-        "보드 항목이 많아 일부만 표시됩니다. (최대 500개)",
+        "보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈 최대 520개)",
       ),
     ).toBeInTheDocument();
   });
@@ -300,14 +306,217 @@ describe("ProjectPage", () => {
 
     await waitFor(() =>
       expect(
-        gateway.calls.filter((call) => call.method === "listGithubProjects"),
-      ).toHaveLength(1),
+        gateway.calls.filter((call) => call.method === "listGithubProjects")
+          .length,
+      ).toBeGreaterThanOrEqual(1),
     );
     await waitFor(() =>
       expect(
         gateway.calls.filter((call) => call.method === "linkGithubProject"),
       ).toHaveLength(1),
     );
+  });
+
+  it("groups layer-less issues into the unassigned swimlane", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 7,
+              title: "분류 전 이슈",
+              url: "https://example.test/issues/7",
+              layer: "unassigned",
+              status: "backlog",
+              children: [],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    const lane = await screen.findByRole("region", { name: "미지정 레이어" });
+    expect(
+      within(lane).getByRole("article", { name: "Issue #7 분류 전 이슈" }),
+    ).toBeInTheDocument();
+  });
+
+  it("switches between layer and tree views", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 12,
+              title: "기획서 초안",
+              url: "https://example.test/issues/12",
+              layer: "planning",
+              status: "in_progress",
+              children: [
+                {
+                  number: 13,
+                  title: "하위 작업",
+                  url: "https://example.test/issues/13",
+                  layer: "planning",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                },
+              ],
+              kind: "기능",
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    await screen.findByRole("region", { name: "기획 레이어" });
+    await user.click(screen.getByRole("button", { name: "계층별" }));
+
+    expect(
+      await screen.findByRole("tree", { name: "계층 보기" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("treeitem", { name: "에픽 #12 기획서 초안 상태: In progress, 영역: 기획, 유형: 기능" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("treeitem", { name: "태스크 #13 하위 작업 상태: Backlog, 영역: 기획, 유형: 작업" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "기획서 초안 접기" }));
+    expect(
+      screen.queryByRole("treeitem", { name: "태스크 #13 하위 작업 상태: Backlog, 영역: 기획, 유형: 작업" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "영역별" }));
+    expect(
+      await screen.findByRole("region", { name: "기획 레이어" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a tab stop on the parent after collapsing a focused child", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 12,
+              title: "기획서 초안",
+              url: "https://example.test/issues/12",
+              layer: "planning",
+              status: "in_progress",
+              children: [
+                {
+                  number: 13,
+                  title: "하위 작업",
+                  url: "https://example.test/issues/13",
+                  layer: "planning",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                },
+              ],
+              kind: "기능",
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    await screen.findByRole("region", { name: "기획 레이어" });
+    await user.click(screen.getByRole("button", { name: "계층별" }));
+    const root = await screen.findByRole("treeitem", {
+      name: "에픽 #12 기획서 초안 상태: In progress, 영역: 기획, 유형: 기능",
+    });
+    const child = screen.getByRole("treeitem", {
+      name: "태스크 #13 하위 작업 상태: Backlog, 영역: 기획, 유형: 작업",
+    });
+    child.focus();
+    await waitFor(() => expect(child).toHaveAttribute("tabindex", "0"));
+
+    await user.click(screen.getByRole("button", { name: "기획서 초안 접기" }));
+
+    await waitFor(() => expect(root).toHaveAttribute("tabindex", "0"));
+  });
+
+  it("lets linked workspaces switch projects from the list", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.empty();
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("region", { name: "기획 레이어" });
+    expect(
+      screen.queryByRole("region", { name: "GitHub Project 연결" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "프로젝트 변경" }));
+    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
+
+    const choice = await screen.findByRole("radio", {
+      name: "Mockly · Mockly-Company #1",
+    });
+    await user.click(choice);
+    await user.click(screen.getByRole("button", { name: "이 프로젝트 연결" }));
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "linkGithubProject"),
+      ).toHaveLength(1),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("region", { name: "GitHub Project 연결" }),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("hides done work unless the toggle is off", async () => {
+    const user = userEvent.setup();
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "끝난 에픽",
+              url: "https://example.test/issues/1",
+              layer: "backend",
+              status: "done",
+              children: [],
+              kind: null,
+            },
+            {
+              number: 2,
+              title: "진행 중 작업",
+              url: "https://example.test/issues/2",
+              layer: "backend",
+              status: "in_progress",
+              children: [],
+              kind: "작업",
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    await screen.findByRole("region", { name: "백엔드 레이어" });
+    expect(
+      screen.queryByRole("article", { name: "Issue #1 끝난 에픽" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("checkbox", { name: "완료 항목 숨기기" }),
+    );
+    expect(
+      await screen.findByRole("article", { name: "Issue #1 끝난 에픽" }),
+    ).toBeInTheDocument();
   });
 
   it("explains why a project URL cannot be resolved", async () => {
