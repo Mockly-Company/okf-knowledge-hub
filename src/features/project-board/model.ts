@@ -22,6 +22,8 @@ export interface BoardIssue {
   children: BoardIssue[];
   /** 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 null. */
   kind: string | null;
+  /** 같은 부모 아래 선행 이슈 번호. 본문 `이전 단계: #N`에서 온다. */
+  dependsOn?: number | null;
   /** 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시. 구 캐시에는 없음. */
   childrenTruncated?: boolean;
 }

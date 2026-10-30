@@ -12,8 +12,9 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    DraftPullRequest, DraftPullRequestRequest, GithubProjectItem, GithubProjectListItem,
-    GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page,
+    parse_depends_on, DraftPullRequest, DraftPullRequestRequest, GithubProjectItem,
+    GithubProjectListItem, GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary,
+    GithubSubIssue, Page,
 };
 use crate::project_board::model::ProjectOwnerScope;
 
@@ -211,6 +212,9 @@ struct GithubProjectItemContent {
     number: Option<u64>,
     title: Option<String>,
     url: Option<String>,
+    /// 본문의 `이전 단계: #N` 줄을 읽어 선행 이슈를 정한다.
+    #[serde(default)]
+    body: Option<String>,
     labels: Option<GithubProjectLabelConnection>,
     #[serde(rename = "subIssues", default)]
     sub_issues: Option<GithubSubIssuesConnection>,
@@ -469,7 +473,7 @@ fn project_permission_error() -> AppError {
 /// `sub_issues_query`로 이어서 가져온다.
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{id number title url labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{id number title url body labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url body labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -1081,6 +1085,7 @@ impl GithubHttpClient {
                     status,
                     area,
                     kind,
+                    depends_on: parse_depends_on(content.body.as_deref()),
                     sub_issues,
                 });
             }
@@ -1883,6 +1888,10 @@ mod tests {
             );
             assert!(query.contains("projectV2(number:$number)"));
             assert!(query.contains("after:$after"));
+            assert!(
+                query.contains("on PullRequest{number title url body"),
+                "PR dependencies need the body field just like issues"
+            );
         }
     }
 
@@ -1923,7 +1932,7 @@ mod tests {
         let transport = RecordingTransport::with_responses(vec![
             response(
                 200,
-                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]},"subIssues":{"nodes":[{"number":13,"title":"하위 작업","url":"https://example.test/issues/13"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":null}]}}}}}"#,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]},"subIssues":{"nodes":[{"number":13,"title":"하위 작업","url":"https://example.test/issues/13"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","body":"이전 단계: #12","labels":{"nodes":[]}},"fieldValues":null}]}}}}}"#,
             ),
             response(
                 200,
@@ -1948,6 +1957,7 @@ mod tests {
         assert_eq!(items[0].sub_issues[0].number, 13);
         assert_eq!(items[1].number, 34);
         assert!(items[1].status.is_none());
+        assert_eq!(items[1].depends_on, Some(12));
         let bodies: Vec<_> = transport
             .requests()
             .iter()
