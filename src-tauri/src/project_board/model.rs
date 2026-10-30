@@ -101,6 +101,9 @@ pub struct BoardIssue {
     /// 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// 같은 부모 아래에서의 선행 이슈 번호. 본문 `이전 단계: #N`에서 온다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<u64>,
     /// 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시.
     /// 구 캐시에는 없어 `false`로 읽힌다.
     #[serde(default)]
@@ -288,9 +291,11 @@ mod tests {
                     status: BoardStatus::Backlog,
                     children: Vec::new(),
                     kind: Some("작업".to_owned()),
+                    depends_on: Some(12),
                     children_truncated: false,
                 }],
                 kind: Some("기능".to_owned()),
+                depends_on: None,
                 children_truncated: false,
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
@@ -301,6 +306,7 @@ mod tests {
         assert!(json.contains("\"fetchedAt\""));
         assert!(json.contains("\"children\""));
         assert!(json.contains("\"childrenTruncated\""));
+        assert!(json.contains("\"dependsOn\":12"));
         let restored: ProjectBoard = serde_json::from_str(&json).expect("board parses");
         assert_eq!(restored, board);
     }

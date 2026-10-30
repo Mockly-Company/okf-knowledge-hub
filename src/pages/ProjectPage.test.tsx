@@ -21,6 +21,12 @@ async function showLayersView(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("region", { name: "기획 레이어" });
 }
 
+/** 흐름 단계(li)의 제목. 단계 카드의 첫 헤딩에서 `종류 #번호 ` 접두를 뺀다. */
+function stepTitle(item: HTMLElement): string {
+  const heading = within(item).getAllByRole("heading")[0];
+  return (heading.textContent ?? "").replace(/^.*?#\d+ /, "");
+}
+
 describe("ProjectPage", () => {
   it("renders one swimlane per layer with five status columns", async () => {
     const user = userEvent.setup();
@@ -446,7 +452,7 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("orders tree children by phase before status", async () => {
+  it("groups tree children by layer before status", async () => {
     render(
       <ProjectPage
         gateway={FakeProjectBoardGateway.withIssues(
@@ -490,9 +496,260 @@ describe("ProjectPage", () => {
     const cards = within(tree).getAllByRole("article");
     expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
       "에픽 #1 에픽",
-      "태스크 #3 백엔드 작업",
       "태스크 #2 프론트 작업",
+      "태스크 #3 백엔드 작업",
     ]);
+  });
+
+  it("shows dependency chains as a flow with predecessor captions", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "에픽",
+              url: "https://example.test/issues/1",
+              layer: "unassigned",
+              status: "backlog",
+              children: [
+                {
+                  number: 2,
+                  title: "기획",
+                  url: "https://example.test/issues/2",
+                  layer: "planning",
+                  status: "in_progress",
+                  children: [],
+                  kind: "기능",
+                  dependsOn: null,
+                },
+                {
+                  number: 3,
+                  title: "디자인",
+                  url: "https://example.test/issues/3",
+                  layer: "design",
+                  status: "backlog",
+                  children: [],
+                  kind: "기능",
+                  dependsOn: 2,
+                },
+                {
+                  number: 4,
+                  title: "자유 작업",
+                  url: "https://example.test/issues/4",
+                  layer: "backend",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: null,
+                },
+                {
+                  number: 5,
+                  title: "기획 직후 작업",
+                  url: "https://example.test/issues/5",
+                  layer: "backend",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: 2,
+                },
+              ],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+    const flow = within(tree).getByRole("list", { name: "에픽 흐름 요약" });
+    const chains = within(flow).getAllByRole("listitem");
+    expect(chains.map(stepTitle)).toEqual([
+      "기획",
+      "디자인",
+      "기획 직후 작업",
+    ]);
+    const steps = within(tree).getAllByRole("article");
+    expect(
+      steps
+        .map((step) => step.getAttribute("aria-label"))
+        .filter(
+          (label) =>
+            label === "스토리 #2 기획" ||
+            label === "스토리 #3 디자인" ||
+            label === "태스크 #5 기획 직후 작업",
+        ),
+    ).toEqual(["스토리 #2 기획", "스토리 #3 디자인", "태스크 #5 기획 직후 작업"]);
+    expect(
+      within(flow).queryByRole("article", { name: "태스크 #4 자유 작업" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(tree).getByRole("article", { name: "태스크 #4 자유 작업" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders flows in nested subtasks", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "에픽",
+              url: "https://example.test/issues/1",
+              layer: "unassigned",
+              status: "backlog",
+              children: [
+                {
+                  number: 2,
+                  title: "부모 작업",
+                  url: "https://example.test/issues/2",
+                  layer: "planning",
+                  status: "in_progress",
+                  children: [
+                    {
+                      number: 3,
+                      title: "먼저 할 일",
+                      url: "https://example.test/issues/3",
+                      layer: "planning",
+                      status: "in_progress",
+                      children: [],
+                      kind: "작업",
+                      dependsOn: null,
+                    },
+                    {
+                      number: 4,
+                      title: "나중 할 일",
+                      url: "https://example.test/issues/4",
+                      layer: "planning",
+                      status: "backlog",
+                      children: [],
+                      kind: "작업",
+                      dependsOn: 3,
+                    },
+                  ],
+                  kind: "작업",
+                  dependsOn: null,
+                },
+              ],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+    // 중첩 흐름은 이름 없는 목록으로 렌더된다. 상위 카드가 맥락을 제공한다.
+    const card = within(tree).getByRole("article", {
+      name: "태스크 #2 부모 작업",
+    });
+    expect(
+      within(card)
+        .getAllByRole("listitem")
+        .map(stepTitle),
+    ).toEqual(["먼저 할 일", "나중 할 일"]);
+  });
+
+  it("gives each epic flow a unique accessible name", async () => {
+    const gateway = (number: number, title: string) => ({
+      number,
+      title,
+      url: `https://example.test/issues/${number}`,
+      layer: "unassigned" as const,
+      status: "backlog" as const,
+      children: [
+        {
+          number: number * 10 + 1,
+          title: `${title} 첫 단계`,
+          url: `https://example.test/issues/${number * 10 + 1}`,
+          layer: "planning" as const,
+          status: "in_progress" as const,
+          children: [],
+          kind: "작업" as const,
+          dependsOn: null,
+        },
+        {
+          number: number * 10 + 2,
+          title: `${title} 다음 단계`,
+          url: `https://example.test/issues/${number * 10 + 2}`,
+          layer: "planning" as const,
+          status: "backlog" as const,
+          children: [],
+          kind: "작업" as const,
+          dependsOn: number * 10 + 1,
+        },
+      ],
+      kind: null,
+    });
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [gateway(1, "첫 번째"), gateway(2, "두 번째")],
+          null,
+        )}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+    expect(
+      within(tree).getByRole("list", { name: "첫 번째 흐름 요약" }),
+    ).toBeInTheDocument();
+    expect(
+      within(tree).getByRole("list", { name: "두 번째 흐름 요약" }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders cyclic dependencies without hanging", async () => {
+    render(
+      <ProjectPage
+        gateway={FakeProjectBoardGateway.withIssues(
+          [
+            {
+              number: 1,
+              title: "에픽",
+              url: "https://example.test/issues/1",
+              layer: "unassigned",
+              status: "backlog",
+              children: [
+                {
+                  number: 2,
+                  title: "순환 A",
+                  url: "https://example.test/issues/2",
+                  layer: "planning",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: 3,
+                },
+                {
+                  number: 3,
+                  title: "순환 B",
+                  url: "https://example.test/issues/3",
+                  layer: "design",
+                  status: "backlog",
+                  children: [],
+                  kind: "작업",
+                  dependsOn: 2,
+                },
+              ],
+              kind: null,
+            },
+          ],
+          null,
+        )}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "계층 보기" });
+    expect(
+      within(tree).getByRole("article", { name: "태스크 #2 순환 A" }),
+    ).toBeInTheDocument();
+    expect(
+      within(tree).getByRole("article", { name: "태스크 #3 순환 B" }),
+    ).toBeInTheDocument();
   });
 
   it("lets linked workspaces switch projects from the list", async () => {
