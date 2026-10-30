@@ -97,7 +97,8 @@ export function isIssueLike(value: unknown): value is BoardIssue {
   return (
     typeof candidate.number === "number" &&
     Number.isInteger(candidate.number) &&
-    candidate.number >= 0 &&
+    // GitHub Issue 번호는 1부터다(normalizeDependsOn과 같은 기준).
+    candidate.number > 0 &&
     typeof candidate.url === "string" &&
     candidate.url.trim().length > 0 &&
     typeof candidate.title === "string" &&

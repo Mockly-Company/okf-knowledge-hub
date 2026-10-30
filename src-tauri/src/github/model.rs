@@ -117,7 +117,8 @@ pub fn parse_depends_on(body: Option<&str>) -> Option<u64> {
                 .chars()
                 .take_while(|ch| ch.is_ascii_digit())
                 .collect();
-            if let Ok(number) = digits.parse::<u64>() {
+            // Issue 번호는 1부터라 #0은 순서 약속으로 보지 않는다(프론트 normalizeDependsOn과 같은 기준).
+            if let Ok(number @ 1..) = digits.parse::<u64>() {
                 return Some(number);
             }
         }
@@ -146,5 +147,6 @@ mod tests {
         assert_eq!(parse_depends_on(None), None);
         assert_eq!(parse_depends_on(Some("순서 없음")), None);
         assert_eq!(parse_depends_on(Some("이전 단계: TBD")), None);
+        assert_eq!(parse_depends_on(Some("이전 단계: #0")), None);
     }
 }
