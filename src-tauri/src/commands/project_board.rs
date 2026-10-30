@@ -453,6 +453,7 @@ fn build_tree(
                 status,
                 children: std::mem::take(&mut child_issues),
                 kind: item.kind.clone(),
+                depends_on: item.depends_on,
                 // 깊이 제한으로 잘린 노드는 프론트가 "하위 항목 생략됨"으로 표시한다.
                 // 자식이 없으면 잘릴 게 없으므로 리프로 둔다.
                 // 예산 절단으로 통째로 빠진 자식이 있으면 부모에도 표시한다.
@@ -785,6 +786,7 @@ mod tests {
             status: Some("In progress".to_owned()),
             area: Some("백엔드".to_owned()),
             kind: None,
+            depends_on: None,
             sub_issues: sub_urls
                 .iter()
                 .enumerate()
