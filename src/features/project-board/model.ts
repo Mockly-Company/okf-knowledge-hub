@@ -1,4 +1,9 @@
-export type BoardLayer = "planning" | "design" | "frontend" | "backend";
+export type BoardLayer =
+  | "planning"
+  | "design"
+  | "frontend"
+  | "backend"
+  | "unassigned";
 
 export type BoardStatus =
   | "backlog"
@@ -13,6 +18,12 @@ export interface BoardIssue {
   url: string;
   layer: BoardLayer;
   status: BoardStatus;
+  /** 하위 이슈(스토리·태스크의 자식). 없으면 빈 배열. */
+  children: BoardIssue[];
+  /** 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 null. */
+  kind: string | null;
+  /** 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시. 구 캐시에는 없음. */
+  childrenTruncated?: boolean;
 }
 
 export interface ProjectBoard {
@@ -42,12 +53,14 @@ export interface ProjectList {
 export const BOARD_LAYERS: ReadonlyArray<{
   id: BoardLayer;
   name: string;
-  label: string;
+  label?: string;
 }> = [
   { id: "planning", name: "기획", label: "layer:planning" },
   { id: "design", name: "디자인", label: "layer:design" },
   { id: "frontend", name: "프론트엔드", label: "layer:frontend" },
   { id: "backend", name: "백엔드", label: "layer:backend" },
+  // 미지정 레인은 매핑되는 layer: 라벨이 없다(Rust BoardLayer::Unassigned.label() == None과 동일).
+  { id: "unassigned", name: "미지정" },
 ];
 
 export const BOARD_STATUSES: ReadonlyArray<{

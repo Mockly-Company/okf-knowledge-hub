@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { FormField } from "@/components/patterns/FormField";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Radio } from "@/components/ui/radio";
 import { Select } from "@/components/ui/select";
@@ -16,12 +17,159 @@ import {
   type ProjectBoard,
   type ResolvedGithubProject,
 } from "@/features/project-board/model";
+import {
+  MAX_ISSUE_TREE_DEPTH,
+  asIssueArray,
+  enterPath,
+  issueKey,
+  safeHref,
+} from "@/features/project-board/boardUtils";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
+
+/** 계층 트리는 기본(영역별) 뷰에 필요 없어 전환 시점에 lazy 로드한다. */
+const ProjectTree = lazy(() =>
+  import("@/features/project-board/ProjectTree").then((module) => ({
+    default: module.ProjectTree,
+  })),
+);
 
 type LayerFilter = "all" | BoardLayer;
 
+/** 프론트 집계 순회 총량 상한. 백엔드 MAX_COUNT_NODES와 같은 취지다. */
+const MAX_WALK_NODES = 100_000;
+
 /** 연결 화면으로 안내해야 하는 백엔드 에러 코드. */
 const UNLINKED_CODES = new Set(["workspace_invalid", "workspace_missing"]);
+
+
+/** 레이어 집계용: 루트+자식을 모두 펼친다. 트리 children은 별도 집계가 아니면 사라진다. */
+function* walkIssues(
+  issues: BoardIssue[],
+  depth = 0,
+  path = new Set<string>(),
+  budget: { count: number; capped: boolean } = { count: 0, capped: false },
+): Generator<BoardIssue> {
+  // 빈 입력은 잘린 것이 없으므로 배너를 세우지 않는다(리프 기준 통일).
+  if (asIssueArray(issues).length === 0) {
+    return;
+  }
+  if (depth > MAX_ISSUE_TREE_DEPTH) {
+    // 깊이 절단도 잘림이므로 배너 조건에 합친다.
+    // (백엔드·게이트웨이가 truncated를 세우는 것과 같은 취지.)
+    budget.capped = true;
+    return;
+  }
+  for (const issue of asIssueArray(issues)) {
+    // 초과 이후에는 형제 루프를 즉시 중단한다. 현재 호출의 return만으로는
+    // 바깥 재귀 레벨의 for가 다음 형제로 계속 진행해 상한이 무력화된다.
+    if (budget.capped) {
+      return;
+    }
+    // 오염 캐시의 순환 참조에 대비해 재귀 경로상의 URL만 건너뛴다.
+    // 집계(walkIssues)는 렌더와 달리 항상 전체 순회하므로, withoutDone과 같은
+    // enterPath push/pop 백트래킹을 공유 집합에 적용한다. 집합은 이 집계 호출
+    // 전용이라 조기 종료돼도 다음 집계가 새 집합을 만들어 오염되지 않는다.
+    const release = enterPath(path, issueKey(issue));
+    if (!release) {
+      continue;
+    }
+    try {
+      budget.count += 1;
+      // 백엔드 MAX_COUNT_NODES와 같은 취지의 총량 상한. 다이아몬드 공유를
+      // 매번 펼치면 집계 자체가 기하급수 팽창하므로 여기서 멈춘다.
+      if (budget.count > MAX_WALK_NODES) {
+        budget.capped = true;
+        return;
+      }
+      yield issue;
+      yield* walkIssues(asIssueArray(issue.children), depth + 1, path, budget);
+    } finally {
+      release();
+    }
+  }
+}
+
+function withoutDone(
+  issues: BoardIssue[],
+  depth = 0,
+  path = new Set<string>(),
+  budget: { count: number; capped: boolean } = { count: 0, capped: false },
+): BoardIssue[] {
+  if (asIssueArray(issues).length === 0) {
+    return [];
+  }
+  if (depth > MAX_ISSUE_TREE_DEPTH) {
+    // 깊이 절단도 잘림이므로 배너 조건에 합친다.
+    budget.capped = true;
+    return [];
+  }
+  const kept: BoardIssue[] = [];
+  for (const issue of asIssueArray(issues)) {
+    // 하위에서 예산이 초과됐으면 형제 순회를 중단한다.
+    // (walkIssues의 상향 전파와 동일한 규칙.)
+    if (budget.capped) {
+      break;
+    }
+    const release = enterPath(path, issueKey(issue));
+    if (!release) {
+      continue;
+    }
+    try {
+      budget.count += 1;
+      // walkIssues와 같은 총량 상한. 초과분은 펼치지 않고 중단한다.
+      // 계속 돌면 잘린 플레이스홀더 자체가 O(N) DOM이 되므로, 초과 지점부터는
+      // 남은 형제를 펼치지 않고 중단한다(중단은 capped 플래그로 배너에 알린다).
+      // hideDone 필터를 우회하지 않도록 done 항목은 플레이스홀더도 남기지 않는다.
+      // (withoutDone은 hideDone=true일 때만 호출된다.)
+      if (budget.count > MAX_WALK_NODES) {
+        budget.capped = true;
+        if (issue.status !== "done") {
+          // 자식이 없는 리프는 잘린 것이 없으므로 생략 표시를 하지 않는다.
+          kept.push({
+            ...issue,
+            children: [],
+            childrenTruncated: asIssueArray(issue.children).length > 0,
+          });
+        }
+        break;
+      }
+      const rawChildren = asIssueArray(issue.children);
+      // 깊이 절단으로 잘린 자식은 부모에 생략 플래그를 남긴다.
+      // (백엔드 build_tree·게이트웨이 normalizeIssue와 동일한 규칙.)
+      // 절단은 배너 조건에도 합친다.
+      const cut =
+        depth + 1 > MAX_ISSUE_TREE_DEPTH && rawChildren.length > 0;
+      if (cut) {
+        budget.capped = true;
+      }
+      const children = cut
+        ? []
+        : withoutDone(rawChildren, depth + 1, path, budget);
+      const flagged = cut ? { childrenTruncated: true as const } : {};
+      if (issue.status === "done") {
+        // 완료된 부모 밑에 진행 중 자식이 있으면 계층 맥락 유지를 위해
+        // 부모를 남긴다(상태 배지로 Done임이 표시된다). 자식이 없으면 버린다.
+        // 깊이 절단된 부모는 숨은 자식이 남아 있을 수 있어 생략 표시와 함께 남긴다.
+        if (children.length > 0 || cut) {
+          kept.push({ ...issue, children, ...flagged });
+        }
+      } else if (
+        !cut &&
+        children.length === rawChildren.length &&
+        children.every((child, index) => child === rawChildren[index])
+      ) {
+        // 자식에 변함이 없으면 원본 참조를 유지해 TreeNode memo가 동작한다.
+        // (얕은 복사를 남발하면 hideDone=true 기본값에서 memo가 무효화된다.)
+        kept.push(issue);
+      } else {
+        kept.push({ ...issue, children, ...flagged });
+      }
+    } finally {
+      release();
+    }
+  }
+  return kept;
+}
 
 /** 손상된 workspace.yml은 미연결이 아니라 로드 에러로 보여야 한다. */
 function errorDetail(error: unknown, key: string): string | undefined {
@@ -95,7 +243,7 @@ function BoardColumn({
         ) : (
           issues.map((issue) => (
             <article
-              key={`${issue.number}-${issue.url}`}
+              key={`${issue.number}-${issueKey(issue)}`}
               className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
               aria-label={`Issue #${issue.number} ${issue.title}`}
             >
@@ -103,18 +251,22 @@ function BoardColumn({
                 #{issue.number}
               </div>
               <div>
-                {issue.url.startsWith("https://") ? (
-                  <a
-                    href={issue.url}
-                    target="_blank"
-                    rel="noreferrer noopener"
-                    className="text-inherit no-underline hover:underline"
-                  >
-                    {issue.title}
-                  </a>
-                ) : (
-                  <span>{issue.title}</span>
-                )}
+                {(() => {
+                  // 계층 보기와 같은 검증·렌더 규칙을 쓴다.
+                  const safeUrl = safeHref(issue.url);
+                  return safeUrl ? (
+                    <a
+                      href={safeUrl}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="text-inherit no-underline hover:underline"
+                    >
+                      {issue.title}
+                    </a>
+                  ) : (
+                    <span>{issue.title}</span>
+                  );
+                })()}
               </div>
             </article>
           ))
@@ -137,6 +289,8 @@ function BoardColumn({
   );
 }
 
+type BoardView = "layers" | "tree";
+
 export function ProjectPage({
   gateway = sharedGateway,
 }: {
@@ -147,6 +301,7 @@ export function ProjectPage({
   const [isSyncing, setIsSyncing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isUnlinked, setIsUnlinked] = useState(false);
+  const [showLinkPanel, setShowLinkPanel] = useState(false);
   const [projectUrl, setProjectUrl] = useState("");
   const [resolved, setResolved] = useState<ResolvedGithubProject | null>(null);
   const [projectOptions, setProjectOptions] = useState<
@@ -156,8 +311,12 @@ export function ProjectPage({
   const [linkError, setLinkError] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [isListing, setIsListing] = useState(false);
+  const [listFailed, setListFailed] = useState(false);
   const [isLinking, setIsLinking] = useState(false);
   const [filter, setFilter] = useState<LayerFilter>("all");
+  const [view, setView] = useState<BoardView>("layers");
+  const [hideDone, setHideDone] = useState(true);
+  const panelVisible = isUnlinked || showLinkPanel;
 
   const load = useCallback(async () => {
     setIsLoading(true);
@@ -224,11 +383,13 @@ export function ProjectPage({
   const listProjects = useCallback(async () => {
     setIsListing(true);
     setLinkError(null);
+    setListFailed(false);
     try {
       const list = await gateway.listGithubProjects();
       setProjectOptions(list.projects);
       setIsProjectListTruncated(list.truncated);
     } catch (error) {
+      setListFailed(true);
       setLinkError(
         typeof error === "object" && error !== null && "message" in error
           ? String((error as { message: string }).message)
@@ -246,6 +407,7 @@ export function ProjectPage({
     setLinkError(null);
     try {
       await gateway.linkGithubProject(resolved);
+      setShowLinkPanel(false);
       await refresh();
     } catch (error) {
       setLinkError(
@@ -258,6 +420,12 @@ export function ProjectPage({
     }
   }, [gateway, refresh, resolved]);
 
+  useEffect(() => {
+    if (panelVisible && projectOptions === null && !isListing && !listFailed) {
+      void listProjects();
+    }
+  }, [panelVisible, projectOptions, isListing, listFailed, listProjects]);
+
   const visibleLayers = useMemo(
     () =>
       BOARD_LAYERS.filter(
@@ -265,10 +433,26 @@ export function ProjectPage({
       ),
     [filter],
   );
-
-  const groupedIssues = useMemo(() => {
+  const { grouped: groupedIssues, capped: walkCapped } = useMemo(() => {
+    // 계층 뷰에서는 레이어 셀이 렌더되지 않으므로 집계를 건너뛴다.
+    // (walkIssues 전체 순회 + emitted Set 비용을 아낀다.)
+    if (view !== "layers" || !board) {
+      return { grouped: new Map<string, BoardIssue[]>(), capped: false };
+    }
     const grouped = new Map<string, BoardIssue[]>();
-    for (const issue of board?.issues ?? []) {
+    // 다이아몬드 공유 자식은 여러 부모 경로에서 walk되므로 같은 셀에
+    // 두 번 펼치지 않도록 레이어:상태:URL 기준으로 한 번만 집계한다.
+    const emitted = new Set<string>();
+    const budget = { count: 0, capped: false };
+    for (const issue of walkIssues(board?.issues ?? [], 0, new Set<string>(), budget)) {
+      if (hideDone && issue.status === "done") {
+        continue;
+      }
+      const dedupeKey = `${issue.layer}:${issue.status}:${issueKey(issue)}`;
+      if (emitted.has(dedupeKey)) {
+        continue;
+      }
+      emitted.add(dedupeKey);
       const key = `${issue.layer}:${issue.status}`;
       const list = grouped.get(key);
       if (list) {
@@ -277,8 +461,20 @@ export function ProjectPage({
         grouped.set(key, [issue]);
       }
     }
-    return grouped;
-  }, [board]);
+    return { grouped, capped: budget.capped };
+  }, [board, hideDone, view]);
+
+  // 트리 펼침 상태(useState)가 무관한 렌더에 리셋되지 않도록 메모한다.
+  const { issues: treeIssues, capped: treeCapped } = useMemo(() => {
+    if (view === "tree" && hideDone && board) {
+      const budget = { count: 0, capped: false };
+      return {
+        issues: withoutDone(board.issues, 0, new Set<string>(), budget),
+        capped: budget.capped,
+      };
+    }
+    return { issues: board?.issues ?? [], capped: false };
+  }, [hideDone, board, view]);
 
   return (
     <section
@@ -315,6 +511,17 @@ export function ProjectPage({
               <RefreshCw aria-hidden="true" strokeWidth={1.75} />
               새로고침
             </Button>
+            {!isUnlinked ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setShowLinkPanel((shown) => !shown)}
+                aria-expanded={isUnlinked || showLinkPanel}
+                disabled={isLoading || isSyncing}
+              >
+                프로젝트 변경
+              </Button>
+            ) : null}
             <div className="w-64 max-w-full">
               <FormField label="Iteration">
                 <Select disabled defaultValue="none">
@@ -328,11 +535,12 @@ export function ProjectPage({
 
       {isUnlinked || board === null ? null : (
         <>
-          <div
-            className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
-            role="group"
-            aria-label="레이어 필터"
-          >
+          {view === "layers" ? (
+            <div
+              className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
+              role="group"
+              aria-label="레이어 필터"
+            >
         <Button
           type="button"
           variant={filter === "all" ? "primary" : "secondary"}
@@ -353,6 +561,7 @@ export function ProjectPage({
           </Button>
         ))}
       </div>
+      ) : null}
 
       {board && board.skipped > 0 ? (
         <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
@@ -361,15 +570,53 @@ export function ProjectPage({
         </p>
       ) : null}
 
-      {board && board.truncated ? (
+      <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
+        <div className="flex flex-wrap items-center gap-[var(--space-3)]">
+          <div
+            className="flex flex-wrap gap-[var(--space-2)]"
+            role="group"
+            aria-label="보드 보기 방식"
+          >
+            <Button
+              type="button"
+              variant={view === "layers" ? "primary" : "secondary"}
+              aria-pressed={view === "layers"}
+              onClick={() => setView("layers")}
+            >
+              영역별
+            </Button>
+            <Button
+              type="button"
+              variant={view === "tree" ? "primary" : "secondary"}
+              aria-pressed={view === "tree"}
+              onClick={() => setView("tree")}
+            >
+              계층별
+            </Button>
+          </div>
+          <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+            <Checkbox
+              checked={hideDone}
+              onChange={(event) => setHideDone(event.target.checked)}
+            />
+            완료 항목 숨기기
+          </label>
+        </div>
+      </div>
+      {board && (board.truncated || walkCapped || treeCapped) ? (
         <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-          보드 항목이 많아 일부만 표시됩니다. (최대 500개)
+          보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈
+          최대 520개
+          {walkCapped || treeCapped
+            ? "·화면 표시 상한, 화면에서 생략된 항목은 제외 개수에 포함되지 않음"
+            : ""}
+          )
         </p>
       ) : null}
         </>
       )}
 
-      {isUnlinked ? (
+      {isUnlinked || showLinkPanel ? (
         <section
           aria-label="GitHub Project 연결"
           className="mt-[var(--space-4)] grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)]"
@@ -447,6 +694,19 @@ export function ProjectPage({
               ))}
             </div>
           ) : null}
+          {listFailed ? (
+            <div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void listProjects()}
+                disabled={isListing}
+                loading={isListing}
+              >
+                목록 다시 불러오기
+              </Button>
+            </div>
+          ) : null}
           {resolved ? (
             <div className="grid gap-[var(--space-2)]">
               <p className="m-0">
@@ -487,10 +747,18 @@ export function ProjectPage({
             </div>
           ) : null}
           {!isUnlinked && board ? (
+            view === "tree" ? (
+              <Suspense
+                fallback={<p role="status">계층 보기 불러오는 중</p>}
+              >
+                <ProjectTree issues={treeIssues} />
+              </Suspense>
+            ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
             <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">
-              <h2 className="m-0 mb-[var(--space-3)]" title={layer.label}>
+              {/* 미지정 레인은 매핑 라벨이 없어 title을 붙이지 않는다. */}
+              <h2 className="m-0 mb-[var(--space-3)]" title={layer.label ?? undefined}>
                 {layer.name}
               </h2>
               <section
@@ -513,7 +781,8 @@ export function ProjectPage({
             </section>
           ))}
         </div>
-          ) : null}
+          )
+        ) : null}
         </>
       )}
     </section>

@@ -12,12 +12,21 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    DraftPullRequest, DraftPullRequestRequest, GithubProjectListItem, GithubProjectSummary,
-    GithubRepositoryDetail, GithubRepositorySummary, Page,
+    DraftPullRequest, DraftPullRequestRequest, GithubProjectItem, GithubProjectListItem,
+    GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page,
 };
 use crate::project_board::model::ProjectOwnerScope;
 
 pub const INITIALIZATION_DRAFT_PR_BODY: &str = "## Summary\n\n- Initialize this repository as an OkHub knowledge workspace\n\n## Why\n\n- Share OKF documents and workspace metadata through Git\n\n## Changes\n\n- Add `.okf/workspace.yml`\n- Add the initial document and template roots when missing\n\n## Test Plan\n\n- Validate `.okf/workspace.yml` in OkHub\n- Confirm the configured document root stays inside the repository\n\n## Review Notes\n\n- This change contains workspace metadata only";
+/// 보드 조회에서 Issue당 함께 가져오는 서브이슈 수. 초과분은 `node(id)` 후속 조회로
+/// 이어서 가져온다(`SUB_ISSUES_FOLLOW_UP_PAGES`·`SUB_ISSUES_FOLLOW_UP_BUDGET` 상한).
+pub const SUB_ISSUES_FIRST: usize = 20;
+/// 서브이슈 후속 조회의 페이지 크기.
+const SUB_ISSUES_FOLLOW_UP_FIRST: usize = 100;
+/// Issue 하나당 서브이슈 후속 조회 최대 페이지 수(첫 20개 + 최대 500개).
+const SUB_ISSUES_FOLLOW_UP_PAGES: usize = 5;
+/// 동기화 한 번에 쓰는 서브이슈 후속 조회 요청 총량. 초과분은 잘림으로 표시한다.
+const SUB_ISSUES_FOLLOW_UP_BUDGET: usize = 50;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -146,16 +155,6 @@ struct GithubProjectV2Response {
     title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GithubProjectItem {
-    pub number: u64,
-    pub title: String,
-    pub url: String,
-    pub labels: Vec<String>,
-    pub status: Option<String>,
-    pub area: Option<String>,
-}
-
 #[derive(Deserialize)]
 struct GithubProjectItemsResponse {
     data: Option<GithubProjectItemsData>,
@@ -206,10 +205,48 @@ struct GithubProjectItemNode {
 struct GithubProjectItemContent {
     #[serde(rename = "__typename")]
     kind: String,
+    /// 서브이슈 후속 조회용 node ID. Issue에만 있다.
+    #[serde(default)]
+    id: Option<String>,
     number: Option<u64>,
     title: Option<String>,
     url: Option<String>,
     labels: Option<GithubProjectLabelConnection>,
+    #[serde(rename = "subIssues", default)]
+    sub_issues: Option<GithubSubIssuesConnection>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesResponse {
+    data: Option<GithubSubIssuesData>,
+    errors: Option<Vec<GithubProjectLookupError>>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesData {
+    node: Option<GithubSubIssuesOwner>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesOwner {
+    #[serde(rename = "subIssues", default)]
+    sub_issues: Option<GithubSubIssuesConnection>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssuesConnection {
+    #[serde(rename = "pageInfo", default)]
+    page_info: Option<GithubProjectPageInfo>,
+    /// 명시적 `null`도 허용한다. 바깥 content 파싱까지 깨지지 않게 한다.
+    #[serde(default)]
+    nodes: Option<Vec<Option<GithubSubIssueNode>>>,
+}
+
+#[derive(Deserialize)]
+struct GithubSubIssueNode {
+    number: Option<u64>,
+    title: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -427,10 +464,46 @@ fn project_permission_error() -> AppError {
     .with_recovery(RecoveryAction::ReinstallGithubApp)
 }
 
+/// 보드 동기화용 projectV2.items 조회문.
+/// 서브이슈는 첫 `SUB_ISSUES_FIRST`개를 함께 조회하고, 초과분은
+/// `sub_issues_query`로 이어서 가져온다.
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{number title url labels(first:100){{nodes{{name}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{id number title url labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
+}
+
+/// 첫 페이지 이후 서브이슈를 이어서 가져오는 조회문.
+fn sub_issues_query() -> String {
+    format!(
+        "query($id:ID!,$after:String!){{node(id:$id){{... on Issue{{subIssues(first:{SUB_ISSUES_FOLLOW_UP_FIRST},after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}}}}}}",
+    )
+}
+
+/// 서브이슈 노드를 모델로 옮긴다. null·필드 결손·빈 URL 원소는 `dropped`에 센다.
+fn collect_sub_issues(
+    nodes: Option<Vec<Option<GithubSubIssueNode>>>,
+    out: &mut Vec<GithubSubIssue>,
+    dropped: &mut u32,
+) {
+    for node in nodes.unwrap_or_default() {
+        let Some(GithubSubIssueNode {
+            number: Some(number),
+            title: Some(title),
+            url: Some(url),
+        }) = node
+        else {
+            *dropped += 1;
+            continue;
+        };
+        // 프론트 issueKey(url.trim())와 키 기준을 일치시킨다.
+        let url = url.trim().to_owned();
+        if url.is_empty() {
+            *dropped += 1;
+            continue;
+        }
+        out.push(GithubSubIssue { number, title, url });
+    }
 }
 
 fn project_not_found_error() -> AppError {
@@ -863,6 +936,8 @@ impl GithubHttpClient {
 
     /// 프로젝트 보드 동기화용으로 Issue/PR 목록을 가져온다.
     /// `Status` 단일 선택 필드 값과 `layer:*` 라벨을 함께 반환한다.
+    /// 서브이슈는 첫 `SUB_ISSUES_FIRST`개 이후를 후속 조회로 이어 받고,
+    /// 후속 조회 상한에 걸리면 잘림으로 표시한다.
     /// 두 번째 값은 페이지 상한(5페이지)에 걸려 잘렸는지, 세 번째 값은
     /// 내용이 없어 버린 항목 수다.
     pub async fn list_project_items(
@@ -877,6 +952,8 @@ impl GithubHttpClient {
         };
         let mut items = Vec::new();
         let mut dropped = 0u32;
+        let mut sub_truncated = false;
+        let mut follow_up_budget = SUB_ISSUES_FOLLOW_UP_BUDGET;
         let mut after: Option<String> = None;
         let query = project_items_query(root);
         for _ in 0..5 {
@@ -929,6 +1006,14 @@ impl GithubHttpClient {
                     dropped += 1;
                     continue;
                 };
+                // 프론트 issueKey(url.trim())와 키 기준을 일치시킨다.
+                // 앞뒤 공백 오염 시 순환 검사가 어긋나지 않게 경계에서 정규화한다.
+                // trim 후 빈 문자열은 유효 항목이 아니므로 누락으로 센다.
+                let url = url.trim().to_owned();
+                if url.is_empty() {
+                    dropped += 1;
+                    continue;
+                }
                 let labels = content
                     .labels
                     .map(|connection| {
@@ -957,6 +1042,37 @@ impl GithubHttpClient {
                     .iter()
                     .find(|(field, _)| field == "영역")
                     .map(|(_, name)| name.clone());
+                let kind = single_selects
+                    .iter()
+                    .find(|(field, _)| field == "타입")
+                    .map(|(_, name)| name.clone());
+                let mut sub_issues = Vec::new();
+                if let Some(connection) = content.sub_issues {
+                    collect_sub_issues(connection.nodes, &mut sub_issues, &mut dropped);
+                    let next = connection
+                        .page_info
+                        .filter(|page| page.has_next_page)
+                        .map(|page| page.end_cursor);
+                    if let Some(cursor) = next {
+                        let complete = match (content.id.as_deref(), cursor) {
+                            (Some(id), Some(cursor)) => {
+                                self.fetch_remaining_sub_issues(
+                                    id,
+                                    cursor,
+                                    &mut follow_up_budget,
+                                    &mut sub_issues,
+                                    &mut dropped,
+                                )
+                                .await?
+                            }
+                            // 이어 받을 근거(node ID·커서)가 없으면 잘림으로 표시한다.
+                            _ => false,
+                        };
+                        if !complete {
+                            sub_truncated = true;
+                        }
+                    }
+                }
                 items.push(GithubProjectItem {
                     number,
                     title,
@@ -964,18 +1080,76 @@ impl GithubHttpClient {
                     labels,
                     status,
                     area,
+                    kind,
+                    sub_issues,
                 });
             }
             // 5페이지·500개를 넘기면 나머지는 버린다. 잘림·누락 수는 호출자가 노출한다.
+            // 서브이슈 잘림(subIssues hasNextPage)도 보드 잘림으로 합친다.
             match connection.page_info {
                 Some(page) if page.has_next_page => match page.end_cursor {
                     Some(cursor) => after = Some(cursor),
                     None => return Ok((items, true, dropped)),
                 },
-                _ => return Ok((items, false, dropped)),
+                _ => return Ok((items, sub_truncated, dropped)),
             }
         }
         Ok((items, true, dropped))
+    }
+
+    /// 첫 페이지 이후 서브이슈를 `out`에 이어 붙인다. 끝까지 받았으면 `true`,
+    /// 페이지·요청 예산에 걸려 남은 것이 있으면 `false`를 돌려준다.
+    async fn fetch_remaining_sub_issues(
+        &self,
+        issue_id: &str,
+        mut cursor: String,
+        budget: &mut usize,
+        out: &mut Vec<GithubSubIssue>,
+        dropped: &mut u32,
+    ) -> Result<bool, AppError> {
+        let query = sub_issues_query();
+        for _ in 0..SUB_ISSUES_FOLLOW_UP_PAGES {
+            if *budget == 0 {
+                return Ok(false);
+            }
+            *budget -= 1;
+            let response = self
+                .send(
+                    HttpMethod::Post,
+                    &["graphql"],
+                    &[],
+                    Some(serde_json::json!({
+                        "query": query,
+                        "variables": { "id": issue_id, "after": cursor },
+                    })),
+                )
+                .await?;
+            if !(200..300).contains(&response.status) {
+                return Err(map_project_error(response.status));
+            }
+            let body: GithubSubIssuesResponse =
+                deserialize_response(response).map_err(|_| github_unavailable_error())?;
+            if let Some(errors) = body.errors.filter(|errors| !errors.is_empty()) {
+                return Err(map_project_lookup_errors(&errors));
+            }
+            let Some(connection) = body
+                .data
+                .and_then(|data| data.node)
+                .and_then(|node| node.sub_issues)
+            else {
+                // 노드가 삭제됐거나 볼 수 없으면 더 받을 하위가 없으므로 잘림으로 세지 않는다.
+                return Ok(true);
+            };
+            collect_sub_issues(connection.nodes, out, dropped);
+            match connection.page_info {
+                Some(page) if page.has_next_page => match page.end_cursor {
+                    Some(next) => cursor = next,
+                    None => return Ok(false),
+                },
+                _ => return Ok(true),
+            }
+        }
+        Ok(false)
     }
 
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
@@ -1749,7 +1923,7 @@ mod tests {
         let transport = RecordingTransport::with_responses(vec![
             response(
                 200,
-                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":null}]}}}}}"#,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":true,"endCursor":"cursor-1"},"nodes":[{"content":{"__typename":"Issue","number":12,"title":"기획서 초안","url":"https://example.test/issues/12","labels":{"nodes":[{"name":"layer:planning"}]},"subIssues":{"nodes":[{"number":13,"title":"하위 작업","url":"https://example.test/issues/13"}]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"In progress","field":{"name":"Status"}},{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"백엔드","field":{"name":"영역"}}]}},{"content":{"__typename":"PullRequest","number":34,"title":"홈 화면 시안","url":"https://example.test/pulls/34","labels":{"nodes":[]}},"fieldValues":null}]}}}}}"#,
             ),
             response(
                 200,
@@ -1770,6 +1944,8 @@ mod tests {
         assert_eq!(items[0].labels, vec!["layer:planning"]);
         assert_eq!(items[0].status.as_deref(), Some("In progress"));
         assert_eq!(items[0].area.as_deref(), Some("백엔드"));
+        assert_eq!(items[0].sub_issues.len(), 1);
+        assert_eq!(items[0].sub_issues[0].number, 13);
         assert_eq!(items[1].number, 34);
         assert!(items[1].status.is_none());
         let bodies: Vec<_> = transport
@@ -1780,6 +1956,52 @@ mod tests {
         assert_eq!(bodies.len(), 2);
         assert!(!bodies[0].contains("\"after\""));
         assert!(bodies[1].contains("\"after\":\"cursor-1\""));
+    }
+
+    #[tokio::test]
+    async fn project_items_fetch_remaining_sub_issues_after_first_page() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"content":{"__typename":"Issue","id":"I_epic","number":1,"title":"에픽","url":"https://example.test/issues/1","labels":{"nodes":[]},"subIssues":{"pageInfo":{"hasNextPage":true,"endCursor":"s1"},"nodes":[{"number":2,"title":"a","url":"https://example.test/issues/2"}]}},"fieldValues":{"nodes":[]}}]}}}}}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"node":{"subIssues":{"pageInfo":{"hasNextPage":true,"endCursor":"s2"},"nodes":[{"number":3,"title":"b","url":"https://example.test/issues/3"},null]}}}}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"node":{"subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"number":4,"title":"c","url":"https://example.test/issues/4"}]}}}}"#,
+            ),
+        ]);
+        let service = client(tokens, transport.clone());
+
+        let (items, truncated, dropped) = service
+            .list_project_items(ProjectOwnerScope::Organization, "Mockly-Company", 1)
+            .await
+            .unwrap();
+
+        assert!(!truncated);
+        assert_eq!(dropped, 1);
+        let numbers: Vec<_> = items[0].sub_issues.iter().map(|sub| sub.number).collect();
+        assert_eq!(numbers, vec![2, 3, 4]);
+        let bodies: Vec<_> = transport
+            .requests()
+            .iter()
+            .map(|request| request.body.clone().unwrap().to_string())
+            .collect();
+        assert_eq!(bodies.len(), 3);
+        assert!(bodies[1].contains("\"id\":\"I_epic\""));
+        assert!(bodies[1].contains("\"after\":\"s1\""));
+        assert!(bodies[2].contains("\"after\":\"s2\""));
+    }
+
+    #[test]
+    fn sub_issues_query_is_balanced_graphql() {
+        let query = super::sub_issues_query();
+        assert_eq!(query.matches('{').count(), query.matches('}').count());
+        assert!(query.contains("after:$after"));
     }
 
     #[tokio::test]

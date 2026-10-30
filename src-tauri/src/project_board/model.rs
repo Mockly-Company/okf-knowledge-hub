@@ -9,24 +9,27 @@ pub enum BoardLayer {
     Design,
     Frontend,
     Backend,
+    Unassigned,
 }
 
 impl BoardLayer {
-    pub fn all() -> [BoardLayer; 4] {
+    pub fn all() -> [BoardLayer; 5] {
         [
             BoardLayer::Planning,
             BoardLayer::Design,
             BoardLayer::Frontend,
             BoardLayer::Backend,
+            BoardLayer::Unassigned,
         ]
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> Option<&'static str> {
         match self {
-            BoardLayer::Planning => "layer:planning",
-            BoardLayer::Design => "layer:design",
-            BoardLayer::Frontend => "layer:frontend",
-            BoardLayer::Backend => "layer:backend",
+            BoardLayer::Planning => Some("layer:planning"),
+            BoardLayer::Design => Some("layer:design"),
+            BoardLayer::Frontend => Some("layer:frontend"),
+            BoardLayer::Backend => Some("layer:backend"),
+            BoardLayer::Unassigned => None,
         }
     }
 
@@ -36,6 +39,7 @@ impl BoardLayer {
             BoardLayer::Design => "디자인",
             BoardLayer::Frontend => "프론트엔드",
             BoardLayer::Backend => "백엔드",
+            BoardLayer::Unassigned => "미지정",
         }
     }
 
@@ -91,6 +95,16 @@ pub struct BoardIssue {
     pub url: String,
     pub layer: BoardLayer,
     pub status: BoardStatus,
+    /// 하위 이슈(스토리·태스크의 자식). 없는 경우 빈 배열.
+    #[serde(default)]
+    pub children: Vec<BoardIssue>,
+    /// 프로젝트 `타입` 필드 값(예: 기능, 작업). 없으면 `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시.
+    /// 구 캐시에는 없어 `false`로 읽힌다.
+    #[serde(default)]
+    pub children_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,10 +222,11 @@ mod tests {
 
     #[test]
     fn layer_labels_match_the_github_convention() {
-        assert_eq!(BoardLayer::Planning.label(), "layer:planning");
-        assert_eq!(BoardLayer::Design.label(), "layer:design");
-        assert_eq!(BoardLayer::Frontend.label(), "layer:frontend");
-        assert_eq!(BoardLayer::Backend.label(), "layer:backend");
+        assert_eq!(BoardLayer::Planning.label(), Some("layer:planning"));
+        assert_eq!(BoardLayer::Design.label(), Some("layer:design"));
+        assert_eq!(BoardLayer::Frontend.label(), Some("layer:frontend"));
+        assert_eq!(BoardLayer::Backend.label(), Some("layer:backend"));
+        assert_eq!(BoardLayer::Unassigned.label(), None);
     }
 
     #[test]
@@ -265,6 +280,18 @@ mod tests {
                 url: "https://example.test/issues/12".to_owned(),
                 layer: BoardLayer::Planning,
                 status: BoardStatus::InProgress,
+                children: vec![super::BoardIssue {
+                    number: 13,
+                    title: "하위 작업".to_owned(),
+                    url: "https://example.test/issues/13".to_owned(),
+                    layer: BoardLayer::Planning,
+                    status: BoardStatus::Backlog,
+                    children: Vec::new(),
+                    kind: Some("작업".to_owned()),
+                    children_truncated: false,
+                }],
+                kind: Some("기능".to_owned()),
+                children_truncated: false,
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
             skipped: 0,
@@ -272,6 +299,8 @@ mod tests {
         };
         let json = serde_json::to_string(&board).expect("board serializes");
         assert!(json.contains("\"fetchedAt\""));
+        assert!(json.contains("\"children\""));
+        assert!(json.contains("\"childrenTruncated\""));
         let restored: ProjectBoard = serde_json::from_str(&json).expect("board parses");
         assert_eq!(restored, board);
     }
