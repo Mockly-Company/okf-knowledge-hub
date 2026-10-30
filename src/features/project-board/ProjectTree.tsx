@@ -95,7 +95,8 @@ export function epicProgress(
   let done = issue.status === "done" ? 1 : 0;
   let total = 1;
   // 깊이 상한과 순환 차단으로 오염 캐시에서도 집계가 끝나게 한다.
-  if (depth < MAX_ISSUE_TREE_DEPTH) {
+  // 게이트웨이 normalizeIssue·ProjectPage 집계와 같은 경계(depth > 상한에서 절단).
+  if (depth <= MAX_ISSUE_TREE_DEPTH) {
     const childPath = withKey(path, issue);
     for (const child of childrenOf(issue, childPath)) {
       const childProgress = epicProgress(child, childPath, depth + 1);
@@ -177,7 +178,7 @@ function LeafRow({
 }) {
   const childPath = withKey(path, issue);
   // 깊이 상한을 넘으면 자식을 펼치지 않고 생략 표시만 남긴다.
-  const cut = depth >= MAX_ISSUE_TREE_DEPTH;
+  const cut = depth > MAX_ISSUE_TREE_DEPTH;
   const ordered = cut ? [] : childrenOf(issue, childPath);
   const omitted =
     issue.childrenTruncated ||
@@ -341,6 +342,8 @@ function EpicCard({
 }
 
 export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
+  // 트리가 한 화면에 둘 이상 렌더돼도 헤딩 ID가 겹치지 않게 한다.
+  const singlesHeadingId = useId();
   // hideDone=false 등 정규화를 우회하는 경로에서도 안전하도록 최상위도 검증한다.
   const { epics, singles } = useMemo(() => {
     const safeIssues = asIssueArray(issues);
@@ -371,8 +374,8 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
         <EpicCard key={key} issue={epics[index]} defaultOpen={autoExpand} />
       ))}
       {singles.length > 0 ? (
-        <section aria-labelledby="singles-heading">
-          <h2 id="singles-heading" className="m-0 mb-[var(--space-3)]">단일 항목</h2>
+        <section aria-labelledby={singlesHeadingId}>
+          <h2 id={singlesHeadingId} className="m-0 mb-[var(--space-3)]">단일 항목</h2>
           <div className="grid gap-[var(--space-2)]">
             {siblingKeys(singles).map((key, index) => {
               const issue = singles[index];
