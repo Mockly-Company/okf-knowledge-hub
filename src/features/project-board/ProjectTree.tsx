@@ -289,7 +289,8 @@ function EpicCard({
               variant="ghost"
               onClick={() => setOpen((value) => !value)}
               aria-expanded={open}
-              aria-controls={flowId}
+              // 접힌 동안에는 흐름 컨테이너가 DOM에 없으므로 가리키지 않는다.
+              aria-controls={open ? flowId : undefined}
               aria-label={`${issue.title} ${open ? "접기" : "펼치기"}`}
             >
               {open ? (
