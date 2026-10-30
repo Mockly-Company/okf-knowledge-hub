@@ -357,7 +357,7 @@ fn count_descendants(
 }
 
 /// 트리 펼치기에 필요한 공유 상태를 묶는다.
-/// 은 루트별 순회 경로라 별도 인자로 둔다.
+/// `visiting`은 루트별 순회 경로라 별도 인자로 둔다.
 struct TreeBuildCtx<'a> {
     index: &'a std::collections::HashMap<&'a str, &'a GithubProjectItem>,
     skipped: &'a mut u32,
