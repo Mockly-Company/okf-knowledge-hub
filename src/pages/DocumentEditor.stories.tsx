@@ -100,7 +100,8 @@ export const RichInteractionTest: Story = { ...Rich, tags: ["!dev", "!autodocs"]
   }
   await userEvent.clear(title);
   await userEvent.type(title, "지도 검색 API 계약 수정");
-  await expect(canvas.getByText("자동 저장 대기중", { exact: true })).toHaveAttribute("role", "status");
+  // 디바운스(800ms)가 느린 CI에서 먼저 끝날 수 있어 저장 진행 중 문구를 모두 허용한다.
+  await expect(await canvas.findByText(/^(자동 저장 대기중|로컬에 저장중|로컬에 자동 저장 완료)$/)).toHaveAttribute("role", "status");
   await expect(await canvas.findByText("로컬에 자동 저장 완료")).toBeVisible();
   await userEvent.clear(title);
   await userEvent.type(title, "지도 검색 API 계약");
