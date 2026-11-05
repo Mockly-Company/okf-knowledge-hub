@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { DocumentsProvider } from "../DocumentsProvider";
 import type { HistoryPage } from "../model";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { DocumentsPage } from "@/pages/DocumentsPage";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
@@ -15,13 +16,15 @@ afterEach(cleanup);
 
 function renderSelectedDocument(gateway: FakeDocumentsGateway) {
   render(
-    <MemoryRouter>
-      <PreferencesProvider repository={new FakePreferencesRepository()}>
-      <DocumentsProvider gateway={gateway} createId={() => SESSION_ID}>
-        <DocumentsPage />
-      </DocumentsProvider>
-      </PreferencesProvider>
-    </MemoryRouter>,
+    <TestQueryProvider>
+      <MemoryRouter>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+        <DocumentsProvider gateway={gateway} createId={() => SESSION_ID}>
+          <DocumentsPage />
+        </DocumentsProvider>
+        </PreferencesProvider>
+      </MemoryRouter>
+    </TestQueryProvider>,
   );
 }
 
@@ -102,9 +105,10 @@ describe("DocumentHistory", () => {
     expect(screen.getByText("커밋 · aabbccd")).toBeVisible();
     expect(screen.queryByText("확정본 · main")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "현재 문서로 돌아가기" }));
-    await waitFor(() =>
-      expect(gateway.calls.filter((call) => call.method === "readDocument")).toHaveLength(2),
-    );
+    expect(await screen.findByText("확정본 · main")).toBeVisible();
+    expect(
+      gateway.calls.filter((call) => call.method === "readDocument"),
+    ).toHaveLength(1);
   });
 
   it("shows a historical-version read error and retries the same version", async () => {

@@ -6,6 +6,7 @@ import { WorkspaceConnectionProvider } from "@/features/workspace-connection/Wor
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { AppShell } from "./AppShell";
 
 function renderShell(
@@ -13,20 +14,22 @@ function renderShell(
   gateway = FakeWorkspaceConnectionGateway.connected(),
 ) {
   return render(
-    <WorkspaceConnectionProvider gateway={gateway}>
-      <DocumentsProvider gateway={new FakeDocumentsGateway()}>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route element={<AppShell />}>
-              <Route index element={<h1>프로젝트 진행 상황</h1>} />
-              <Route path="documents" element={<h1>Documents</h1>} />
-              <Route path="project" element={<h1>Project</h1>} />
-              <Route path="settings" element={<h1>Settings</h1>} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </DocumentsProvider>
-    </WorkspaceConnectionProvider>,
+    <TestQueryProvider>
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <DocumentsProvider gateway={new FakeDocumentsGateway()}>
+          <MemoryRouter initialEntries={[initialEntry]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route index element={<h1>프로젝트 진행 상황</h1>} />
+                <Route path="documents" element={<h1>Documents</h1>} />
+                <Route path="project" element={<h1>Project</h1>} />
+                <Route path="settings" element={<h1>Settings</h1>} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </DocumentsProvider>
+      </WorkspaceConnectionProvider>
+    </TestQueryProvider>,
   );
 }
 

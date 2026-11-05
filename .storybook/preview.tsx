@@ -1,8 +1,15 @@
-import { useLayoutEffect, type PropsWithChildren } from "react";
+import { useLayoutEffect, useState, type PropsWithChildren } from "react";
 import type { Preview } from "@storybook/react-vite";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { DEFAULT_DISPLAY_DENSITY } from "@/features/preferences/display-density";
+import { createQueryClient } from "@/infrastructure/query/queryClient";
 import "pretendard/dist/web/variable/pretendardvariable.css";
 import "@/styles/globals.css";
+
+function QueryRoot({ children }: PropsWithChildren) {
+  const [client] = useState(() => createQueryClient());
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
 
 function DensityRoot({
   density,
@@ -45,7 +52,9 @@ const preview: Preview = {
 
       return (
         <DensityRoot density={displayDensity}>
-          <Story />
+          <QueryRoot>
+            <Story />
+          </QueryRoot>
         </DensityRoot>
       );
     },

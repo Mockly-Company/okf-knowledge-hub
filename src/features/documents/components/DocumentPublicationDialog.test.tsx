@@ -3,12 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentsProvider } from "../DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { DocumentPublicationDialog, type DocumentPublicationDialogProps } from "./DocumentPublicationDialog";
 
 afterEach(cleanup);
 function show(props: Partial<DocumentPublicationDialogProps> = {}) {
   const defaults: DocumentPublicationDialogProps = { open: true, intent: "publish", path: "docs/api.md", markdown: "# 지도 API\n\n새 내용", baselineMarkdown: "# 지도 API\n\n이전 내용", onOpenChange: vi.fn(), onSubmit: vi.fn().mockResolvedValue(undefined) };
-  return render(<DocumentsProvider gateway={new FakeDocumentsGateway()}><DocumentPublicationDialog {...defaults} {...props} /></DocumentsProvider>);
+  return render(<TestQueryProvider><DocumentsProvider gateway={new FakeDocumentsGateway()}><DocumentPublicationDialog {...defaults} {...props} /></DocumentsProvider></TestQueryProvider>);
 }
 describe("DocumentPublicationDialog", () => {
   it("does not require a new commit message when publishing an already shared snapshot", async () => {

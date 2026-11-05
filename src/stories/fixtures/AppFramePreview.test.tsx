@@ -6,6 +6,7 @@ import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { AppFramePreview } from "./AppFramePreview";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
@@ -16,7 +17,7 @@ const rangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRe
 beforeAll(() => Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] }));
 afterAll(() => { if (rangeRects) Object.defineProperty(Range.prototype, "getClientRects", rangeRects); else delete (Range.prototype as Partial<Range>).getClientRects; });
 function show(initialCollapsed = false, platform: "macos" | "windows" = "macos") {
-  return render(<MemoryRouter><PreferencesProvider repository={new FakePreferencesRepository()}><WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}><DocumentsProvider gateway={new FakeDocumentsGateway()}><AppFramePreview screen="detail" initialCollapsed={initialCollapsed} platform={platform} /></DocumentsProvider></WorkspaceConnectionProvider></PreferencesProvider></MemoryRouter>);
+  return render(<TestQueryProvider><MemoryRouter><PreferencesProvider repository={new FakePreferencesRepository()}><WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}><DocumentsProvider gateway={new FakeDocumentsGateway()}><AppFramePreview screen="detail" initialCollapsed={initialCollapsed} platform={platform} /></DocumentsProvider></WorkspaceConnectionProvider></PreferencesProvider></MemoryRouter></TestQueryProvider>);
 }
 describe("Storybook app frame", () => {
   it("keeps the connected account at the bottom in expanded and collapsed navigation", async () => {

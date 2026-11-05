@@ -2,12 +2,15 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import type { DocumentEventEnvelope } from "./model";
 import { DocumentsProvider, useDocuments } from "./DocumentsProvider";
 
 const SESSION_ID = "4b20eda7-09a0-46f9-bd3b-4de83d4b0157";
 const SEARCH_ONE_ID = "34e1764e-4278-41f8-bcf8-9f74ff6f66e0";
 const SEARCH_TWO_ID = "54bf90af-b193-4387-8618-ae168b775407";
+const READ_API_ID = "7c9e6679-1234-4b5a-9c6d-abcdef123456";
+const READ_GUIDE_ID = "8d0f778a-2345-4c6b-8d7e-bcdef1234567";
 
 function Probe() {
   const {
@@ -73,18 +76,20 @@ function renderProvider(
 ) {
   const remainingIds = [...ids];
   return render(
-    <DocumentsProvider
-      gateway={gateway}
-      createId={() => {
-        const id = remainingIds.shift();
-        if (!id) throw new Error("test did not provide enough UUIDs");
-        return id;
-      }}
-      searchDebounceMs={0}
-      saveDebounceMs={saveDebounceMs}
-    >
-      <Probe />
-    </DocumentsProvider>,
+    <TestQueryProvider>
+      <DocumentsProvider
+        gateway={gateway}
+        createId={() => {
+          const id = remainingIds.shift();
+          if (!id) throw new Error("test did not provide enough UUIDs");
+          return id;
+        }}
+        searchDebounceMs={0}
+        saveDebounceMs={saveDebounceMs}
+      >
+        <Probe />
+      </DocumentsProvider>
+    </TestQueryProvider>,
   );
 }
 
@@ -254,6 +259,40 @@ describe("DocumentsProvider", () => {
     );
     expect(screen.getByTestId("document-notice")).toHaveTextContent(
       "외부 변경사항을 반영했습니다.",
+    );
+  });
+
+  it("serves a repeated document read from the query cache", async () => {
+    const gateway = new FakeDocumentsGateway();
+    const user = userEvent.setup();
+    renderProvider(gateway, [SESSION_ID, READ_API_ID, READ_GUIDE_ID]);
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "readDocument"),
+      ).toHaveLength(1),
+    );
+    gateway.calls.length = 0;
+
+    await user.click(screen.getByRole("button", { name: "open-api" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected")).toHaveTextContent("docs/api.md"),
+    );
+    await user.click(screen.getByRole("button", { name: "open-guide" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected")).toHaveTextContent(
+        "docs/guide.md",
+      ),
+    );
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "readDocument"),
+      ).toEqual([
+        {
+          method: "readDocument",
+          args: [SESSION_ID, READ_API_ID, "docs/api.md"],
+        },
+      ]),
     );
   });
 

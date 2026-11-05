@@ -6,6 +6,7 @@ import {
 } from "@/features/documents/DocumentsProvider";
 import type { DocumentContent } from "@/features/documents/model";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 
 const fixture = vi.hoisted(() => ({ language: "typescript", hasCode: true }));
 
@@ -52,9 +53,11 @@ function renderDocument(language: string, hasCode = true) {
   fixture.language = language;
   fixture.hasCode = hasCode;
   return render(
-    <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
-      <MarkdownDocument document={document} />
-    </DocumentsProvider>,
+    <TestQueryProvider>
+      <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
+        <MarkdownDocument document={document} />
+      </DocumentsProvider>
+    </TestQueryProvider>,
   );
 }
 

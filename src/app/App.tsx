@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { HashRouter } from "react-router-dom";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createQueryClient } from "@/infrastructure/query/queryClient";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
@@ -16,6 +18,17 @@ interface AppProps {
   documentsGateway?: DocumentsGateway;
 }
 
+// React Query devtools는 dev 웹뷰에서만 띄운다. 테스트에서는 DOM 오염 방지.
+const showQueryDevtools =
+  import.meta.env.DEV &&
+  (typeof process === "undefined" || !process.env.VITEST);
+
+const ReactQueryDevtools = lazy(() =>
+  import("@tanstack/react-query-devtools").then((module) => ({
+    default: module.ReactQueryDevtools,
+  })),
+);
+
 export function App({
   workspaceGateway = createWorkspaceConnectionGateway(),
   preferencesRepository = createPreferencesRepository(),
@@ -24,14 +37,22 @@ export function App({
   const [repository] = useState(() => preferencesRepository);
   const [workspace] = useState(() => workspaceGateway);
   const [documents] = useState(() => documentsGateway);
+  const [queryClient] = useState(() => createQueryClient());
 
   return (
-    <PreferencesProvider repository={repository}>
-      <WorkspaceConnectionProvider gateway={workspace}>
-        <HashRouter>
-          <AppRoutes documentsGateway={documents} />
-        </HashRouter>
-      </WorkspaceConnectionProvider>
-    </PreferencesProvider>
+    <QueryClientProvider client={queryClient}>
+      <PreferencesProvider repository={repository}>
+        <WorkspaceConnectionProvider gateway={workspace}>
+          <HashRouter>
+            <AppRoutes documentsGateway={documents} />
+          </HashRouter>
+        </WorkspaceConnectionProvider>
+      </PreferencesProvider>
+      {showQueryDevtools ? (
+        <Suspense fallback={null}>
+          <ReactQueryDevtools initialIsOpen={false} />
+        </Suspense>
+      ) : null}
+    </QueryClientProvider>
   );
 }

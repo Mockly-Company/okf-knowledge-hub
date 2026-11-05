@@ -9,7 +9,9 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { DocumentsGateway } from "./DocumentsGateway";
+import { documentsKeys } from "./queryKeys";
 import {
   createInitialDocumentsState,
   documentsReducer,
@@ -177,6 +179,7 @@ export function DocumentsProvider({
   );
   const stateRef = useRef(state);
   const authoringStateRef = useRef(authoringState);
+  const queryClient = useQueryClient();
 
   const dispatchAccepted = useCallback((action: DocumentsAction) => {
     const current = stateRef.current;
@@ -213,6 +216,14 @@ export function DocumentsProvider({
       try {
         const registeredUnlisten = await gateway.onDocumentEvent((event) => {
           if (!active) return;
+          if (
+            event.type === "tree_changed" &&
+            event.sessionId === stateRef.current.activeSessionId
+          ) {
+            void queryClient.invalidateQueries({
+              queryKey: documentsKeys.session(sessionId),
+            });
+          }
           dispatchAccepted({
             type: "documentEventReceived",
             event: sanitizedEvent(event),
@@ -243,7 +254,7 @@ export function DocumentsProvider({
       unlisten?.();
       void gateway.stopSession(sessionId).catch(() => undefined);
     };
-  }, [createId, dispatchAccepted, gateway, sessionAttempt]);
+  }, [createId, dispatchAccepted, gateway, queryClient, sessionAttempt]);
 
   useEffect(() => {
     if (state.status !== "ready" || state.activeSessionId === null) return;
@@ -251,9 +262,18 @@ export function DocumentsProvider({
     let active = true;
     dispatchAuthoringAccepted({ type: "templatesLoading", sessionId });
     void Promise.all([
-      gateway.listDocumentTemplates(sessionId),
-      gateway.listLocalDocumentDrafts(sessionId),
-      gateway.getActiveDraftRecovery(sessionId),
+      queryClient.fetchQuery({
+        queryKey: documentsKeys.templates(sessionId),
+        queryFn: () => gateway.listDocumentTemplates(sessionId),
+      }),
+      queryClient.fetchQuery({
+        queryKey: documentsKeys.drafts(sessionId),
+        queryFn: () => gateway.listLocalDocumentDrafts(sessionId),
+      }),
+      queryClient.fetchQuery({
+        queryKey: documentsKeys.recovery(sessionId),
+        queryFn: () => gateway.getActiveDraftRecovery(sessionId),
+      }),
     ]).then(
       ([catalog, drafts, recovery]) => {
         if (!active || stateRef.current.activeSessionId !== sessionId) return;
@@ -271,7 +291,7 @@ export function DocumentsProvider({
     return () => {
       active = false;
     };
-  }, [dispatchAuthoringAccepted, gateway, state.activeSessionId, state.status]);
+  }, [dispatchAuthoringAccepted, gateway, queryClient, state.activeSessionId, state.status]);
 
   const creationRequestId = authoringState.creation.requestId;
   const creationStatus = authoringState.creation.status;
@@ -294,8 +314,12 @@ export function DocumentsProvider({
     ) {
       return;
     }
-    void gateway
-      .validateDocumentCreation(sessionId, input.folder, input.fileName)
+    void queryClient
+      .fetchQuery({
+        queryKey: documentsKeys.validate(sessionId, input.folder, input.fileName),
+        queryFn: () =>
+          gateway.validateDocumentCreation(sessionId, input.folder, input.fileName),
+      })
       .then(
         (validation) => {
           dispatchAuthoringAccepted({
@@ -317,6 +341,7 @@ export function DocumentsProvider({
     creationStatus,
     dispatchAuthoringAccepted,
     gateway,
+    queryClient,
   ]);
 
   useEffect(() => {
@@ -475,6 +500,9 @@ export function DocumentsProvider({
       })
       .then(
         (response) => {
+          void queryClient.invalidateQueries({
+            queryKey: documentsKeys.session(sessionId),
+          });
           dispatchAuthoringAccepted({
             type: "saveSucceeded",
             requestId: saveRequestId,
@@ -489,7 +517,7 @@ export function DocumentsProvider({
           });
         },
       );
-  }, [dispatchAuthoringAccepted, gateway, saveRequestId]);
+  }, [dispatchAuthoringAccepted, gateway, queryClient, saveRequestId]);
 
   const flushCurrentEditor = useCallback(async (): Promise<boolean> => {
     const editor = authoringStateRef.current.editor;
@@ -690,16 +718,27 @@ export function DocumentsProvider({
       return;
     }
     let active = true;
-    void gateway
-      .searchDocuments(
-        sessionId,
-        activeSearchRequestId,
-        query,
-        DOCUMENT_SEARCH_LIMIT,
-      )
+    void queryClient
+      .fetchQuery({
+        queryKey: documentsKeys.search(sessionId, query),
+        queryFn: () =>
+          gateway.searchDocuments(
+            sessionId,
+            activeSearchRequestId,
+            query,
+            DOCUMENT_SEARCH_LIMIT,
+          ),
+      })
       .then(
         (response) => {
-          if (active) dispatchAccepted({ type: "searchSucceeded", response });
+          // A cache hit returns the earlier request's correlation ids, so
+          // re-correlate the items to the request that is still loading.
+          const recorrelated = {
+            ...response,
+            sessionId,
+            requestId: activeSearchRequestId,
+          };
+          if (active) dispatchAccepted({ type: "searchSucceeded", response: recorrelated });
         },
         (error) => {
           if (!active) return;
@@ -714,7 +753,7 @@ export function DocumentsProvider({
     return () => {
       active = false;
     };
-  }, [activeSearchRequestId, dispatchAccepted, gateway]);
+  }, [activeSearchRequestId, dispatchAccepted, gateway, queryClient]);
 
   const activeReadRequestId = state.activeReadRequest?.requestId ?? null;
   useEffect(() => {
@@ -729,20 +768,32 @@ export function DocumentsProvider({
       return;
     }
     let active = true;
-    const read =
+    const locator =
       request.kind === "current"
-        ? gateway.readDocument(
-            request.sessionId,
-            request.requestId,
-            request.path,
-          )
-        : gateway.readDocumentVersion(
-            request.sessionId,
-            request.requestId,
-            request.commitOid,
-            request.pathAtCommit,
-          );
-    void read.then(
+        ? request.path
+        : `${request.commitOid}:${request.pathAtCommit}`;
+    void queryClient
+      .fetchQuery({
+        queryKey: documentsKeys.read(
+          request.sessionId,
+          request.kind,
+          locator,
+        ),
+        queryFn: () =>
+          request.kind === "current"
+            ? gateway.readDocument(
+                request.sessionId,
+                request.requestId,
+                request.path,
+              )
+            : gateway.readDocumentVersion(
+                request.sessionId,
+                request.requestId,
+                request.commitOid,
+                request.pathAtCommit,
+              ),
+      })
+      .then(
       (content) => {
         if (active) {
           dispatchAccepted({
@@ -765,7 +816,7 @@ export function DocumentsProvider({
     return () => {
       active = false;
     };
-  }, [activeReadRequestId, dispatchAccepted, gateway]);
+  }, [activeReadRequestId, dispatchAccepted, gateway, queryClient]);
 
   const activeHistoryRequestId = state.activeHistoryRequest?.requestId ?? null;
   useEffect(() => {
@@ -780,12 +831,20 @@ export function DocumentsProvider({
       return;
     }
     let active = true;
-    void gateway
-      .listDocumentHistory(
-        request.sessionId,
-        request.path,
-        request.cursor,
-      )
+    void queryClient
+      .fetchQuery({
+        queryKey: documentsKeys.history(
+          request.sessionId,
+          request.path,
+          request.cursor,
+        ),
+        queryFn: () =>
+          gateway.listDocumentHistory(
+            request.sessionId,
+            request.path,
+            request.cursor,
+          ),
+      })
       .then(
         (page) => {
           if (active) {
@@ -805,7 +864,7 @@ export function DocumentsProvider({
     return () => {
       active = false;
     };
-  }, [activeHistoryRequestId, dispatchAccepted, gateway]);
+  }, [activeHistoryRequestId, dispatchAccepted, gateway, queryClient]);
 
   const setSearchQuery = useCallback(
     (query: string) => {
@@ -925,6 +984,9 @@ export function DocumentsProvider({
     if (sessionId === null) return;
     try {
       await gateway.refreshSession(sessionId);
+      await queryClient.invalidateQueries({
+        queryKey: documentsKeys.session(sessionId),
+      });
     } catch (error) {
       dispatchAccepted({
         type: "sessionOperationFailed",
@@ -932,7 +994,7 @@ export function DocumentsProvider({
         error: asDocumentError(error),
       });
     }
-  }, [dispatchAccepted, gateway]);
+  }, [dispatchAccepted, gateway, queryClient]);
 
   const readAsset = useCallback(
     async (documentPath: string, assetPath: string) => {

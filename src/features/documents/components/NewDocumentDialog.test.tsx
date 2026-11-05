@@ -2,6 +2,7 @@ import { cleanup, render as renderBase, screen, within } from "@testing-library/
 import type { ReactElement } from "react";
 import { DocumentsProvider } from "../DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -13,7 +14,7 @@ import { NewDocumentDialog } from "./NewDocumentDialog";
 afterEach(cleanup);
 
 function render(ui: ReactElement) {
-  return renderBase(<DocumentsProvider gateway={new FakeDocumentsGateway()}>{ui}</DocumentsProvider>);
+  return renderBase(<TestQueryProvider><DocumentsProvider gateway={new FakeDocumentsGateway()}>{ui}</DocumentsProvider></TestQueryProvider>);
 }
 
 function dialogState(): DocumentAuthoringState {
