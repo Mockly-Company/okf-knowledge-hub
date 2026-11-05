@@ -15,14 +15,17 @@ import { PreferencesProvider } from "@/features/preferences/PreferencesProvider"
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 import { DocumentsPage } from "./DocumentsPage";
 import type { ReactElement } from "react";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 
 afterEach(cleanup);
 
 function render(ui: ReactElement) {
   return renderWithoutPreferences(
-    <PreferencesProvider repository={new FakePreferencesRepository()}>
-      {ui}
-    </PreferencesProvider>,
+    <TestQueryProvider>
+      <PreferencesProvider repository={new FakePreferencesRepository()}>
+        {ui}
+      </PreferencesProvider>
+    </TestQueryProvider>,
   );
 }
 

@@ -1,6 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, type PropsWithChildren } from "react";
 import { MemoryRouter } from "react-router-dom";
 import type { Decorator } from "@storybook/react-vite";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createQueryClient } from "@/infrastructure/query/queryClient";
 import { DocumentsProvider, type DocumentsProviderProps } from "@/features/documents/DocumentsProvider";
 import type {
   DocumentAsset,
@@ -146,6 +148,7 @@ export function StorybookAppProviders({
 }: PropsWithChildren<StorybookAppProvidersOptions>) {
   const optionsKey = JSON.stringify(options);
   const boundary = useMemo(() => createBoundary(options), [optionsKey]);
+  const queryClient = useMemo(() => createQueryClient(), [optionsKey]);
   const initialEntries = options.router?.initialEntries ?? ["/"];
   const includeDocumentsProvider = options.includeDocumentsProvider ?? true;
 
@@ -163,14 +166,16 @@ export function StorybookAppProviders({
 
   return (
     <StorybookBoundaryContext.Provider value={boundary}>
-      <PreferencesProvider key={optionsKey} repository={boundary.preferences}>
-        <WorkspaceConnectionProvider gateway={boundary.workspace}>
-          <MemoryRouter initialEntries={initialEntries}>
-            <StorybookCloneSimulation outcome={options.workspace?.cloneOutcome} />
-            {appChildren}
-          </MemoryRouter>
-        </WorkspaceConnectionProvider>
-      </PreferencesProvider>
+      <QueryClientProvider client={queryClient}>
+        <PreferencesProvider key={optionsKey} repository={boundary.preferences}>
+          <WorkspaceConnectionProvider gateway={boundary.workspace}>
+            <MemoryRouter initialEntries={initialEntries}>
+              <StorybookCloneSimulation outcome={options.workspace?.cloneOutcome} />
+              {appChildren}
+            </MemoryRouter>
+          </WorkspaceConnectionProvider>
+        </PreferencesProvider>
+      </QueryClientProvider>
     </StorybookBoundaryContext.Provider>
   );
 }

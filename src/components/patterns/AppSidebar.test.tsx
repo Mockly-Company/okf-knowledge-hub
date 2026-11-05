@@ -8,6 +8,7 @@ import { WorkspaceConnectionProvider } from "@/features/workspace-connection/Wor
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { AppSidebar } from "./AppSidebar";
 
 function renderSidebar(
@@ -16,13 +17,15 @@ function renderSidebar(
   documentsGateway = new FakeDocumentsGateway(),
 ) {
   return render(
-    <WorkspaceConnectionProvider gateway={gateway}>
-      <DocumentsProvider gateway={documentsGateway}>
-        <MemoryRouter initialEntries={[initialPath]}>
-          <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />
-        </MemoryRouter>
-      </DocumentsProvider>
-    </WorkspaceConnectionProvider>,
+    <TestQueryProvider>
+      <WorkspaceConnectionProvider gateway={gateway}>
+        <DocumentsProvider gateway={documentsGateway}>
+          <MemoryRouter initialEntries={[initialPath]}>
+            <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />
+          </MemoryRouter>
+        </DocumentsProvider>
+      </WorkspaceConnectionProvider>
+    </TestQueryProvider>,
   );
 }
 

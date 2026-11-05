@@ -8,6 +8,7 @@ import {
 } from "@/features/documents/DocumentsProvider";
 import type { DocumentContent } from "@/features/documents/model";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import {
   MarkdownDocument,
   type MarkdownDocumentProps,
@@ -47,9 +48,11 @@ function renderMarkdown(
 ) {
   const gateway = new FakeDocumentsGateway();
   const view = render(
-    <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
-      <MarkdownDocument document={content(markdown)} {...props} />
-    </DocumentsProvider>,
+    <TestQueryProvider>
+      <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+        <MarkdownDocument document={content(markdown)} {...props} />
+      </DocumentsProvider>
+    </TestQueryProvider>,
   );
   return { gateway, ...view };
 }
@@ -62,9 +65,11 @@ function ReadyMarkdown({ markdown }: { markdown: string }) {
 function renderReadyMarkdown(markdown: string) {
   const gateway = new FakeDocumentsGateway();
   const view = render(
-    <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
-      <ReadyMarkdown markdown={markdown} />
-    </DocumentsProvider>,
+    <TestQueryProvider>
+      <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+        <ReadyMarkdown markdown={markdown} />
+      </DocumentsProvider>
+    </TestQueryProvider>,
   );
   return { gateway, ...view };
 }
@@ -90,9 +95,11 @@ function SearchMatchedMarkdown({
 function renderSearchMatchedMarkdown(markdown: string, matchText: string) {
   const gateway = new FakeDocumentsGateway();
   const view = render(
-    <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
-      <SearchMatchedMarkdown markdown={markdown} matchText={matchText} />
-    </DocumentsProvider>,
+    <TestQueryProvider>
+      <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+        <SearchMatchedMarkdown markdown={markdown} matchText={matchText} />
+      </DocumentsProvider>
+    </TestQueryProvider>,
   );
   return { gateway, ...view };
 }
@@ -128,9 +135,9 @@ describe("MarkdownDocument", () => {
   it("keeps Mermaid DOM ids equal to deterministic block ids across rerenders", async () => {
     const markdown = "```mermaid\nflowchart LR\nA --> B\n```";
     const gateway = new FakeDocumentsGateway();
-    const tree = () => <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+    const tree = () => <TestQueryProvider><DocumentsProvider gateway={gateway} createId={() => "session-id"}>
       <ReadyMarkdown markdown={markdown} />
-    </DocumentsProvider>;
+    </DocumentsProvider></TestQueryProvider>;
     const view = render(tree());
     const block = (await screen.findByText("stable diagram")).closest("[data-okhub-block-id]")!;
     const id = block.getAttribute("data-okhub-block-id");
@@ -146,13 +153,15 @@ describe("MarkdownDocument", () => {
 
   it("suppresses only the first source H1 that matches the document title", () => {
     render(
-      <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
-        <MarkdownDocument
-          document={content("# Guide\n\n## 요청\n\n본문")}
-          hideHeader
-          suppressSourceTitle
-        />
-      </DocumentsProvider>,
+      <TestQueryProvider>
+        <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
+          <MarkdownDocument
+            document={content("# Guide\n\n## 요청\n\n본문")}
+            hideHeader
+            suppressSourceTitle
+          />
+        </DocumentsProvider>
+      </TestQueryProvider>,
     );
 
     expect(screen.queryByRole("heading", { level: 1, name: "Guide" })).toBeNull();
@@ -161,13 +170,15 @@ describe("MarkdownDocument", () => {
 
   it("keeps a non-matching or later source H1 when title suppression is enabled", () => {
     render(
-      <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
-        <MarkdownDocument
-          document={content("# Overview\n\n# Guide\n\n본문")}
-          hideHeader
-          suppressSourceTitle
-        />
-      </DocumentsProvider>,
+      <TestQueryProvider>
+        <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
+          <MarkdownDocument
+            document={content("# Overview\n\n# Guide\n\n본문")}
+            hideHeader
+            suppressSourceTitle
+          />
+        </DocumentsProvider>
+      </TestQueryProvider>,
     );
 
     expect(screen.getByRole("heading", { level: 1, name: "Overview" })).toBeVisible();
@@ -228,16 +239,20 @@ describe("MarkdownDocument", () => {
   it("creates deterministic nonempty block IDs for documents without frontmatter IDs", () => {
     const markdown = "```ts\nconst legacy = true\n```";
     const first = render(
-      <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
-        <MarkdownDocument document={content(markdown, null)} />
-      </DocumentsProvider>,
+      <TestQueryProvider>
+        <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
+          <MarkdownDocument document={content(markdown, null)} />
+        </DocumentsProvider>
+      </TestQueryProvider>,
     );
     const firstId = first.container.querySelector("[data-okhub-block-id]")?.id;
     first.unmount();
     const second = render(
-      <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
-        <MarkdownDocument document={content(markdown, null)} />
-      </DocumentsProvider>,
+      <TestQueryProvider>
+        <DocumentsProvider gateway={new FakeDocumentsGateway()} createId={() => "session-id"}>
+          <MarkdownDocument document={content(markdown, null)} />
+        </DocumentsProvider>
+      </TestQueryProvider>,
     );
     const secondId = second.container.querySelector("[data-okhub-block-id]")?.id;
 

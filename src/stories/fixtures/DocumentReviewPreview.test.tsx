@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { DocumentReviewPreview, type DocumentReviewPreviewProps } from "./DocumentReviewPreview";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.removeItem("okhub.review-panel-width"); });
 function show(props: DocumentReviewPreviewProps = {}) {
-  return render(<DocumentsProvider gateway={new FakeDocumentsGateway()}><DocumentReviewPreview {...props} /></DocumentsProvider>);
+  return render(<TestQueryProvider><DocumentsProvider gateway={new FakeDocumentsGateway()}><DocumentReviewPreview {...props} /></DocumentsProvider></TestQueryProvider>);
 }
 describe("Storybook document review", () => {
   it("reveals only the scrolled region scrollbar and hides it after scrolling stops", () => {

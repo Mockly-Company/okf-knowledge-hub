@@ -10,6 +10,7 @@ import type { DisplayDensity } from "@/features/preferences/display-density";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { DocumentsPage } from "@/pages/DocumentsPage";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 
@@ -90,13 +91,15 @@ function renderSelectedDocument(document = invalidFrontmatterDocument(), localDr
   };
   vi.spyOn(gateway, "readDocument").mockResolvedValue(document);
   render(
-    <PreferencesProvider repository={new FakePreferencesRepository()}>
-      <MemoryRouter>
-        <DocumentsProvider gateway={gateway}>
-          <DocumentsPage />
-        </DocumentsProvider>
-      </MemoryRouter>
-    </PreferencesProvider>,
+    <TestQueryProvider>
+      <PreferencesProvider repository={new FakePreferencesRepository()}>
+        <MemoryRouter>
+          <DocumentsProvider gateway={gateway}>
+            <DocumentsPage />
+          </DocumentsProvider>
+        </MemoryRouter>
+      </PreferencesProvider>
+    </TestQueryProvider>,
   );
   return gateway;
 }
@@ -344,13 +347,15 @@ describe("DocumentReader", () => {
     };
     vi.spyOn(gateway, "readDocument").mockResolvedValue(document);
     render(
-      <PreferencesProvider repository={repository}>
-        <MemoryRouter>
-          <DocumentsProvider gateway={gateway}>
-            <DocumentsPage />
-          </DocumentsProvider>
-        </MemoryRouter>
-      </PreferencesProvider>,
+      <TestQueryProvider>
+        <PreferencesProvider repository={repository}>
+          <MemoryRouter>
+            <DocumentsProvider gateway={gateway}>
+              <DocumentsPage />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>,
     );
     const user = userEvent.setup();
 
@@ -374,13 +379,15 @@ describe("DocumentReader", () => {
     };
     vi.spyOn(gateway, "readDocument").mockResolvedValue(document);
     render(
-      <PreferencesProvider repository={repository}>
-        <MemoryRouter>
-          <DocumentsProvider gateway={gateway}>
-            <DocumentsPage />
-          </DocumentsProvider>
-        </MemoryRouter>
-      </PreferencesProvider>,
+      <TestQueryProvider>
+        <PreferencesProvider repository={repository}>
+          <MemoryRouter>
+            <DocumentsProvider gateway={gateway}>
+              <DocumentsPage />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>,
     );
     const user = userEvent.setup();
 
