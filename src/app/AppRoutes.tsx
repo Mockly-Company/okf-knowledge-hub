@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/patterns/AppShell";
 import { DocumentsPage } from "@/pages/DocumentsPage";
@@ -7,7 +8,12 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { DesignSystemPage } from "@/pages/DesignSystemPage";
 import { WorkspaceGate } from "@/features/workspace-connection/WorkspaceGate";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
+import { useDocuments } from "@/features/documents/DocumentsProvider";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
+import type { AiGateway } from "@/features/ai/AiGateway";
+import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
+import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 function ConnectedAppShell({ documentsGateway }: { documentsGateway: DocumentsGateway }) {
   return (
@@ -17,7 +23,42 @@ function ConnectedAppShell({ documentsGateway }: { documentsGateway: DocumentsGa
   );
 }
 
-export function AppRoutes({ documentsGateway }: { documentsGateway: DocumentsGateway }) {
+// AI 화면을 열기 전에는 터미널 라이브러리를 불러오지 않는다.
+const AiPage = lazy(() =>
+  import("@/pages/AiPage").then((module) => ({ default: module.AiPage })),
+);
+
+const sharedAiGateway = new TauriAiGateway();
+const sharedProjectBoardGateway = new TauriProjectBoardGateway();
+
+function ConnectedAiPage({
+  aiGateway,
+  projectBoardGateway,
+}: {
+  aiGateway: AiGateway;
+  projectBoardGateway: ProjectBoardGateway;
+}) {
+  const { refresh } = useDocuments();
+  return (
+    <Suspense fallback={<p role="status">AI 화면을 불러오는 중…</p>}>
+      <AiPage
+        aiGateway={aiGateway}
+        projectBoardGateway={projectBoardGateway}
+        refreshDocuments={refresh}
+      />
+    </Suspense>
+  );
+}
+
+export function AppRoutes({
+  documentsGateway,
+  aiGateway = sharedAiGateway,
+  projectBoardGateway = sharedProjectBoardGateway,
+}: {
+  documentsGateway: DocumentsGateway;
+  aiGateway?: AiGateway;
+  projectBoardGateway?: ProjectBoardGateway;
+}) {
   return (
     <Routes>
       <Route element={<WorkspaceGate />}>
@@ -27,7 +68,16 @@ export function AppRoutes({ documentsGateway }: { documentsGateway: DocumentsGat
           <Route path="project" element={<ProjectPage />} />
           {/* /work는 /project 별칭. 사이드바 "Ticket" 탭과 같은 화면이다. */}
           <Route path="work" element={<ProjectPage />} />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route
+            path="ai"
+            element={
+              <ConnectedAiPage
+                aiGateway={aiGateway}
+                projectBoardGateway={projectBoardGateway}
+              />
+            }
+          />
+          <Route path="settings" element={<SettingsPage aiGateway={aiGateway} />} />
           <Route path="dev/design-system" element={<DesignSystemPage />} />
         </Route>
       </Route>

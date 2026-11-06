@@ -5,6 +5,7 @@ import {
   Plus,
   Search,
   Settings,
+  Sparkles,
   SquareKanban,
 } from "lucide-react";
 import { useState, type RefObject } from "react";
@@ -25,6 +26,7 @@ const navigationItems = [
   { to: "/documents", label: "Documents", icon: FolderOpen, end: false },
   { to: "/project", label: "Ticket", icon: SquareKanban, end: false },
   { to: "/settings", label: "Settings", icon: Settings, end: false },
+  { to: "/ai", label: "AI", icon: Sparkles, end: false },
 ] as const;
 
 interface AppSidebarProps {
