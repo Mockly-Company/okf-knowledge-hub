@@ -72,6 +72,7 @@ pub fn run() {
                     auth_jobs.clone(),
                 ),
             );
+            app.manage(settings::ai_runner::AiTaskRegistry::default());
             app.manage(
                 state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs)
                     .with_document_storage(
@@ -125,6 +126,14 @@ pub fn run() {
             commands::project_board::list_github_projects,
             settings::commands::get_display_density,
             settings::commands::set_display_density,
+            settings::commands::get_ai_config,
+            settings::commands::set_ai_config,
+            settings::commands::detect_ai_tools,
+            settings::commands::resolve_app_agents_md,
+            settings::commands::resolve_agents_md,
+            settings::commands::create_agents_md,
+            settings::commands::run_ai_task,
+            settings::commands::cancel_ai_task,
             settings::commands::get_workspace_for_project,
             settings::commands::set_workspace_for_project,
             settings::commands::list_remembered_workspaces,

@@ -11,12 +11,15 @@ import { cn } from "@/lib/utils";
 import { BuildInfoPanel } from "@/features/build-info/BuildInfoPanel";
 import type { BuildInfoGateway } from "@/features/build-info/BuildInfoGateway";
 import { createBuildInfoGateway } from "@/infrastructure/build-info/createBuildInfoGateway";
+import { AiSettingsPanel } from "@/features/ai/AiSettingsPanel";
+import type { AiGateway } from "@/features/ai/AiGateway";
 
 const settingsCategories = [
   "외부 연결",
   "문서",
   "작업 방식",
   "화면",
+  "AI 연동",
   "앱 정보",
 ];
 
@@ -46,6 +49,9 @@ function resolveSettingsCategory(value: string | null): string {
   }
   if (key === "display" || key === "screen" || key === "화면") {
     return "화면";
+  }
+  if (key === "ai" || key === "ai 연동" || key === "ai연동") {
+    return "AI 연동";
   }
   if (
     key === "app-info" ||
@@ -97,8 +103,10 @@ const defaultBuildInfoGateway = createBuildInfoGateway();
 
 export function SettingsPage({
   buildInfoGateway = defaultBuildInfoGateway,
+  aiGateway,
 }: {
   buildInfoGateway?: BuildInfoGateway;
+  aiGateway?: AiGateway;
 }) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [activeCategory, setActiveCategory] = useState(readInitialSettingsCategory);
@@ -200,6 +208,8 @@ export function SettingsPage({
         </div>
         ) : activeCategory === "앱 정보" ? (
           <BuildInfoPanel gateway={buildInfoGateway} />
+        ) : activeCategory === "AI 연동" ? (
+          <AiSettingsPanel gateway={aiGateway} />
         ) : (
           <div>
             <SectionHeader
