@@ -314,12 +314,9 @@ export function DocumentsProvider({
     ) {
       return;
     }
-    void queryClient
-      .fetchQuery({
-        queryKey: documentsKeys.validate(sessionId, input.folder, input.fileName),
-        queryFn: () =>
-          gateway.validateDocumentCreation(sessionId, input.folder, input.fileName),
-      })
+    // 파일 생성·삭제 직후의 중복 검사가 뒤집히지 않도록 캐시하지 않는다.
+    void gateway
+      .validateDocumentCreation(sessionId, input.folder, input.fileName)
       .then(
         (validation) => {
           dispatchAuthoringAccepted({

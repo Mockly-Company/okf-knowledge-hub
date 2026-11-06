@@ -27,6 +27,4 @@ export const documentsKeys = {
     [...documentsKeys.session(sessionId), "drafts"] as const,
   recovery: (sessionId: string) =>
     [...documentsKeys.session(sessionId), "recovery"] as const,
-  validate: (sessionId: string, folder: string, fileName: string) =>
-    [...documentsKeys.session(sessionId), "validate", folder, fileName] as const,
 };
