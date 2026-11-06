@@ -4,6 +4,7 @@ use tauri::{Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::settings::ai_runner::{self, AiTaskRegistry, AiTaskStatus, AiTool};
+use crate::settings::ai_terminal::{AiTerminalRegistry, TerminalEvent};
 use crate::settings::model::DisplayDensity;
 use crate::state::AppServices;
 
@@ -192,6 +193,83 @@ pub async fn detect_ai_tools() -> CommandResult<AiToolAvailability> {
     .map_err(|_| ai_blocking_error())
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct AiTerminalSession {
+    pub session_id: String,
+}
+
+#[tauri::command]
+pub async fn start_ai_terminal(
+    app: tauri::AppHandle,
+    state: State<'_, AppServices>,
+    terminals: State<'_, AiTerminalRegistry>,
+    tool: AiTool,
+    cols: u16,
+    rows: u16,
+    on_event: tauri::ipc::Channel<TerminalEvent>,
+) -> CommandResult<AiTerminalSession> {
+    let (command_line, workspace_dir) = prepare_ai_terminal(&state, tool, &app_data_dir(&app)?)?;
+    let session_id = terminals
+        .start(&command_line, &workspace_dir, cols, rows, move |event| {
+            let _ = on_event.send(event);
+        })
+        .map_err(|reason| {
+            AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "AI 터미널을 시작할 수 없습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry)
+            .with_detail("reason", reason)
+        })?;
+    Ok(AiTerminalSession { session_id })
+}
+
+#[tauri::command]
+pub fn write_ai_terminal(
+    terminals: State<'_, AiTerminalRegistry>,
+    session_id: String,
+    data: String,
+) -> bool {
+    terminals.write(&session_id, data.as_bytes())
+}
+
+#[tauri::command]
+pub fn resize_ai_terminal(
+    terminals: State<'_, AiTerminalRegistry>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> bool {
+    terminals.resize(&session_id, cols, rows)
+}
+
+#[tauri::command]
+pub fn stop_ai_terminal(terminals: State<'_, AiTerminalRegistry>, session_id: String) -> bool {
+    terminals.stop(&session_id)
+}
+
+/// 터미널에서 실행할 명령과 폴더를 정한다. 규칙 파일도 이때 새로 쓴다.
+fn prepare_ai_terminal(
+    services: &AppServices,
+    tool: AiTool,
+    app_data_dir: &Path,
+) -> CommandResult<(String, PathBuf)> {
+    let custom_command = services.local_settings.load_ai_cli_command()?;
+    if tool == AiTool::Custom && custom_command.trim().is_empty() {
+        return Err(AppError::new(
+            ErrorCode::LocalSettingsUnavailable,
+            "AI CLI가 설정되지 않았습니다. 설정 → AI 연동에서 등록해 주세요.",
+        ));
+    }
+    let workspace_dir = connected_workspace_dir(&services.local_settings)?;
+    let rules_file = write_rules_file(app_data_dir, &workspace_dir)?;
+    Ok((
+        tool.terminal_command(&custom_command, &rules_file),
+        workspace_dir,
+    ))
+}
+
 fn app_data_dir(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
     app.path().app_data_dir().map_err(|_| {
         AppError::new(
@@ -222,6 +300,31 @@ fn load_ai_rules(app_data_dir: &Path, workspace_dir: &Path) -> CommandResult<Str
         &app_rules,
         project_rules.as_deref(),
     ))
+}
+
+/// 다른 워크스페이스의 터미널이 서로의 규칙을 덮어쓰지 않도록 파일을 나눈다.
+fn rules_file_name(workspace_dir: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    workspace_dir.hash(&mut hasher);
+    format!("AI_SESSION_RULES-{:016x}.md", hasher.finish())
+}
+
+/// 터미널 CLI가 읽을 규칙 파일. 창이 언제 닫힐지 모르므로 고정 경로에 덮어쓴다.
+fn write_rules_file(app_data_dir: &Path, workspace_dir: &Path) -> CommandResult<PathBuf> {
+    let rules = load_ai_rules(app_data_dir, workspace_dir)?;
+    let target = app_data_dir
+        .join("okhub")
+        .join(rules_file_name(workspace_dir));
+    std::fs::write(&target, rules).map_err(|error| {
+        AppError::new(
+            ErrorCode::LocalSettingsUnavailable,
+            "AI 규칙 파일을 만들 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("reason", error.to_string())
+    })?;
+    Ok(ai_runner::shell_path(&target))
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -682,6 +785,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn custom_terminal_rejects_an_unset_cli_before_checking_the_workspace() {
+        let services = AppServices::new(LocalSettingsService::new(MemoryStore::default()));
+
+        let app_data = tempfile::tempdir().unwrap();
+
+        let error = prepare_ai_terminal(&services, AiTool::Custom, app_data.path()).unwrap_err();
+
+        assert_eq!(
+            error.message,
+            "AI CLI가 설정되지 않았습니다. 설정 → AI 연동에서 등록해 주세요."
+        );
+        assert_eq!(
+            error.code,
+            crate::error::ErrorCode::LocalSettingsUnavailable
+        );
+    }
+
+    #[test]
+    fn presets_open_without_any_saved_command_but_need_a_connected_workspace() {
+        let services = AppServices::new(LocalSettingsService::new(MemoryStore::default()));
+        let app_data = tempfile::tempdir().unwrap();
+
+        let error = prepare_ai_terminal(&services, AiTool::Claude, app_data.path()).unwrap_err();
+
+        assert_eq!(error.code, crate::error::ErrorCode::WorkspaceMissing);
+    }
+
     /// 준비된 워크스페이스와 프로젝트 규칙을 가진 설정 서비스.
     fn settings_with_workspace(directory: &Path) -> LocalSettingsService {
         std::fs::create_dir_all(directory.join(".okf")).unwrap();
@@ -695,6 +826,28 @@ mod tests {
         let settings = LocalSettingsService::new(MemoryStore::default());
         settings.set_current(directory).unwrap();
         settings
+    }
+
+    #[test]
+    fn each_workspace_gets_its_own_rules_file() {
+        assert_ne!(
+            rules_file_name(Path::new("workspace-a")),
+            rules_file_name(Path::new("workspace-b"))
+        );
+    }
+
+    #[test]
+    fn terminal_rules_file_contains_hub_and_project_rules() {
+        let workspace = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        resolve_app_agents_md_inner(app_data.path()).unwrap();
+        std::fs::write(workspace.path().join("AGENTS.md"), "# 프로젝트 규칙 표식\n").unwrap();
+
+        let rules_file = write_rules_file(app_data.path(), workspace.path()).unwrap();
+
+        let rules = std::fs::read_to_string(rules_file).unwrap();
+        assert!(rules.contains("프로젝트 규칙 표식"), "{rules}");
+        assert!(rules.contains("OkHub 워크스페이스 작업 규칙"), "{rules}");
     }
 
     #[test]

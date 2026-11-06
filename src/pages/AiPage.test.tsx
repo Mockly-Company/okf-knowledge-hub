@@ -1,10 +1,11 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AiGateway, AiTaskResult } from "@/features/ai/AiGateway";
 import { FakeAiGateway } from "@/test/FakeAiGateway";
+import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { TestQueryProvider, createTestQueryClient } from "@/test/queryTestUtils";
@@ -15,7 +16,10 @@ import {
 } from "@/features/project-board/queryKeys";
 import { AiPage } from "./AiPage";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  FakeTerminalRenderer.created = [];
+});
 
 function renderPage(
   aiGateway: AiGateway,
@@ -28,6 +32,7 @@ function renderPage(
           aiGateway={aiGateway}
           projectBoardGateway={FakeProjectBoardGateway.empty()}
           refreshDocuments={options?.refreshDocuments}
+          terminalRendererFactory={FakeTerminalRenderer.create}
         />
       </MemoryRouter>
     </TestQueryProvider>,
@@ -195,7 +200,116 @@ describe("AiPage", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("hides a tool that is not installed and says so", async () => {
+  it("numbers tabs when the same tool is opened twice", async () => {
+    const user = userEvent.setup();
+    renderPage(new FakeAiGateway());
+
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+    await screen.findByRole("tab", { name: "Claude Code" });
+    await user.click(screen.getByRole("button", { name: "Claude Code" }));
+
+    expect(await screen.findByRole("tab", { name: "Claude Code 2" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Claude Code 2 터미널 닫기" }),
+    ).toBeInTheDocument();
+  });
+
+  it("opens Claude Code inside the app with one click and no setup", async () => {
+    const gateway = new FakeAiGateway();
+    gateway.cliCommand = "";
+    gateway.template = "";
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+
+    await waitFor(() => expect(gateway.terminalStarts).toEqual(["claude"]));
+    expect(await screen.findByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+    const panel = screen.getByRole("tabpanel", { name: "Claude Code" });
+    expect(FakeTerminalRenderer.created[0].parent).toBe(panel.firstElementChild);
+  });
+
+  it("opens Codex inside the app", async () => {
+    const gateway = new FakeAiGateway();
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    const button = await screen.findByRole("button", { name: "Codex" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    await waitFor(() => expect(gateway.terminalStarts).toEqual(["codex"]));
+  });
+
+  it("switches between open terminals without restarting them", async () => {
+    const gateway = new FakeAiGateway();
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+    await screen.findByRole("tab", { name: "Claude Code" });
+    await user.click(screen.getByRole("button", { name: "Codex" }));
+    await screen.findByRole("tab", { name: "Codex" });
+    expect(FakeTerminalRenderer.created[1].parent).not.toBeNull();
+    expect(FakeTerminalRenderer.created[0].parent).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Claude Code" }));
+
+    expect(FakeTerminalRenderer.created[0].parent).not.toBeNull();
+    expect(FakeTerminalRenderer.created[1].parent).toBeNull();
+    expect(gateway.terminalStarts).toEqual(["claude", "codex"]);
+    expect(gateway.terminalStops).toEqual([]);
+  });
+
+  it("closes a terminal and stops its process", async () => {
+    const gateway = new FakeAiGateway();
+    const user = userEvent.setup();
+    renderPage(gateway);
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+
+    await user.click(
+      await screen.findByRole("button", { name: "Claude Code 터미널 닫기" }),
+    );
+
+    await waitFor(() => expect(gateway.terminalStops).toEqual(["session-0"]));
+    expect(screen.queryByRole("tab", { name: "Claude Code" })).toBeNull();
+  });
+
+  it("shows when the process in a terminal has ended", async () => {
+    const gateway = new FakeAiGateway();
+    const user = userEvent.setup();
+    renderPage(gateway);
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+    await screen.findByRole("tab", { name: "Claude Code" });
+
+    act(() => gateway.emitTerminal(0, { kind: "exit", exit_code: 2 }));
+
+    expect(
+      await screen.findByText("터미널이 종료되었습니다 (코드 2)."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a terminal running after leaving and returning to the page", async () => {
+    const gateway = new FakeAiGateway();
+    const user = userEvent.setup();
+    const first = renderPage(gateway);
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+    await screen.findByRole("tab", { name: "Claude Code" });
+
+    first.unmount();
+    expect(FakeTerminalRenderer.created[0].parent).toBeNull();
+    gateway.emitTerminal(0, { kind: "output", data: "다른 화면에 있는 동안" });
+    expect(gateway.terminalStops).toEqual([]);
+    renderPage(gateway);
+
+    expect(await screen.findByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+    expect(FakeTerminalRenderer.created).toHaveLength(1);
+    expect(FakeTerminalRenderer.created[0].parent).not.toBeNull();
+    expect(FakeTerminalRenderer.created[0].written).toContain("다른 화면에 있는 동안");
+  });
+
+  it("disables a tool that is not installed and says so", async () => {
     const gateway = new FakeAiGateway();
     gateway.tools = { claude: true, codex: false };
     renderPage(gateway);
@@ -203,8 +317,8 @@ describe("AiPage", () => {
     expect(
       await screen.findByText("Codex가 설치되어 있지 않습니다."),
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText("Codex로 실행")).toBeNull();
-    expect(screen.getByLabelText("Claude Code로 실행")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Codex" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Claude Code" })).toBeEnabled();
   });
 
   it("offers the custom command only when one is saved", async () => {
@@ -213,7 +327,9 @@ describe("AiPage", () => {
     gateway.template = "";
     renderPage(gateway);
 
+    await screen.findByRole("button", { name: "Claude Code" });
     await screen.findByLabelText("Claude Code로 실행");
+    expect(screen.queryByRole("button", { name: "사용자 지정" })).toBeNull();
     expect(screen.queryByLabelText("사용자 지정으로 실행")).toBeNull();
   });
 
@@ -326,6 +442,24 @@ describe("AiPage", () => {
     expect(await screen.findByRole("button", { name: "취소" })).toBeInTheDocument();
   });
 
+  it("links to settings from the terminal error", async () => {
+    const gateway = new FakeAiGateway();
+    gateway.startTerminal = async () => {
+      throw new Error("AI 터미널을 시작할 수 없습니다.");
+    };
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+
+    expect(
+      await screen.findByText("터미널을 열지 못했습니다"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "설정에서 확인" }),
+    ).toHaveAttribute("href", "/settings");
+  });
+
   it("shows the unsupported guidance when the backend is missing", async () => {
     const failing: AiGateway = {
       getConfig: async () => {
@@ -338,6 +472,18 @@ describe("AiPage", () => {
         throw new Error("아직 지원되지 않습니다");
       },
       cancelTask: async () => {
+        throw new Error("아직 지원되지 않습니다");
+      },
+      startTerminal: async () => {
+        throw new Error("아직 지원되지 않습니다");
+      },
+      writeTerminal: async () => {
+        throw new Error("아직 지원되지 않습니다");
+      },
+      resizeTerminal: async () => {
+        throw new Error("아직 지원되지 않습니다");
+      },
+      stopTerminal: async () => {
         throw new Error("아직 지원되지 않습니다");
       },
       resolveAgentsMd: async () => {

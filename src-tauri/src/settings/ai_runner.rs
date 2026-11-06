@@ -31,6 +31,24 @@ pub enum AiTool {
 }
 
 impl AiTool {
+    /// 터미널에서 대화형으로 띄울 명령. Codex에는 규칙 파일 옵션이 없어 첫 프롬프트로 전달한다.
+    pub fn terminal_command(self, custom_command: &str, rules_file: &Path) -> String {
+        let rules = rules_file.display();
+        match self {
+            AiTool::Claude => format!(
+                "claude --append-system-prompt-file {}",
+                shell_quote(&rules.to_string())
+            ),
+            AiTool::Codex => format!(
+                "codex {}",
+                shell_quote(&format!(
+                    "Read the workspace rules in {rules} and follow them during this session. Then wait for my request."
+                ))
+            ),
+            AiTool::Custom => custom_command.trim().to_owned(),
+        }
+    }
+
     /// 프롬프트를 표준 입력으로 받는 비대화형 명령. 사용자 지정은 템플릿을 쓴다.
     pub fn headless_command(self) -> Option<&'static str> {
         match self {
@@ -371,6 +389,34 @@ mod tests {
         } else {
             "sleep 30"
         }
+    }
+
+    #[test]
+    fn claude_terminal_loads_rules_through_the_system_prompt_file() {
+        assert_eq!(
+            AiTool::Claude.terminal_command("", Path::new("C:\\app data\\rules.md")),
+            format!(
+                "claude --append-system-prompt-file {}",
+                shell_quote("C:\\app data\\rules.md")
+            )
+        );
+    }
+
+    #[test]
+    fn codex_terminal_asks_to_read_rules_in_its_first_prompt() {
+        let command = AiTool::Codex.terminal_command("", Path::new("C:\\app data\\rules.md"));
+        let quote = if cfg!(windows) { '"' } else { '\'' };
+        assert!(command.starts_with(&format!("codex {quote}")), "{command}");
+        assert!(command.contains("C:\\app data\\rules.md"), "{command}");
+        assert!(command.ends_with(quote), "{command}");
+    }
+
+    #[test]
+    fn custom_terminal_keeps_the_arguments_the_user_typed() {
+        assert_eq!(
+            AiTool::Custom.terminal_command("  opencode --model x ", Path::new("rules.md")),
+            "opencode --model x"
+        );
     }
 
     #[test]

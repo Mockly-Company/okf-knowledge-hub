@@ -42,6 +42,7 @@ url = "2"
 unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3.55", features = ["formatting"] }
+portable-pty = "0.9"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"

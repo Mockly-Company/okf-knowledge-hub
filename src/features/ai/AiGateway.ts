@@ -3,6 +3,9 @@
  * - `get_ai_config` {} → `{ command_template: string, cli_command: string }`
  * - `set_ai_config` `{ command_template: string, cli_command: string }`
  * - `detect_ai_tools` {} → `{ claude: boolean, codex: boolean }`
+ * - `start_ai_terminal` `{ tool, cols, rows, onEvent: Channel }` → `{ session_id }`
+ * - `write_ai_terminal` `{ sessionId, data }`, `resize_ai_terminal` `{ sessionId, cols, rows }`,
+ *   `stop_ai_terminal` `{ sessionId }` → `boolean`
  * - `resolve_agents_md` {} → `{ workspace_path, path, content }`
  * - `resolve_app_agents_md` {} → `{ path: string, content: string }`
  * - `create_agents_md` {} → `{ path: string }`
@@ -17,6 +20,10 @@ export interface AiToolAvailability {
   claude: boolean;
   codex: boolean;
 }
+
+export type AiTerminalEvent =
+  | { kind: "output"; data: string }
+  | { kind: "exit"; exit_code: number };
 
 export type AiTaskStatus = "completed" | "cancelled" | "timed_out";
 
@@ -46,6 +53,14 @@ export interface AiGateway {
   getConfig(): Promise<AiConfig>;
   setConfig(command_template: string, cli_command: string): Promise<void>;
   detectTools(): Promise<AiToolAvailability>;
+  startTerminal(
+    tool: AiToolId,
+    size: { cols: number; rows: number },
+    onEvent: (event: AiTerminalEvent) => void,
+  ): Promise<string>;
+  writeTerminal(sessionId: string, data: string): Promise<void>;
+  resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void>;
+  stopTerminal(sessionId: string): Promise<void>;
   resolveAgentsMd(): Promise<AgentsMdResolution>;
   resolveAppAgentsMd(): Promise<AppAgentsMdResolution>;
   createAgentsMd(): Promise<{ path: string }>;

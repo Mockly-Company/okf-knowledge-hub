@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import {
   useIsMutating,
   useMutation,
@@ -16,6 +17,11 @@ import {
 } from "@/components/ui/status-feedback";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { AiGateway, AiTaskResult, AiToolId } from "@/features/ai/AiGateway";
+import { AiTerminalPanel } from "@/features/ai/AiTerminalPanel";
+import {
+  terminalStoreFor,
+  type TerminalRendererFactory,
+} from "@/features/ai/TerminalSessionStore";
 import { aiKeys } from "@/features/ai/queryKeys";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import {
@@ -23,6 +29,7 @@ import {
   projectBoardKeys,
 } from "@/features/project-board/queryKeys";
 import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
+import { createXtermRenderer } from "@/infrastructure/ai/XtermRenderer";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 const sharedAiGateway = new TauriAiGateway();
@@ -54,16 +61,21 @@ export function AiPage({
   projectBoardGateway = sharedProjectGateway,
   /** DocumentsProvider의 refresh. 없으면 생략한다. */
   refreshDocuments,
+  terminalRendererFactory = createXtermRenderer,
 }: {
   aiGateway?: AiGateway;
   projectBoardGateway?: ProjectBoardGateway;
   refreshDocuments?: () => Promise<void>;
+  terminalRendererFactory?: TerminalRendererFactory;
 }) {
+  const terminalStore = terminalStoreFor(aiGateway, terminalRendererFactory);
   const activeProject = useOptionalActiveProject();
   const activeProjectId = activeProject?.activeProjectId ?? null;
   const queryProjectId = activeProject ? activeProjectId : LEGACY_BOARD_ID;
   const queryClient = useQueryClient();
   const [prompt, setPrompt] = useState("");
+  const [openingTool, setOpeningTool] = useState<AiToolId | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
   const [pickedTool, setPickedTool] = useState<AiToolId | null>(null);
 
   const configQuery = useQuery({
@@ -100,6 +112,7 @@ export function AiPage({
     (tool) => !isInstalled(tool),
   );
   const presetTools = (["claude", "codex"] as const).filter(isInstalled);
+  const hasCustomTerminal = Boolean(configQuery.data?.cli_command.trim());
   const hasCustomTask = Boolean(configQuery.data?.command_template.trim());
   const runnableTools: AiToolId[] = hasCustomTask
     ? [...presetTools, "custom"]
@@ -108,6 +121,20 @@ export function AiPage({
     pickedTool !== null && runnableTools.includes(pickedTool)
       ? pickedTool
       : (runnableTools[0] ?? null);
+
+  const openTerminal = async (tool: AiToolId) => {
+    setOpeningTool(tool);
+    setOpenError(null);
+    try {
+      await terminalStore.open(tool);
+    } catch (error) {
+      setOpenError(
+        error instanceof Error ? error.message : "아직 지원되지 않습니다",
+      );
+    } finally {
+      setOpeningTool(null);
+    }
+  };
 
   // 완료 후 보드 동기화 + 문서 새로고침은 최선 노력으로 시도한다.
   // 실패해도 실행 성공 자체는 유지된다.
@@ -182,13 +209,17 @@ export function AiPage({
     }
   };
 
+  const terminalTools: AiToolId[] = hasCustomTerminal
+    ? ["claude", "codex", "custom"]
+    : ["claude", "codex"];
+
   return (
     <section
       className="min-h-full bg-[var(--color-surface)] px-[var(--page-padding-inline)] pt-[var(--page-block-start)] pb-[var(--space-10)]"
       aria-labelledby="ai-title"
     >
       <PageHeader titleId="ai-title" title="AI" />
-      <div
+      <section
         aria-label="컨텍스트 요약"
         className="mt-[var(--space-4)] grid gap-[var(--space-1)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
       >
@@ -206,7 +237,7 @@ export function AiPage({
         <p className="m-0">
           앱 AGENTS.md: {appAgents ? appAgents.path : (appAgentsError ?? "불러오는 중")}
         </p>
-      </div>
+      </section>
       {contextError ? (
         <div className="mt-[var(--space-4)]">
           <StatusFeedback variant="content" tone="error">
@@ -216,6 +247,55 @@ export function AiPage({
         </div>
       ) : null}
       <div className="mt-[var(--space-6)] grid gap-[var(--space-3)]">
+        <div className="grid gap-[var(--space-2)]">
+          <h2 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+            터미널에서 열기
+          </h2>
+          <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+            앱 안 터미널에서 워크스페이스 폴더로 바로 실행합니다. Claude Code와 Codex에는 프로젝트 규칙을 함께 전달합니다.
+          </p>
+          <div className="flex flex-wrap gap-[var(--space-2)]">
+            {terminalTools.map((tool) => (
+              <Button
+                key={tool}
+                type="button"
+                variant="primary"
+                onClick={() => void openTerminal(tool)}
+                disabled={
+                  openingTool !== null ||
+                  contextError !== null ||
+                  (tool !== "custom" && !isInstalled(tool))
+                }
+                loading={openingTool === tool}
+              >
+                {TOOL_LABELS[tool]}
+              </Button>
+            ))}
+          </div>
+          {missingTools.map((tool) => (
+            <p
+              key={tool}
+              className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
+            >
+              {NOT_INSTALLED_MESSAGES[tool]}
+            </p>
+          ))}
+        </div>
+        {openError ? (
+          <StatusFeedback
+            variant="content"
+            tone="error"
+            action={
+              <Button asChild variant="secondary">
+                <Link to="/settings">설정에서 확인</Link>
+              </Button>
+            }
+          >
+            <StatusFeedbackTitle>터미널을 열지 못했습니다</StatusFeedbackTitle>
+            <StatusFeedbackDescription>{openError}</StatusFeedbackDescription>
+          </StatusFeedback>
+        ) : null}
+        <AiTerminalPanel store={terminalStore} labels={TOOL_LABELS} />
         <fieldset className="m-0 grid gap-[var(--space-2)] border-0 p-0">
           <legend className="p-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
             실행 도구
@@ -236,14 +316,6 @@ export function AiPage({
             ))}
           </div>
         </fieldset>
-        {missingTools.map((tool) => (
-          <p
-            key={tool}
-            className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
-          >
-            {NOT_INSTALLED_MESSAGES[tool]}
-          </p>
-        ))}
         <label
           className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]"
           htmlFor="ai-prompt"
