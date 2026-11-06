@@ -35,6 +35,32 @@ function renderPage(
 }
 
 describe("AiPage", () => {
+  it("does not store a synced board under the project selected when the run started", async () => {
+    const user = userEvent.setup();
+    const client = createTestQueryClient();
+    const key = projectBoardKeys.board(LEGACY_BOARD_ID);
+    const before = { issues: [], fetchedAt: "before", skipped: 0, truncated: false };
+    client.setQueryData(key, before);
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <AiPage
+            aiGateway={new FakeAiGateway()}
+            projectBoardGateway={FakeProjectBoardGateway.empty()}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await user.type(await screen.findByLabelText("요청"), "요청");
+    await user.click(screen.getByRole("button", { name: "실행" }));
+
+    await waitFor(() =>
+      expect(client.getQueryState(key)?.isInvalidated).toBe(true),
+    );
+    expect(client.getQueryData(key)).toBe(before);
+  });
+
   it("shows the last run result again after leaving and returning to the page", async () => {
     const user = userEvent.setup();
     const client = createTestQueryClient();

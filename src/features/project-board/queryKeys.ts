@@ -10,6 +10,7 @@ export const LEGACY_BOARD_ID = "legacy";
 export const projectBoardKeys = {
   all: ["projectBoard"] as const,
   linkedProjects: ["projectBoard", "linkedProjects"] as const,
+  boards: ["projectBoard", "board"] as const,
   board: (projectId: string | null) =>
     ["projectBoard", "board", projectId] as const,
 };

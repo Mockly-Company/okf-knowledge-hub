@@ -123,7 +123,10 @@ export function AiSettingsPanel({
         <textarea
           id="ai-command-template"
           value={template}
-          onChange={(event) => setTemplate(event.target.value)}
+          onChange={(event) => {
+            setTemplate(event.target.value);
+            saveMutation.reset();
+          }}
           placeholder={COMMAND_PLACEHOLDER}
           rows={3}
           disabled={isLoading}
@@ -144,7 +147,10 @@ export function AiSettingsPanel({
         <input
           id="ai-cli-command"
           value={cliCommand}
-          onChange={(event) => setCliCommand(event.target.value)}
+          onChange={(event) => {
+            setCliCommand(event.target.value);
+            saveMutation.reset();
+          }}
           placeholder="my-ai-cli"
           disabled={isLoading}
           className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)] font-mono text-[var(--font-meta-size)]"
@@ -190,6 +196,7 @@ export function AiSettingsPanel({
             </p>
             <pre
               aria-label="AGENTS.md 미리보기"
+              tabIndex={0}
               className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
             >
               {previewLines(agentsContent)}
@@ -234,6 +241,7 @@ export function AiSettingsPanel({
             </p>
             <pre
               aria-label="앱 AGENTS.md 미리보기"
+              tabIndex={0}
               className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
             >
               {previewLines(appAgentsContent, 10)}
