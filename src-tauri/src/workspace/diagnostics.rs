@@ -400,7 +400,86 @@ fn diagnose_project_fields(github: Option<&Value>, diagnostics: &mut Vec<Workspa
         ));
         return;
     }
-    let Some(project) = github.get("project") else {
+    diagnose_single_project(github.get("project"), "github.project", diagnostics);
+    if let Some(projects) = github.get("projects") {
+        if projects.is_null() {
+            // 명시적 null은 미지정과 같다.
+        } else if let Some(sequence) = projects.as_sequence() {
+            for (index, entry) in sequence.iter().enumerate() {
+                let base = format!("github.projects[{index}]");
+                if entry.is_null() {
+                    continue;
+                }
+                if !entry.is_mapping() {
+                    diagnostics.push(diagnostic(
+                        WorkspaceDiagnosticCode::GithubProjectTypeInvalid,
+                        base,
+                        "github.projects 항목은 객체여야 합니다.",
+                    ));
+                    continue;
+                }
+                diagnose_required_string(
+                    entry.get("id"),
+                    WorkspaceDiagnosticCode::GithubProjectIdMissing,
+                    WorkspaceDiagnosticCode::GithubProjectIdTypeInvalid,
+                    format!("{base}.id"),
+                    "GitHub Project Node ID가 필요합니다.",
+                    "GitHub Project Node ID는 문자열이어야 합니다.",
+                    true,
+                    diagnostics,
+                );
+                diagnose_required_string(
+                    entry.get("owner"),
+                    WorkspaceDiagnosticCode::GithubProjectOwnerMissing,
+                    WorkspaceDiagnosticCode::GithubProjectOwnerTypeInvalid,
+                    format!("{base}.owner"),
+                    "GitHub Project owner가 필요합니다.",
+                    "GitHub Project owner는 문자열이어야 합니다.",
+                    false,
+                    diagnostics,
+                );
+                match entry.get("number") {
+                    None => diagnostics.push(diagnostic(
+                        WorkspaceDiagnosticCode::GithubProjectNumberMissing,
+                        format!("{base}.number"),
+                        "GitHub Project number가 필요합니다.",
+                    )),
+                    Some(number) if number.as_u64().is_some() => {}
+                    Some(_) => diagnostics.push(diagnostic(
+                        WorkspaceDiagnosticCode::GithubProjectNumberTypeInvalid,
+                        format!("{base}.number"),
+                        "GitHub Project number는 0 이상의 정수여야 합니다.",
+                    )),
+                }
+            }
+        } else {
+            diagnostics.push(diagnostic(
+                WorkspaceDiagnosticCode::GithubProjectTypeInvalid,
+                "github.projects",
+                "github.projects는 배열이어야 합니다.",
+            ));
+        }
+    }
+    if let Some(active) = github
+        .get("active_project_id")
+        .or_else(|| github.get("activeProjectId"))
+    {
+        if !active.is_null() && !matches!(active, Value::String(_)) {
+            diagnostics.push(diagnostic(
+                WorkspaceDiagnosticCode::GithubProjectIdTypeInvalid,
+                "github.active_project_id",
+                "활성 GitHub Project ID는 문자열이어야 합니다.",
+            ));
+        }
+    }
+}
+
+fn diagnose_single_project(
+    project: Option<&Value>,
+    base: &str,
+    diagnostics: &mut Vec<WorkspaceDiagnostic>,
+) {
+    let Some(project) = project else {
         return;
     };
     if project.is_null() {
@@ -409,7 +488,7 @@ fn diagnose_project_fields(github: Option<&Value>, diagnostics: &mut Vec<Workspa
     if !project.is_mapping() {
         diagnostics.push(diagnostic(
             WorkspaceDiagnosticCode::GithubProjectTypeInvalid,
-            "github.project",
+            base,
             "github.project는 객체여야 합니다.",
         ));
         return;
@@ -419,7 +498,7 @@ fn diagnose_project_fields(github: Option<&Value>, diagnostics: &mut Vec<Workspa
         project.get("id"),
         WorkspaceDiagnosticCode::GithubProjectIdMissing,
         WorkspaceDiagnosticCode::GithubProjectIdTypeInvalid,
-        "github.project.id",
+        format!("{base}.id"),
         "GitHub Project Node ID가 필요합니다.",
         "GitHub Project Node ID는 문자열이어야 합니다.",
         true,
@@ -429,7 +508,7 @@ fn diagnose_project_fields(github: Option<&Value>, diagnostics: &mut Vec<Workspa
         project.get("owner"),
         WorkspaceDiagnosticCode::GithubProjectOwnerMissing,
         WorkspaceDiagnosticCode::GithubProjectOwnerTypeInvalid,
-        "github.project.owner",
+        format!("{base}.owner"),
         "GitHub Project owner가 필요합니다.",
         "GitHub Project owner는 문자열이어야 합니다.",
         false,
@@ -438,13 +517,13 @@ fn diagnose_project_fields(github: Option<&Value>, diagnostics: &mut Vec<Workspa
     match project.get("number") {
         None => diagnostics.push(diagnostic(
             WorkspaceDiagnosticCode::GithubProjectNumberMissing,
-            "github.project.number",
+            format!("{base}.number"),
             "GitHub Project number가 필요합니다.",
         )),
         Some(number) if number.as_u64().is_some() => {}
         Some(_) => diagnostics.push(diagnostic(
             WorkspaceDiagnosticCode::GithubProjectNumberTypeInvalid,
-            "github.project.number",
+            format!("{base}.number"),
             "GitHub Project number는 0 이상의 정수여야 합니다.",
         )),
     }

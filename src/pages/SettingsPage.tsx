@@ -5,7 +5,6 @@ import { SectionHeader } from "@/components/patterns/SectionHeader";
 import { Radio } from "@/components/ui/radio";
 import { Button } from "@/components/ui/button";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
-import { WorkspaceSettingsPanel } from "@/features/workspace-connection/components/WorkspaceSettingsPanel";
 import { GitHubAccountPanel } from "@/features/workspace-connection/components/GitHubAccountPanel";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { cn } from "@/lib/utils";
@@ -14,14 +13,68 @@ import type { BuildInfoGateway } from "@/features/build-info/BuildInfoGateway";
 import { createBuildInfoGateway } from "@/infrastructure/build-info/createBuildInfoGateway";
 
 const settingsCategories = [
-  "워크스페이스",
   "외부 연결",
   "문서",
   "작업 방식",
   "화면",
-  "AI 연동",
   "앱 정보",
 ];
+
+/** `#/settings?category=...` 딥링크를 초기 카테고리로 매핑한다. 없으면 기존 기본 "화면". */
+function resolveSettingsCategory(value: string | null): string {
+  if (!value) {
+    return "화면";
+  }
+  const key = value.trim().toLowerCase();
+  if (
+    key === "external" ||
+    key === "external-connection" ||
+    key === "외부 연결" ||
+    key === "외부연결"
+  ) {
+    return "외부 연결";
+  }
+  if (key === "document" || key === "documents" || key === "문서") {
+    return "문서";
+  }
+  if (
+    key === "workflow" ||
+    key === "작업 방식" ||
+    key === "작업방식"
+  ) {
+    return "작업 방식";
+  }
+  if (key === "display" || key === "screen" || key === "화면") {
+    return "화면";
+  }
+  if (
+    key === "app-info" ||
+    key === "appinfo" ||
+    key === "앱 정보" ||
+    key === "앱정보"
+  ) {
+    return "앱 정보";
+  }
+  return "화면";
+}
+
+/**
+ * HashRouter(`#/settings?category=...`) query를 읽는다.
+ * Router 밖(단위 테스트)에서도 기본값으로 동작하도록 hook 없이 hash를 직접 파싱한다.
+ */
+function readInitialSettingsCategory(): string {
+  try {
+    const hash = window.location.hash;
+    const queryIndex = hash.indexOf("?");
+    if (queryIndex === -1) {
+      return "화면";
+    }
+    const params = new URLSearchParams(hash.slice(queryIndex + 1));
+    return resolveSettingsCategory(params.get("category"));
+  } catch {
+    return "화면";
+  }
+}
 
 const options: Array<{
   value: DisplayDensity;
@@ -48,7 +101,7 @@ export function SettingsPage({
   buildInfoGateway?: BuildInfoGateway;
 }) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
-  const [activeCategory, setActiveCategory] = useState("화면");
+  const [activeCategory, setActiveCategory] = useState(readInitialSettingsCategory);
 
   return (
     <section
@@ -85,9 +138,7 @@ export function SettingsPage({
             ))}
           </ul>
         </aside>
-        {activeCategory === "워크스페이스" ? (
-          <WorkspaceSettingsPanel />
-        ) : activeCategory === "외부 연결" ? (
+        {activeCategory === "외부 연결" ? (
           <GitHubAccountPanel />
         ) : activeCategory === "화면" ? (
         <div>

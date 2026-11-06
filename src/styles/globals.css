@@ -250,6 +250,8 @@ select {
   flex-direction: column;
   border-right: 1px solid var(--color-border);
   background: var(--color-canvas);
+  /* 긴 프로젝트 명·문서 경로가 좌우로 넘치지 않게 고정한다. */
+  overflow-x: hidden;
 }
 
 .app-sidebar__brand {

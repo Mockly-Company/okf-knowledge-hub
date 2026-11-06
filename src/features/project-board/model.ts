@@ -83,3 +83,19 @@ export function layerName(layer: BoardLayer): string {
 export function statusName(status: BoardStatus): string {
   return BOARD_STATUSES.find((entry) => entry.id === status)?.name ?? status;
 }
+
+/** GitHub 계정(조직 또는 개인). 프로젝트 목록의 owner 필터 단위. */
+export interface Organization {
+  login: string;
+  type: "organization" | "user";
+}
+
+/**
+ * 연결된 프로젝트 + workspace docs 매핑(읽기전용 표시용).
+ * 쓰기는 workspace 설정 화면이 담당하므로 프론트 보드에서는 표시만 한다.
+ * 백엔드 projects lane이 docs 매핑을 내려주기 전까지는 필드가 없을 수 있다.
+ */
+export type LinkedProject = ResolvedGithubProject & {
+  docsRoot?: string;
+  repoFullName?: string;
+};

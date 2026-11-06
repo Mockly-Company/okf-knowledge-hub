@@ -23,6 +23,12 @@ github:
     owner: "Mockly-Company"
     number: 3
     project_extension: project-value
+  projects:
+    - id: "PVT_kwDOExample"
+      owner: "Mockly-Company"
+      number: 3
+      project_extension: project-value
+  active_project_id: "PVT_kwDOExample"
 extensions:
   mockly:
     owner: platform-team

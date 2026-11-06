@@ -2,7 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
-import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
+import type {
+  RememberedWorkspace,
+  WorkspaceConnectionGateway,
+} from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import type {
   AuthState,
   AuthStatusEvent,
@@ -154,5 +157,25 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
 
   initializeWorkspace(previewId: string): Promise<InitializationResult> {
     return this.invokeCommand("initialize_workspace", { previewId });
+  }
+
+  async getWorkspaceForProject(projectId: string): Promise<string | null> {
+    const result = await this.invokeCommand<{ path: string | null }>(
+      "get_workspace_for_project",
+      { projectId },
+    );
+    return result.path || null;
+  }
+
+  async setWorkspaceForProject(projectId: string, path: string): Promise<void> {
+    await this.invokeCommand("set_workspace_for_project", { projectId, path });
+  }
+
+  async listRememberedWorkspaces(): Promise<RememberedWorkspace[]> {
+    const result = await this.invokeCommand<{ items: RememberedWorkspace[] }>(
+      "list_remembered_workspaces",
+      {},
+    );
+    return result.items;
   }
 }

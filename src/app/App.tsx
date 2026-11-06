@@ -5,17 +5,21 @@ import { createQueryClient } from "@/infrastructure/query/queryClient";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
+import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
+import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import { createDocumentsGateway } from "@/infrastructure/documents/createDocumentsGateway";
 import { createPreferencesRepository } from "@/infrastructure/preferences/createPreferencesRepository";
 import { createWorkspaceConnectionGateway } from "@/infrastructure/workspace/createWorkspaceConnectionGateway";
+import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 import { AppRoutes } from "./AppRoutes";
 
 interface AppProps {
   workspaceGateway?: WorkspaceConnectionGateway;
   preferencesRepository?: PreferencesRepository;
   documentsGateway?: DocumentsGateway;
+  projectBoardGateway?: ProjectBoardGateway;
 }
 
 // React Query devtools는 dev 웹뷰에서만 띄운다. 테스트에서는 DOM 오염 방지.
@@ -36,19 +40,28 @@ export function App({
   workspaceGateway = createWorkspaceConnectionGateway(),
   preferencesRepository = createPreferencesRepository(),
   documentsGateway = createDocumentsGateway(),
+  projectBoardGateway,
 }: AppProps) {
   const [repository] = useState(() => preferencesRepository);
   const [workspace] = useState(() => workspaceGateway);
   const [documents] = useState(() => documentsGateway);
+  const [projectBoard] = useState(
+    () => projectBoardGateway ?? new TauriProjectBoardGateway(),
+  );
   const [queryClient] = useState(() => createQueryClient());
 
   return (
     <QueryClientProvider client={queryClient}>
       <PreferencesProvider repository={repository}>
         <WorkspaceConnectionProvider gateway={workspace}>
-          <HashRouter>
-            <AppRoutes documentsGateway={documents} />
-          </HashRouter>
+          <ActiveProjectProvider
+            projectGateway={projectBoard}
+            workspaceGateway={workspace}
+          >
+            <HashRouter>
+              <AppRoutes documentsGateway={documents} />
+            </HashRouter>
+          </ActiveProjectProvider>
         </WorkspaceConnectionProvider>
       </PreferencesProvider>
       {ReactQueryDevtools && showQueryDevtools ? (

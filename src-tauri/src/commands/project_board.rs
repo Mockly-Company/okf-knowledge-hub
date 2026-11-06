@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
@@ -65,7 +66,7 @@ async fn load_linked_project(
         .config
         .github
         .as_ref()
-        .and_then(|github| github.project.clone())
+        .and_then(|github| github.active_project())
     {
         Some(project) => Ok((repository_root, project, document)),
         None => Err(AppError::new(
@@ -75,6 +76,72 @@ async fn load_linked_project(
         .with_recovery(RecoveryAction::OpenWorkspaceFile)
         .with_detail("path", ".okf/workspace.yml")),
     }
+}
+
+/// 보드 캐시 키. 사람이 읽을 수 있도록 `{owner}-{number}` 기준이다.
+/// 구버전 키(프로젝트 Node ID)는 마이그레이션 읽기용으로만 쓴다.
+fn board_cache_key(project: &GithubProjectRef) -> String {
+    format!("{}-{}", project.owner, project.number)
+}
+
+fn legacy_board_cache_key(project: &GithubProjectRef) -> String {
+    project.id.clone()
+}
+
+async fn load_board_with_migration(
+    cache_root: &std::path::Path,
+    project: &GithubProjectRef,
+) -> CommandResult<ProjectBoard> {
+    let current = load_cached_board(cache_root, &board_cache_key(project)).await?;
+    if !is_empty_board(&current) {
+        return Ok(current);
+    }
+    // 구버전 단일 캐시(id 키)가 있으면 active/첫 프로젝트로 승격된 것처럼 읽는다.
+    let legacy = load_cached_board(cache_root, &legacy_board_cache_key(project)).await?;
+    Ok(legacy)
+}
+
+fn is_empty_board(board: &ProjectBoard) -> bool {
+    board.issues.is_empty() && board.fetched_at.is_none()
+}
+
+async fn persist_workspace_document(
+    repository_root: &std::path::Path,
+    document: &WorkspaceDocument,
+) -> CommandResult<()> {
+    let content = document.to_yaml()?;
+    // 크래시 시 반만 쓰인 workspace.yml이 남지 않도록 임시 파일에 쓰고 교체한다.
+    let tmp_path = repository_root.join(".okf").join(format!(
+        "workspace.yml.tmp.{}.{}",
+        std::process::id(),
+        workspace_tmp_seq()
+    ));
+    if let Err(error) = tokio::fs::write(&tmp_path, content).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "워크스페이스 파일을 저장할 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::OpenWorkspaceFile)
+        .with_detail("path", repository_root.display().to_string())
+        .with_detail("reason", error.to_string()));
+    }
+    if let Err(error) = tokio::fs::rename(
+        &tmp_path,
+        repository_root.join(".okf").join("workspace.yml"),
+    )
+    .await
+    {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "워크스페이스 파일을 저장할 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::OpenWorkspaceFile)
+        .with_detail("path", repository_root.display().to_string())
+        .with_detail("reason", error.to_string()));
+    }
+    Ok(())
 }
 
 /// 연결용 로더. 프로젝트 연결 여부와 무관하게 workspace 문서까지만 읽는다.
@@ -119,13 +186,12 @@ pub async fn get_project_board(
     let _access = state.acquire_authenticated_command().await?;
     // 읽기는 파일시스템을 변경하지 않는다. 디렉터리는 저장 시점에 만든다.
     let (_repository_root, project, _document) = load_linked_project(&state).await?;
-    let project_key = project.id.clone();
     let cache_root = app
         .path()
         .app_data_dir()
         .map_err(|_| settings_unavailable_error())?
         .join(PROJECT_BOARD_CACHE_DIR_NAME);
-    load_cached_board(&cache_root, &project_key).await
+    load_board_with_migration(&cache_root, &project).await
 }
 
 fn service_unavailable() -> AppError {
@@ -141,16 +207,27 @@ fn invalid_project_url_error(reason: String) -> AppError {
 }
 
 /// 로그인한 계정이 볼 수 있는 GitHub Projects 목록을 가져온다.
+/// `owner`가 비어 있지 않으면 해당 owner(조직/사용자 로그인)와 일치하는 것만 돌려준다.
 #[tauri::command]
 pub async fn list_github_projects(
     state: State<'_, AppServices>,
+    owner: Option<String>,
 ) -> CommandResult<GithubProjectList> {
     let _access = state.acquire_authenticated_command().await?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
     let (items, truncated) = github.list_projects().await?;
+    let needle = owner
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
     Ok(GithubProjectList {
         projects: items
             .into_iter()
+            .filter(|item| match needle.as_deref() {
+                Some(want) => item.owner.to_ascii_lowercase() == want,
+                None => true,
+            })
             .map(|item| ResolvedGithubProject {
                 id: item.id,
                 owner: item.owner,
@@ -165,6 +242,45 @@ pub async fn list_github_projects(
             .collect(),
         truncated,
     })
+}
+
+/// 연결된 Project 목록. `list_github_projects`의 `ResolvedGithubProject`와
+/// 직렬화 키가 동일하다(`camelCase`: id/owner/number/title/scope).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedGithubProjectList {
+    pub projects: Vec<ResolvedGithubProject>,
+}
+
+/// 현재 워크스페이스에 연결된 GitHub Projects 목록을 돌려준다.
+/// 미연결 시 빈 배열이 아니라 `workspace_missing` 에러를 돌려준다.
+#[tauri::command]
+pub async fn list_linked_projects(
+    state: State<'_, AppServices>,
+) -> CommandResult<LinkedGithubProjectList> {
+    let (_repository_root, document) = load_workspace_document(&state).await?;
+    let projects = document
+        .config
+        .github
+        .map(|github| github.all_projects())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|project| ResolvedGithubProject {
+            id: project.id,
+            owner: project.owner,
+            number: project.number,
+            title: project
+                .extra
+                .get("title")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .unwrap_or_default()
+                .to_owned(),
+            scope: project.scope.unwrap_or(ProjectOwnerScope::Organization),
+        })
+        .collect();
+    Ok(LinkedGithubProjectList { projects })
 }
 
 /// 붙여넣은 Project URL에서 owner/number를 읽고 GitHub에서 Node ID와 제목을 가져온다.
@@ -232,48 +348,108 @@ pub async fn link_github_project(
         .take()
         .unwrap_or(GithubWorkspaceConfig {
             project: None,
+            projects: Vec::new(),
+            active_project_id: None,
             extra: Default::default(),
         });
-    github.project = Some(GithubProjectRef {
+    // 다중 연결: projects에 upsert하고 active로 지정한다.
+    // 레거시 단일 리더용 `project`도 같은 값으로 동기화해 하위호환을 유지한다.
+    // 제목은 workspace.yml의 extra에 보관해 목록 조회에서 그대로 돌려준다.
+    let mut project_extra: indexmap::IndexMap<String, serde_yaml_ng::Value> = Default::default();
+    let linked_title = project.title.trim();
+    if !linked_title.is_empty() {
+        project_extra.insert(
+            "title".to_owned(),
+            serde_yaml_ng::Value::String(linked_title.to_owned()),
+        );
+    }
+    github.upsert_active(GithubProjectRef {
         id: project.id,
         owner: project.owner,
         number: project.number,
         scope: Some(verified_scope),
-        extra: Default::default(),
+        extra: project_extra,
     });
     document.config.github = Some(github);
-    let content = document.to_yaml()?;
-    // 크래시 시 반만 쓰인 workspace.yml이 남지 않도록 임시 파일에 쓰고 교체한다.
-    let tmp_path = repository_root.join(".okf").join(format!(
-        "workspace.yml.tmp.{}.{}",
-        std::process::id(),
-        workspace_tmp_seq()
-    ));
-    if let Err(error) = tokio::fs::write(&tmp_path, content).await {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(AppError::new(
+    persist_workspace_document(&repository_root, &document).await?;
+    Ok(())
+}
+
+/// 연결된 GitHub Project를 활성 프로젝트로 전환한다.
+#[tauri::command]
+pub async fn set_active_github_project(
+    state: State<'_, AppServices>,
+    project_id: String,
+) -> CommandResult<()> {
+    let _access = state.acquire_authenticated_command().await?;
+    let (repository_root, mut document) = load_workspace_document(&state).await?;
+    let mut github = document.config.github.take().ok_or_else(|| {
+        AppError::new(
             ErrorCode::WorkspaceInvalid,
-            "워크스페이스 파일을 저장할 수 없습니다.",
+            "GitHub Project가 연결되지 않았습니다.",
         )
         .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", repository_root.display().to_string())
-        .with_detail("reason", error.to_string()));
-    }
-    if let Err(error) = tokio::fs::rename(
-        &tmp_path,
-        repository_root.join(".okf").join("workspace.yml"),
-    )
-    .await
-    {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
+        .with_detail("path", ".okf/workspace.yml")
+    })?;
+    if !github.set_active(project_id.trim()) {
         return Err(AppError::new(
             ErrorCode::WorkspaceInvalid,
-            "워크스페이스 파일을 저장할 수 없습니다.",
+            "연결되지 않은 Project입니다. 먼저 연결해 주세요.",
         )
         .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", repository_root.display().to_string())
-        .with_detail("reason", error.to_string()));
+        .with_detail("path", ".okf/workspace.yml"));
     }
+    document.config.github = Some(github);
+    persist_workspace_document(&repository_root, &document).await?;
+    Ok(())
+}
+
+/// 연결된 GitHub Project를 목록에서 제거한다. `project_id`가 비면 활성 프로젝트를 제거한다.
+#[tauri::command]
+pub async fn unlink_github_project(
+    state: State<'_, AppServices>,
+    project_id: Option<String>,
+) -> CommandResult<()> {
+    let _access = state.acquire_authenticated_command().await?;
+    let (repository_root, mut document) = load_workspace_document(&state).await?;
+    let target = match project_id.as_deref().map(str::trim) {
+        Some(id) if !id.is_empty() => id.to_owned(),
+        _ => document
+            .config
+            .github
+            .as_ref()
+            .and_then(|github| github.active_project())
+            .map(|project| project.id)
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "GitHub Project가 연결되지 않았습니다.",
+                )
+                .with_recovery(RecoveryAction::OpenWorkspaceFile)
+                .with_detail("path", ".okf/workspace.yml")
+            })?,
+    };
+    let mut github = document.config.github.take().ok_or_else(|| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "GitHub Project가 연결되지 않았습니다.",
+        )
+        .with_recovery(RecoveryAction::OpenWorkspaceFile)
+        .with_detail("path", ".okf/workspace.yml")
+    })?;
+    if !github.remove_project(&target) {
+        return Err(
+            AppError::new(ErrorCode::WorkspaceInvalid, "연결되지 않은 Project입니다.")
+                .with_recovery(RecoveryAction::OpenWorkspaceFile)
+                .with_detail("path", ".okf/workspace.yml"),
+        );
+    }
+    if github.all_projects().is_empty() {
+        document.config.github = None;
+    } else {
+        document.config.github = Some(github);
+    }
+    persist_workspace_document(&repository_root, &document).await?;
     Ok(())
 }
 
@@ -738,7 +914,7 @@ pub async fn sync_project_board(
         .map_err(|_| settings_unavailable_error())?
         .join(PROJECT_BOARD_CACHE_DIR_NAME);
     // 캐시 저장은 best-effort다. 실패해도 갓 가져온 보드는 반환한다.
-    if let Err(error) = save_cached_board(&cache_root, &project.id, &board).await {
+    if let Err(error) = save_cached_board(&cache_root, &board_cache_key(&project), &board).await {
         eprintln!("warning: failed to persist project board cache: {error:?}");
     }
     Ok(board)

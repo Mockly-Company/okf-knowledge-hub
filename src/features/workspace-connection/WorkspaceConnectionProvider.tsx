@@ -857,6 +857,11 @@ export function WorkspaceConnectionProvider({
   return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;
 }
 
+/** provider 없이 렌더되는 단위 테스트·스토리용. 없으면 null. */
+export function useOptionalWorkspaceConnection(): WorkspaceConnectionContextValue | null {
+  return useContext(WorkspaceConnectionContext);
+}
+
 export function useWorkspaceConnection(): WorkspaceConnectionContextValue {
   const value = useContext(WorkspaceConnectionContext);
   if (!value) throw new Error("useWorkspaceConnection must be used inside WorkspaceConnectionProvider");

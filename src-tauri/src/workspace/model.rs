@@ -62,8 +62,111 @@ pub struct GithubRepositoryRef {
 pub struct GithubWorkspaceConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<GithubProjectRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<GithubProjectRef>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "activeProjectId"
+    )]
+    pub active_project_id: Option<String>,
     #[serde(flatten)]
     pub extra: IndexMap<String, Value>,
+}
+
+impl GithubWorkspaceConfig {
+    /// 모든 연결 프로젝트. 구버전 문서(`project` 단일 필드)도 포함한다.
+    pub fn all_projects(&self) -> Vec<GithubProjectRef> {
+        if self.projects.is_empty() {
+            return self.project.clone().into_iter().collect();
+        }
+        let mut seen = std::collections::HashSet::new();
+        let mut merged = Vec::new();
+        for project in self.projects.iter().cloned() {
+            seen.insert(project.id.clone());
+            merged.push(project);
+        }
+        // 구버전 단일 필드가 목록에 없으면 하위호환용으로 합친다.
+        if let Some(legacy) = self.project.clone() {
+            if seen.insert(legacy.id.clone()) {
+                merged.push(legacy);
+            }
+        }
+        merged
+    }
+
+    /// 보드 조회·동기화 기준이 되는 활성 프로젝트.
+    /// `active_project_id`가 목록에 없거나 비어 있으면 레거시 단일 프로젝트,
+    /// 없으면 목록 첫 항목 순으로 폴백한다.
+    pub fn active_project(&self) -> Option<GithubProjectRef> {
+        let all = self.all_projects();
+        if all.is_empty() {
+            return None;
+        }
+        if let Some(active_id) = self.active_project_id.as_deref() {
+            if let Some(found) = all.iter().find(|project| project.id == active_id).cloned() {
+                return Some(found);
+            }
+        }
+        if let Some(legacy) = self.project.clone() {
+            return Some(legacy);
+        }
+        all.into_iter().next()
+    }
+
+    /// projects에 upsert하고 active로 지정한다. 레거시 `project`도 동기화한다.
+    pub fn upsert_active(&mut self, project: GithubProjectRef) {
+        if let Some(existing) = self.projects.iter_mut().find(|item| item.id == project.id) {
+            *existing = project.clone();
+        } else {
+            self.projects.push(project.clone());
+        }
+        self.active_project_id = Some(project.id.clone());
+        self.project = Some(project);
+    }
+
+    /// 지정 id를 제거한다. active였으면 첫 후보로 폴백하고 레거시도 동기화한다.
+    pub fn remove_project(&mut self, project_id: &str) -> bool {
+        let before = self.projects.len() + usize::from(self.project.is_some());
+        self.projects.retain(|item| item.id != project_id);
+        if self
+            .project
+            .as_ref()
+            .is_some_and(|item| item.id == project_id)
+        {
+            self.project = None;
+        }
+        if self
+            .active_project_id
+            .as_deref()
+            .is_some_and(|id| id == project_id)
+        {
+            self.active_project_id = None;
+        }
+        let removed = before != self.projects.len() + usize::from(self.project.is_some());
+        // active가 비었으면 남은 첫 후보를 승격해 레거시 리더와 일치시킨다.
+        if self.active_project_id.is_none() {
+            if let Some(next) = self.projects.first().cloned() {
+                self.active_project_id = Some(next.id.clone());
+                self.project = Some(next);
+            } else if self.project.is_some() {
+                self.active_project_id = self.project.as_ref().map(|item| item.id.clone());
+            }
+        }
+        removed
+    }
+
+    /// 지정 id를 active로 승격한다. 레거시 `project`도 동기화한다.
+    pub fn set_active(&mut self, project_id: &str) -> bool {
+        let found = self.all_projects();
+        if let Some(next) = found.into_iter().find(|item| item.id == project_id) {
+            self.active_project_id = Some(next.id.clone());
+            self.project = Some(next);
+            true
+        } else {
+            false
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

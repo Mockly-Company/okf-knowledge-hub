@@ -1,13 +1,42 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, type ReactElement } from "react";
+import {
+  cleanup,
+  render as rtlRender,
+  screen,
+  waitFor,
+  within,
+  type RenderOptions,
+  type RenderResult,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
+import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
+import {
+  ActiveProjectProvider,
+  useActiveProject,
+} from "@/features/active-project/ActiveProjectProvider";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
-import type { BoardIssue, ResolvedGithubProject } from "@/features/project-board/model";
+import type {
+  BoardIssue,
+  ProjectBoard,
+  ResolvedGithubProject,
+} from "@/features/project-board/model";
 import { MAX_ISSUE_TREE_DEPTH } from "@/features/project-board/boardUtils";
 import { ProjectPage } from "./ProjectPage";
 
 afterEach(cleanup);
+
+// 이 파일의 모든 렌더는 QueryClient를 제공한다.
+function render(ui: ReactElement, options?: RenderOptions): RenderResult {
+  return rtlRender(ui, {
+    ...options,
+    wrapper: ({ children }) => (
+      <TestQueryProvider>{children}</TestQueryProvider>
+    ),
+  });
+}
 
 function renderProject(board = FakeProjectBoardGateway.empty()) {
   return {
@@ -123,7 +152,7 @@ describe("ProjectPage", () => {
     expect(screen.queryByRole("region", { name: "백엔드 레이어" })).not.toBeInTheDocument();
   });
 
-  it("syncs with GitHub when the refresh button is pressed", async () => {
+  it("loads with a cheap read on mount and syncs with GitHub only on refresh", async () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.withIssues(
       [
@@ -145,6 +174,9 @@ describe("ProjectPage", () => {
     expect(
       gateway.calls.filter((call) => call.method === "getProjectBoard"),
     ).toHaveLength(1);
+    expect(
+      gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+    ).toHaveLength(0);
 
     await user.click(screen.getByRole("button", { name: "새로고침" }));
 
@@ -153,6 +185,9 @@ describe("ProjectPage", () => {
         gateway.calls.filter((call) => call.method === "syncProjectBoard"),
       ).toHaveLength(1),
     );
+    expect(
+      gateway.calls.filter((call) => call.method === "getProjectBoard"),
+    ).toHaveLength(1);
     expect(
       await screen.findByRole("article", { name: "Issue #12 기획서 초안" }),
     ).toBeInTheDocument();
@@ -197,7 +232,7 @@ describe("ProjectPage", () => {
     render(<ProjectPage gateway={counting} />);
 
     expect(
-      await screen.findByText("Project 보드를 불러오지 못했습니다."),
+      await screen.findByText("Project 보드를 불러오지 못했습니다. (원인: offline)"),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("group", { name: "레이어 필터" }),
@@ -206,44 +241,22 @@ describe("ProjectPage", () => {
     await waitFor(() => expect(attempts).toBe(2));
   });
 
-  it("lets users link a project from its URL when none is connected", async () => {
-    const user = userEvent.setup();
+  it("shows the sidebar guidance instead of the link UI when none is connected", async () => {
     const gateway = FakeProjectBoardGateway.unlinked();
     render(<ProjectPage gateway={gateway} />);
 
-    const urlBox = await screen.findByRole("textbox", { name: "Project URL" });
-    await user.type(
-      urlBox,
-      "https://github.com/orgs/Mockly-Company/projects/1",
-    );
-    await user.click(screen.getByRole("button", { name: "불러오기" }));
-
     expect(
-      await screen.findByText("Mockly Board · Mockly-Company #1"),
+      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
     ).toBeInTheDocument();
     expect(
-      gateway.calls.filter((call) => call.method === "resolveGithubProject"),
-    ).toHaveLength(1);
-
-    await user.click(
-      screen.getByRole("button", { name: "이 프로젝트 연결" }),
-    );
-
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "linkGithubProject"),
-      ).toHaveLength(1),
-    );
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "getProjectBoard"),
-      ).toHaveLength(1),
-    );
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "syncProjectBoard"),
-      ).toHaveLength(1),
-    );
+      screen.queryByRole("region", { name: "GitHub Project 연결" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Project URL" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("group", { name: "레이어 필터" }),
+    ).not.toBeInTheDocument();
   });
 
   it("notes items excluded for missing layer or status", async () => {
@@ -274,7 +287,7 @@ describe("ProjectPage", () => {
     const gateway = FakeProjectBoardGateway.unlinked();
     render(<ProjectPage gateway={gateway} />);
 
-    await screen.findByRole("textbox", { name: "Project URL" });
+    await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.");
     expect(
       screen.queryByRole("region", { name: "기획 레이어" }),
     ).not.toBeInTheDocument();
@@ -287,7 +300,7 @@ describe("ProjectPage", () => {
     const gateway = FakeProjectBoardGateway.missingWorkspace();
     render(<ProjectPage gateway={gateway} />);
 
-    await screen.findByRole("textbox", { name: "Project URL" });
+    await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.");
     expect(
       screen.queryByRole("region", { name: "기획 레이어" }),
     ).not.toBeInTheDocument();
@@ -296,43 +309,73 @@ describe("ProjectPage", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("does not fetch the board when the global None(로컬) state is active", async () => {
+    window.localStorage.removeItem("okhub.last-active-project-id");
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 12,
+        title: "로컬에서는 숨겨야 할 이슈",
+        url: "https://example.test/issues/12",
+        layer: "planning",
+        status: "in_progress",
+        children: [],
+        kind: null,
+      },
+    ]);
+    // 조회 가능한 프로젝트가 없으므로 자동 선택이 동작하지 않고 None이 유지된다.
+    gateway.projectList = [];
+    gateway.linkedProjects = [];
+    const workspace = FakeWorkspaceConnectionGateway.connected();
+    render(
+      <ActiveProjectProvider projectGateway={gateway} workspaceGateway={workspace}>
+        <ProjectPage gateway={gateway} />
+      </ActiveProjectProvider>,
+    );
+
+    await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.");
+    expect(
+      gateway.calls.filter((call) => call.method === "getProjectBoard"),
+    ).toHaveLength(0);
+    expect(
+      gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+    ).toHaveLength(0);
+    expect(screen.queryByText("로컬에서는 숨겨야 할 이슈")).toBeNull();
+  });
+
+  it("shows the cause of a string board failure", async () => {
+    const gateway = FakeProjectBoardGateway.empty();
+    vi.spyOn(gateway, "getProjectBoard").mockRejectedValue("연결이 끊어졌습니다");
+    render(<ProjectPage gateway={gateway} />);
+
+    expect(
+      await screen.findByText(
+        "Project 보드를 불러오지 못했습니다. (원인: 연결이 끊어졌습니다)",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("shows a load error instead of the connect UI for a corrupt workspace file", async () => {
     const gateway = FakeProjectBoardGateway.corruptWorkspaceFile();
     render(<ProjectPage gateway={gateway} />);
 
-    await screen.findByText("Project 보드를 불러오지 못했습니다.");
+    await screen.findByText(/^Project 보드를 불러오지 못했습니다./);
     expect(
       screen.queryByRole("textbox", { name: "Project URL" }),
     ).not.toBeInTheDocument();
   });
 
-  it("lets users pick a project from the fetched list", async () => {
-    const user = userEvent.setup();
+  it("shows the sidebar guidance without the legacy link UI", async () => {
     const gateway = FakeProjectBoardGateway.unlinked();
     render(<ProjectPage gateway={gateway} />);
 
-    await screen.findByRole("textbox", { name: "Project URL" });
-    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
-
-    const choice = await screen.findByRole("radio", {
-      name: "Mockly · Mockly-Company #1",
-    });
-    await user.click(choice);
-    await user.click(
-      screen.getByRole("button", { name: "이 프로젝트 연결" }),
-    );
-
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "listGithubProjects")
-          .length,
-      ).toBeGreaterThanOrEqual(1),
-    );
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "linkGithubProject"),
-      ).toHaveLength(1),
-    );
+    expect(
+      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("radio", {
+        name: "Mockly · Mockly-Company #1",
+      }),
+    ).not.toBeInTheDocument();
   });
 
   it("groups layer-less issues into the unassigned swimlane", async () => {
@@ -752,7 +795,7 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("lets linked workspaces switch projects from the list", async () => {
+  it("keeps the board read-only without the project switch UI when linked", async () => {
     const user = userEvent.setup();
     const gateway = FakeProjectBoardGateway.empty();
     render(<ProjectPage gateway={gateway} />);
@@ -760,26 +803,9 @@ describe("ProjectPage", () => {
     expect(
       screen.queryByRole("region", { name: "GitHub Project 연결" }),
     ).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "프로젝트 변경" }));
-    await user.click(screen.getByRole("button", { name: "목록에서 고르기" }));
-
-    const choice = await screen.findByRole("radio", {
-      name: "Mockly · Mockly-Company #1",
-    });
-    await user.click(choice);
-    await user.click(screen.getByRole("button", { name: "이 프로젝트 연결" }));
-
-    await waitFor(() =>
-      expect(
-        gateway.calls.filter((call) => call.method === "linkGithubProject"),
-      ).toHaveLength(1),
-    );
-    await waitFor(() =>
-      expect(
-        screen.queryByRole("region", { name: "GitHub Project 연결" }),
-      ).not.toBeInTheDocument(),
-    );
+    expect(
+      screen.queryByRole("button", { name: "프로젝트 변경" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides done work unless the toggle is off", async () => {
@@ -826,21 +852,233 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("explains why a project URL cannot be resolved", async () => {
-    const user = userEvent.setup();
+  it("shows the sidebar guidance instead of the resolve UI when unconnected", async () => {
     const gateway = FakeProjectBoardGateway.unlinked();
     gateway.resolveResult = new Error("GitHub Project URL 형식을 확인해 주세요.");
     render(<ProjectPage gateway={gateway} />);
 
-    await screen.findByRole("textbox", { name: "Project URL" });
-    await user.type(
-      screen.getByRole("textbox", { name: "Project URL" }),
-      "not a project url",
-    );
-    await user.click(screen.getByRole("button", { name: "불러오기" }));
+    expect(
+      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: "Project URL" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not retry unlinked board errors", async () => {
+    const gateway = FakeProjectBoardGateway.unlinked();
+    render(<ProjectPage gateway={gateway} />);
 
     expect(
-      await screen.findByRole("alert"),
-    ).toHaveTextContent("GitHub Project URL 형식을 확인해 주세요.");
+      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
+    ).toBeInTheDocument();
+    // 첫 재시도 타이머(1s)가 지나도 추가 호출이 없어야 한다.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    expect(
+      gateway.calls.filter((call) => call.method === "getProjectBoard"),
+    ).toHaveLength(1);
+    expect(
+      gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+    ).toHaveLength(0);
+  });
+});
+
+describe("ProjectPage project switching", () => {
+  const alpha: ResolvedGithubProject = {
+    id: "PVT_alpha",
+    owner: "Mockly-Company",
+    number: 1,
+    title: "Alpha",
+    scope: "organization",
+  };
+  const beta: ResolvedGithubProject = {
+    id: "PVT_beta",
+    owner: "Mockly-Company",
+    number: 2,
+    title: "Beta",
+    scope: "organization",
+  };
+
+  function boardWith(title: string, url: string): ProjectBoard {
+    return {
+      issues: [
+        {
+          number: 1,
+          title,
+          url,
+          layer: "planning",
+          status: "in_progress",
+          children: [],
+          kind: null,
+        },
+      ],
+      fetchedAt: null,
+      skipped: 0,
+      truncated: false,
+    };
+  }
+
+  function ProjectSwitcher() {
+    const { selectProject, clearActiveProject } = useActiveProject();
+    return (
+      <div>
+        <button type="button" onClick={() => void selectProject(alpha.id)}>
+          switch-to-alpha
+        </button>
+        <button type="button" onClick={() => void selectProject(beta.id)}>
+          switch-to-beta
+        </button>
+        <button type="button" onClick={() => clearActiveProject()}>
+          clear-project
+        </button>
+      </div>
+    );
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  /** 보드 조회를 지연시켜 전환 중간 상태를 관찰한다. Alpha까지 로드 후 반환. */
+  async function renderWithDeferredBoard() {
+    const gateway = FakeProjectBoardGateway.empty();
+    gateway.linkedProjects = [alpha, beta];
+    const releases: Array<(board: ProjectBoard) => void> = [];
+    gateway.getProjectBoard = async () => {
+      gateway.calls.push({ method: "getProjectBoard" });
+      return new Promise<ProjectBoard>((resolve) => {
+        releases.push(resolve);
+      });
+    };
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    render(
+      <ActiveProjectProvider
+        projectGateway={gateway}
+        workspaceGateway={workspaceGateway}
+      >
+        <ProjectSwitcher />
+        <ProjectPage gateway={gateway} />
+      </ActiveProjectProvider>,
+    );
+
+    expect(
+      await screen.findByText('"Alpha" 보드 가져오는 중'),
+    ).toBeInTheDocument();
+    await act(async () => {
+      releases[0](boardWith("Alpha 작업", "https://example.test/alpha"));
+    });
+    await screen.findByRole("article", { name: "단일 항목 #1 Alpha 작업" });
+    return { gateway, releases };
+  }
+
+  it("shows the switching status and replaces the board on project change", async () => {
+    const user = userEvent.setup();
+    const { gateway, releases } = await renderWithDeferredBoard();
+
+    await user.click(screen.getByRole("button", { name: "switch-to-beta" }));
+
+    // 이전 보드를 그대로 두지 않고 가져오는 중 UI를 보여준다.
+    expect(
+      await screen.findByText('"Beta" 보드 가져오는 중'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: "단일 항목 #1 Alpha 작업" }),
+    ).toBeNull();
+
+    await act(async () => {
+      releases[1](boardWith("Beta 작업", "https://example.test/beta"));
+    });
+
+    expect(
+      await screen.findByRole("article", { name: "단일 항목 #1 Beta 작업" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: "단일 항목 #1 Alpha 작업" }),
+    ).toBeNull();
+    expect(
+      gateway.calls.filter((call) => call.method === "getProjectBoard"),
+    ).toHaveLength(2);
+  });
+
+  it("reuses the cached board when switching back without refetching", async () => {
+    const user = userEvent.setup();
+    const { gateway, releases } = await renderWithDeferredBoard();
+
+    await user.click(screen.getByRole("button", { name: "switch-to-beta" }));
+    await screen.findByText('"Beta" 보드 가져오는 중');
+    await act(async () => {
+      releases[1](boardWith("Beta 작업", "https://example.test/beta"));
+    });
+    await screen.findByRole("article", { name: "단일 항목 #1 Beta 작업" });
+
+    await user.click(screen.getByRole("button", { name: "switch-to-alpha" }));
+
+    // 캐시 적중: 세 번째 조회 없이 Alpha 보드가 바로 보인다.
+    expect(
+      await screen.findByRole("article", { name: "단일 항목 #1 Alpha 작업" }),
+    ).toBeInTheDocument();
+    expect(
+      gateway.calls.filter((call) => call.method === "getProjectBoard"),
+    ).toHaveLength(2);
+  });
+
+  it("syncs when switching to a project whose cached board is empty", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.empty();
+    gateway.linkedProjects = [alpha, beta];
+    gateway.boardsByProjectId.set(
+      alpha.id,
+      boardWith("Alpha 작업", "https://example.test/alpha"),
+    );
+    gateway.board = boardWith("Beta 작업", "https://example.test/beta");
+    const realGet = gateway.getProjectBoard.bind(gateway);
+    gateway.getProjectBoard = async () => {
+      if (gateway.activeProjectId === beta.id) {
+        gateway.calls.push({ method: "getProjectBoard" });
+        return { issues: [], fetchedAt: null, skipped: 0, truncated: false };
+      }
+      return realGet();
+    };
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    render(
+      <ActiveProjectProvider
+        projectGateway={gateway}
+        workspaceGateway={workspaceGateway}
+      >
+        <ProjectSwitcher />
+        <ProjectPage gateway={gateway} />
+      </ActiveProjectProvider>,
+    );
+
+    await screen.findByRole("article", { name: "단일 항목 #1 Alpha 작업" });
+    await user.click(screen.getByRole("button", { name: "switch-to-beta" }));
+
+    expect(
+      await screen.findByRole("article", { name: "단일 항목 #1 Beta 작업" }),
+    ).toBeInTheDocument();
+    expect(
+      gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+    ).toHaveLength(1);
+  });
+
+  it("shows the unlinked guidance when cleared back to local", async () => {
+    const user = userEvent.setup();
+    await renderWithDeferredBoard();
+
+    await user.click(screen.getByRole("button", { name: "clear-project" }));
+
+    expect(
+      await screen.findByText(
+        "프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: "단일 항목 #1 Alpha 작업" }),
+    ).toBeNull();
   });
 });

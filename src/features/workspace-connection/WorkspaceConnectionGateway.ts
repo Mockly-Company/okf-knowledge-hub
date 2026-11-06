@@ -16,6 +16,11 @@ import type {
   WorkspaceInspection,
 } from "./types";
 
+export interface RememberedWorkspace {
+  projectId: string;
+  path: string;
+}
+
 export interface WorkspaceConnectionGateway {
   getCurrentWorkspace(): Promise<CurrentWorkspaceState>;
   getAuthState(): Promise<AuthState>;
@@ -42,4 +47,11 @@ export interface WorkspaceConnectionGateway {
   ): Promise<ConnectedWorkspace>;
   previewInitialization(input: PreviewInitializationInput): Promise<InitializationPreview>;
   initializeWorkspace(previewId: string): Promise<InitializationResult>;
+  /**
+   * 프로젝트 전환 시 docs 저장소 매핑 기억/복원용.
+   * 백엔드 lane이 없으면 Tauri 게이트웨이가 catch → 로컬 폴백한다.
+   */
+  getWorkspaceForProject(projectId: string): Promise<string | null>;
+  setWorkspaceForProject(projectId: string, path: string): Promise<void>;
+  listRememberedWorkspaces(): Promise<RememberedWorkspace[]>;
 }

@@ -9,7 +9,6 @@ const meta = { id: "pages-settingspage", title: "화면/설정", component: Sett
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const Display: Story = {};
-export const Workspace: Story = { play: async ({ canvas, userEvent }) => { await userEvent.click(await canvas.findByRole("button", { name: "워크스페이스" })); await expect(canvas.getByRole("heading", { name: "워크스페이스" })).toBeVisible(); } };
 export const Connections: Story = { play: async ({ canvas, userEvent }) => { await userEvent.click(await canvas.findByRole("button", { name: "외부 연결" })); await expect(canvas.getByRole("button", { name: "로그아웃" })).toBeVisible(); } };
 export const LogoutConfirmation: Story = { play: async ({ canvas, userEvent }) => { await userEvent.click(await canvas.findByRole("button", { name: "외부 연결" })); await userEvent.click(await canvas.findByRole("button", { name: "로그아웃" })); await waitFor(() => expect(screen.getByRole("alertdialog")).toBeVisible()); } };
 export const AppInformation: Story = { play: async ({ canvas, userEvent }) => { await userEvent.click(await canvas.findByRole("button", { name: "앱 정보" })); await expect(await canvas.findByText("system keychain")).toBeVisible(); } };

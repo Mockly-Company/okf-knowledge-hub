@@ -1,4 +1,7 @@
-import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
+import type {
+  RememberedWorkspace,
+  WorkspaceConnectionGateway,
+} from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import type {
   AppError,
   AuthState,
@@ -120,6 +123,18 @@ export class UnavailableWorkspaceConnectionGateway
   }
 
   initializeWorkspace(_previewId: string): Promise<InitializationResult> {
+    return unavailable();
+  }
+
+  getWorkspaceForProject(_projectId: string): Promise<string | null> {
+    return unavailable();
+  }
+
+  setWorkspaceForProject(_projectId: string, _path: string): Promise<void> {
+    return unavailable();
+  }
+
+  listRememberedWorkspaces(): Promise<RememberedWorkspace[]> {
     return unavailable();
   }
 }

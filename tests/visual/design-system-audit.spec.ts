@@ -9,7 +9,6 @@ const screens = [
   ["pages-homepage--default", "#home-title"],
   ["pages-projectpage--default", '[aria-label="계층 보기"]'],
   ["pages-settingspage--display", "fieldset"],
-  ["pages-settingspage--workspace", "dl"],
   ["pages-settingspage--connections", ".github-account-card"],
   ["pages-settingspage--app-information", "dl"],
   ["pages-settingspage--logout-confirmation", '[role="alertdialog"]'],

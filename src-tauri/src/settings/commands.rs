@@ -1,8 +1,27 @@
+use std::path::Path;
+
 use tauri::State;
 
-use crate::error::CommandResult;
+use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::settings::model::DisplayDensity;
 use crate::state::AppServices;
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct WorkspaceForProject {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RememberedWorkspaceItem {
+    pub project_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct RememberedWorkspaceList {
+    pub items: Vec<RememberedWorkspaceItem>,
+}
 
 #[tauri::command]
 pub fn get_display_density(state: State<'_, AppServices>) -> CommandResult<DisplayDensity> {
@@ -23,6 +42,76 @@ fn get_display_density_inner(services: &AppServices) -> CommandResult<DisplayDen
 
 fn set_display_density_inner(services: &AppServices, density: DisplayDensity) -> CommandResult<()> {
     services.local_settings.set_display_density(density)
+}
+
+#[tauri::command]
+pub fn get_workspace_for_project(
+    state: State<'_, AppServices>,
+    project_id: String,
+) -> CommandResult<WorkspaceForProject> {
+    if project_id.trim().is_empty() {
+        return Ok(WorkspaceForProject { path: None });
+    }
+    let path = state
+        .local_settings
+        .get_workspace_for_project(project_id.trim())?
+        .and_then(|path| path.to_str().map(str::to_owned));
+    Ok(WorkspaceForProject { path })
+}
+
+#[tauri::command]
+pub fn set_workspace_for_project(
+    state: State<'_, AppServices>,
+    project_id: String,
+    path: String,
+) -> CommandResult<()> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::LocalSettingsUnavailable,
+            "프로젝트를 지정해 주세요.",
+        )
+        .with_recovery(RecoveryAction::Retry));
+    }
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::LocalSettingsUnavailable,
+            "선택한 폴더가 존재하지 않습니다.",
+        )
+        .with_recovery(RecoveryAction::ChooseAnotherDirectory));
+    }
+    // 디렉터리 존재 여부까지만 검사한다. workspace.yml 유무는 검사하지 않는다.
+    let candidate = Path::new(path);
+    if !candidate.is_dir() && candidate.canonicalize().is_err() {
+        return Err(AppError::new(
+            ErrorCode::LocalSettingsUnavailable,
+            "선택한 폴더가 존재하지 않습니다.",
+        )
+        .with_recovery(RecoveryAction::ChooseAnotherDirectory)
+        .with_detail("path", path.to_owned()));
+    }
+    state
+        .local_settings
+        .set_workspace_for_project(project_id, candidate)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_remembered_workspaces(
+    state: State<'_, AppServices>,
+) -> CommandResult<RememberedWorkspaceList> {
+    let mut items: Vec<RememberedWorkspaceItem> = state
+        .local_settings
+        .list_remembered_workspaces()?
+        .into_iter()
+        .map(|(project_id, path)| RememberedWorkspaceItem {
+            project_id,
+            path: path.display().to_string(),
+        })
+        .collect();
+    items.sort_by(|a, b| a.project_id.cmp(&b.project_id));
+    Ok(RememberedWorkspaceList { items })
 }
 
 #[cfg(test)]

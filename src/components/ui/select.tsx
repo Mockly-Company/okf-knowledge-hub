@@ -104,7 +104,10 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
             className,
           )}
         >
-          <SelectPrimitive.Value placeholder={placeholder} />
+          <SelectPrimitive.Value
+            placeholder={placeholder}
+            className="min-w-0 flex-1 truncate text-left"
+          />
           <SelectPrimitive.Icon asChild>
             <ChevronDown aria-hidden="true" className={cn("size-[var(--icon-size)] shrink-0 transition-transform duration-[var(--motion-control-duration)] ease-[var(--motion-control-easing)] motion-reduce:transition-none", open && "rotate-180")} strokeWidth={1.75} />
           </SelectPrimitive.Icon>
