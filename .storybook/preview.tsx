@@ -52,7 +52,7 @@ const preview: Preview = {
 
       return (
         <DensityRoot density={displayDensity}>
-          <QueryRoot>
+          <QueryRoot key={context.id}>
             <Story />
           </QueryRoot>
         </DensityRoot>

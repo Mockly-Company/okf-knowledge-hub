@@ -23,11 +23,14 @@ const showQueryDevtools =
   import.meta.env.DEV &&
   (typeof process === "undefined" || !process.env.VITEST);
 
-const ReactQueryDevtools = lazy(() =>
-  import("@tanstack/react-query-devtools").then((module) => ({
-    default: module.ReactQueryDevtools,
-  })),
-);
+// 프로덕션 빌드에서 동적 import까지 사라지도록 DEV로 직접 분기한다.
+const ReactQueryDevtools = import.meta.env.DEV
+  ? lazy(() =>
+      import("@tanstack/react-query-devtools").then((module) => ({
+        default: module.ReactQueryDevtools,
+      })),
+    )
+  : null;
 
 export function App({
   workspaceGateway = createWorkspaceConnectionGateway(),
@@ -48,7 +51,7 @@ export function App({
           </HashRouter>
         </WorkspaceConnectionProvider>
       </PreferencesProvider>
-      {showQueryDevtools ? (
+      {ReactQueryDevtools && showQueryDevtools ? (
         <Suspense fallback={null}>
           <ReactQueryDevtools initialIsOpen={false} />
         </Suspense>

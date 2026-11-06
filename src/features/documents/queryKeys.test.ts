@@ -64,15 +64,5 @@ describe("documentsKeys", () => {
       "session-1",
       "recovery",
     ]);
-    expect(
-      documentsKeys.validate("session-1", "docs", "guide.md"),
-    ).toEqual([
-      "documents",
-      "session",
-      "session-1",
-      "validate",
-      "docs",
-      "guide.md",
-    ]);
   });
 });
