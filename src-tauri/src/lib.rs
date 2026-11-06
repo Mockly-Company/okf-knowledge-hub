@@ -73,6 +73,7 @@ pub fn run() {
                 ),
             );
             app.manage(settings::ai_runner::AiTaskRegistry::default());
+            app.manage(settings::ai_terminal::AiTerminalRegistry::default());
             app.manage(
                 state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs)
                     .with_document_storage(
@@ -129,6 +130,10 @@ pub fn run() {
             settings::commands::get_ai_config,
             settings::commands::set_ai_config,
             settings::commands::detect_ai_tools,
+            settings::commands::start_ai_terminal,
+            settings::commands::write_ai_terminal,
+            settings::commands::resize_ai_terminal,
+            settings::commands::stop_ai_terminal,
             settings::commands::resolve_app_agents_md,
             settings::commands::resolve_agents_md,
             settings::commands::create_agents_md,

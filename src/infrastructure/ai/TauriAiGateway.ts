@@ -1,9 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
   AgentsMdResolution,
   AiConfig,
   AiGateway,
   AiTaskResult,
+  AiTerminalEvent,
   AiToolAvailability,
   AiToolId,
   AppAgentsMdResolution,
@@ -43,9 +44,15 @@ function withBackendMessage(error: unknown): Error {
   return unsupported();
 }
 
+interface TerminalChannel {
+  onmessage: (event: AiTerminalEvent) => void;
+}
+
 export class TauriAiGateway implements AiGateway {
   constructor(
     private readonly invokeCommand: InvokeDesktop = invokeDesktop,
+    private readonly createChannel: () => TerminalChannel = () =>
+      new Channel<AiTerminalEvent>(),
   ) {}
 
   async getConfig(): Promise<AiConfig> {
@@ -83,6 +90,44 @@ export class TauriAiGateway implements AiGateway {
     } catch (error) {
       throw withBackendMessage(error);
     }
+  }
+
+  async startTerminal(
+    tool: AiToolId,
+    size: { cols: number; rows: number },
+    onEvent: (event: AiTerminalEvent) => void,
+  ): Promise<string> {
+    const channel = this.createChannel();
+    channel.onmessage = onEvent;
+    try {
+      const result = await this.invokeCommand<{ session_id: string }>(
+        "start_ai_terminal",
+        { tool, cols: size.cols, rows: size.rows, onEvent: channel },
+      );
+      return result.session_id;
+    } catch (error) {
+      throw withBackendMessage(error);
+    }
+  }
+
+  async writeTerminal(sessionId: string, data: string): Promise<void> {
+    await this.invokeCommand<boolean>("write_ai_terminal", { sessionId, data });
+  }
+
+  async resizeTerminal(
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    await this.invokeCommand<boolean>("resize_ai_terminal", {
+      sessionId,
+      cols,
+      rows,
+    });
+  }
+
+  async stopTerminal(sessionId: string): Promise<void> {
+    await this.invokeCommand<boolean>("stop_ai_terminal", { sessionId });
   }
 
   async resolveAgentsMd(): Promise<AgentsMdResolution> {

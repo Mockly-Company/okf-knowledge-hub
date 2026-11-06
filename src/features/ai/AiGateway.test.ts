@@ -22,6 +22,14 @@ describe("FakeAiGateway", () => {
     });
   });
 
+  it("records which tool started a terminal", async () => {
+    const gateway = new FakeAiGateway();
+    await expect(
+      gateway.startTerminal("claude", { cols: 80, rows: 24 }, () => {}),
+    ).resolves.toBe("session-0");
+    expect(gateway.terminalStarts).toEqual(["claude"]);
+  });
+
   it("records runs and returns a fake result", async () => {
     const gateway = new FakeAiGateway();
     const result = await gateway.runTask("이슈 생성해줘", "codex");

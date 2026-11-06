@@ -3,6 +3,7 @@ import type {
   AiConfig,
   AiGateway,
   AiTaskResult,
+  AiTerminalEvent,
   AiToolAvailability,
   AiToolId,
   AppAgentsMdResolution,
@@ -27,6 +28,17 @@ export class FakeAiGateway implements AiGateway {
   readonly creates: string[] = [];
   readonly runs: string[] = [];
   readonly sets: Array<{ command_template: string; cli_command: string }> = [];
+  /** startTerminal 호출 기록. 각 항목은 연 도구다. */
+  readonly terminalStarts: AiToolId[] = [];
+  readonly terminalWrites: Array<{ sessionId: string; data: string }> = [];
+  readonly terminalResizes: Array<{
+    sessionId: string;
+    cols: number;
+    rows: number;
+  }> = [];
+  readonly terminalStops: string[] = [];
+  private readonly terminalListeners: Array<(event: AiTerminalEvent) => void> =
+    [];
   /** runTask에 전달된 도구 기록. runs와 같은 순서다. */
   readonly runTools: AiToolId[] = [];
   tools: AiToolAvailability = { claude: true, codex: true };
@@ -52,6 +64,38 @@ export class FakeAiGateway implements AiGateway {
 
   async detectTools(): Promise<AiToolAvailability> {
     return this.tools;
+  }
+
+  async startTerminal(
+    tool: AiToolId,
+    _size: { cols: number; rows: number },
+    onEvent: (event: AiTerminalEvent) => void,
+  ): Promise<string> {
+    const index = this.terminalStarts.length;
+    this.terminalStarts.push(tool);
+    this.terminalListeners.push(onEvent);
+    return `session-${index}`;
+  }
+
+  /** index번째로 시작한 터미널에 백엔드 이벤트를 보낸다. */
+  emitTerminal(index: number, event: AiTerminalEvent): void {
+    this.terminalListeners[index](event);
+  }
+
+  async writeTerminal(sessionId: string, data: string): Promise<void> {
+    this.terminalWrites.push({ sessionId, data });
+  }
+
+  async resizeTerminal(
+    sessionId: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
+    this.terminalResizes.push({ sessionId, cols, rows });
+  }
+
+  async stopTerminal(sessionId: string): Promise<void> {
+    this.terminalStops.push(sessionId);
   }
 
   async resolveAgentsMd(): Promise<AgentsMdResolution> {
