@@ -117,14 +117,11 @@ export function AiPage({
     if (queryProjectId !== null) {
       attempted += 1;
       try {
-        // AI 실행이 보드를 바꿨을 수 있으므로 캐시를 먼저 무효화한다.
-        // 무효화 없이 fetchQuery만 하면 신선한 캐시가 그대로 반환된다.
+        // 실행 중에 프로젝트가 바뀌었을 수 있다. 동기화는 백엔드의 현재 활성
+        // 프로젝트에 적용되므로 결과를 시작 시점의 키에 넣지 않고 다시 읽게 한다.
+        await projectBoardGateway.syncProjectBoard();
         await queryClient.invalidateQueries({
-          queryKey: projectBoardKeys.board(queryProjectId),
-        });
-        await queryClient.fetchQuery({
-          queryKey: projectBoardKeys.board(queryProjectId),
-          queryFn: () => projectBoardGateway.syncProjectBoard(),
+          queryKey: projectBoardKeys.boards,
         });
         succeeded += 1;
       } catch {
