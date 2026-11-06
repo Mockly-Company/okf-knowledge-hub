@@ -559,6 +559,10 @@ describe("DocumentsProvider", () => {
     } else {
       await waitFor(() => expect(screen.getByTestId("editor-path")).toHaveTextContent("none"));
       expect(screen.getByTestId("selected")).toHaveTextContent("docs/api.md");
+      // fetchQuery는 조회를 한 틱 뒤에 시작한다.
+      await waitFor(() =>
+        expect(gateway.calls.some(call => call.method === "readDocument")).toBe(true),
+      );
       const saveIndex = gateway.calls.findIndex(call => call.method === "saveDocumentDraft");
       const readIndex = gateway.calls.findIndex(call => call.method === "readDocument");
       expect(saveIndex).toBeGreaterThanOrEqual(0);
