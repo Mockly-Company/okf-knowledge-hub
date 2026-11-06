@@ -199,6 +199,126 @@ describe("TauriProjectBoardGateway", () => {
     expect(list.truncated).toBe(true);
   });
 
+  it("propagates set_active failures instead of silently keeping the old project", async () => {
+    const invoke = async <T>(): Promise<T> => {
+      throw new Error("연결되지 않은 Project입니다. 먼저 연결해 주세요.");
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    await expect(gateway.setActiveProject("PVT_kwDOExample")).rejects.toThrow(
+      "연결되지 않은 Project입니다. 먼저 연결해 주세요.",
+    );
+  });
+
+  it("treats a missing set_active command as an old backend and resolves", async () => {
+    // 실행 중인 백엔드가 멀티프로젝트 명령 이전 버전이면 invoke가 실패한다.
+    // link가 이미 active를 지정하므로 이 경우만 조용히 넘어간다.
+    const invoke = async <T>(): Promise<T> => {
+      throw "Command set_active_github_project not found";
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    await expect(
+      gateway.setActiveProject("PVT_kwDOExample"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("treats a release-mode ACL rejection of set_active as an old backend", async () => {
+    // 릴리스 빌드에서는 "not allowed by ACL" 형태로 거부된다. 명령명을
+    // 포함한 거부만 구버전으로 보고, 그 외 사유는 계속 전파한다.
+    const invoke = async <T>(): Promise<T> => {
+      throw "Command set_active_github_project not allowed by ACL";
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    await expect(
+      gateway.setActiveProject("PVT_kwDOExample"),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not turn a failed owner search into an unfiltered list", async () => {
+    const calls: unknown[] = [];
+    const gateway = new TauriProjectBoardGateway(async <T>(_command: string, args?: unknown): Promise<T> => {
+      calls.push(args);
+      throw { code: "github_auth_required" };
+    });
+
+    await expect(gateway.listGithubProjects("Mockly-Company")).rejects.toEqual({
+      code: "github_auth_required",
+    });
+    expect(calls).toEqual([{ owner: "Mockly-Company" }]);
+  });
+
+  it("propagates string failures of set_active that are not a missing command", async () => {
+    const invoke = async <T>(): Promise<T> => {
+      throw "some IPC failure without command name";
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    await expect(gateway.setActiveProject("PVT_kwDOExample")).rejects.toBe(
+      "some IPC failure without command name",
+    );
+  });
+
+  it("propagates unlink failures unless the command is missing", async () => {
+    const failing = new TauriProjectBoardGateway(async <T>(): Promise<T> => {
+      throw { message: "저장 실패" };
+    });
+    await expect(failing.unlinkGithubProject("id")).rejects.toEqual({
+      message: "저장 실패",
+    });
+
+    const oldBackend = new TauriProjectBoardGateway(async <T>(): Promise<T> => {
+      throw "unlink_github_project not allowed. Command not found";
+    });
+    await expect(oldBackend.unlinkGithubProject("id")).resolves.toBeUndefined();
+  });
+
+  it("propagates linked project list failures instead of reporting an empty list", async () => {
+    const gateway = new TauriProjectBoardGateway(async <T>(): Promise<T> => {
+      throw { code: "workspace_missing" };
+    });
+
+    await expect(gateway.listLinkedProjects()).rejects.toEqual({
+      code: "workspace_missing",
+    });
+  });
+
+  it("rejects a linked project response with the wrong shape", async () => {
+    const gateway = new TauriProjectBoardGateway(async <T>() => ({}) as T);
+
+    await expect(gateway.listLinkedProjects()).rejects.toThrow(
+      "연결된 프로젝트 목록의 형식이 올바르지 않습니다.",
+    );
+  });
+
+  it("keeps only well-formed linked projects", async () => {
+    const valid = {
+      id: "PVT_1",
+      owner: "Mockly-Company",
+      number: 1,
+      title: "Board",
+      scope: "user",
+    };
+    const gateway = new TauriProjectBoardGateway(
+      async <T>() =>
+        ({ projects: [valid, { ...valid, id: "PVT_2", scope: "team" }] }) as T,
+    );
+
+    await expect(gateway.listLinkedProjects()).resolves.toEqual([valid]);
+  });
+
+  it("still propagates non-string set_active failures without a message", async () => {
+    const invoke = async <T>(): Promise<T> => {
+      throw {};
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    await expect(gateway.setActiveProject("PVT_kwDOExample")).rejects.toEqual(
+      {},
+    );
+  });
+
   it("maps project resolve and link commands", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> =
       [];
@@ -241,6 +361,33 @@ describe("TauriProjectBoardGateway", () => {
             scope: "organization",
           },
         },
+      },
+    ]);
+  });
+
+  it("sends camelCase projectId to set_active and unlink (Tauri macro default)", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> =
+      [];
+    const invoke = async <T>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      calls.push({ command, args });
+      return undefined as T;
+    };
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    await gateway.setActiveProject("PVT_kwDOExample");
+    await gateway.unlinkGithubProject("PVT_kwDOExample");
+
+    expect(calls).toEqual([
+      {
+        command: "set_active_github_project",
+        args: { projectId: "PVT_kwDOExample" },
+      },
+      {
+        command: "unlink_github_project",
+        args: { projectId: "PVT_kwDOExample" },
       },
     ]);
   });

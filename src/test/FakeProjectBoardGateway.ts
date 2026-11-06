@@ -11,8 +11,11 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     | { method: "getProjectBoard" }
     | { method: "syncProjectBoard" }
     | { method: "resolveGithubProject"; url: string }
-    | { method: "listGithubProjects" }
+    | { method: "listGithubProjects"; owner?: string }
+    | { method: "listLinkedProjects" }
     | { method: "linkGithubProject"; project: ResolvedGithubProject }
+    | { method: "setActiveProject"; id: string }
+    | { method: "unlinkGithubProject"; id: string }
   > = [];
 
   projectList: ResolvedGithubProject[] | Error = [
@@ -25,7 +28,16 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     },
   ];
 
+  /** 사이드바용 연결된 프로젝트 목록. 비어 있으면 None(로컬)만 표시. */
+  linkedProjects: ResolvedGithubProject[] = [];
+
+  /** 프로젝트별 보드. 있으면 get/sync가 activeProjectId 기준으로 반환한다. */
+  readonly boardsByProjectId = new Map<string, ProjectBoard>();
+
   listTruncated = false;
+
+  /** 마지막으로 연결·전환된 프로젝트 id. Org 스위처 뼈대용 상태. */
+  activeProjectId: string | null = null;
 
   resolveResult: ResolvedGithubProject | Error = {
     id: "PVT_kwDOFake",
@@ -85,6 +97,12 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     if (this.loadError) {
       throw this.loadError;
     }
+    if (this.activeProjectId) {
+      const perProject = this.boardsByProjectId.get(this.activeProjectId);
+      if (perProject) {
+        return perProject;
+      }
+    }
     const current = this.boardResult ?? this.board;
     if ("code" in current) {
       throw current;
@@ -97,7 +115,17 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     if (this.loadError) {
       throw this.loadError;
     }
-    return this.board;
+    if (this.activeProjectId) {
+      const perProject = this.boardsByProjectId.get(this.activeProjectId);
+      if (perProject) {
+        return perProject;
+      }
+    }
+    const current = this.boardResult ?? this.board;
+    if ("code" in current) {
+      throw current;
+    }
+    return current;
   }
 
   async resolveGithubProject(url: string): Promise<ResolvedGithubProject> {
@@ -108,16 +136,35 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     return this.resolveResult;
   }
 
-  async listGithubProjects(): Promise<ProjectList> {
-    this.calls.push({ method: "listGithubProjects" });
+  async listGithubProjects(owner?: string): Promise<ProjectList> {
+    this.calls.push({ method: "listGithubProjects", owner });
     if (this.projectList instanceof Error) {
       throw this.projectList;
     }
     return { projects: this.projectList, truncated: this.listTruncated };
   }
 
+  async listLinkedProjects(): Promise<ResolvedGithubProject[]> {
+    this.calls.push({ method: "listLinkedProjects" });
+    return [...this.linkedProjects];
+  }
+
   async linkGithubProject(project: ResolvedGithubProject): Promise<void> {
     this.calls.push({ method: "linkGithubProject", project });
+    this.activeProjectId = project.id;
     this.boardResult = this.board;
+  }
+
+  async setActiveProject(id: string): Promise<void> {
+    this.calls.push({ method: "setActiveProject", id });
+    this.activeProjectId = id;
+    this.boardResult = this.board;
+  }
+
+  async unlinkGithubProject(id: string): Promise<void> {
+    this.calls.push({ method: "unlinkGithubProject", id });
+    if (this.activeProjectId === id) {
+      this.activeProjectId = null;
+    }
   }
 }

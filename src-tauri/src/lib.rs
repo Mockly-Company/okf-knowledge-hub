@@ -119,9 +119,15 @@ pub fn run() {
             commands::project_board::sync_project_board,
             commands::project_board::resolve_github_project,
             commands::project_board::link_github_project,
+            commands::project_board::list_linked_projects,
+            commands::project_board::set_active_github_project,
+            commands::project_board::unlink_github_project,
             commands::project_board::list_github_projects,
             settings::commands::get_display_density,
             settings::commands::set_display_density,
+            settings::commands::get_workspace_for_project,
+            settings::commands::set_workspace_for_project,
+            settings::commands::list_remembered_workspaces,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OkHub");

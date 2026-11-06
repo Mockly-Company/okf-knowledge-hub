@@ -10,12 +10,15 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
+import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
+import * as ActiveProjectModule from "@/features/active-project/ActiveProjectProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { TestQueryProvider } from "@/test/queryTestUtils";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 import { DocumentsPage } from "./DocumentsPage";
 import type { ReactElement } from "react";
-import { TestQueryProvider } from "@/test/queryTestUtils";
 
 afterEach(cleanup);
 
@@ -231,7 +234,7 @@ describe("DocumentsPage", () => {
     );
   });
 
-  it("links invalid document roots to Settings", async () => {
+  it("offers a workspace reconnect for invalid document roots", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.startError = {
       code: "workspace_invalid",
@@ -244,10 +247,9 @@ describe("DocumentsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "설정한 문서 루트를 찾을 수 없습니다.",
     );
-    expect(screen.getByRole("link", { name: "Settings에서 확인" })).toHaveAttribute(
-      "href",
-      "/settings",
-    );
+    expect(
+      screen.getByRole("button", { name: "저장소 연결하기" }),
+    ).toBeInTheDocument();
   });
 
   it("offers retry instead of Settings for a retryable start failure", async () => {
@@ -264,7 +266,7 @@ describe("DocumentsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "문서 검색을 준비하지 못했습니다.",
     );
-    expect(screen.queryByRole("link", { name: "Settings에서 확인" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "저장소 연결하기" })).toBeNull();
     gateway.startError = null;
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
     await waitFor(() =>
@@ -390,6 +392,60 @@ describe("DocumentsPage", () => {
       expect(screen.queryByRole("alert")).toBeNull(),
     );
     expect(await screen.findByRole("region", { name: "API" })).toBeVisible();
+  });
+
+  it("hides catalog and reader entry when the active project has no docs mapping", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = "docs/guide.md";
+    const connectionGateway = FakeWorkspaceConnectionGateway.connected();
+    const spy = vi
+      .spyOn(ActiveProjectModule, "useOptionalActiveProject")
+      .mockReturnValue({
+        docsMissing: true,
+      } as ActiveProjectModule.ActiveProjectContextValue);
+    try {
+      render(
+        <MemoryRouter>
+          <WorkspaceConnectionProvider gateway={connectionGateway}>
+            <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+              <main aria-label="OkHub">
+                <DocumentsPage />
+              </main>
+            </DocumentsProvider>
+          </WorkspaceConnectionProvider>
+        </MemoryRouter>,
+      );
+
+      expect(
+        await screen.findByText("이 프로젝트의 docs 저장소가 연결되지 않았습니다."),
+      ).toBeVisible();
+      expect(
+        await screen.findByText("저장소를 선택하거나 클론해 주세요."),
+      ).toBeVisible();
+      expect(
+        screen.getByText("연결된 docs 저장소가 없어 문서를 숨겼습니다."),
+      ).toHaveAttribute("role", "status");
+      const connectButton = screen.getByRole("button", { name: "저장소 연결하기" });
+      expect(connectButton).toBeVisible();
+      expect(connectButton).toBeEnabled();
+      expect(
+        screen.queryByRole("link", { name: "워크스페이스 연결 화면으로 이동" }),
+      ).toBeNull();
+      expect(screen.queryByRole("searchbox", { name: "문서 검색" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "새 문서" })).toBeNull();
+      expect(screen.queryByRole("region", { name: "Guide" })).toBeNull();
+      expect(screen.queryByText("Guide")).toBeNull();
+
+      const user = userEvent.setup();
+      await user.click(connectButton);
+      await waitFor(() =>
+        expect(
+          connectionGateway.calls.some((call) => call.method === "getAuthState"),
+        ).toBe(true),
+      );
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("keeps untrusted Markdown inert when a document is opened from the Documents page", async () => {

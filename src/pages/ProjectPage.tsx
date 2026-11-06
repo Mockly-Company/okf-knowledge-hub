@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormField } from "@/components/patterns/FormField";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Radio } from "@/components/ui/radio";
 import { Select } from "@/components/ui/select";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import {
@@ -15,8 +14,11 @@ import {
   type BoardIssue,
   type BoardLayer,
   type ProjectBoard,
-  type ResolvedGithubProject,
 } from "@/features/project-board/model";
+import {
+  LEGACY_BOARD_ID,
+  projectBoardKeys,
+} from "@/features/project-board/queryKeys";
 import {
   MAX_ISSUE_TREE_DEPTH,
   asIssueArray,
@@ -25,6 +27,7 @@ import {
   safeHref,
 } from "@/features/project-board/boardUtils";
 import { ProjectTree } from "@/features/project-board/ProjectTree";
+import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 type LayerFilter = "all" | BoardLayer;
@@ -196,6 +199,19 @@ function isUnlinkedError(error: unknown): boolean {
   );
 }
 
+/** 고정 안내 뒤에 백엔드가 알려 준 원인을 붙인다. */
+function describeBoardError(error: unknown): string {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message)
+      : null;
+  const text = typeof error === "string" && error.trim() ? error : null;
+  const cause = errorDetail(error, "reason") ?? message ?? text;
+  return cause
+    ? `Project 보드를 불러오지 못했습니다. (원인: ${cause})`
+    : "Project 보드를 불러오지 못했습니다.";
+}
+
 const sharedGateway = new TauriProjectBoardGateway();
 
 const fetchedAtFormatter = new Intl.DateTimeFormat("ko-KR", {
@@ -296,135 +312,72 @@ export function ProjectPage({
 }: {
   gateway?: ProjectBoardGateway;
 }) {
-  const [board, setBoard] = useState<ProjectBoard | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSyncing, setIsSyncing] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [isUnlinked, setIsUnlinked] = useState(false);
-  const [showLinkPanel, setShowLinkPanel] = useState(false);
-  const [projectUrl, setProjectUrl] = useState("");
-  const [resolved, setResolved] = useState<ResolvedGithubProject | null>(null);
-  const [projectOptions, setProjectOptions] = useState<
-    ResolvedGithubProject[] | null
-  >(null);
-  const [isProjectListTruncated, setIsProjectListTruncated] = useState(false);
-  const [linkError, setLinkError] = useState<string | null>(null);
-  const [isResolving, setIsResolving] = useState(false);
-  const [isListing, setIsListing] = useState(false);
-  const [listFailed, setListFailed] = useState(false);
-  const [isLinking, setIsLinking] = useState(false);
+  const activeProject = useOptionalActiveProject();
+  const activeProjectId = activeProject?.activeProjectId ?? null;
+  // provider 없으면 기존 단일 프로젝트 경로로 조회한다(테스트·스토리 폴백).
+  const queryProjectId = activeProject ? activeProjectId : LEGACY_BOARD_ID;
+
+  // 보드는 프로젝트 id를 키로 쓴다. 전환하면 이전 키 데이터가 아닌 새 키로
+  // 조회되므로, 예전처럼 수동으로 비우거나 revision을 맞출 필요가 없다.
+  // 마운트·전환·재시도는 저렴한 읽기(get)부터 쓰고, 캐시가 비어 있을 때만
+  // 네트워크 동기화(sync)로 채운다. 명시적 새로고침은 항상 sync다.
+  const queryClient = useQueryClient();
+  const boardQuery = useQuery({
+    queryKey: projectBoardKeys.board(queryProjectId),
+    queryFn: async () => {
+      const cached = await gateway.getProjectBoard();
+      // 백엔드 get은 프로젝트별 캐시 읽기라, 한 번도 동기화하지 않은
+      // 프로젝트는 빈 보드를 돌려준다. 그때만 sync로 채운다.
+      if (cached.issues.length === 0 && cached.fetchedAt === null) {
+        return gateway.syncProjectBoard();
+      }
+      return cached;
+    },
+    enabled: queryProjectId !== null,
+  });
+  const syncMutation = useMutation({
+    mutationFn: () => gateway.syncProjectBoard(),
+    onSuccess: (fresh) => {
+      if (queryProjectId !== null) {
+        queryClient.setQueryData(
+          projectBoardKeys.board(queryProjectId),
+          fresh,
+        );
+      }
+    },
+  });
+  const board: ProjectBoard | null = boardQuery.data ?? null;
+  const queryFailed = boardQuery.isError;
+  const isUnlinked =
+    queryProjectId === null ||
+    (queryFailed && isUnlinkedError(boardQuery.error));
+  const loadError =
+    queryFailed && !isUnlinked
+      ? describeBoardError(boardQuery.error)
+      : syncMutation.isError
+        ? describeBoardError(syncMutation.error)
+        : null;
+  // disabled 쿼리(None 상태)는 isPending이므로 id 가드로 제외한다.
+  const boardLoading =
+    queryProjectId !== null &&
+    board === null &&
+    (boardQuery.isPending || boardQuery.isFetching);
+  const isFetchingBoard = boardQuery.isFetching;
+  const isSyncingBoard = syncMutation.isPending;
+  const retryLoad = () => {
+    syncMutation.reset();
+    void boardQuery.refetch();
+  };
+
   const [filter, setFilter] = useState<LayerFilter>("all");
   const [view, setView] = useState<BoardView>("tree");
   const [hideDone, setHideDone] = useState(true);
-  const panelVisible = isUnlinked || showLinkPanel;
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    setLoadError(null);
-    setIsUnlinked(false);
-    try {
-      setBoard(await gateway.getProjectBoard());
-    } catch (error) {
-      if (isUnlinkedError(error)) {
-        setIsUnlinked(true);
-        setBoard({ issues: [], fetchedAt: null, skipped: 0, truncated: false });
-      } else {
-        setLoadError("Project 보드를 불러오지 못했습니다.");
-      }
-    } finally {
-      setIsLoading(false);
-    }
-  }, [gateway]);
-
-  const refresh = useCallback(async () => {
-    setIsSyncing(true);
-    setLoadError(null);
-    setIsUnlinked(false);
-    try {
-      setBoard(await gateway.syncProjectBoard());
-      setIsUnlinked(false);
-    } catch (error) {
-      if (isUnlinkedError(error)) {
-        setIsUnlinked(true);
-        return;
-      }
-      const message =
-        typeof error === "object" && error !== null && "message" in error
-          ? String((error as { message: string }).message)
-          : "Project 보드를 가져오지 못했습니다.";
-      const reason = errorDetail(error, "reason");
-      setLoadError(reason ? `${message} (원인: ${reason})` : message);
-    } finally {
-      setIsSyncing(false);
-    }
-  }, [gateway]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const resolve = useCallback(async () => {
-    setIsResolving(true);
-    setLinkError(null);
-    setResolved(null);
-    try {
-      setResolved(await gateway.resolveGithubProject(projectUrl));
-    } catch (error) {
-      setLinkError(
-        typeof error === "object" && error !== null && "message" in error
-          ? String((error as { message: string }).message)
-          : "Project 주소를 확인해 주세요.",
-      );
-    } finally {
-      setIsResolving(false);
-    }
-  }, [gateway, projectUrl]);
-
-  const listProjects = useCallback(async () => {
-    setIsListing(true);
-    setLinkError(null);
-    setListFailed(false);
-    try {
-      const list = await gateway.listGithubProjects();
-      setProjectOptions(list.projects);
-      setIsProjectListTruncated(list.truncated);
-    } catch (error) {
-      setListFailed(true);
-      setLinkError(
-        typeof error === "object" && error !== null && "message" in error
-          ? String((error as { message: string }).message)
-          : "Project 목록을 가져오지 못했습니다.",
-      );
-    } finally {
-      setIsListing(false);
-    }
-  }, [gateway]);
-  const link = useCallback(async () => {
-    if (!resolved) {
-      return;
-    }
-    setIsLinking(true);
-    setLinkError(null);
-    try {
-      await gateway.linkGithubProject(resolved);
-      setShowLinkPanel(false);
-      await refresh();
-    } catch (error) {
-      setLinkError(
-        typeof error === "object" && error !== null && "message" in error
-          ? String((error as { message: string }).message)
-          : "Project 연결에 실패했습니다.",
-      );
-    } finally {
-      setIsLinking(false);
-    }
-  }, [gateway, refresh, resolved]);
-
-  useEffect(() => {
-    if (panelVisible && projectOptions === null && !isListing && !listFailed) {
-      void listProjects();
-    }
-  }, [panelVisible, projectOptions, isListing, listFailed, listProjects]);
+  // 전환 중 로딩 문구에 쓸 프로젝트 명. 목록에 없으면 일반 문구로 폴백.
+  const switchingTitle =
+    activeProject?.projects.find(
+      (candidate) => candidate.id === activeProjectId,
+    )?.title ?? null;
 
   const visibleLayers = useMemo(
     () =>
@@ -483,7 +436,7 @@ export function ProjectPage({
     >
       <PageHeader
         titleId="project-title"
-        title="Project"
+        title="Ticket"
         actions={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-[var(--space-3)]">
             <span
@@ -504,24 +457,13 @@ export function ProjectPage({
             <Button
               type="button"
               variant="secondary"
-              onClick={() => void refresh()}
-              disabled={isLoading || isSyncing || isUnlinked}
-              loading={isSyncing}
+              onClick={() => syncMutation.mutate()}
+              disabled={isFetchingBoard || isSyncingBoard || isUnlinked}
+              loading={isFetchingBoard || isSyncingBoard}
             >
               <RefreshCw aria-hidden="true" strokeWidth={1.75} />
               새로고침
             </Button>
-            {!isUnlinked ? (
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setShowLinkPanel((shown) => !shown)}
-                aria-expanded={isUnlinked || showLinkPanel}
-                disabled={isLoading || isSyncing}
-              >
-                프로젝트 변경
-              </Button>
-            ) : null}
             <div className="w-64 max-w-full">
               <FormField label="Iteration">
                 <Select disabled defaultValue="none">
@@ -533,6 +475,15 @@ export function ProjectPage({
         }
       />
 
+      {isUnlinked ? (
+        <p
+          role="status"
+          className="m-0 mt-[var(--space-4)] text-[var(--color-text-muted)]"
+        >
+          프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.
+        </p>
+      ) : null}
+
       {isUnlinked || board === null ? null : (
         <>
           {view === "layers" ? (
@@ -541,206 +492,92 @@ export function ProjectPage({
               role="group"
               aria-label="레이어 필터"
             >
-        <Button
-          type="button"
-          variant={filter === "all" ? "primary" : "secondary"}
-          aria-pressed={filter === "all"}
-          onClick={() => setFilter("all")}
-        >
-          전체
-        </Button>
-        {BOARD_LAYERS.map((layer) => (
-          <Button
-            key={layer.id}
-            type="button"
-            variant={filter === layer.id ? "primary" : "secondary"}
-            aria-pressed={filter === layer.id}
-            onClick={() => setFilter(layer.id)}
-          >
-            {layer.name}
-          </Button>
-        ))}
-      </div>
-      ) : null}
-
-      {board && board.skipped > 0 ? (
-        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-          {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
-          Project의 영역 값과 상태 값을 확인해 주세요.
-        </p>
-      ) : null}
-
-      <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
-        <div className="flex flex-wrap items-center gap-[var(--space-3)]">
-          <div
-            className="flex flex-wrap gap-[var(--space-2)]"
-            role="group"
-            aria-label="보드 보기 방식"
-          >
-            <Button
-              type="button"
-              variant={view === "layers" ? "primary" : "secondary"}
-              aria-pressed={view === "layers"}
-              onClick={() => setView("layers")}
-            >
-              영역별
-            </Button>
-            <Button
-              type="button"
-              variant={view === "tree" ? "primary" : "secondary"}
-              aria-pressed={view === "tree"}
-              onClick={() => setView("tree")}
-            >
-              계층별
-            </Button>
-          </div>
-          <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
-            <Checkbox
-              checked={hideDone}
-              onChange={(event) => setHideDone(event.target.checked)}
-            />
-            완료 항목 숨기기
-          </label>
-        </div>
-      </div>
-      {board && (board.truncated || walkCapped || treeCapped) ? (
-        <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-          보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈
-          최대 520개
-          {walkCapped || treeCapped
-            ? "·화면 표시 상한, 화면에서 생략된 항목은 제외 개수에 포함되지 않음"
-            : ""}
-          )
-        </p>
-      ) : null}
-        </>
-      )}
-
-      {isUnlinked || showLinkPanel ? (
-        <section
-          aria-label="GitHub Project 연결"
-          className="mt-[var(--space-4)] grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)]"
-        >
-          <h2 className="m-0">GitHub Project 연결</h2>
-          <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-            Project 페이지 주소(URL)를 붙여넣으면 소유자·번호·Node
-            ID를 자동으로 불러옵니다. 예:
-            https://github.com/orgs/Mockly-Company/projects/1
-          </p>
-          <FormField label="Project URL">
-            <Input
-              value={projectUrl}
-              onChange={(event) => setProjectUrl(event.target.value)}
-              placeholder="https://github.com/orgs/{owner}/projects/{number}"
-              inputMode="url"
-            />
-          </FormField>
-          <div>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void resolve()}
-              disabled={isResolving || projectUrl.trim().length === 0}
-              loading={isResolving}
-            >
-              불러오기
-            </Button>
-          </div>
-          <div>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => void listProjects()}
-              disabled={isListing}
-              loading={isListing}
-            >
-              목록에서 고르기
-            </Button>
-          </div>
-          {projectOptions ? (
-            <div
-              role="radiogroup"
-              aria-label="GitHub Project 목록"
-              className="grid gap-[var(--space-2)]"
-            >
-              {projectOptions.length === 0 ? (
-                <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-                  볼 수 있는 Project가 없습니다.
-                </p>
-              ) : null}
-              {isProjectListTruncated ? (
-                <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-                  목록이 잘렸을 수 있습니다. (조직 최대 20개·목록별 최대 100개까지 표시)
-                </p>
-              ) : null}
-              {projectOptions.map((option) => (
-                <label
-                  key={option.id}
-                  className="flex cursor-pointer items-center gap-[var(--space-2)]"
+              <Button
+                type="button"
+                variant={filter === "all" ? "primary" : "secondary"}
+                aria-pressed={filter === "all"}
+                onClick={() => setFilter("all")}
+              >
+                전체
+              </Button>
+              {BOARD_LAYERS.map((layer) => (
+                <Button
+                  key={layer.id}
+                  type="button"
+                  variant={filter === layer.id ? "primary" : "secondary"}
+                  aria-pressed={filter === layer.id}
+                  onClick={() => setFilter(layer.id)}
                 >
-                  <Radio
-                    name="github-project-choice"
-                    value={option.id}
-                    checked={resolved?.id === option.id}
-                    onChange={() => {
-                      setResolved(option);
-                      setLinkError(null);
-                    }}
-                  />
-                  <span>
-                    {option.title} · {option.owner} #{option.number}
-                  </span>
-                </label>
+                  {layer.name}
+                </Button>
               ))}
             </div>
           ) : null}
-          {listFailed ? (
-            <div>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => void listProjects()}
-                disabled={isListing}
-                loading={isListing}
-              >
-                목록 다시 불러오기
-              </Button>
-            </div>
-          ) : null}
-          {resolved ? (
-            <div className="grid gap-[var(--space-2)]">
-              <p className="m-0">
-                {resolved.title} · {resolved.owner} #{resolved.number}
-              </p>
-              <div>
-                <Button
-                  type="button"
-                  onClick={() => void link()}
-                  disabled={isLinking}
-                  loading={isLinking}
-                >
-                  이 프로젝트 연결
-                </Button>
-              </div>
-            </div>
-          ) : null}
-          {linkError ? (
-            <p role="alert" className="m-0">
-              {linkError}
+
+          {board && board.skipped > 0 ? (
+            <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+              {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
+              Project의 영역 값과 상태 값을 확인해 주세요.
             </p>
           ) : null}
-        </section>
-      ) : null}
 
-      {isLoading && board === null ? (
-        <p role="status">Project 불러오는 중</p>
+          <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
+            <div className="flex flex-wrap items-center gap-[var(--space-3)]">
+              <div
+                className="flex flex-wrap gap-[var(--space-2)]"
+                role="group"
+                aria-label="보드 보기 방식"
+              >
+                <Button
+                  type="button"
+                  variant={view === "layers" ? "primary" : "secondary"}
+                  aria-pressed={view === "layers"}
+                  onClick={() => setView("layers")}
+                >
+                  영역별
+                </Button>
+                <Button
+                  type="button"
+                  variant={view === "tree" ? "primary" : "secondary"}
+                  aria-pressed={view === "tree"}
+                  onClick={() => setView("tree")}
+                >
+                  계층별
+                </Button>
+              </div>
+              <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                <Checkbox
+                  checked={hideDone}
+                  onChange={(event) => setHideDone(event.target.checked)}
+                />
+                완료 항목 숨기기
+              </label>
+            </div>
+          </div>
+          {board && (board.truncated || walkCapped || treeCapped) ? (
+            <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+              보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈
+              최대 520개
+              {walkCapped || treeCapped
+                ? "·화면 표시 상한, 화면에서 생략된 항목은 제외 개수에 포함되지 않음"
+                : ""}
+              )
+            </p>
+          ) : null}
+        </>
+      )}
+
+      {boardLoading ? (
+        <p role="status">
+          {switchingTitle ? `"${switchingTitle}" 보드 가져오는 중` : "Project 불러오는 중"}
+        </p>
       ) : (
         <>
           {loadError ? (
             <div role="alert" className="grid gap-[var(--space-3)]">
               <p className="m-0">{loadError}</p>
               <div>
-                <Button type="button" variant="secondary" onClick={() => void load()}>
+                <Button type="button" variant="secondary" onClick={retryLoad}>
                   다시 시도
                 </Button>
               </div>

@@ -45,17 +45,103 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
     });
   }
 
-  listGithubProjects(): Promise<ProjectList> {
+  listGithubProjects(owner?: string): Promise<ProjectList> {
+    const trimmed = owner?.trim();
+    if (trimmed) {
+      return this.invokeCommand<ProjectList>("list_github_projects", {
+        owner: trimmed,
+      });
+    }
     return this.invokeCommand<ProjectList>("list_github_projects");
   }
 
   linkGithubProject(project: ResolvedGithubProject): Promise<void> {
     return this.invokeCommand<void>("link_github_project", { project });
   }
+
+  setActiveProject(id: string): Promise<void> {
+    // 실패를 삼키면 프론트 선택과 백엔드 활성이 어긋나 보드가 그대로 보인다.
+    // 에러를 올려보내 provider가 selectError로 노출한다.
+    // 명령 자체가 없는 구버전 백엔드에서만 link가 지정한 active를 그대로 쓴다.
+    return this.invokeCommand<void>("set_active_github_project", {
+      projectId: id,
+    }).catch((error: unknown) => {
+      if (isMissingCommandError(error, "set_active_github_project")) {
+        console.info(
+          "[project-board] old backend without set_active; link already selected the project",
+        );
+        return;
+      }
+      throw error;
+    });
+  }
+
+  unlinkGithubProject(id: string): Promise<void> {
+    // setActiveProject와 같은 이유로 없는 명령일 때만 무시한다.
+    return this.invokeCommand<void>("unlink_github_project", {
+      projectId: id,
+    }).catch((error: unknown) => {
+      if (!isMissingCommandError(error, "unlink_github_project")) {
+        throw error;
+      }
+    });
+  }
+
+  listLinkedProjects(): Promise<ResolvedGithubProject[]> {
+    return this.invokeCommand<unknown>("list_linked_projects", {}).then(
+      normalizeLinkedProjects,
+    );
+  }
+}
+
+/** 등록되지 않은 Tauri 명령 호출 실패인지 판별한다. 구버전 백엔드 감지용.
+ * 디버그 빌드는 "X not allowed. Command not found", 릴리스 빌드는
+ * "Command X not allowed by ACL" 형태로 거부한다. 명령명을 포함한
+ * 거부만 구버전으로 보고, 백엔드 업무 에러는 계속 전파한다. */
+function isMissingCommandError(error: unknown, command: string): boolean {
+  const message =
+    typeof error === "string"
+      ? error
+      : error instanceof Error
+        ? error.message
+        : "";
+  return (
+    message.includes(command) &&
+    /not found|not registered|unknown command|not allowed/i.test(message)
+  );
 }
 
 /** 절단 집계의 노드 예산. 백엔드 MAX_COUNT_NODES와 같은 단위(고유 URL 수)로 통일한다. */
 const MAX_HIDDEN_NODES = 100_000;
+
+/** list_linked_projects 응답(`{ projects }`)을 검증한다. 형식이 다른 항목은 경고 후 뺀다. */
+function normalizeLinkedProjects(raw: unknown): ResolvedGithubProject[] {
+  const candidates =
+    typeof raw === "object" && raw !== null
+      ? (raw as Record<string, unknown>).projects
+      : undefined;
+  // 빈 목록으로 돌려주면 "연결 없음"으로 처리돼 저장된 선택이 지워진다.
+  if (!Array.isArray(candidates)) {
+    throw new Error("연결된 프로젝트 목록의 형식이 올바르지 않습니다.");
+  }
+  const normalized: ResolvedGithubProject[] = [];
+  for (const item of candidates) {
+    if (typeof item !== "object" || item === null) continue;
+    const { id, owner, number, title, scope } = item as Record<string, unknown>;
+    if (
+      typeof id !== "string" ||
+      typeof owner !== "string" ||
+      typeof number !== "number" ||
+      typeof title !== "string" ||
+      (scope !== "user" && scope !== "organization")
+    ) {
+      console.warn("[project-board] skipped a malformed linked project", item);
+      continue;
+    }
+    normalized.push({ id, owner, number, title, scope });
+  }
+  return normalized;
+}
 
 /** 절단된 서브트리의 숨은 노드 수를 센다(백엔드 count_descendants와 같은 단위).
  * 잘린 노드는 렌더되지 않으므로 다이아몬드 공유 서브트리도 고유 URL 기준으로

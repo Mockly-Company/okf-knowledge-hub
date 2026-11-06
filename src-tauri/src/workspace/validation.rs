@@ -115,17 +115,30 @@ pub fn validate_workspace(config: &WorkspaceConfigV1) -> Vec<WorkspaceDiagnostic
         }
     }
 
-    if let Some(project) = config
-        .github
-        .as_ref()
-        .and_then(|github| github.project.as_ref())
-    {
-        if project.id.trim().is_empty() {
-            diagnostics.push(diagnostic(
-                WorkspaceDiagnosticCode::GithubProjectIdMissing,
-                "github.project.id",
-                "GitHub Project Node ID가 필요합니다.",
-            ));
+    if let Some(github) = config.github.as_ref() {
+        for (index, project) in github.all_projects().iter().enumerate() {
+            if project.id.trim().is_empty() {
+                let path = if github.projects.is_empty() {
+                    "github.project.id".to_owned()
+                } else {
+                    format!("github.projects[{index}].id")
+                };
+                diagnostics.push(diagnostic(
+                    WorkspaceDiagnosticCode::GithubProjectIdMissing,
+                    path,
+                    "GitHub Project Node ID가 필요합니다.",
+                ));
+            }
+        }
+        if let Some(active_id) = github.active_project_id.as_deref() {
+            let known = github.all_projects();
+            if !known.iter().any(|project| project.id == active_id) {
+                diagnostics.push(diagnostic(
+                    WorkspaceDiagnosticCode::GithubProjectIdMissing,
+                    "github.active_project_id",
+                    "활성 GitHub Project가 연결 목록에 없습니다.",
+                ));
+            }
         }
     }
 

@@ -87,7 +87,7 @@ export const NotLinked: StoryObj<typeof meta> = {
   ),
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByRole("region", { name: "GitHub Project 연결" }),
+      await canvas.findByText(/프로젝트 없음 \(로컬\)/),
     ).toBeVisible();
   },
 };

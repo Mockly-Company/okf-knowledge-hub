@@ -1,6 +1,5 @@
 import { FilePlus2 } from "lucide-react";
 import { lazy, Suspense, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
 import { StatusFeedback } from "@/components/ui/status-feedback";
@@ -9,6 +8,8 @@ import { NewDocumentDialog } from "@/features/documents/components/NewDocumentDi
 import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
+import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
+import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import "@/features/documents/documents.css";
 import type { DocumentSummary } from "@/features/documents/model";
 
@@ -45,6 +46,15 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
     readAsset,
     copyText,
   } = useDocuments();
+  // provider 밖(단위 테스트·스토리)에서는 null이므로 배너를 숨긴다.
+  const docsMissing = useOptionalActiveProject()?.docsMissing ?? false;
+  // hook은 항상 호출하고 값만 분기한다. 미연결이면 strip 숨김.
+  const workspaceConnection = useOptionalWorkspaceConnection();
+  const connectedWorkspace =
+    workspaceConnection?.state.step === "initialize" &&
+    workspaceConnection.state.status === "connected"
+      ? workspaceConnection.state.connectedWorkspace
+      : null;
   const creationDialog = (
     <NewDocumentDialog
       state={authoringState}
@@ -55,30 +65,6 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
       onDuplicateTemplate={duplicateTeamTemplate}
     />
   );
-
-  if (authoringState.editor) {
-    return (
-      <>
-        <Suspense fallback={<p className="documents-page__loading">편집기를 준비하는 중…</p>}>
-          <DocumentDraftEditor
-            editor={authoringState.editor}
-            readAsset={readAsset}
-            copyText={copyText}
-            headerSecondary={
-              <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
-            }
-            onMarkdownChange={updateDraftMarkdown}
-            onModeChange={setDraftEditorMode}
-            onAcceptDisk={acceptDiskConflict}
-            onAcceptHub={acceptHubConflict}
-            onStartMerge={startConflictMerge}
-            onClose={closeDraftEditor}
-          />
-        </Suspense>
-        {creationDialog}
-      </>
-    );
-  }
 
   if (state.status === "error") {
     const invalidRoot = [
@@ -101,8 +87,13 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
           className="documents-page__notice"
           action={
             invalidRoot ? (
-              <Button asChild variant="secondary">
-                <Link to="/settings">Settings에서 확인</Link>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!workspaceConnection}
+                onClick={() => void workspaceConnection?.startReplacement()}
+              >
+                저장소 연결하기
               </Button>
             ) : retryable ? (
               <Button variant="secondary" onClick={retrySession}>
@@ -114,6 +105,65 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
           <strong>{state.recoverableError?.message ?? "문서를 불러오지 못했습니다."}</strong>
         </StatusFeedback>
       </section>
+    );
+  }
+
+  if (docsMissing) {
+    return (
+      <section className="documents-page" aria-labelledby="documents-title">
+        <PageHeader
+          titleId="documents-title"
+          title="Documents"
+          description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
+          actions={headerActions}
+        />
+        <StatusFeedback
+          variant="banner"
+          tone="info"
+          actionPlacement="end"
+          className="documents-page__notice"
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!workspaceConnection}
+              onClick={() => void workspaceConnection?.startReplacement()}
+            >
+              저장소 연결하기
+            </Button>
+          }
+        >
+          <strong>이 프로젝트의 docs 저장소가 연결되지 않았습니다.</strong>
+          <p>저장소를 선택하거나 클론해 주세요.</p>
+        </StatusFeedback>
+        <p role="status" className="documents-page__notice">
+          연결된 docs 저장소가 없어 문서를 숨겼습니다.
+        </p>
+      </section>
+    );
+  }
+
+  if (authoringState.editor) {
+    return (
+      <>
+        <Suspense fallback={<p className="documents-page__loading">편집기를 준비하는 중…</p>}>
+          <DocumentDraftEditor
+            editor={authoringState.editor}
+            readAsset={readAsset}
+            copyText={copyText}
+            headerSecondary={
+              <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
+            }
+            onMarkdownChange={updateDraftMarkdown}
+            onModeChange={setDraftEditorMode}
+            onAcceptDisk={acceptDiskConflict}
+            onAcceptHub={acceptHubConflict}
+            onStartMerge={startConflictMerge}
+            onClose={closeDraftEditor}
+          />
+        </Suspense>
+        {creationDialog}
+      </>
     );
   }
 
@@ -179,6 +229,26 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
         description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
         actions={headerActions}
       />
+
+      {connectedWorkspace && !docsMissing ? (
+        <p
+          role="status"
+          className="documents-page__notice flex flex-wrap items-center gap-x-[var(--space-2)] gap-y-[var(--space-1)] text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]"
+        >
+          <span className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+            {connectedWorkspace.repository?.fullName ?? "저장소 정보 없음"}
+          </span>
+          <span aria-hidden="true">·</span>
+          <span className="break-all font-mono">{connectedWorkspace.path}</span>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void workspaceConnection?.startReplacement()}
+          >
+            다른 저장소 연결
+          </Button>
+        </p>
+      ) : null}
 
       {state.documentNotice ? (
         <StatusFeedback

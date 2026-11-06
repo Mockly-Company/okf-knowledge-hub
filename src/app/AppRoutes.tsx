@@ -25,6 +25,8 @@ export function AppRoutes({ documentsGateway }: { documentsGateway: DocumentsGat
           <Route index element={<HomePage />} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="project" element={<ProjectPage />} />
+          {/* /work는 /project 별칭. 사이드바 "Ticket" 탭과 같은 화면이다. */}
+          <Route path="work" element={<ProjectPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="dev/design-system" element={<DesignSystemPage />} />
         </Route>

@@ -16,3 +16,8 @@ github:
     id: "PVT_kwDOExample"
     owner: "Mockly-Company"
     number: 3
+  projects:
+    - id: "PVT_kwDOExample"
+      owner: "Mockly-Company"
+      number: 3
+  active_project_id: "PVT_kwDOExample"
