@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/patterns/AppShell";
 import { DocumentsPage } from "@/pages/DocumentsPage";
@@ -9,15 +9,30 @@ import { DesignSystemPage } from "@/pages/DesignSystemPage";
 import { WorkspaceGate } from "@/features/workspace-connection/WorkspaceGate";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
+import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
 import type { AiGateway } from "@/features/ai/AiGateway";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
+/** 프로젝트를 바꾸면 백엔드가 문서 저장소를 바꾸므로 Documents 세션을 새로 연다. */
+function DocumentsFollowActiveProject() {
+  const activeProjectId = useOptionalActiveProject()?.activeProjectId ?? null;
+  const { retrySession } = useDocuments();
+  const previous = useRef(activeProjectId);
+  useEffect(() => {
+    if (previous.current === activeProjectId) return;
+    previous.current = activeProjectId;
+    retrySession();
+  }, [activeProjectId, retrySession]);
+  return null;
+}
+
 function ConnectedAppShell({ documentsGateway }: { documentsGateway: DocumentsGateway }) {
   return (
     <DocumentsProvider gateway={documentsGateway}>
+      <DocumentsFollowActiveProject />
       <AppShell />
     </DocumentsProvider>
   );

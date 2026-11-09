@@ -14,6 +14,7 @@ import { WorkspaceConnectionProvider } from "@/features/workspace-connection/Wor
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import * as ActiveProjectModule from "@/features/active-project/ActiveProjectProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
@@ -392,6 +393,60 @@ describe("DocumentsPage", () => {
       expect(screen.queryByRole("alert")).toBeNull(),
     );
     expect(await screen.findByRole("region", { name: "API" })).toBeVisible();
+  });
+
+  it("offers the docs repository picker when the active project has none", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const spy = vi
+      .spyOn(ActiveProjectModule, "useOptionalActiveProject")
+      .mockReturnValue({
+        docsMissing: true,
+        activeProjectId: "project-1",
+        selectProject: vi.fn(async () => {}),
+      } as unknown as ActiveProjectModule.ActiveProjectContextValue);
+    try {
+      render(
+        <MemoryRouter>
+          <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+            <DocumentsPage
+              docsRepositoryGateway={new FakeDocsRepositoryGateway()}
+              repositoryGateway={FakeWorkspaceConnectionGateway.connected()}
+            />
+          </DocumentsProvider>
+        </MemoryRouter>,
+      );
+
+      expect(
+        await screen.findByRole("group", { name: "문서 저장소 선택" }),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", { name: "저장소 연결하기" })).toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("warns while the connected docs repository is not in OKF format", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const repositories = FakeWorkspaceConnectionGateway.connected();
+    const current = repositories.currentWorkspace;
+    if (current?.status !== "connected") throw new Error("connected fixture expected");
+    repositories.currentWorkspace = { ...current, okf: false };
+    render(
+      <MemoryRouter>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <DocumentsPage
+            docsRepositoryGateway={new FakeDocsRepositoryGateway()}
+            repositoryGateway={repositories}
+          />
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("OKF 형식에 맞지 않는 저장소입니다."),
+    ).toBeVisible();
   });
 
   it("hides catalog and reader entry when the active project has no docs mapping", async () => {

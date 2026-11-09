@@ -1,5 +1,5 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { Button } from "@/components/ui/button";
 import { StatusFeedback } from "@/components/ui/status-feedback";
@@ -10,6 +10,14 @@ import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
+import {
+  NotOkfNotice,
+  ProjectDocsRepositoryPicker,
+  sharedDocsRepositoryGateway,
+  sharedRepositoryGateway,
+  type ProjectRepositoryGateway,
+} from "@/features/docs-repository/ProjectDocsRepository";
 import "@/features/documents/documents.css";
 import type { DocumentSummary } from "@/features/documents/model";
 
@@ -19,7 +27,17 @@ const DocumentDraftEditor = lazy(() =>
   ),
 );
 
-export function DocumentsPage({ headerActions, additionalDocuments = [] }: { headerActions?: ReactNode; additionalDocuments?: DocumentSummary[] }) {
+export function DocumentsPage({
+  headerActions,
+  additionalDocuments = [],
+  docsRepositoryGateway = sharedDocsRepositoryGateway,
+  repositoryGateway = sharedRepositoryGateway,
+}: {
+  headerActions?: ReactNode;
+  additionalDocuments?: DocumentSummary[];
+  docsRepositoryGateway?: DocsRepositoryGateway;
+  repositoryGateway?: ProjectRepositoryGateway;
+}) {
   const {
     state,
     authoringState,
@@ -47,7 +65,19 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
     copyText,
   } = useDocuments();
   // provider 밖(단위 테스트·스토리)에서는 null이므로 배너를 숨긴다.
-  const docsMissing = useOptionalActiveProject()?.docsMissing ?? false;
+  const activeProject = useOptionalActiveProject();
+  const docsMissing = activeProject?.docsMissing ?? false;
+  const activeProjectId = activeProject?.activeProjectId ?? null;
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const picker =
+    activeProjectId !== null ? (
+      <ProjectDocsRepositoryPicker
+        projectId={activeProjectId}
+        gateway={docsRepositoryGateway}
+        repositoryGateway={repositoryGateway}
+        onDone={() => setPickerOpen(false)}
+      />
+    ) : null;
   // hook은 항상 호출하고 값만 분기한다. 미연결이면 strip 숨김.
   const workspaceConnection = useOptionalWorkspaceConnection();
   const connectedWorkspace =
@@ -86,7 +116,7 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
           actionPlacement="end"
           className="documents-page__notice"
           action={
-            invalidRoot ? (
+            invalidRoot && picker === null ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -104,6 +134,21 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
         >
           <strong>{state.recoverableError?.message ?? "문서를 불러오지 못했습니다."}</strong>
         </StatusFeedback>
+        {invalidRoot ? picker : null}
+      </section>
+    );
+  }
+
+  if (docsMissing && picker !== null) {
+    return (
+      <section className="documents-page" aria-labelledby="documents-title">
+        <PageHeader
+          titleId="documents-title"
+          title="Documents"
+          description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
+          actions={headerActions}
+        />
+        {picker}
       </section>
     );
   }
@@ -243,12 +288,18 @@ export function DocumentsPage({ headerActions, additionalDocuments = [] }: { hea
           <Button
             type="button"
             variant="secondary"
-            onClick={() => void workspaceConnection?.startReplacement()}
+            onClick={() =>
+              picker !== null
+                ? setPickerOpen((open) => !open)
+                : void workspaceConnection?.startReplacement()
+            }
           >
             다른 저장소 연결
           </Button>
         </p>
       ) : null}
+      {pickerOpen ? picker : null}
+      <NotOkfNotice gateway={repositoryGateway} />
 
       {state.documentNotice ? (
         <StatusFeedback
