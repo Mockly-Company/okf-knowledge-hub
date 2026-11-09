@@ -216,6 +216,8 @@ export interface ConnectedWorkspace {
     id: string;
     fullName: string;
   };
+  /** `.okf/workspace.yml`이 있는 OKF 저장소인지. 없는 값은 OKF로 본다. */
+  okf?: boolean;
 }
 
 export interface RecoveryRequiredWorkspace {
