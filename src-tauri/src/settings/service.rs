@@ -12,7 +12,6 @@ pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
 pub const REMEMBERED_WORKSPACES_KEY: &str = "remembered-workspaces";
 pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
-pub const AI_COMMAND_TEMPLATE_KEY: &str = "ai-command-template";
 pub const AI_CLI_COMMAND_KEY: &str = "ai-cli-command";
 const INVALIDATED_PENDING_INITIALIZATION: &str = r#"{"state":"invalidated"}"#;
 
@@ -310,18 +309,6 @@ impl LocalSettingsService {
 
     pub fn set_display_density(&self, density: DisplayDensity) -> Result<(), AppError> {
         self.store.write(DISPLAY_DENSITY_KEY, density.as_stored())
-    }
-
-    pub fn load_ai_command_template(&self) -> Result<String, AppError> {
-        Ok(self
-            .store
-            .read(AI_COMMAND_TEMPLATE_KEY)?
-            .map(|value| value.trim().to_owned())
-            .unwrap_or_default())
-    }
-
-    pub fn set_ai_command_template(&self, command_template: &str) -> Result<(), AppError> {
-        self.store.write(AI_COMMAND_TEMPLATE_KEY, command_template)
     }
 
     pub fn load_ai_cli_command(&self) -> Result<String, AppError> {
@@ -850,22 +837,6 @@ mod tests {
             Some("/workspace/current")
         );
         assert_eq!(store.raw(UNKNOWN_KEY).as_deref(), Some("keep-me"));
-    }
-
-    #[test]
-    fn ai_command_template_is_stored_raw_and_loaded_trimmed() {
-        let store = MemoryLocalSettingsStore::default();
-        let service = LocalSettingsService::new(store.clone());
-
-        assert_eq!(service.load_ai_command_template().unwrap(), "");
-
-        service.set_ai_command_template("  echo hi  ").unwrap();
-
-        assert_eq!(
-            store.raw(AI_COMMAND_TEMPLATE_KEY).as_deref(),
-            Some("  echo hi  ")
-        );
-        assert_eq!(service.load_ai_command_template().unwrap(), "echo hi");
     }
 
     #[test]

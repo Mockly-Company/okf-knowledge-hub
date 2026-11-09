@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use tauri::{Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
-use crate::settings::ai_runner::{self, AiTaskRegistry, AiTaskStatus, AiTool};
+use crate::settings::ai_runner::{self, AiTool};
 use crate::settings::ai_terminal::{AiTerminalRegistry, TerminalEvent};
 use crate::settings::model::DisplayDensity;
 use crate::state::AppServices;
@@ -121,7 +121,6 @@ const AGENTS_MD_LIMIT_BYTES: usize = 200 * 1024;
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub struct AiConfig {
-    pub command_template: String,
     pub cli_command: String,
 }
 
@@ -133,14 +132,6 @@ pub struct AgentsMdResolution {
     pub content: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub struct AiTaskResult {
-    pub status: AiTaskStatus,
-    pub exit_code: i32,
-    pub output: String,
-}
-
 #[tauri::command]
 pub fn get_ai_config(state: State<'_, AppServices>) -> CommandResult<AiConfig> {
     get_ai_config_inner(&state)
@@ -148,28 +139,16 @@ pub fn get_ai_config(state: State<'_, AppServices>) -> CommandResult<AiConfig> {
 
 fn get_ai_config_inner(services: &AppServices) -> CommandResult<AiConfig> {
     Ok(AiConfig {
-        command_template: services.local_settings.load_ai_command_template()?,
         cli_command: services.local_settings.load_ai_cli_command()?,
     })
 }
 
 #[tauri::command]
-pub fn set_ai_config(
-    state: State<'_, AppServices>,
-    command_template: String,
-    cli_command: String,
-) -> CommandResult<()> {
-    set_ai_config_inner(&state, &command_template, &cli_command)
+pub fn set_ai_config(state: State<'_, AppServices>, cli_command: String) -> CommandResult<()> {
+    set_ai_config_inner(&state, &cli_command)
 }
 
-fn set_ai_config_inner(
-    services: &AppServices,
-    command_template: &str,
-    cli_command: &str,
-) -> CommandResult<()> {
-    services
-        .local_settings
-        .set_ai_command_template(command_template.trim())?;
+fn set_ai_config_inner(services: &AppServices, cli_command: &str) -> CommandResult<()> {
     services
         .local_settings
         .set_ai_cli_command(cli_command.trim())?;
@@ -473,141 +452,6 @@ fn create_agents_md_inner(services: &AppServices) -> CommandResult<CreateAgentsM
     })
 }
 
-#[tauri::command]
-pub async fn run_ai_task(
-    app: tauri::AppHandle,
-    state: State<'_, AppServices>,
-    tasks: State<'_, AiTaskRegistry>,
-    prompt: String,
-    tool: AiTool,
-) -> CommandResult<AiTaskResult> {
-    let guard = tasks.begin().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::LocalSettingsUnavailable,
-            "이미 실행 중인 AI 작업이 있습니다.",
-        )
-    })?;
-    let settings = state.local_settings.clone();
-    let data_dir = app_data_dir(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        run_ai_task_blocking(
-            &settings,
-            &data_dir,
-            &prompt,
-            tool,
-            ai_runner::AI_TASK_TIMEOUT,
-            guard.cancel.clone(),
-        )
-    })
-    .await
-    .map_err(|_| ai_blocking_error())?
-}
-
-#[tauri::command]
-pub fn cancel_ai_task(tasks: State<'_, AiTaskRegistry>) -> bool {
-    tasks.cancel()
-}
-
-fn run_ai_task_blocking(
-    settings: &crate::settings::service::LocalSettingsService,
-    app_data_dir: &Path,
-    prompt: &str,
-    tool: AiTool,
-    timeout: std::time::Duration,
-    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> CommandResult<AiTaskResult> {
-    let template = settings.load_ai_command_template()?;
-    if tool == AiTool::Custom && template.trim().is_empty() {
-        return Err(AppError::new(
-            ErrorCode::LocalSettingsUnavailable,
-            "AI CLI 명령이 설정되지 않았습니다. 설정 → AI 연동에서 등록해 주세요.",
-        ));
-    }
-    let workspace_dir = connected_workspace_dir(settings)?;
-    let rules = load_ai_rules(app_data_dir, &workspace_dir)?;
-    let prompt_file =
-        std::env::temp_dir().join(format!("okhub-ai-prompt-{}.md", uuid::Uuid::new_v4()));
-    std::fs::write(&prompt_file, ai_runner::compose_task_prompt(&rules, prompt)).map_err(
-        |error| {
-            AppError::new(
-                ErrorCode::LocalSettingsUnavailable,
-                "AI 작업 프롬프트를 임시 파일에 쓸 수 없습니다.",
-            )
-            .with_recovery(RecoveryAction::Retry)
-            .with_detail("reason", error.to_string())
-        },
-    )?;
-    let outcome = build_ai_task_command(tool, &template, &prompt_file, &workspace_dir)
-        .and_then(|command| ai_runner::run_process(command, timeout, cancel));
-    let _ = std::fs::remove_file(&prompt_file);
-    let outcome = outcome.map_err(|error| {
-        AppError::new(
-            ErrorCode::LocalSettingsUnavailable,
-            "AI CLI 명령을 실행할 수 없습니다.",
-        )
-        .with_recovery(RecoveryAction::Retry)
-        .with_detail("reason", error.to_string())
-    })?;
-    Ok(AiTaskResult {
-        status: outcome.status,
-        exit_code: outcome.exit_code,
-        output: outcome.output,
-    })
-}
-
-fn build_ai_task_command(
-    tool: AiTool,
-    template: &str,
-    prompt_file: &Path,
-    workspace_dir: &Path,
-) -> std::io::Result<std::process::Command> {
-    let mut command = match tool.headless_command() {
-        Some(line) => {
-            let mut command = ai_runner::shell_command(line);
-            command.stdin(std::fs::File::open(prompt_file)?);
-            command
-        }
-        None => {
-            let mut command = ai_runner::shell_command(&render_command_template(
-                template,
-                prompt_file,
-                workspace_dir,
-            )?);
-            // 자리표시가 없으면 요청이 조용히 사라지지 않도록 표준 입력으로 넘긴다.
-            if !template.contains("{prompt_file}") {
-                command.stdin(std::fs::File::open(prompt_file)?);
-            }
-            command
-        }
-    };
-    command.current_dir(workspace_dir);
-    Ok(command)
-}
-
-/// 자리표시를 셸 인자 하나로 인용된 경로로 바꾼다. 경로의 특수문자가 명령으로 해석되지 않는다.
-/// 템플릿에 이미 쓴 따옴표는 함께 대체해 이중 인용을 막는다.
-fn render_command_template(
-    template: &str,
-    prompt_file: &Path,
-    workspace_dir: &Path,
-) -> std::io::Result<String> {
-    let mut rendered = template.to_owned();
-    for (placeholder, path) in [
-        ("{prompt_file}", prompt_file),
-        ("{workspace_dir}", workspace_dir),
-    ] {
-        if !rendered.contains(placeholder) {
-            continue;
-        }
-        let quoted = ai_runner::shell_quote_path(path)?;
-        rendered = rendered
-            .replace(&format!("\"{placeholder}\""), &quoted)
-            .replace(&format!("'{placeholder}'"), &quoted)
-            .replace(placeholder, &quoted);
-    }
-    Ok(rendered)
-}
-
 fn truncate_bytes_to_string(bytes: Vec<u8>, limit: usize) -> String {
     let mut bytes = bytes;
     if bytes.len() > limit {
@@ -771,15 +615,14 @@ mod tests {
     }
 
     #[test]
-    fn ai_config_round_trip_trims_both_fields() {
+    fn ai_config_round_trip_trims_cli_command() {
         let services = AppServices::new(LocalSettingsService::new(MemoryStore::default()));
 
-        set_ai_config_inner(&services, "  echo hi  ", "  codex  ").unwrap();
+        set_ai_config_inner(&services, "  codex  ").unwrap();
 
         assert_eq!(
             get_ai_config_inner(&services).unwrap(),
             AiConfig {
-                command_template: "echo hi".into(),
                 cli_command: "codex".into(),
             }
         );
@@ -813,21 +656,6 @@ mod tests {
         assert_eq!(error.code, crate::error::ErrorCode::WorkspaceMissing);
     }
 
-    /// 준비된 워크스페이스와 프로젝트 규칙을 가진 설정 서비스.
-    fn settings_with_workspace(directory: &Path) -> LocalSettingsService {
-        std::fs::create_dir_all(directory.join(".okf")).unwrap();
-        std::fs::write(directory.join(".okf/AGENTS.md"), "# 프로젝트 규칙 표식\n").unwrap();
-        std::fs::write(
-            directory.join(".okf/workspace.yml"),
-            include_str!("../workspace/fixtures/valid-workspace.yml"),
-        )
-        .unwrap();
-        std::fs::create_dir_all(directory.join("docs")).unwrap();
-        let settings = LocalSettingsService::new(MemoryStore::default());
-        settings.set_current(directory).unwrap();
-        settings
-    }
-
     #[test]
     fn each_workspace_gets_its_own_rules_file() {
         assert_ne!(
@@ -848,133 +676,6 @@ mod tests {
         let rules = std::fs::read_to_string(rules_file).unwrap();
         assert!(rules.contains("프로젝트 규칙 표식"), "{rules}");
         assert!(rules.contains("OkHub 워크스페이스 작업 규칙"), "{rules}");
-    }
-
-    #[test]
-    fn custom_task_treats_special_characters_in_paths_as_plain_text() {
-        let parent = tempfile::tempdir().unwrap();
-        let name = if cfg!(windows) {
-            "a & echo INJECTED"
-        } else {
-            "a$(echo INJECTED); echo 'INJECTED"
-        };
-        let workspace = parent.path().join(name);
-        std::fs::create_dir(&workspace).unwrap();
-        let printer = if cfg!(windows) { "echo" } else { "printf %s" };
-        let prompt_file = parent.path().join("prompt.md");
-        std::fs::write(&prompt_file, "").unwrap();
-
-        let command = build_ai_task_command(
-            AiTool::Custom,
-            &format!("{printer} \"{{workspace_dir}}\""),
-            &prompt_file,
-            &workspace,
-        )
-        .unwrap();
-        let outcome = ai_runner::run_process(
-            command,
-            std::time::Duration::from_secs(30),
-            Default::default(),
-        )
-        .unwrap();
-
-        assert_eq!(outcome.exit_code, 0, "{}", outcome.output);
-        assert_eq!(
-            outcome.output.matches("INJECTED").count(),
-            name.matches("INJECTED").count(),
-            "{}",
-            outcome.output
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn custom_task_refuses_paths_that_cmd_would_expand() {
-        let result = render_command_template(
-            "tool {workspace_dir}",
-            Path::new("prompt.md"),
-            Path::new(r"C:\work\%PATH%"),
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn custom_task_without_a_placeholder_receives_the_request_on_stdin() {
-        let workspace = tempfile::tempdir().unwrap();
-        let app_data = tempfile::tempdir().unwrap();
-        let settings = settings_with_workspace(workspace.path());
-        let reader = if cfg!(windows) { "more" } else { "cat" };
-        settings.set_ai_command_template(reader).unwrap();
-
-        let result = run_ai_task_blocking(
-            &settings,
-            app_data.path(),
-            "STDIN-REQUEST-MARK",
-            AiTool::Custom,
-            std::time::Duration::from_secs(30),
-            Default::default(),
-        )
-        .unwrap();
-
-        assert_eq!(result.exit_code, 0, "{}", result.output);
-        assert!(
-            result.output.contains("STDIN-REQUEST-MARK"),
-            "{}",
-            result.output
-        );
-    }
-
-    #[test]
-    fn custom_task_receives_the_rules_and_request_through_the_prompt_file() {
-        let workspace = tempfile::tempdir().unwrap();
-        let app_data = tempfile::tempdir().unwrap();
-        let settings = settings_with_workspace(workspace.path());
-        let reader = if cfg!(windows) { "type" } else { "cat" };
-        settings
-            .set_ai_command_template(&format!("{reader} \"{{prompt_file}}\""))
-            .unwrap();
-
-        let result = run_ai_task_blocking(
-            &settings,
-            app_data.path(),
-            "한글 요청 표식",
-            AiTool::Custom,
-            std::time::Duration::from_secs(30),
-            Default::default(),
-        )
-        .unwrap();
-
-        assert_eq!(result.status, AiTaskStatus::Completed);
-        assert_eq!(result.exit_code, 0, "{}", result.output);
-        assert!(
-            result.output.contains("프로젝트 규칙 표식"),
-            "{}",
-            result.output
-        );
-        assert!(
-            result.output.contains("한글 요청 표식"),
-            "{}",
-            result.output
-        );
-    }
-
-    #[test]
-    fn custom_task_without_a_template_explains_what_to_set() {
-        let app_data = tempfile::tempdir().unwrap();
-        let settings = LocalSettingsService::new(MemoryStore::default());
-
-        let error = run_ai_task_blocking(
-            &settings,
-            app_data.path(),
-            "요청",
-            AiTool::Custom,
-            std::time::Duration::from_secs(30),
-            Default::default(),
-        )
-        .unwrap_err();
-
-        assert!(error.message.contains("AI CLI 명령이 설정되지 않았습니다"));
     }
 
     #[test]
