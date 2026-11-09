@@ -7,5 +7,6 @@
 //! ```
 
 pub(crate) mod git2_adapter;
+pub mod managed;
 pub mod model;
 pub mod service;

@@ -65,6 +65,8 @@ pub struct CurrentWorkspace {
     pub summary: Option<WorkspaceSummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository: Option<KnowledgeRepository>,
+    /// `.okf/workspace.yml`이 있는 OKF 저장소인지. 아니면 화면에 경고를 띄운다.
+    pub okf: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -81,6 +83,7 @@ impl CurrentWorkspace {
             status: CurrentWorkspaceStatus::Connected,
             summary: Some(summary),
             repository: None,
+            okf: true,
         }
     }
 
@@ -94,6 +97,25 @@ impl CurrentWorkspace {
             status: CurrentWorkspaceStatus::Connected,
             summary: Some(summary),
             repository: Some(repository),
+            okf: true,
+        }
+    }
+
+    /// OKF 설정이 없는 저장소. 저장소 전체를 문서 폴더로 본다.
+    pub fn connected_without_okf(path: PathBuf, repository: KnowledgeRepository) -> Self {
+        let summary = WorkspaceSummary {
+            id: Uuid::new_v5(&Uuid::NAMESPACE_URL, repository.id.as_bytes()),
+            name: repository.full_name.clone(),
+            schema_version: 0,
+            document_roots: vec![".".to_owned()],
+            repository_count: 1,
+        };
+        Self {
+            path,
+            status: CurrentWorkspaceStatus::Connected,
+            summary: Some(summary),
+            repository: Some(repository),
+            okf: false,
         }
     }
 
@@ -103,6 +125,7 @@ impl CurrentWorkspace {
             status: CurrentWorkspaceStatus::RecoveryRequired,
             summary: None,
             repository: None,
+            okf: false,
         }
     }
 }

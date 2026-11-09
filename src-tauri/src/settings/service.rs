@@ -106,6 +106,13 @@ impl LocalSettingsService {
         };
 
         match inspection {
+            WorkspaceInspection::InitializationRequired | WorkspaceInspection::Invalid { .. }
+                if repository.is_some() =>
+            {
+                Ok(repository.map(|repository| {
+                    CurrentWorkspace::connected_without_okf(canonical_path, repository)
+                }))
+            }
             WorkspaceInspection::Ready { summary } => Ok(Some(
                 repository
                     .map(|repository| {
@@ -188,13 +195,23 @@ impl LocalSettingsService {
                 "현재 지식 저장소 정보를 로컬 설정에 저장할 수 없습니다.",
             ));
         }
-        let inspected_summary = ready_summary(self.workspace_inspector.as_ref(), repository_path)?;
         let canonical_path = self.path_resolver.canonicalize(repository_path)?;
+        // OKF 설정이 없거나 깨진 저장소도 연결한다. 화면이 경고를 띄운다.
         let summary = match self.workspace_inspector.inspect(&canonical_path)? {
-            WorkspaceInspection::Ready { summary } => summary,
+            WorkspaceInspection::Ready { summary } => Some(summary),
+            WorkspaceInspection::InitializationRequired | WorkspaceInspection::Invalid { .. } => {
+                None
+            }
             inspection => return Err(workspace_not_ready_error(inspection)),
         };
-        if summary.id != inspected_summary.id {
+        let path_changed = match (&summary, self.workspace_inspector.inspect(repository_path)?) {
+            (Some(summary), WorkspaceInspection::Ready { summary: inspected }) => {
+                summary.id != inspected.id
+            }
+            (Some(_), _) => true,
+            (None, _) => false,
+        };
+        if path_changed {
             return Err(AppError::new(
                 ErrorCode::WorkspaceInvalid,
                 "검증 중 워크스페이스 경로가 변경되었습니다.",
@@ -213,11 +230,12 @@ impl LocalSettingsService {
         })?;
         self.store.write(CURRENT_WORKSPACE_PATH_KEY, &encoded)?;
 
-        Ok(CurrentWorkspace::connected_to_repository(
-            canonical_path,
-            summary,
-            repository,
-        ))
+        Ok(match summary {
+            Some(summary) => {
+                CurrentWorkspace::connected_to_repository(canonical_path, summary, repository)
+            }
+            None => CurrentWorkspace::connected_without_okf(canonical_path, repository),
+        })
     }
 
     pub fn clear_current(&self) -> Result<(), AppError> {
@@ -619,7 +637,7 @@ mod tests {
     use crate::error::AppError;
     use crate::project_board::model::ProjectOwnerScope;
     use crate::settings::model::{
-        CurrentWorkspaceStatus, DisplayDensity, DocsRepository, LinkedProject,
+        CurrentWorkspaceStatus, DisplayDensity, DocsRepository, KnowledgeRepository, LinkedProject,
         PendingInitializationContext,
     };
     use crate::workspace::service::{WorkspaceInspection, WorkspaceSummary};
@@ -954,6 +972,69 @@ mod tests {
             Some("/workspace/current")
         );
         assert_eq!(store.raw(UNKNOWN_KEY).as_deref(), Some("keep-me"));
+    }
+
+    fn non_okf_repository() -> (TempDir, KnowledgeRepository) {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("README.md"),
+            "# 소개
+",
+        )
+        .unwrap();
+        fs::create_dir(directory.path().join("notes")).unwrap();
+        fs::write(
+            directory.path().join("notes/a.md"),
+            "# 메모
+",
+        )
+        .unwrap();
+        let repository = KnowledgeRepository {
+            id: "R_plain".to_owned(),
+            full_name: "Mockly-Company/plain-docs".to_owned(),
+        };
+        (directory, repository)
+    }
+
+    #[test]
+    fn non_okf_repository_connects_with_a_warning_flag() {
+        let (directory, repository) = non_okf_repository();
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+
+        let connected = service
+            .set_current_for_repository(directory.path(), repository)
+            .unwrap();
+        assert!(!connected.okf);
+        assert_eq!(connected.status, CurrentWorkspaceStatus::Connected);
+
+        let loaded = service.load_current().unwrap().unwrap();
+        assert_eq!(loaded.status, CurrentWorkspaceStatus::Connected);
+        assert!(!loaded.okf);
+        assert_eq!(loaded.summary, connected.summary);
+    }
+
+    #[test]
+    fn non_okf_repository_lists_markdown_from_the_root() {
+        let (directory, repository) = non_okf_repository();
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+        service
+            .set_current_for_repository(directory.path(), repository)
+            .unwrap();
+        let workspace = service.load_connected_document_workspace().unwrap();
+
+        let catalog = crate::documents::discovery::discover_documents(
+            &workspace.repository_root,
+            &workspace.document_roots,
+        )
+        .unwrap();
+
+        let mut paths: Vec<String> = catalog
+            .documents
+            .iter()
+            .map(|document| document.path.clone())
+            .collect();
+        paths.sort();
+        assert_eq!(paths, vec!["README.md".to_owned(), "notes/a.md".to_owned()]);
     }
 
     fn linked(id: &str, title: &str) -> LinkedProject {
