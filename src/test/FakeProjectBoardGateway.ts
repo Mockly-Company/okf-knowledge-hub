@@ -1,4 +1,8 @@
-import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import type {
+  ActiveProjectResult,
+  DocsRepositoryRef,
+  ProjectBoardGateway,
+} from "@/features/project-board/ProjectBoardGateway";
 import type {
   BoardIssue,
   ProjectBoard,
@@ -35,6 +39,9 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
   readonly boardsByProjectId = new Map<string, ProjectBoard>();
 
   listTruncated = false;
+
+  /** 프로젝트별 문서 저장소. setActiveProject가 돌려준다. */
+  readonly docsRepositories = new Map<string, DocsRepositoryRef>();
 
   /** 마지막으로 연결·전환된 프로젝트 id. Org 스위처 뼈대용 상태. */
   activeProjectId: string | null = null;
@@ -155,10 +162,11 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     this.boardResult = this.board;
   }
 
-  async setActiveProject(id: string): Promise<void> {
+  async setActiveProject(id: string): Promise<ActiveProjectResult> {
     this.calls.push({ method: "setActiveProject", id });
     this.activeProjectId = id;
     this.boardResult = this.board;
+    return { docsRepository: this.docsRepositories.get(id) ?? null };
   }
 
   async unlinkGithubProject(id: string): Promise<void> {

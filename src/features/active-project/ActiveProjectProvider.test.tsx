@@ -47,61 +47,31 @@ describe("ActiveProjectProvider", () => {
   beforeEach(() => localStorage.clear());
   afterEach(cleanup);
 
-  it("remembers the connected workspace the first time a project is selected", async () => {
+  it("selecting a project does not touch the workspace mapping", async () => {
     const projects = FakeProjectBoardGateway.empty();
     projects.linkedProjects = [project];
+    projects.docsRepositories.set("PVT_1", {
+      repositoryId: "R_1",
+      fullName: "Mockly-Company/docs",
+    });
     const workspace = FakeWorkspaceConnectionGateway.connected("/repo/current");
+    const read = vi.spyOn(workspace, "getWorkspaceForProject");
+    const write = vi.spyOn(workspace, "setWorkspaceForProject");
 
     renderProvider(projects, workspace);
 
     expect(
       await screen.findByText("active=PVT_1 missing=false"),
     ).toBeInTheDocument();
-    await expect(workspace.getWorkspaceForProject("PVT_1")).resolves.toBe(
-      "/repo/current",
-    );
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
   });
 
-  it("keeps an existing mapping when another workspace is connected", async () => {
+  it("reports missing docs when the project has no docs repository", async () => {
     const projects = FakeProjectBoardGateway.empty();
     projects.linkedProjects = [project];
-    const workspace = FakeWorkspaceConnectionGateway.connected("/repo/current");
-    await workspace.setWorkspaceForProject("PVT_1", "/repo/remembered");
 
-    renderProvider(projects, workspace);
-
-    expect(
-      await screen.findByText("active=PVT_1 missing=false"),
-    ).toBeInTheDocument();
-    await expect(workspace.getWorkspaceForProject("PVT_1")).resolves.toBe(
-      "/repo/remembered",
-    );
-  });
-
-  it("does not report missing docs when the workspace mapping cannot be read", async () => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    const projects = FakeProjectBoardGateway.empty();
-    projects.linkedProjects = [project];
-    const workspace = FakeWorkspaceConnectionGateway.connected();
-    vi.spyOn(workspace, "getWorkspaceForProject").mockRejectedValue(
-      new Error("기억된 프로젝트 저장소 정보를 읽을 수 없습니다."),
-    );
-
-    renderProvider(projects, workspace);
-
-    expect(
-      await screen.findByText("active=PVT_1 missing=false"),
-    ).toBeInTheDocument();
-    expect(console.warn).toHaveBeenCalled();
-  });
-
-  it("reports missing docs when no workspace is connected", async () => {
-    const projects = FakeProjectBoardGateway.empty();
-    projects.linkedProjects = [project];
-    const workspace = FakeWorkspaceConnectionGateway.connected();
-    workspace.currentWorkspace = null;
-
-    renderProvider(projects, workspace);
+    renderProvider(projects, FakeWorkspaceConnectionGateway.connected());
 
     expect(
       await screen.findByText("active=PVT_1 missing=true"),

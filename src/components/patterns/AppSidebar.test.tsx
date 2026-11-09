@@ -449,6 +449,7 @@ describe("AppSidebar project search", () => {
       if (selectCalls === 1) {
         throw new Error("연결되지 않은 Project입니다.");
       }
+      return { docsRepository: null };
     };
     await openAddPanel(user);
 
