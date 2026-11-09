@@ -98,6 +98,7 @@ function describeSelectError(error: unknown): string | null {
 
 interface ActiveProjectProviderProps extends PropsWithChildren {
   projectGateway?: ProjectBoardGateway;
+  /** 쓰지 않는다. 예전 로컬 연결 경로와 함께 지운다(계획 Task 12). */
   workspaceGateway?: Pick<
     WorkspaceConnectionGateway,
     "getCurrentWorkspace" | "getWorkspaceForProject" | "setWorkspaceForProject"
@@ -106,14 +107,10 @@ interface ActiveProjectProviderProps extends PropsWithChildren {
 
 export function ActiveProjectProvider({
   projectGateway,
-  workspaceGateway,
   children,
 }: ActiveProjectProviderProps) {
   // Tauri 게이트웨이는 invoke 래퍼라 인스턴스를 공유해도 안전하다.
   const [project] = useState(() => projectGateway ?? new TauriProjectBoardGateway());
-  const [workspace] = useState(
-    () => workspaceGateway ?? new TauriWorkspaceConnectionGateway(),
-  );
   const queryClient = useQueryClient();
   const [activeProjectId, setActiveProjectId] = useState<string | null>(() =>
     readLastActiveProjectId(),
@@ -175,40 +172,9 @@ export function ActiveProjectProvider({
   // 키로 쓰므로 자동 재조회된다. 별도 invalidate가 필요 없다.
   const selectMutation = useMutation({
     mutationFn: async (projectId: string): Promise<boolean> => {
-      // 백엔드 lane이 붙기 전에는 setActiveProject가 없을 수 있다.
-      // 목록에서 찾은 프로젝트가 있으면 link로 폴백한다.
-      if (project.setActiveProject) {
-        await project.setActiveProject(projectId);
-      } else {
-        const fresh =
-          queryClient.getQueryData<ResolvedGithubProject[]>(
-            projectBoardKeys.linkedProjects,
-          ) ?? projects;
-        const resolved = fresh.find(
-          (candidate) => candidate.id === projectId,
-        );
-        if (!resolved) {
-          throw new Error("프로젝트 전환에 실패했습니다.");
-        }
-        await project.linkGithubProject(resolved);
-      }
-      // 연결 목록은 현재 워크스페이스의 파일에서 오므로, 매핑이 없으면
-      // 현재 저장소를 이 프로젝트의 docs로 기억한다. 기존 매핑은 덮어쓰지 않는다.
-      try {
-        if (await workspace.getWorkspaceForProject(projectId)) {
-          return false;
-        }
-        const current = await workspace.getCurrentWorkspace();
-        if (current?.status !== "connected" || !current.path) {
-          return true;
-        }
-        await workspace.setWorkspaceForProject(projectId, current.path);
-        return false;
-      } catch (error) {
-        // 조회 실패를 "저장소 없음" 안내로 바꾸지 않는다. Documents는 그대로 쓸 수 있다.
-        console.warn("[active-project] workspace mapping failed", error);
-        return false;
-      }
+      // 프로젝트별 문서 저장소는 앱 설정에 있다. 없으면 Documents가 선택을 안내한다.
+      const result = await project.setActiveProject(projectId);
+      return result.docsRepository === null;
     },
     onSuccess: (missing, projectId) => {
       userClearedRef.current = false;

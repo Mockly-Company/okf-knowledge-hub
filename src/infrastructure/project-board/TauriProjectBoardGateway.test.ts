@@ -210,30 +210,27 @@ describe("TauriProjectBoardGateway", () => {
     );
   });
 
-  it("treats a missing set_active command as an old backend and resolves", async () => {
-    // 실행 중인 백엔드가 멀티프로젝트 명령 이전 버전이면 invoke가 실패한다.
-    // link가 이미 active를 지정하므로 이 경우만 조용히 넘어간다.
+  it("returns the docs repository of the newly active project", async () => {
+    const invoke = async <T>(): Promise<T> =>
+      ({
+        docsRepository: { repositoryId: "R_1", fullName: "Mockly-Company/docs" },
+      }) as T;
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    await expect(gateway.setActiveProject("PVT_kwDOExample")).resolves.toEqual({
+      docsRepository: { repositoryId: "R_1", fullName: "Mockly-Company/docs" },
+    });
+  });
+
+  it("propagates a failed project switch", async () => {
     const invoke = async <T>(): Promise<T> => {
       throw "Command set_active_github_project not found";
     };
     const gateway = new TauriProjectBoardGateway(invoke);
 
-    await expect(
-      gateway.setActiveProject("PVT_kwDOExample"),
-    ).resolves.toBeUndefined();
-  });
-
-  it("treats a release-mode ACL rejection of set_active as an old backend", async () => {
-    // 릴리스 빌드에서는 "not allowed by ACL" 형태로 거부된다. 명령명을
-    // 포함한 거부만 구버전으로 보고, 그 외 사유는 계속 전파한다.
-    const invoke = async <T>(): Promise<T> => {
-      throw "Command set_active_github_project not allowed by ACL";
-    };
-    const gateway = new TauriProjectBoardGateway(invoke);
-
-    await expect(
-      gateway.setActiveProject("PVT_kwDOExample"),
-    ).resolves.toBeUndefined();
+    await expect(gateway.setActiveProject("PVT_kwDOExample")).rejects.toBe(
+      "Command set_active_github_project not found",
+    );
   });
 
   it("does not turn a failed owner search into an unfiltered list", async () => {

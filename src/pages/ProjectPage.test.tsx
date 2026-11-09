@@ -228,6 +228,7 @@ describe("ProjectPage", () => {
       listGithubProjects: () => gateway.listGithubProjects(),
       linkGithubProject: (project: ResolvedGithubProject) =>
         gateway.linkGithubProject(project),
+      setActiveProject: (id: string) => gateway.setActiveProject(id),
     };
     render(<ProjectPage gateway={counting} />);
 

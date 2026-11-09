@@ -1,5 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
@@ -10,72 +8,33 @@ use crate::project_board::{
     BoardIssue, BoardLayer, BoardStatus, GithubProjectList, ProjectBoard, ProjectOwnerScope,
     ResolvedGithubProject,
 };
-use crate::settings::model::CurrentWorkspaceStatus;
+use crate::settings::model::{DocsRepository, LinkedProject};
 use crate::state::AppServices;
-use crate::workspace::model::{GithubProjectRef, GithubWorkspaceConfig, WorkspaceDocument};
+use crate::workspace::model::GithubProjectRef;
 
 pub const PROJECT_BOARD_CACHE_DIR_NAME: &str = "project-board";
 
-/// workspace 문서까지만 읽는다. 연결 여부와 무관하다.
-async fn load_workspace_root(
-    services: &AppServices,
-) -> CommandResult<(std::path::PathBuf, WorkspaceDocument)> {
-    let settings = services.local_settings.clone();
-    let current = settings
-        .load_current()
-        .map_err(|_| settings_unavailable_error())?
-        .ok_or_else(workspace_missing_error)?;
-    if current.status != CurrentWorkspaceStatus::Connected {
-        return Err(workspace_missing_error());
-    }
-    let repository_root = std::path::PathBuf::from(&current.path);
-    // 크래시로 남았을 수 있는 workspace.yml 임시 파일을 best-effort로 정리한다.
-    // 진행 중인 다른 작업을 건드리지 않도록 1시간 초과분만 지운다.
-    let okf_dir = repository_root.join(".okf");
-    if let Ok(mut entries) = tokio::fs::read_dir(&okf_dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("workspace.yml.tmp.") {
-                continue;
-            }
-            let stale = entry
-                .metadata()
-                .await
-                .ok()
-                .and_then(|metadata| metadata.modified().ok())
-                .and_then(|modified| modified.elapsed().ok())
-                .is_some_and(|age| age.as_secs() > 3600);
-            if stale {
-                let _ = tokio::fs::remove_file(entry.path()).await;
-            }
-        }
-    }
-    let source = tokio::fs::read_to_string(okf_dir.join("workspace.yml"))
-        .await
-        .map_err(|_| workspace_file_error(&current.path))?;
-    let document =
-        WorkspaceDocument::parse(&source).map_err(|_| workspace_file_error(&current.path))?;
-    Ok((repository_root, document))
+/// 앱 설정의 활성 프로젝트. 보드 조회·동기화의 대상이다.
+fn load_linked_project(services: &AppServices) -> CommandResult<GithubProjectRef> {
+    let project = services
+        .local_settings
+        .load_active_project()?
+        .ok_or_else(project_not_linked_error)?;
+    Ok(GithubProjectRef {
+        id: project.id,
+        owner: project.owner,
+        number: project.number,
+        scope: Some(project.scope),
+        extra: Default::default(),
+    })
 }
 
-async fn load_linked_project(
-    services: &AppServices,
-) -> CommandResult<(std::path::PathBuf, GithubProjectRef, WorkspaceDocument)> {
-    let (repository_root, document) = load_workspace_root(services).await?;
-    match document
-        .config
-        .github
-        .as_ref()
-        .and_then(|github| github.active_project())
-    {
-        Some(project) => Ok((repository_root, project, document)),
-        None => Err(AppError::new(
-            ErrorCode::WorkspaceInvalid,
-            "GitHub Project가 연결되지 않았습니다.",
-        )
-        .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", ".okf/workspace.yml")),
-    }
+fn project_not_linked_error() -> AppError {
+    AppError::new(
+        ErrorCode::WorkspaceInvalid,
+        "GitHub Project가 연결되지 않았습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
 }
 
 /// 보드 캐시 키. 사람이 읽을 수 있도록 `{owner}-{number}` 기준이다.
@@ -105,77 +64,12 @@ fn is_empty_board(board: &ProjectBoard) -> bool {
     board.issues.is_empty() && board.fetched_at.is_none()
 }
 
-async fn persist_workspace_document(
-    repository_root: &std::path::Path,
-    document: &WorkspaceDocument,
-) -> CommandResult<()> {
-    let content = document.to_yaml()?;
-    // 크래시 시 반만 쓰인 workspace.yml이 남지 않도록 임시 파일에 쓰고 교체한다.
-    let tmp_path = repository_root.join(".okf").join(format!(
-        "workspace.yml.tmp.{}.{}",
-        std::process::id(),
-        workspace_tmp_seq()
-    ));
-    if let Err(error) = tokio::fs::write(&tmp_path, content).await {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(AppError::new(
-            ErrorCode::WorkspaceInvalid,
-            "워크스페이스 파일을 저장할 수 없습니다.",
-        )
-        .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", repository_root.display().to_string())
-        .with_detail("reason", error.to_string()));
-    }
-    if let Err(error) = tokio::fs::rename(
-        &tmp_path,
-        repository_root.join(".okf").join("workspace.yml"),
-    )
-    .await
-    {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
-        return Err(AppError::new(
-            ErrorCode::WorkspaceInvalid,
-            "워크스페이스 파일을 저장할 수 없습니다.",
-        )
-        .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", repository_root.display().to_string())
-        .with_detail("reason", error.to_string()));
-    }
-    Ok(())
-}
-
-/// 연결용 로더. 프로젝트 연결 여부와 무관하게 workspace 문서까지만 읽는다.
-/// 첫 연결 시에는 project가 없는 것이 정상이므로 여기서 요구하지 않는다.
-async fn load_workspace_document(
-    services: &AppServices,
-) -> CommandResult<(std::path::PathBuf, WorkspaceDocument)> {
-    load_workspace_root(services).await
-}
-
 fn settings_unavailable_error() -> AppError {
     AppError::new(
         ErrorCode::LocalSettingsUnavailable,
         "로컬 설정을 읽을 수 없습니다.",
     )
     .with_recovery(RecoveryAction::Retry)
-}
-
-fn workspace_missing_error() -> AppError {
-    AppError::new(
-        ErrorCode::WorkspaceMissing,
-        "연결된 워크스페이스가 없습니다.",
-    )
-    .with_recovery(RecoveryAction::Retry)
-}
-
-fn workspace_file_error(path: &std::path::Path) -> AppError {
-    AppError::new(
-        ErrorCode::WorkspaceInvalid,
-        "워크스페이스 파일을 읽을 수 없습니다.",
-    )
-    .with_recovery(RecoveryAction::OpenWorkspaceFile)
-    .with_detail("path", path.display().to_string())
-    .with_detail("reason", "workspace_file_unreadable")
 }
 
 #[tauri::command]
@@ -185,7 +79,7 @@ pub async fn get_project_board(
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
     // 읽기는 파일시스템을 변경하지 않는다. 디렉터리는 저장 시점에 만든다.
-    let (_repository_root, project, _document) = load_linked_project(&state).await?;
+    let project = load_linked_project(&state)?;
     let cache_root = app
         .path()
         .app_data_dir()
@@ -252,37 +146,30 @@ pub struct LinkedGithubProjectList {
     pub projects: Vec<ResolvedGithubProject>,
 }
 
-/// 현재 워크스페이스에 연결된 GitHub Projects 목록을 돌려준다.
-/// 미연결 시 빈 배열이 아니라 `workspace_missing` 에러를 돌려준다.
+/// 앱 설정에 연결된 GitHub Projects 목록을 돌려준다. 워크스페이스가 없어도 된다.
 #[tauri::command]
 pub async fn list_linked_projects(
     state: State<'_, AppServices>,
 ) -> CommandResult<LinkedGithubProjectList> {
-    let (_repository_root, document) = load_workspace_document(&state).await?;
-    let projects = document
-        .config
-        .github
-        .map(|github| github.all_projects())
-        .unwrap_or_default()
+    let projects = list_linked_projects_inner(&state)?;
+    Ok(LinkedGithubProjectList {
+        projects: without_closed_projects(&state, projects).await,
+    })
+}
+
+fn list_linked_projects_inner(services: &AppServices) -> CommandResult<Vec<ResolvedGithubProject>> {
+    Ok(services
+        .local_settings
+        .load_linked_projects()?
         .into_iter()
         .map(|project| ResolvedGithubProject {
             id: project.id,
             owner: project.owner,
             number: project.number,
-            title: project
-                .extra
-                .get("title")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|title| !title.is_empty())
-                .unwrap_or_default()
-                .to_owned(),
-            scope: project.scope.unwrap_or(ProjectOwnerScope::Organization),
+            title: project.title,
+            scope: project.scope,
         })
-        .collect();
-    Ok(LinkedGithubProjectList {
-        projects: without_closed_projects(&state, projects).await,
-    })
+        .collect())
 }
 
 /// GitHub에서 닫은 프로젝트는 선택 목록에서 숨긴다. 다시 열면 다시 보인다.
@@ -334,14 +221,13 @@ pub async fn resolve_github_project(
     })
 }
 
-/// 확인된 프로젝트를 현재 워크스페이스의 `.okf/workspace.yml`에 연결한다.
+/// 확인된 프로젝트를 앱 설정에 연결한다.
 #[tauri::command]
 pub async fn link_github_project(
     state: State<'_, AppServices>,
     project: ResolvedGithubProject,
 ) -> CommandResult<()> {
     let _access = state.acquire_authenticated_command().await?;
-    let (repository_root, mut document) = load_workspace_document(&state).await?;
     // 프론트가 보낸 값을 그대로 저장하지 않고 GitHub에 재조회해 검증한다.
     // id·owner·number가 어긋나면 다른 프로젝트를 가리킬 수 있다.
     // 스코프가 어긋났을 수 있어 반대 스코프로 한 번 더 시도한다.
@@ -372,37 +258,29 @@ pub async fn link_github_project(
             "Project 정보가 일치하지 않습니다. 다시 불러와 연결해 주세요.".to_owned(),
         ));
     }
-    let mut github = document
-        .config
-        .github
-        .take()
-        .unwrap_or(GithubWorkspaceConfig {
-            project: None,
-            projects: Vec::new(),
-            active_project_id: None,
-            extra: Default::default(),
-        });
-    // 다중 연결: projects에 upsert하고 active로 지정한다.
-    // 레거시 단일 리더용 `project`도 같은 값으로 동기화해 하위호환을 유지한다.
-    // 제목은 workspace.yml의 extra에 보관해 목록 조회에서 그대로 돌려준다.
-    let mut project_extra: indexmap::IndexMap<String, serde_yaml_ng::Value> = Default::default();
-    let linked_title = project.title.trim();
-    if !linked_title.is_empty() {
-        project_extra.insert(
-            "title".to_owned(),
-            serde_yaml_ng::Value::String(linked_title.to_owned()),
-        );
-    }
-    github.upsert_active(GithubProjectRef {
+    link_verified_project_inner(&state, project, verified_scope)
+}
+
+/// GitHub에서 확인한 스코프로 저장한다. 처음 연결한 프로젝트는 활성이 된다.
+fn link_verified_project_inner(
+    services: &AppServices,
+    project: ResolvedGithubProject,
+    verified_scope: ProjectOwnerScope,
+) -> CommandResult<()> {
+    services.local_settings.link_project(LinkedProject {
         id: project.id,
         owner: project.owner,
         number: project.number,
-        scope: Some(verified_scope),
-        extra: project_extra,
-    });
-    document.config.github = Some(github);
-    persist_workspace_document(&repository_root, &document).await?;
-    Ok(())
+        title: project.title.trim().to_owned(),
+        scope: verified_scope,
+    })
+}
+
+/// 활성 프로젝트 전환 결과. 그 프로젝트의 문서 저장소가 없으면 `docs_repository`가 비어 있다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveProjectResult {
+    pub docs_repository: Option<DocsRepository>,
 }
 
 /// 연결된 GitHub Project를 활성 프로젝트로 전환한다.
@@ -410,28 +288,18 @@ pub async fn link_github_project(
 pub async fn set_active_github_project(
     state: State<'_, AppServices>,
     project_id: String,
-) -> CommandResult<()> {
-    let _access = state.acquire_authenticated_command().await?;
-    let (repository_root, mut document) = load_workspace_document(&state).await?;
-    let mut github = document.config.github.take().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::WorkspaceInvalid,
-            "GitHub Project가 연결되지 않았습니다.",
-        )
-        .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", ".okf/workspace.yml")
-    })?;
-    if !github.set_active(project_id.trim()) {
-        return Err(AppError::new(
-            ErrorCode::WorkspaceInvalid,
-            "연결되지 않은 Project입니다. 먼저 연결해 주세요.",
-        )
-        .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", ".okf/workspace.yml"));
-    }
-    document.config.github = Some(github);
-    persist_workspace_document(&repository_root, &document).await?;
-    Ok(())
+) -> CommandResult<ActiveProjectResult> {
+    set_active_project_inner(&state, project_id.trim())
+}
+
+fn set_active_project_inner(
+    services: &AppServices,
+    project_id: &str,
+) -> CommandResult<ActiveProjectResult> {
+    services.local_settings.set_active_project(project_id)?;
+    Ok(ActiveProjectResult {
+        docs_repository: services.local_settings.docs_repository_for(project_id)?,
+    })
 }
 
 /// 연결된 GitHub Project를 목록에서 제거한다. `project_id`가 비면 활성 프로젝트를 제거한다.
@@ -440,53 +308,26 @@ pub async fn unlink_github_project(
     state: State<'_, AppServices>,
     project_id: Option<String>,
 ) -> CommandResult<()> {
-    let _access = state.acquire_authenticated_command().await?;
-    let (repository_root, mut document) = load_workspace_document(&state).await?;
-    let target = match project_id.as_deref().map(str::trim) {
-        Some(id) if !id.is_empty() => id.to_owned(),
-        _ => document
-            .config
-            .github
-            .as_ref()
-            .and_then(|github| github.active_project())
-            .map(|project| project.id)
-            .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::WorkspaceInvalid,
-                    "GitHub Project가 연결되지 않았습니다.",
-                )
-                .with_recovery(RecoveryAction::OpenWorkspaceFile)
-                .with_detail("path", ".okf/workspace.yml")
-            })?,
-    };
-    let mut github = document.config.github.take().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::WorkspaceInvalid,
-            "GitHub Project가 연결되지 않았습니다.",
-        )
-        .with_recovery(RecoveryAction::OpenWorkspaceFile)
-        .with_detail("path", ".okf/workspace.yml")
-    })?;
-    if !github.remove_project(&target) {
-        return Err(
-            AppError::new(ErrorCode::WorkspaceInvalid, "연결되지 않은 Project입니다.")
-                .with_recovery(RecoveryAction::OpenWorkspaceFile)
-                .with_detail("path", ".okf/workspace.yml"),
-        );
-    }
-    if github.all_projects().is_empty() {
-        document.config.github = None;
-    } else {
-        document.config.github = Some(github);
-    }
-    persist_workspace_document(&repository_root, &document).await?;
-    Ok(())
+    unlink_project_inner(&state, project_id)
 }
 
-static WORKSPACE_TMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
-fn workspace_tmp_seq() -> u64 {
-    WORKSPACE_TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+fn unlink_project_inner(services: &AppServices, project_id: Option<String>) -> CommandResult<()> {
+    let target = match project_id.as_deref().map(str::trim) {
+        Some(id) if !id.is_empty() => id.to_owned(),
+        _ => load_linked_project(services)?.id,
+    };
+    if !services
+        .local_settings
+        .load_linked_projects()?
+        .iter()
+        .any(|project| project.id == target)
+    {
+        return Err(
+            AppError::new(ErrorCode::WorkspaceInvalid, "연결되지 않은 Project입니다.")
+                .with_recovery(RecoveryAction::Retry),
+        );
+    }
+    services.local_settings.unlink_project(&target)
 }
 
 fn resolve_project_scope(project: &GithubProjectRef) -> (ProjectOwnerScope, ProjectOwnerScope) {
@@ -897,7 +738,7 @@ pub async fn sync_project_board(
     state: State<'_, AppServices>,
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
-    let (_repository_root, project, _document) = load_linked_project(&state).await?;
+    let project = load_linked_project(&state)?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
     let (first_scope, fallback_scope) = resolve_project_scope(&project);
     let (items, truncated, dropped) = match github
@@ -957,6 +798,95 @@ mod tests {
     };
     use crate::github::model::{GithubProjectItem, GithubSubIssue};
     use crate::project_board::{BoardLayer, BoardStatus};
+
+    mod app_settings {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        use crate::error::AppError;
+        use crate::project_board::{ProjectOwnerScope, ResolvedGithubProject};
+        use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
+        use crate::state::AppServices;
+
+        use super::super::{
+            link_verified_project_inner, list_linked_projects_inner, load_linked_project,
+            set_active_project_inner, unlink_project_inner,
+        };
+
+        #[derive(Clone, Default)]
+        struct MemoryStore(Arc<Mutex<HashMap<String, String>>>);
+
+        impl LocalSettingsStore for MemoryStore {
+            fn read(&self, key: &str) -> Result<Option<String>, AppError> {
+                Ok(self.0.lock().unwrap().get(key).cloned())
+            }
+            fn write(&self, key: &str, value: &str) -> Result<(), AppError> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .insert(key.to_owned(), value.to_owned());
+                Ok(())
+            }
+            fn remove(&self, key: &str) -> Result<(), AppError> {
+                self.0.lock().unwrap().remove(key);
+                Ok(())
+            }
+        }
+
+        fn project(id: &str, number: u64) -> ResolvedGithubProject {
+            ResolvedGithubProject {
+                id: id.to_owned(),
+                owner: "Mockly-Company".to_owned(),
+                number,
+                title: format!("보드 {number}"),
+                scope: ProjectOwnerScope::Organization,
+            }
+        }
+
+        #[test]
+        fn linked_projects_do_not_require_a_workspace() {
+            let services = AppServices::new(LocalSettingsService::new(MemoryStore::default()));
+
+            link_verified_project_inner(&services, project("a", 1), ProjectOwnerScope::User)
+                .unwrap();
+            link_verified_project_inner(
+                &services,
+                project("b", 2),
+                ProjectOwnerScope::Organization,
+            )
+            .unwrap();
+
+            let listed = list_linked_projects_inner(&services).unwrap();
+            assert_eq!(listed.len(), 2);
+            assert_eq!(listed[0].scope, ProjectOwnerScope::User);
+            assert_eq!(load_linked_project(&services).unwrap().id, "a");
+        }
+
+        #[test]
+        fn switching_and_unlinking_use_app_settings() {
+            let services = AppServices::new(LocalSettingsService::new(MemoryStore::default()));
+            link_verified_project_inner(
+                &services,
+                project("a", 1),
+                ProjectOwnerScope::Organization,
+            )
+            .unwrap();
+            link_verified_project_inner(
+                &services,
+                project("b", 2),
+                ProjectOwnerScope::Organization,
+            )
+            .unwrap();
+
+            let switched = set_active_project_inner(&services, "b").unwrap();
+            assert_eq!(switched.docs_repository, None);
+            assert_eq!(load_linked_project(&services).unwrap().number, 2);
+
+            unlink_project_inner(&services, None).unwrap();
+            assert_eq!(load_linked_project(&services).unwrap().id, "a");
+            assert!(set_active_project_inner(&services, "b").is_err());
+        }
+    }
 
     #[test]
     fn status_names_map_to_board_columns() {

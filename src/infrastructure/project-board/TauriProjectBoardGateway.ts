@@ -1,5 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import type {
+  ActiveProjectResult,
+  ProjectBoardGateway,
+} from "@/features/project-board/ProjectBoardGateway";
 import type {
   BoardIssue,
   ProjectBoard,
@@ -59,21 +62,14 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
     return this.invokeCommand<void>("link_github_project", { project });
   }
 
-  setActiveProject(id: string): Promise<void> {
+  async setActiveProject(id: string): Promise<ActiveProjectResult> {
     // 실패를 삼키면 프론트 선택과 백엔드 활성이 어긋나 보드가 그대로 보인다.
     // 에러를 올려보내 provider가 selectError로 노출한다.
-    // 명령 자체가 없는 구버전 백엔드에서만 link가 지정한 active를 그대로 쓴다.
-    return this.invokeCommand<void>("set_active_github_project", {
-      projectId: id,
-    }).catch((error: unknown) => {
-      if (isMissingCommandError(error, "set_active_github_project")) {
-        console.info(
-          "[project-board] old backend without set_active; link already selected the project",
-        );
-        return;
-      }
-      throw error;
-    });
+    const result = await this.invokeCommand<Partial<ActiveProjectResult> | null>(
+      "set_active_github_project",
+      { projectId: id },
+    );
+    return { docsRepository: result?.docsRepository ?? null };
   }
 
   unlinkGithubProject(id: string): Promise<void> {
