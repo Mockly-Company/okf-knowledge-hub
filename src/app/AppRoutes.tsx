@@ -9,16 +9,31 @@ import { DesignSystemPage } from "@/pages/DesignSystemPage";
 import { WorkspaceGate } from "@/features/workspace-connection/WorkspaceGate";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { DocumentsFollowActiveProject } from "@/features/docs-repository/ProjectDocsRepository";
+import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
+import { sharedDocsRepositoryGateway } from "@/features/docs-repository/ProjectDocsRepository";
+import { useDocsRepositorySync } from "@/features/docs-repository/useDocsRepositorySync";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
 import type { AiGateway } from "@/features/ai/AiGateway";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
-function ConnectedAppShell({ documentsGateway }: { documentsGateway: DocumentsGateway }) {
+function DocsRepositorySync({ gateway }: { gateway: DocsRepositoryGateway }) {
+  useDocsRepositorySync(gateway);
+  return null;
+}
+
+function ConnectedAppShell({
+  documentsGateway,
+  docsRepositoryGateway,
+}: {
+  documentsGateway: DocumentsGateway;
+  docsRepositoryGateway: DocsRepositoryGateway;
+}) {
   return (
     <DocumentsProvider gateway={documentsGateway}>
       <DocumentsFollowActiveProject />
+      <DocsRepositorySync gateway={docsRepositoryGateway} />
       <AppShell />
     </DocumentsProvider>
   );
@@ -44,15 +59,24 @@ export function AppRoutes({
   documentsGateway,
   aiGateway = sharedAiGateway,
   projectBoardGateway = sharedProjectBoardGateway,
+  docsRepositoryGateway = sharedDocsRepositoryGateway,
 }: {
   documentsGateway: DocumentsGateway;
   aiGateway?: AiGateway;
   projectBoardGateway?: ProjectBoardGateway;
+  docsRepositoryGateway?: DocsRepositoryGateway;
 }) {
   return (
     <Routes>
       <Route element={<WorkspaceGate />}>
-        <Route element={<ConnectedAppShell documentsGateway={documentsGateway} />}>
+        <Route
+          element={
+            <ConnectedAppShell
+              documentsGateway={documentsGateway}
+              docsRepositoryGateway={docsRepositoryGateway}
+            />
+          }
+        >
           <Route index element={<HomePage />} />
           <Route path="documents" element={<DocumentsPage />} />
           <Route path="project" element={<ProjectPage />} />

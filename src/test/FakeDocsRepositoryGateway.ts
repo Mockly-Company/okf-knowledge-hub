@@ -2,6 +2,7 @@ import type {
   ConnectedDocsRepository,
   DocsRepositoryGateway,
   PreparedDocsRepository,
+  PullOutcome,
 } from "@/features/docs-repository/DocsRepositoryGateway";
 
 export class FakeDocsRepositoryGateway implements DocsRepositoryGateway {
@@ -10,6 +11,8 @@ export class FakeDocsRepositoryGateway implements DocsRepositoryGateway {
     alreadyCloned: false,
   };
   okf = true;
+  pullOutcome: PullOutcome = "up_to_date";
+  pulls = 0;
   readonly prepares: string[] = [];
   readonly connects: Array<{ projectId: string; repositoryId: string; fullName: string }> = [];
 
@@ -25,5 +28,10 @@ export class FakeDocsRepositoryGateway implements DocsRepositoryGateway {
   ): Promise<ConnectedDocsRepository> {
     this.connects.push({ projectId, repositoryId, fullName });
     return { fullName, okf: this.okf };
+  }
+
+  async pull(): Promise<PullOutcome> {
+    this.pulls += 1;
+    return this.pullOutcome;
   }
 }

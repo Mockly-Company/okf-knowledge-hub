@@ -3,6 +3,7 @@ import type {
   ConnectedDocsRepository,
   DocsRepositoryGateway,
   PreparedDocsRepository,
+  PullOutcome,
 } from "@/features/docs-repository/DocsRepositoryGateway";
 
 type InvokeDesktop = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
@@ -24,5 +25,9 @@ export class TauriDocsRepositoryGateway implements DocsRepositoryGateway {
       repositoryId,
       fullName,
     });
+  }
+
+  pull(): Promise<PullOutcome> {
+    return this.invokeCommand("pull_docs_repository");
   }
 }

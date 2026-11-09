@@ -18,6 +18,7 @@ import {
   sharedRepositoryGateway,
   type ProjectRepositoryGateway,
 } from "@/features/docs-repository/ProjectDocsRepository";
+import { DocsPullNotice } from "@/features/docs-repository/DocsPullNotice";
 import "@/features/documents/documents.css";
 import type { DocumentSummary } from "@/features/documents/model";
 
@@ -307,6 +308,7 @@ export function DocumentsPage({
       ) : null}
       {pickerOpen ? picker : null}
       <NotOkfNotice gateway={repositoryGateway} />
+      <DocsPullNotice />
 
       {state.documentNotice ? (
         <StatusFeedback
