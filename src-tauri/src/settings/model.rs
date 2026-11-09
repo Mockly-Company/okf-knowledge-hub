@@ -2,8 +2,28 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::project_board::model::ProjectOwnerScope;
 use crate::workspace::service::WorkspaceSummary;
 use uuid::Uuid;
+
+/// 앱 설정에 저장하는 연결된 GitHub Project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkedProject {
+    pub id: String,
+    pub owner: String,
+    pub number: u64,
+    pub title: String,
+    pub scope: ProjectOwnerScope,
+}
+
+/// 프로젝트가 문서 저장소로 쓰는 GitHub 저장소.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocsRepository {
+    pub repository_id: String,
+    pub full_name: String,
+}
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
