@@ -225,7 +225,7 @@ export function AiPage({
       >
         <p className="m-0">
           활성 프로젝트:{" "}
-          {activeProject ? activeProject.activeProjectTitle : "미연결(로컬)"}
+          {activeProject ? activeProject.activeProjectTitle : "선택된 프로젝트 없음"}
         </p>
         <p className="m-0">
           워크스페이스: {agents ? agents.workspace_path : "불러오는 중"}

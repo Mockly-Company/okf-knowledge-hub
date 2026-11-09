@@ -391,6 +391,26 @@ describe("AppSidebar project search", () => {
     ).toHaveTextContent("Mockly Board");
   });
 
+  it("lists only linked projects without a local option", async () => {
+    const user = userEvent.setup();
+    renderSidebarWithProjects({
+      linked: [linkedProject, otherProject],
+      searchable: [],
+    });
+    const trigger = await screen.findByRole("combobox", {
+      name: "활성 프로젝트",
+    });
+    await waitFor(() => expect(trigger).toHaveTextContent("Mockly Board"));
+
+    await user.click(trigger);
+
+    const options = await screen.findAllByRole("option");
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Mockly Board"),
+      expect.stringContaining("Other Thing"),
+    ]);
+  });
+
   it("shows the backend reason when linking fails", async () => {
     const user = userEvent.setup();
     const { projectGateway } = renderSidebarWithProjects({

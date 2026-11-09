@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -76,6 +76,26 @@ impl GithubUserResponse {
 #[derive(Deserialize)]
 struct GithubInstallationResponse {
     id: u64,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectStatesResponse {
+    data: Option<GithubProjectStatesData>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectStatesData {
+    #[serde(default)]
+    nodes: Vec<Option<GithubProjectState>>,
+}
+
+/// `ProjectV2`가 아닌 노드는 빈 객체로 오므로 모든 필드에 기본값을 둔다.
+#[derive(Deserialize)]
+struct GithubProjectState {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    closed: bool,
 }
 
 #[derive(Deserialize)]
@@ -1157,6 +1177,41 @@ impl GithubHttpClient {
         Ok(false)
     }
 
+    /// 주어진 Project Node ID 중 GitHub에서 닫힌 것만 돌려준다.
+    /// 지워졌거나 볼 수 없는 프로젝트는 닫힌 것으로 치지 않는다.
+    pub async fn closed_project_ids(&self, ids: &[String]) -> Result<HashSet<String>, AppError> {
+        // GraphQL `nodes`는 한 번에 최대 100개까지 받는다.
+        const NODES_LIMIT: usize = 100;
+        let mut closed = HashSet::new();
+        for batch in ids.chunks(NODES_LIMIT) {
+            let response = self
+                .send(
+                    HttpMethod::Post,
+                    &["graphql"],
+                    &[],
+                    Some(serde_json::json!({
+                        "query": "query($ids:[ID!]!){nodes(ids:$ids){... on ProjectV2{id closed}}}",
+                        "variables": { "ids": batch },
+                    })),
+                )
+                .await?;
+            if !(200..300).contains(&response.status) {
+                return Err(map_project_error(response.status));
+            }
+            let body: GithubProjectStatesResponse =
+                deserialize_response(response).map_err(|_| github_unavailable_error())?;
+            closed.extend(
+                body.data
+                    .into_iter()
+                    .flat_map(|data| data.nodes)
+                    .flatten()
+                    .filter(|node| node.closed && !node.id.is_empty())
+                    .map(|node| node.id),
+            );
+        }
+        Ok(closed)
+    }
+
     /// 연결된 계정이 볼 수 있는 Projects v2 목록을 가져온다.
     /// 조직 프로젝트와 개인 프로젝트를 합쳐서 반환한다.
     pub async fn list_projects(&self) -> Result<(Vec<GithubProjectListItem>, bool), AppError> {
@@ -2036,6 +2091,23 @@ mod tests {
             transport.requests()[0].url,
             "https://api.example.test/graphql"
         );
+    }
+
+    #[tokio::test]
+    async fn closed_project_lookup_returns_only_closed_projects() {
+        let tokens = SequenceTokenProvider::default();
+        let transport = RecordingTransport::with_responses(vec![response(
+            200,
+            r#"{"data":{"nodes":[{"id":"PVT_open","closed":false},{"id":"PVT_closed","closed":true},null,{}]},"errors":[{"type":"NOT_FOUND"}]}"#,
+        )]);
+        let service = client(tokens, transport.clone());
+        let ids = ["PVT_open", "PVT_closed", "PVT_gone", "I_issue"].map(String::from);
+
+        let closed = service.closed_project_ids(&ids).await.unwrap();
+
+        assert_eq!(closed, HashSet::from(["PVT_closed".to_owned()]));
+        let body = transport.requests()[0].body.clone().unwrap().to_string();
+        assert!(body.contains("\"ids\":[\"PVT_open\",\"PVT_closed\",\"PVT_gone\",\"I_issue\"]"));
     }
 
     #[tokio::test]

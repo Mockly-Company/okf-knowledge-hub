@@ -246,7 +246,7 @@ describe("ProjectPage", () => {
     render(<ProjectPage gateway={gateway} />);
 
     expect(
-      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
+      await screen.findByText("선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다."),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("region", { name: "GitHub Project 연결" }),
@@ -287,7 +287,7 @@ describe("ProjectPage", () => {
     const gateway = FakeProjectBoardGateway.unlinked();
     render(<ProjectPage gateway={gateway} />);
 
-    await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.");
+    await screen.findByText("선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.");
     expect(
       screen.queryByRole("region", { name: "기획 레이어" }),
     ).not.toBeInTheDocument();
@@ -300,7 +300,7 @@ describe("ProjectPage", () => {
     const gateway = FakeProjectBoardGateway.missingWorkspace();
     render(<ProjectPage gateway={gateway} />);
 
-    await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.");
+    await screen.findByText("선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.");
     expect(
       screen.queryByRole("region", { name: "기획 레이어" }),
     ).not.toBeInTheDocument();
@@ -332,7 +332,7 @@ describe("ProjectPage", () => {
       </ActiveProjectProvider>,
     );
 
-    await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.");
+    await screen.findByText("선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.");
     expect(
       gateway.calls.filter((call) => call.method === "getProjectBoard"),
     ).toHaveLength(0);
@@ -369,7 +369,7 @@ describe("ProjectPage", () => {
     render(<ProjectPage gateway={gateway} />);
 
     expect(
-      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
+      await screen.findByText("선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다."),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("radio", {
@@ -858,7 +858,7 @@ describe("ProjectPage", () => {
     render(<ProjectPage gateway={gateway} />);
 
     expect(
-      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
+      await screen.findByText("선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다."),
     ).toBeInTheDocument();
     expect(
       screen.queryByRole("textbox", { name: "Project URL" }),
@@ -870,7 +870,7 @@ describe("ProjectPage", () => {
     render(<ProjectPage gateway={gateway} />);
 
     expect(
-      await screen.findByText("프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다."),
+      await screen.findByText("선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다."),
     ).toBeInTheDocument();
     // 첫 재시도 타이머(1s)가 지나도 추가 호출이 없어야 한다.
     await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -1074,7 +1074,7 @@ describe("ProjectPage project switching", () => {
 
     expect(
       await screen.findByText(
-        "프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.",
+        "선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.",
       ),
     ).toBeInTheDocument();
     expect(
