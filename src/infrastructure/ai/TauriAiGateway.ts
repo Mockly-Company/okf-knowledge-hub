@@ -3,7 +3,6 @@ import type {
   AgentsMdResolution,
   AiConfig,
   AiGateway,
-  AiTaskResult,
   AiTerminalEvent,
   AiToolAvailability,
   AiToolId,
@@ -58,11 +57,9 @@ export class TauriAiGateway implements AiGateway {
   async getConfig(): Promise<AiConfig> {
     try {
       const raw = await this.invokeCommand<{
-        command_template?: string;
         cli_command?: string;
       }>("get_ai_config");
       return {
-        command_template: raw.command_template ?? "",
         cli_command: raw.cli_command ?? "",
       };
     } catch (error) {
@@ -70,15 +67,9 @@ export class TauriAiGateway implements AiGateway {
     }
   }
 
-  async setConfig(
-    command_template: string,
-    cli_command: string,
-  ): Promise<void> {
+  async setConfig(cliCommand: string): Promise<void> {
     try {
-      await this.invokeCommand<void>("set_ai_config", {
-        commandTemplate: command_template,
-        cliCommand: cli_command,
-      });
+      await this.invokeCommand<void>("set_ai_config", { cliCommand });
     } catch (error) {
       throw withBackendMessage(error);
     }
@@ -153,25 +144,6 @@ export class TauriAiGateway implements AiGateway {
   async createAgentsMd(): Promise<{ path: string }> {
     try {
       return await this.invokeCommand<{ path: string }>("create_agents_md");
-    } catch (error) {
-      throw withBackendMessage(error);
-    }
-  }
-
-  async runTask(prompt: string, tool: AiToolId): Promise<AiTaskResult> {
-    try {
-      return await this.invokeCommand<AiTaskResult>("run_ai_task", {
-        prompt,
-        tool,
-      });
-    } catch (error) {
-      throw withBackendMessage(error);
-    }
-  }
-
-  async cancelTask(): Promise<void> {
-    try {
-      await this.invokeCommand<boolean>("cancel_ai_task");
     } catch (error) {
       throw withBackendMessage(error);
     }

@@ -2,16 +2,14 @@ import type {
   AgentsMdResolution,
   AiConfig,
   AiGateway,
-  AiTaskResult,
   AiTerminalEvent,
   AiToolAvailability,
   AiToolId,
   AppAgentsMdResolution,
 } from "@/features/ai/AiGateway";
 
-/** AI 연동 Fake. 메모리 template/cliCommand + 고정 agents_md + runTask 기록. */
+/** AI 연동 Fake. 메모리 cliCommand + 고정 agents_md + 터미널 기록. */
 export class FakeAiGateway implements AiGateway {
-  template = `type "{prompt_file}" | my-ai-cli`;
   cliCommand = "codex";
   agentsMd: AgentsMdResolution = {
     workspace_path: "/work/mockly-knowledge",
@@ -26,8 +24,7 @@ export class FakeAiGateway implements AiGateway {
   /** false면 resolveAgentsMd가 "없음"(path/content null)으로 응답한다. */
   agentsMdExists = true;
   readonly creates: string[] = [];
-  readonly runs: string[] = [];
-  readonly sets: Array<{ command_template: string; cli_command: string }> = [];
+  readonly sets: string[] = [];
   /** startTerminal 호출 기록. 각 항목은 연 도구다. */
   readonly terminalStarts: AiToolId[] = [];
   readonly terminalWrites: Array<{ sessionId: string; data: string }> = [];
@@ -39,27 +36,15 @@ export class FakeAiGateway implements AiGateway {
   readonly terminalStops: string[] = [];
   private readonly terminalListeners: Array<(event: AiTerminalEvent) => void> =
     [];
-  /** runTask에 전달된 도구 기록. runs와 같은 순서다. */
-  readonly runTools: AiToolId[] = [];
   tools: AiToolAvailability = { claude: true, codex: true };
-  cancels = 0;
-  /** 지정하면 runTask가 이 값을 그대로 돌려준다. 실행 중 상태를 만들 때 쓴다. */
-  runResult: Promise<AiTaskResult> | null = null;
 
   async getConfig(): Promise<AiConfig> {
-    return {
-      command_template: this.template,
-      cli_command: this.cliCommand,
-    };
+    return { cli_command: this.cliCommand };
   }
 
-  async setConfig(
-    command_template: string,
-    cli_command: string,
-  ): Promise<void> {
-    this.sets.push({ command_template, cli_command });
-    this.template = command_template;
-    this.cliCommand = cli_command;
+  async setConfig(cliCommand: string): Promise<void> {
+    this.sets.push(cliCommand);
+    this.cliCommand = cliCommand;
   }
 
   async detectTools(): Promise<AiToolAvailability> {
@@ -124,18 +109,5 @@ export class FakeAiGateway implements AiGateway {
         this.agentsMd.content ?? "# AGENTS\n\n- 테스트 규칙\n- 문서 규칙\n",
     };
     return { path };
-  }
-
-  async runTask(prompt: string, tool: AiToolId): Promise<AiTaskResult> {
-    this.runs.push(prompt);
-    this.runTools.push(tool);
-    if (this.runResult) {
-      return this.runResult;
-    }
-    return { status: "completed", exit_code: 0, output: `(fake) ${prompt}` };
-  }
-
-  async cancelTask(): Promise<void> {
-    this.cancels += 1;
   }
 }

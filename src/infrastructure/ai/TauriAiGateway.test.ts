@@ -113,17 +113,7 @@ describe("TauriAiGateway", () => {
     ]);
   });
 
-  it("preserves the backend message for one-shot runs", async () => {
-    const gateway = new TauriAiGateway(async () => {
-      throw { code: "LocalSettingsUnavailable", message: "AI CLI 명령이 설정되지 않았습니다." };
-    });
-
-    await expect(gateway.runTask("hello", "claude")).rejects.toThrow(
-      "AI CLI 명령이 설정되지 않았습니다.",
-    );
-  });
-
-  it("records setConfig with both fields", async () => {
+  it("records setConfig with the cli command", async () => {
     const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
     const gateway = new TauriAiGateway(async <T,>(
       command: string,
@@ -133,43 +123,20 @@ describe("TauriAiGateway", () => {
       return undefined as T;
     });
 
-    await gateway.setConfig("tmpl {prompt_file}", "codex");
+    await gateway.setConfig("codex");
 
     expect(calls).toEqual([
-      {
-        command: "set_ai_config",
-        args: { commandTemplate: "tmpl {prompt_file}", cliCommand: "codex" },
-      },
+      { command: "set_ai_config", args: { cliCommand: "codex" } },
     ]);
   });
 
   it("treats a missing cli_command as no custom command", async () => {
-    const gateway = new TauriAiGateway(invokeReturning({ command_template: "tmpl" }));
+    const gateway = new TauriAiGateway(invokeReturning({}));
 
-    await expect(gateway.getConfig()).resolves.toEqual({
-      command_template: "tmpl",
-      cli_command: "",
-    });
+    await expect(gateway.getConfig()).resolves.toEqual({ cli_command: "" });
   });
 
-  it("passes the chosen tool when running a task", async () => {
-    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
-    const gateway = new TauriAiGateway(async <T,>(
-      command: string,
-      args?: Record<string, unknown>,
-    ) => {
-      calls.push({ command, args });
-      return { status: "completed", exit_code: 0, output: "" } as T;
-    });
-
-    await gateway.runTask("요청", "claude");
-
-    expect(calls).toEqual([
-      { command: "run_ai_task", args: { prompt: "요청", tool: "claude" } },
-    ]);
-  });
-
-  it("detects tools and cancels through the backend", async () => {
+  it("detects tools through the backend", async () => {
     const calls: string[] = [];
     const gateway = new TauriAiGateway(async <T,>(command: string) => {
       calls.push(command);
@@ -182,8 +149,7 @@ describe("TauriAiGateway", () => {
       claude: true,
       codex: false,
     });
-    await gateway.cancelTask();
 
-    expect(calls).toEqual(["detect_ai_tools", "cancel_ai_task"]);
+    expect(calls).toEqual(["detect_ai_tools"]);
   });
 });
