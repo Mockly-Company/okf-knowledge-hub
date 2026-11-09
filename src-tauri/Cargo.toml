@@ -40,7 +40,7 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time", "fs"] }
 tokio-util = "0.7"
 url = "2"
 unicode-normalization = "0.1"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 time = { version = "0.3.55", features = ["formatting"] }
 portable-pty = "0.9"
 
