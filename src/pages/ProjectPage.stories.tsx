@@ -87,7 +87,7 @@ export const NotLinked: StoryObj<typeof meta> = {
   ),
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByText(/프로젝트 없음 \(로컬\)/),
+      await canvas.findByText(/선택된 프로젝트가 없습니다/),
     ).toBeVisible();
   },
 };

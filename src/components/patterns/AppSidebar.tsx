@@ -207,11 +207,7 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
             <Select
               value={activeProject.activeProjectId ?? ""}
               onValueChange={(value) =>
-                value === ""
-                  ? activeProject.clearActiveProject()
-                  : void activeProject
-                      .selectProject(value)
-                      .catch(() => undefined)
+                void activeProject.selectProject(value).catch(() => undefined)
               }
               placeholder={
                 activeProject.isListing
@@ -221,7 +217,6 @@ export function AppSidebar({ collapseButtonRef, onCollapse }: AppSidebarProps) {
               aria-label="활성 프로젝트"
               disabled={activeProject.isSelecting}
             >
-              <option value="">프로젝트 없음 (로컬)</option>
               {activeProject.projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.title} · {project.owner} #{project.number}

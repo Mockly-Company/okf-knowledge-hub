@@ -480,7 +480,7 @@ export function ProjectPage({
           role="status"
           className="m-0 mt-[var(--space-4)] text-[var(--color-text-muted)]"
         >
-          프로젝트 없음 (로컬) — 사이드바에서 프로젝트를 선택하면 이슈를 볼 수 있습니다.
+          선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.
         </p>
       ) : null}
 

@@ -25,7 +25,7 @@ export const LAST_ACTIVE_PROJECT_KEY = "okhub.last-active-project-id";
 export interface ActiveProjectContextValue {
   activeProjectId: string | null;
   projects: ResolvedGithubProject[];
-  /** 활성 프로젝트 표시명. 미선택(None·로컬)이면 "미연결(로컬)". */
+  /** 활성 프로젝트 표시명. 미선택이면 "선택된 프로젝트 없음". */
   activeProjectTitle: string;
   /** 전환한 프로젝트에 기억된 docs 저장소가 없을 때 true. */
   docsMissing: boolean;
@@ -275,7 +275,7 @@ export function ActiveProjectProvider({
 
   const activeProjectTitle =
     projects.find((candidate) => candidate.id === activeProjectId)?.title ??
-    "미연결(로컬)";
+    "선택된 프로젝트 없음";
 
   const value = useMemo<ActiveProjectContextValue>(
     () => ({

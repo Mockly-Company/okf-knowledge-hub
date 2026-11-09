@@ -280,7 +280,37 @@ pub async fn list_linked_projects(
             scope: project.scope.unwrap_or(ProjectOwnerScope::Organization),
         })
         .collect();
-    Ok(LinkedGithubProjectList { projects })
+    Ok(LinkedGithubProjectList {
+        projects: without_closed_projects(&state, projects).await,
+    })
+}
+
+/// GitHub에서 닫은 프로젝트는 선택 목록에서 숨긴다. 다시 열면 다시 보인다.
+/// 로그인 전이거나 GitHub에 묻지 못하면 목록을 그대로 돌려준다.
+async fn without_closed_projects(
+    state: &AppServices,
+    projects: Vec<ResolvedGithubProject>,
+) -> Vec<ResolvedGithubProject> {
+    let Some(github) = state.github.clone() else {
+        return projects;
+    };
+    if projects.is_empty() {
+        return projects;
+    }
+    let Ok(_access) = state.acquire_authenticated_command().await else {
+        return projects;
+    };
+    let ids: Vec<String> = projects.iter().map(|project| project.id.clone()).collect();
+    match github.closed_project_ids(&ids).await {
+        Ok(closed) => projects
+            .into_iter()
+            .filter(|project| !closed.contains(&project.id))
+            .collect(),
+        Err(error) => {
+            eprintln!("warning: closed project lookup failed: {}", error.message);
+            projects
+        }
+    }
 }
 
 /// 붙여넣은 Project URL에서 owner/number를 읽고 GitHub에서 Node ID와 제목을 가져온다.
