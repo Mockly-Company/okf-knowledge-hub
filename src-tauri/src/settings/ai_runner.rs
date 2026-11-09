@@ -48,15 +48,6 @@ impl AiTool {
             AiTool::Custom => custom_command.trim().to_owned(),
         }
     }
-
-    /// 프롬프트를 표준 입력으로 받는 비대화형 명령. 사용자 지정은 템플릿을 쓴다.
-    pub fn headless_command(self) -> Option<&'static str> {
-        match self {
-            AiTool::Claude => Some("claude -p --permission-mode acceptEdits"),
-            AiTool::Codex => Some("codex exec --sandbox workspace-write --skip-git-repo-check"),
-            AiTool::Custom => None,
-        }
-    }
 }
 
 /// `canonicalize`가 만든 `\\?\` 경로는 cmd가 현재 폴더로 쓰지 못하므로 일반 경로로 되돌린다.
@@ -79,10 +70,6 @@ pub fn compose_rules(app_rules: &str, project_rules: Option<&str>) -> String {
         }
         _ => format!("{app_rules}\n"),
     }
-}
-
-pub fn compose_task_prompt(rules: &str, request: &str) -> String {
-    format!("{}\n\n---\n\n{request}\n", rules.trim())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -317,54 +304,6 @@ pub fn run_process(
     })
 }
 
-/// 동시에 하나의 AI 작업만 돌린다. 앱 전역 관리 상태로 등록한다.
-#[derive(Default)]
-pub struct AiTaskRegistry {
-    running: Arc<Mutex<Option<Arc<AtomicBool>>>>,
-}
-
-pub struct AiTaskGuard {
-    pub cancel: Arc<AtomicBool>,
-    running: Arc<Mutex<Option<Arc<AtomicBool>>>>,
-}
-
-impl AiTaskRegistry {
-    pub fn begin(&self) -> Option<AiTaskGuard> {
-        let mut running = self.running.lock().ok()?;
-        if running.is_some() {
-            return None;
-        }
-        let cancel = Arc::new(AtomicBool::new(false));
-        *running = Some(cancel.clone());
-        Some(AiTaskGuard {
-            cancel,
-            running: self.running.clone(),
-        })
-    }
-
-    /// 실행 중인 작업이 있으면 취소를 요청하고 true를 돌려준다.
-    pub fn cancel(&self) -> bool {
-        let Ok(running) = self.running.lock() else {
-            return false;
-        };
-        match running.as_ref() {
-            Some(flag) => {
-                flag.store(true, Ordering::SeqCst);
-                true
-            }
-            None => false,
-        }
-    }
-}
-
-impl Drop for AiTaskGuard {
-    fn drop(&mut self) {
-        if let Ok(mut running) = self.running.lock() {
-            *running = None;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,19 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn presets_have_headless_commands_and_custom_uses_the_template() {
-        assert_eq!(
-            AiTool::Claude.headless_command(),
-            Some("claude -p --permission-mode acceptEdits")
-        );
-        assert_eq!(
-            AiTool::Codex.headless_command(),
-            Some("codex exec --sandbox workspace-write --skip-git-repo-check")
-        );
-        assert_eq!(AiTool::Custom.headless_command(), None);
-    }
-
-    #[test]
     fn verbatim_windows_paths_become_paths_cmd_can_enter() {
         assert_eq!(
             shell_path(Path::new(r"\\?\D:\mockly knowledge")),
@@ -459,14 +385,6 @@ mod tests {
 
         let hub_only = compose_rules("허브 규칙", None);
         assert!(hub_only.contains("허브 규칙"));
-    }
-
-    #[test]
-    fn task_prompt_places_rules_before_the_request() {
-        let prompt = compose_task_prompt("규칙", "이슈 정리해줘");
-        let rules_at = prompt.find("규칙").unwrap();
-        let request_at = prompt.find("이슈 정리해줘").unwrap();
-        assert!(rules_at < request_at);
     }
 
     #[test]
@@ -568,19 +486,5 @@ mod tests {
 
         assert_eq!(outcome.status, AiTaskStatus::Cancelled);
         assert!(started.elapsed() < Duration::from_secs(15));
-    }
-
-    #[test]
-    fn registry_allows_one_task_and_frees_the_slot_afterwards() {
-        let registry = AiTaskRegistry::default();
-        assert!(!registry.cancel());
-
-        let guard = registry.begin().unwrap();
-        assert!(registry.begin().is_none());
-        assert!(registry.cancel());
-        assert!(guard.cancel.load(Ordering::SeqCst));
-
-        drop(guard);
-        assert!(registry.begin().is_some());
     }
 }

@@ -72,7 +72,6 @@ pub fn run() {
                     auth_jobs.clone(),
                 ),
             );
-            app.manage(settings::ai_runner::AiTaskRegistry::default());
             app.manage(settings::ai_terminal::AiTerminalRegistry::default());
             app.manage(
                 state::AppServices::with_auth_jobs(local_settings, auth, auth_jobs)
@@ -137,8 +136,6 @@ pub fn run() {
             settings::commands::resolve_app_agents_md,
             settings::commands::resolve_agents_md,
             settings::commands::create_agents_md,
-            settings::commands::run_ai_task,
-            settings::commands::cancel_ai_task,
             settings::commands::get_workspace_for_project,
             settings::commands::set_workspace_for_project,
             settings::commands::list_remembered_workspaces,
