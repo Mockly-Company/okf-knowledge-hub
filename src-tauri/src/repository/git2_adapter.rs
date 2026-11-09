@@ -12,7 +12,8 @@ use url::Url;
 use crate::auth::model::AccessToken;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::repository::model::{
-    CloneProgress, CloneProgressStage, CommitOutcome, RepositoryIdentity, RepositorySnapshot,
+    CloneProgress, CloneProgressStage, CommitOutcome, PullOutcome, RepositoryIdentity,
+    RepositorySnapshot,
 };
 use crate::repository::service::{CloneProgressSink, GitRepositoryPort};
 use crate::workspace::service::{InitializationPreview, InitializationStrategy};
@@ -21,6 +22,63 @@ use crate::workspace::service::{InitializationPreview, InitializationStrategy};
 pub struct Git2RepositoryAdapter;
 
 impl GitRepositoryPort for Git2RepositoryAdapter {
+    fn fast_forward_default_branch(
+        &self,
+        path: &Path,
+        clean_remote_url: &str,
+        access_token: AccessToken,
+    ) -> Result<PullOutcome, AppError> {
+        let access_token = Arc::new(access_token);
+        let repository = Repository::open(path).map_err(|_| repository_path_error(path))?;
+        let fetch_failed = || repository_git_error("문서 저장소를 GitHub에서 받지 못했습니다.");
+        let mut remote = repository
+            .find_remote("origin")
+            .map_err(|_| fetch_failed())?;
+        let mut fetch = FetchOptions::new();
+        fetch.remote_callbacks(approved_callbacks(clean_remote_url, access_token.clone()));
+        remote
+            .fetch(&[] as &[&str], Some(&mut fetch), None)
+            .map_err(|_| fetch_failed())?;
+        let branch = default_branch_name(&repository, &mut remote, clean_remote_url, &access_token)
+            .ok_or_else(fetch_failed)?;
+
+        if has_tracked_changes(&repository)? {
+            return Ok(PullOutcome::SkippedLocalChanges);
+        }
+        let head = repository.head().map_err(|_| fetch_failed())?;
+        if !head.is_branch() || head.shorthand() != Some(branch.as_str()) {
+            return Ok(PullOutcome::SkippedNotOnDefaultBranch);
+        }
+        let local = head.target().ok_or_else(fetch_failed)?;
+        let upstream = repository
+            .refname_to_id(&format!("refs/remotes/origin/{branch}"))
+            .map_err(|_| fetch_failed())?;
+        if local == upstream
+            || repository
+                .graph_descendant_of(local, upstream)
+                .unwrap_or(false)
+        {
+            return Ok(PullOutcome::UpToDate);
+        }
+        if !repository
+            .graph_descendant_of(upstream, local)
+            .map_err(|_| fetch_failed())?
+        {
+            return Ok(PullOutcome::SkippedDiverged);
+        }
+        let target = repository
+            .find_commit(upstream)
+            .map_err(|_| fetch_failed())?;
+        repository
+            .checkout_tree(target.as_object(), Some(CheckoutBuilder::new().safe()))
+            .map_err(|_| repository_git_error("최신 문서를 작업 폴더에 반영하지 못했습니다."))?;
+        repository
+            .find_reference(&format!("refs/heads/{branch}"))
+            .and_then(|mut reference| reference.set_target(upstream, "okhub: fast-forward"))
+            .map_err(|_| repository_git_error("최신 문서를 작업 폴더에 반영하지 못했습니다."))?;
+        Ok(PullOutcome::Updated)
+    }
+
     fn inspect(&self, path: &Path) -> Result<RepositorySnapshot, AppError> {
         let root = path
             .canonicalize()
@@ -587,6 +645,61 @@ fn repository_fingerprint(
     format!("{:x}", hasher.finalize())
 }
 
+/// 승인된 원격에만 토큰을 건네는 콜백. clone과 같은 규칙이다.
+fn approved_callbacks<'a>(
+    clean_remote_url: &str,
+    access_token: Arc<AccessToken>,
+) -> RemoteCallbacks<'a> {
+    let mut callbacks = RemoteCallbacks::new();
+    let approved_remote_url = clean_remote_url.to_owned();
+    callbacks.credentials(move |url, _username, _allowed| {
+        clone_credential_for_callback(url, &approved_remote_url, &access_token)
+    });
+    callbacks
+}
+
+/// `origin/HEAD`가 가리키는 브랜치. 없으면 원격에 물어본다.
+fn default_branch_name(
+    repository: &Repository,
+    remote: &mut git2::Remote<'_>,
+    clean_remote_url: &str,
+    access_token: &Arc<AccessToken>,
+) -> Option<String> {
+    let from_symbolic = repository
+        .find_reference("refs/remotes/origin/HEAD")
+        .ok()
+        .and_then(|reference| reference.symbolic_target().map(str::to_owned))
+        .and_then(|target| {
+            target
+                .strip_prefix("refs/remotes/origin/")
+                .map(str::to_owned)
+        });
+    if from_symbolic.is_some() {
+        return from_symbolic;
+    }
+    let connection = remote
+        .connect_auth(
+            Direction::Fetch,
+            Some(approved_callbacks(clean_remote_url, access_token.clone())),
+            None,
+        )
+        .ok()?;
+    let name = connection.default_branch().ok()?;
+    name.as_str()?
+        .strip_prefix("refs/heads/")
+        .map(str::to_owned)
+}
+
+/// 추적 중인 파일의 변경만 본다. 미추적 파일(`node_modules` 등)은 받기를 막지 않는다.
+fn has_tracked_changes(repository: &Repository) -> Result<bool, AppError> {
+    let mut options = StatusOptions::new();
+    options.include_untracked(false).include_ignored(false);
+    let statuses = repository
+        .statuses(Some(&mut options))
+        .map_err(|_| repository_git_error("저장소 변경 상태를 확인하지 못했습니다."))?;
+    Ok(!statuses.is_empty())
+}
+
 fn repository_path_error(path: &Path) -> AppError {
     AppError::new(
         ErrorCode::RepositoryPathConflict,
@@ -665,6 +778,189 @@ mod tests {
         repository
             .commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
             .unwrap();
+    }
+
+    mod fast_forward {
+        use std::fs;
+        use std::path::Path;
+        use std::sync::Arc;
+
+        use git2::{BranchType, Repository, Signature};
+        use secrecy::SecretString;
+        use tempfile::TempDir;
+
+        use super::super::Git2RepositoryAdapter;
+        use super::RecordingProgress;
+        use crate::auth::model::AccessToken;
+        use crate::repository::model::PullOutcome;
+        use crate::repository::service::GitRepositoryPort;
+
+        fn token() -> AccessToken {
+            AccessToken::from_secret(SecretString::new("secret-not-for-output".into()))
+        }
+
+        /// 부모가 있는 커밋을 만든다. 첫 커밋이면 부모 없이 만든다.
+        fn commit_change(repository: &Repository, path: &str, content: &str) {
+            let root = repository.workdir().unwrap();
+            fs::write(root.join(path), content).unwrap();
+            let mut index = repository.index().unwrap();
+            index.add_path(Path::new(path)).unwrap();
+            index.write().unwrap();
+            let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+            let signature = Signature::now("fixture", "fixture@example.com").unwrap();
+            let parent = repository
+                .head()
+                .ok()
+                .and_then(|head| head.peel_to_commit().ok());
+            let parents: Vec<&git2::Commit> = parent.iter().collect();
+            repository
+                .commit(
+                    Some("HEAD"),
+                    &signature,
+                    &signature,
+                    "change",
+                    &tree,
+                    &parents,
+                )
+                .unwrap();
+        }
+
+        struct Fixture {
+            _source_directory: TempDir,
+            source: Repository,
+            bare_directory: TempDir,
+            _clone_parent: TempDir,
+            clone: std::path::PathBuf,
+            branch: String,
+        }
+
+        impl Fixture {
+            /// `branch`를 기본 브랜치로 둔 원격과 그 clone을 만든다.
+            fn new(branch: &str) -> Self {
+                let source_directory = tempfile::tempdir().unwrap();
+                let source = Repository::init(source_directory.path()).unwrap();
+                commit_change(&source, "README.md", "v1");
+                let bare_directory = tempfile::tempdir().unwrap();
+                let bare = Repository::init_bare(bare_directory.path()).unwrap();
+                source
+                    .remote("origin", bare_directory.path().to_str().unwrap())
+                    .unwrap();
+                let local = source.head().unwrap().name().unwrap().to_owned();
+                source
+                    .find_remote("origin")
+                    .unwrap()
+                    .push(&[format!("{local}:refs/heads/{branch}")], None)
+                    .unwrap();
+                bare.set_head(&format!("refs/heads/{branch}")).unwrap();
+                let clone_parent = tempfile::tempdir().unwrap();
+                let clone = clone_parent.path().join("docs");
+                fs::create_dir(&clone).unwrap();
+                Git2RepositoryAdapter
+                    .clone_repository(
+                        bare_directory.path().to_str().unwrap(),
+                        &clone,
+                        token(),
+                        Arc::new(RecordingProgress::default()),
+                    )
+                    .unwrap();
+                Self {
+                    _source_directory: source_directory,
+                    source,
+                    bare_directory,
+                    _clone_parent: clone_parent,
+                    clone,
+                    branch: branch.to_owned(),
+                }
+            }
+
+            fn push_remote_change(&self, content: &str) {
+                commit_change(&self.source, "README.md", content);
+                let local = self.source.head().unwrap().name().unwrap().to_owned();
+                self.source
+                    .find_remote("origin")
+                    .unwrap()
+                    .push(&[format!("{local}:refs/heads/{}", self.branch)], None)
+                    .unwrap();
+            }
+
+            fn pull(&self) -> PullOutcome {
+                Git2RepositoryAdapter
+                    .fast_forward_default_branch(
+                        &self.clone,
+                        self.bare_directory.path().to_str().unwrap(),
+                        token(),
+                    )
+                    .unwrap()
+            }
+
+            fn readme(&self) -> String {
+                fs::read_to_string(self.clone.join("README.md")).unwrap()
+            }
+        }
+
+        #[test]
+        fn fast_forwards_when_the_remote_moved() {
+            let fixture = Fixture::new("main");
+            fixture.push_remote_change("v2");
+
+            assert_eq!(fixture.pull(), PullOutcome::Updated);
+            assert_eq!(fixture.readme(), "v2");
+            assert_eq!(fixture.pull(), PullOutcome::UpToDate);
+        }
+
+        #[test]
+        fn fast_forwards_a_non_main_default_branch() {
+            let fixture = Fixture::new("trunk");
+            fixture.push_remote_change("v2");
+
+            assert_eq!(fixture.pull(), PullOutcome::Updated);
+            assert_eq!(fixture.readme(), "v2");
+        }
+
+        #[test]
+        fn skips_when_tracked_files_changed() {
+            let fixture = Fixture::new("main");
+            fixture.push_remote_change("v2");
+            fs::write(fixture.clone.join("README.md"), "local edit").unwrap();
+
+            assert_eq!(fixture.pull(), PullOutcome::SkippedLocalChanges);
+            assert_eq!(fixture.readme(), "local edit");
+        }
+
+        #[test]
+        fn ignores_untracked_files() {
+            let fixture = Fixture::new("main");
+            fixture.push_remote_change("v2");
+            fs::write(fixture.clone.join("notes.md"), "untracked").unwrap();
+
+            assert_eq!(fixture.pull(), PullOutcome::Updated);
+            assert_eq!(fixture.readme(), "v2");
+        }
+
+        #[test]
+        fn skips_when_on_another_branch() {
+            let fixture = Fixture::new("main");
+            fixture.push_remote_change("v2");
+            let repository = Repository::open(&fixture.clone).unwrap();
+            let head = repository.head().unwrap().peel_to_commit().unwrap();
+            repository.branch("work", &head, false).unwrap();
+            repository.set_head("refs/heads/work").unwrap();
+            assert!(repository.find_branch("work", BranchType::Local).is_ok());
+
+            assert_eq!(fixture.pull(), PullOutcome::SkippedNotOnDefaultBranch);
+            assert_eq!(fixture.readme(), "v1");
+        }
+
+        #[test]
+        fn skips_when_histories_diverged() {
+            let fixture = Fixture::new("main");
+            fixture.push_remote_change("v2");
+            let repository = Repository::open(&fixture.clone).unwrap();
+            commit_change(&repository, "local.md", "local commit");
+
+            assert_eq!(fixture.pull(), PullOutcome::SkippedDiverged);
+            assert_eq!(fixture.readme(), "v1");
+        }
     }
 
     fn initialization_preview() -> InitializationPreview {
