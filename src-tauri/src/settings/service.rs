@@ -1,10 +1,11 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::settings::model::{
-    CurrentWorkspace, CurrentWorkspaceStatus, DisplayDensity, KnowledgeRepository,
-    PendingInitializationContext,
+    CurrentWorkspace, CurrentWorkspaceStatus, DisplayDensity, DocsRepository, KnowledgeRepository,
+    LinkedProject, PendingInitializationContext,
 };
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
@@ -13,6 +14,9 @@ pub const REMEMBERED_WORKSPACES_KEY: &str = "remembered-workspaces";
 pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
 pub const AI_CLI_COMMAND_KEY: &str = "ai-cli-command";
+pub const LINKED_PROJECTS_KEY: &str = "linked-projects";
+pub const ACTIVE_PROJECT_KEY: &str = "active-project-id";
+pub const PROJECT_DOCS_REPOSITORIES_KEY: &str = "project-docs-repositories";
 const INVALIDATED_PENDING_INITIALIZATION: &str = r#"{"state":"invalidated"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,6 +315,117 @@ impl LocalSettingsService {
         self.store.write(DISPLAY_DENSITY_KEY, density.as_stored())
     }
 
+    /// 저장값이 없거나 깨졌으면 기본값으로 읽는다. 다음 저장이 덮어쓴다.
+    fn read_json<T: serde::de::DeserializeOwned + Default>(
+        &self,
+        key: &str,
+    ) -> Result<T, AppError> {
+        Ok(self
+            .store
+            .read(key)?
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default())
+    }
+
+    fn write_json<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<(), AppError> {
+        let raw = serde_json::to_string(value).map_err(|_| {
+            AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "설정을 로컬에 저장할 수 없습니다.",
+            )
+        })?;
+        self.store.write(key, &raw)
+    }
+
+    pub fn load_linked_projects(&self) -> Result<Vec<LinkedProject>, AppError> {
+        self.read_json(LINKED_PROJECTS_KEY)
+    }
+
+    /// 같은 id는 덮어쓴다. 활성 프로젝트가 없으면 이 프로젝트를 활성으로 정한다.
+    pub fn link_project(&self, project: LinkedProject) -> Result<(), AppError> {
+        let mut projects = self.load_linked_projects()?;
+        let id = project.id.clone();
+        match projects.iter_mut().find(|stored| stored.id == id) {
+            Some(stored) => *stored = project,
+            None => projects.push(project),
+        }
+        self.write_json(LINKED_PROJECTS_KEY, &projects)?;
+        if self.load_active_project()?.is_none() {
+            self.store.write(ACTIVE_PROJECT_KEY, &id)?;
+        }
+        Ok(())
+    }
+
+    /// 활성 프로젝트를 지우면 남은 첫 프로젝트가 활성이 된다. 문서 저장소 기억도 지운다.
+    pub fn unlink_project(&self, project_id: &str) -> Result<(), AppError> {
+        let was_active = self
+            .load_active_project()?
+            .is_some_and(|active| active.id == project_id);
+        let projects: Vec<LinkedProject> = self
+            .load_linked_projects()?
+            .into_iter()
+            .filter(|project| project.id != project_id)
+            .collect();
+        self.write_json(LINKED_PROJECTS_KEY, &projects)?;
+        if was_active {
+            match projects.first() {
+                Some(next) => self.store.write(ACTIVE_PROJECT_KEY, &next.id)?,
+                None => self.store.remove(ACTIVE_PROJECT_KEY)?,
+            }
+        }
+        let mut repositories: BTreeMap<String, DocsRepository> =
+            self.read_json(PROJECT_DOCS_REPOSITORIES_KEY)?;
+        if repositories.remove(project_id).is_some() {
+            self.write_json(PROJECT_DOCS_REPOSITORIES_KEY, &repositories)?;
+        }
+        Ok(())
+    }
+
+    /// 저장된 활성 id가 연결 목록에 없으면 활성 프로젝트가 없는 것으로 본다.
+    pub fn load_active_project(&self) -> Result<Option<LinkedProject>, AppError> {
+        let Some(active_id) = self.store.read(ACTIVE_PROJECT_KEY)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .load_linked_projects()?
+            .into_iter()
+            .find(|project| project.id == active_id))
+    }
+
+    pub fn set_active_project(&self, project_id: &str) -> Result<(), AppError> {
+        if !self
+            .load_linked_projects()?
+            .iter()
+            .any(|project| project.id == project_id)
+        {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "연결되지 않은 Project입니다. 먼저 연결해 주세요.",
+            ));
+        }
+        self.store.write(ACTIVE_PROJECT_KEY, project_id)
+    }
+
+    pub fn docs_repository_for(
+        &self,
+        project_id: &str,
+    ) -> Result<Option<DocsRepository>, AppError> {
+        let mut repositories: BTreeMap<String, DocsRepository> =
+            self.read_json(PROJECT_DOCS_REPOSITORIES_KEY)?;
+        Ok(repositories.remove(project_id))
+    }
+
+    pub fn set_docs_repository(
+        &self,
+        project_id: &str,
+        repository: DocsRepository,
+    ) -> Result<(), AppError> {
+        let mut repositories: BTreeMap<String, DocsRepository> =
+            self.read_json(PROJECT_DOCS_REPOSITORIES_KEY)?;
+        repositories.insert(project_id.to_owned(), repository);
+        self.write_json(PROJECT_DOCS_REPOSITORIES_KEY, &repositories)
+    }
+
     pub fn load_ai_cli_command(&self) -> Result<String, AppError> {
         Ok(self
             .store
@@ -502,8 +617,10 @@ mod tests {
 
     use super::*;
     use crate::error::AppError;
+    use crate::project_board::model::ProjectOwnerScope;
     use crate::settings::model::{
-        CurrentWorkspaceStatus, DisplayDensity, PendingInitializationContext,
+        CurrentWorkspaceStatus, DisplayDensity, DocsRepository, LinkedProject,
+        PendingInitializationContext,
     };
     use crate::workspace::service::{WorkspaceInspection, WorkspaceSummary};
 
@@ -837,6 +954,106 @@ mod tests {
             Some("/workspace/current")
         );
         assert_eq!(store.raw(UNKNOWN_KEY).as_deref(), Some("keep-me"));
+    }
+
+    fn linked(id: &str, title: &str) -> LinkedProject {
+        LinkedProject {
+            id: id.to_owned(),
+            owner: "Mockly-Company".to_owned(),
+            number: 1,
+            title: title.to_owned(),
+            scope: ProjectOwnerScope::Organization,
+        }
+    }
+
+    fn docs(full_name: &str) -> DocsRepository {
+        DocsRepository {
+            repository_id: format!("R_{full_name}"),
+            full_name: full_name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn linking_the_first_project_makes_it_active() {
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+
+        service.link_project(linked("a", "A")).unwrap();
+
+        assert_eq!(
+            service.load_active_project().unwrap(),
+            Some(linked("a", "A"))
+        );
+    }
+
+    #[test]
+    fn relinking_replaces_the_stored_project() {
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+        service.link_project(linked("a", "A")).unwrap();
+
+        service.link_project(linked("a", "새 이름")).unwrap();
+
+        assert_eq!(
+            service.load_linked_projects().unwrap(),
+            vec![linked("a", "새 이름")]
+        );
+    }
+
+    #[test]
+    fn unlinking_the_active_project_activates_the_next_and_forgets_its_docs() {
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+        service.link_project(linked("a", "A")).unwrap();
+        service.link_project(linked("b", "B")).unwrap();
+        service.set_docs_repository("a", docs("o/docs")).unwrap();
+
+        service.unlink_project("a").unwrap();
+
+        assert_eq!(
+            service.load_active_project().unwrap(),
+            Some(linked("b", "B"))
+        );
+        assert_eq!(service.docs_repository_for("a").unwrap(), None);
+    }
+
+    #[test]
+    fn setting_an_unknown_active_project_fails() {
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+        service.link_project(linked("a", "A")).unwrap();
+
+        assert!(service.set_active_project("x").is_err());
+        assert_eq!(
+            service.load_active_project().unwrap(),
+            Some(linked("a", "A"))
+        );
+    }
+
+    #[test]
+    fn docs_repository_is_remembered_per_project() {
+        let service = LocalSettingsService::new(MemoryLocalSettingsStore::default());
+
+        service.set_docs_repository("a", docs("o/a-docs")).unwrap();
+        service.set_docs_repository("b", docs("o/b-docs")).unwrap();
+
+        assert_eq!(
+            service.docs_repository_for("a").unwrap(),
+            Some(docs("o/a-docs"))
+        );
+        assert_eq!(
+            service.docs_repository_for("b").unwrap(),
+            Some(docs("o/b-docs"))
+        );
+    }
+
+    #[test]
+    fn corrupt_stored_lists_read_as_empty() {
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store.clone());
+        store.write(LINKED_PROJECTS_KEY, "not json").unwrap();
+        store
+            .write(PROJECT_DOCS_REPOSITORIES_KEY, "not json")
+            .unwrap();
+
+        assert!(service.load_linked_projects().unwrap().is_empty());
+        assert_eq!(service.docs_repository_for("a").unwrap(), None);
     }
 
     #[test]
