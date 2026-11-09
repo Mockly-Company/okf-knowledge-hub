@@ -31,21 +31,10 @@ const AiPage = lazy(() =>
 const sharedAiGateway = new TauriAiGateway();
 const sharedProjectBoardGateway = new TauriProjectBoardGateway();
 
-function ConnectedAiPage({
-  aiGateway,
-  projectBoardGateway,
-}: {
-  aiGateway: AiGateway;
-  projectBoardGateway: ProjectBoardGateway;
-}) {
-  const { refresh } = useDocuments();
+function ConnectedAiPage({ aiGateway }: { aiGateway: AiGateway }) {
   return (
     <Suspense fallback={<p role="status">AI 화면을 불러오는 중…</p>}>
-      <AiPage
-        aiGateway={aiGateway}
-        projectBoardGateway={projectBoardGateway}
-        refreshDocuments={refresh}
-      />
+      <AiPage aiGateway={aiGateway} />
     </Suspense>
   );
 }
@@ -71,10 +60,7 @@ export function AppRoutes({
           <Route
             path="ai"
             element={
-              <ConnectedAiPage
-                aiGateway={aiGateway}
-                projectBoardGateway={projectBoardGateway}
-              />
+              <ConnectedAiPage aiGateway={aiGateway} />
             }
           />
           <Route path="settings" element={<SettingsPage aiGateway={aiGateway} />} />

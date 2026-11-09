@@ -36,7 +36,7 @@ describe("AiSettingsPanel", () => {
     expect(screen.queryByRole("button", { name: "템플릿으로 만들기" })).toBeNull();
   });
 
-  it("saves the terminal cli command together with the template", async () => {
+  it("saves the terminal cli command", async () => {
     const gateway = new FakeAiGateway();
     const user = userEvent.setup();
     render(
@@ -55,7 +55,7 @@ describe("AiSettingsPanel", () => {
 
     expect(await screen.findByText("저장했습니다.")).toBeInTheDocument();
     expect(gateway.sets).toHaveLength(1);
-    expect(gateway.sets[0].cli_command).toBe("opencode");
+    expect(gateway.sets[0]).toBe("opencode");
     expect((await gateway.getConfig()).cli_command).toBe("opencode");
   });
 
@@ -89,7 +89,7 @@ describe("AiSettingsPanel", () => {
     expect(await screen.findByText("opencode")).toBeInTheDocument();
   });
 
-  it("explains that presets need no setup and suggests a command that works in cmd", async () => {
+  it("explains that presets need no setup and has no command template", async () => {
     const gateway = new FakeAiGateway();
     render(
       <TestQueryProvider>
@@ -100,8 +100,7 @@ describe("AiSettingsPanel", () => {
     expect(
       await screen.findByText(/Claude Code와 Codex는 설정 없이/),
     ).toBeInTheDocument();
-    const template = screen.getByLabelText("명령 템플릿");
-    expect(template.getAttribute("placeholder")).not.toContain("$(cat");
+    expect(screen.queryByLabelText("명령 템플릿")).toBeNull();
   });
 
   it("shows the app AGENTS.md hub rules with a 10-line preview", async () => {

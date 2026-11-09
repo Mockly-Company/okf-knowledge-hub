@@ -4,7 +4,6 @@
  * - agentsMd: 워크스페이스 AGENTS.md 해석본
  * - appAgentsMd: 허브 공통 규칙
  * - tools: 이 기기에 설치된 AI CLI
- * - run: 실행 중인 AI 작업 mutation. 화면을 떠났다 돌아와도 찾을 수 있게 한다.
  */
 export const aiKeys = {
   all: ["ai"] as const,
@@ -12,5 +11,4 @@ export const aiKeys = {
   agentsMd: ["ai", "agentsMd"] as const,
   appAgentsMd: ["ai", "appAgentsMd"] as const,
   tools: ["ai", "tools"] as const,
-  run: ["ai", "run"] as const,
 };

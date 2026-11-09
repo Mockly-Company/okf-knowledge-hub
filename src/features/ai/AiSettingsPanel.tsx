@@ -13,8 +13,6 @@ import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
 
 const sharedGateway = new TauriAiGateway();
 
-const COMMAND_PLACEHOLDER = `type "{prompt_file}" | my-ai-cli`;
-
 /** AGENTS.md 내용 앞 N줄 미리보기. */
 function previewLines(content: string, max = 20): string {
   return content.split("\n").slice(0, max).join("\n");
@@ -33,7 +31,6 @@ export function AiSettingsPanel({
   gateway?: AiGateway;
 }) {
   const queryClient = useQueryClient();
-  const [template, setTemplate] = useState("");
   const [cliCommand, setCliCommand] = useState("");
   const seededRef = useRef(false);
 
@@ -56,13 +53,12 @@ export function AiSettingsPanel({
   useEffect(() => {
     if (configQuery.data && !seededRef.current) {
       seededRef.current = true;
-      setTemplate(configQuery.data.command_template);
       setCliCommand(configQuery.data.cli_command);
     }
   }, [configQuery.data]);
 
   const saveMutation = useMutation({
-    mutationFn: () => gateway.setConfig(template, cliCommand),
+    mutationFn: () => gateway.setConfig(cliCommand),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: aiKeys.config });
     },
@@ -114,30 +110,6 @@ export function AiSettingsPanel({
         </div>
       ) : null}
       <div className="mt-[var(--space-6)] grid gap-[var(--space-3)]">
-        <label
-          className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]"
-          htmlFor="ai-command-template"
-        >
-          명령 템플릿
-        </label>
-        <textarea
-          id="ai-command-template"
-          value={template}
-          onChange={(event) => {
-            setTemplate(event.target.value);
-            saveMutation.reset();
-          }}
-          placeholder={COMMAND_PLACEHOLDER}
-          rows={3}
-          disabled={isLoading}
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)] font-mono text-[var(--font-meta-size)]"
-        />
-        <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-          요청과 규칙이 담긴 파일은 {"{prompt_file}"}, 워크스페이스는{" "}
-          {"{workspace_dir}"} 자리표시로 씁니다. 파일을 읽을 때 Windows는 type,
-          macOS는 cat을 사용하세요. {"{prompt_file}"}이 없으면 같은 내용을 표준
-          입력으로 넘깁니다.
-        </p>
         <label
           className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]"
           htmlFor="ai-cli-command"
