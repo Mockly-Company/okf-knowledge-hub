@@ -116,6 +116,8 @@ pub fn run() {
             commands::documents::read_document_asset,
             commands::documents::list_document_history,
             commands::documents::read_document_version,
+            commands::docs_repository::prepare_docs_repository,
+            commands::docs_repository::connect_project_docs_repository,
             commands::project_board::get_project_board,
             commands::project_board::sync_project_board,
             commands::project_board::resolve_github_project,
