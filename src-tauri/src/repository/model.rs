@@ -2,6 +2,17 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// 문서 저장소 최신화 결과. 받지 않은 경우에는 이유를 알려 준다.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PullOutcome {
+    Updated,
+    UpToDate,
+    SkippedLocalChanges,
+    SkippedNotOnDefaultBranch,
+    SkippedDiverged,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositorySnapshot {

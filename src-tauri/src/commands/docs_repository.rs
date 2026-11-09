@@ -7,6 +7,8 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::repository::managed::managed_clone_dir;
+use crate::repository::model::PullOutcome;
+use crate::settings::model::CurrentWorkspaceStatus;
 use crate::settings::model::{DocsRepository, KnowledgeRepository};
 use crate::settings::service::LocalSettingsService;
 use crate::state::AppServices;
@@ -167,6 +169,57 @@ pub(crate) fn connect_project_docs_repository_inner(
     })
 }
 
+/// 현재 문서 저장소를 GitHub 최신으로 맞춘다. 앱 폴더의 clone에만 적용한다.
+#[tauri::command]
+pub async fn pull_docs_repository(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+) -> CommandResult<PullOutcome> {
+    let Some((directory, full_name)) = managed_current_clone(&state, &app_data_dir(&app)?)? else {
+        return Ok(PullOutcome::UpToDate);
+    };
+    let _access = state.acquire_authenticated_command().await?;
+    let auth = state.auth.clone().ok_or_else(pull_unavailable)?;
+    let access_token = auth.valid_access_token().await?;
+    let git = state.repository_git.clone();
+    let remote_url = format!("https://github.com/{full_name}.git");
+    tauri::async_runtime::spawn_blocking(move || {
+        git.fast_forward_default_branch(&directory, &remote_url, access_token)
+    })
+    .await
+    .map_err(|_| pull_unavailable())?
+}
+
+fn pull_unavailable() -> AppError {
+    AppError::new(
+        ErrorCode::GithubUnavailable,
+        "문서 저장소를 최신으로 받을 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry)
+}
+
+/// 현재 워크스페이스가 앱 폴더에 받은 문서 저장소일 때만 그 경로와 이름을 돌려준다.
+/// 사용자가 직접 고른 폴더는 앱이 건드리지 않는다.
+pub(crate) fn managed_current_clone(
+    services: &AppServices,
+    app_data: &Path,
+) -> CommandResult<Option<(PathBuf, String)>> {
+    let Some(current) = services.local_settings.load_current()? else {
+        return Ok(None);
+    };
+    let Some(repository) = current.repository else {
+        return Ok(None);
+    };
+    if current.status != CurrentWorkspaceStatus::Connected {
+        return Ok(None);
+    }
+    let expected = managed_clone_dir(app_data, &repository.full_name)?;
+    let is_managed = expected
+        .canonicalize()
+        .is_ok_and(|expected| expected == current.path);
+    Ok(is_managed.then_some((current.path, repository.full_name)))
+}
+
 /// 활성 프로젝트의 문서 저장소로 현재 워크스페이스를 맞춘다. clone이 없으면 연결을 끊는다.
 pub(crate) fn switch_current_to_project(
     settings: &LocalSettingsService,
@@ -210,7 +263,9 @@ mod tests {
     use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
     use crate::state::AppServices;
 
-    use super::{connect_project_docs_repository_inner, prepare_docs_repository_inner};
+    use super::{
+        connect_project_docs_repository_inner, managed_current_clone, prepare_docs_repository_inner,
+    };
     use crate::commands::project_board::set_active_project_inner;
 
     #[derive(Clone, Default)]
@@ -386,6 +441,37 @@ mod tests {
 
         assert_eq!(result.docs_repository, None);
         assert_eq!(services.local_settings.load_current().unwrap(), None);
+    }
+
+    #[test]
+    fn pull_targets_only_clones_in_the_app_folder() {
+        let app_data = tempfile::tempdir().unwrap();
+        let services = services_with_projects(&["a"]);
+        fake_clone(app_data.path(), "o/a-docs");
+        connect_project_docs_repository_inner(&services, app_data.path(), "a", "R_a", "o/a-docs")
+            .unwrap();
+        let (path, full_name) = managed_current_clone(&services, app_data.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(full_name, "o/a-docs");
+        assert!(path.ends_with("a-docs"));
+
+        let elsewhere = tempfile::tempdir().unwrap();
+        git2::Repository::init(elsewhere.path()).unwrap();
+        services
+            .local_settings
+            .set_current_for_repository(
+                elsewhere.path(),
+                crate::settings::model::KnowledgeRepository {
+                    id: "R_a".to_owned(),
+                    full_name: "o/a-docs".to_owned(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            managed_current_clone(&services, app_data.path()).unwrap(),
+            None
+        );
     }
 
     #[test]

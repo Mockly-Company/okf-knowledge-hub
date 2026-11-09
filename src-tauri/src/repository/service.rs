@@ -59,6 +59,20 @@ pub(crate) trait GitRepositoryPort: Send + Sync {
         identity: &RepositoryIdentity,
     ) -> Result<(), AppError>;
 
+    /// `origin`을 받아 기본 브랜치를 fast-forward한다. 고친 파일이 있거나
+    /// 다른 브랜치에 있거나 기록이 갈라졌으면 건드리지 않는다.
+    fn fast_forward_default_branch(
+        &self,
+        _path: &Path,
+        _clean_remote_url: &str,
+        _access_token: AccessToken,
+    ) -> Result<crate::repository::model::PullOutcome, AppError> {
+        Err(AppError::new(
+            crate::error::ErrorCode::GithubUnavailable,
+            "문서 저장소를 최신으로 받을 수 없습니다.",
+        ))
+    }
+
     fn push_branch(
         &self,
         root: &Path,
