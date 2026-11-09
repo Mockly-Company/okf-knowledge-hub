@@ -286,19 +286,25 @@ pub struct ActiveProjectResult {
 /// 연결된 GitHub Project를 활성 프로젝트로 전환한다.
 #[tauri::command]
 pub async fn set_active_github_project(
+    app: AppHandle,
     state: State<'_, AppServices>,
     project_id: String,
 ) -> CommandResult<ActiveProjectResult> {
-    set_active_project_inner(&state, project_id.trim())
+    let app_data = crate::commands::docs_repository::app_data_dir(&app)?;
+    set_active_project_inner(&state, &app_data, project_id.trim())
 }
 
-fn set_active_project_inner(
+/// 활성 프로젝트를 바꾸고, Documents·AI 터미널이 읽는 현재 워크스페이스도 그 문서 저장소로 바꾼다.
+pub(crate) fn set_active_project_inner(
     services: &AppServices,
+    app_data: &std::path::Path,
     project_id: &str,
 ) -> CommandResult<ActiveProjectResult> {
     services.local_settings.set_active_project(project_id)?;
     Ok(ActiveProjectResult {
-        docs_repository: services.local_settings.docs_repository_for(project_id)?,
+        docs_repository: crate::commands::docs_repository::switch_current_to_project(
+            services, app_data, project_id,
+        )?,
     })
 }
 
@@ -878,13 +884,14 @@ mod tests {
             )
             .unwrap();
 
-            let switched = set_active_project_inner(&services, "b").unwrap();
+            let app_data = tempfile::tempdir().unwrap();
+            let switched = set_active_project_inner(&services, app_data.path(), "b").unwrap();
             assert_eq!(switched.docs_repository, None);
             assert_eq!(load_linked_project(&services).unwrap().number, 2);
 
             unlink_project_inner(&services, None).unwrap();
             assert_eq!(load_linked_project(&services).unwrap().id, "a");
-            assert!(set_active_project_inner(&services, "b").is_err());
+            assert!(set_active_project_inner(&services, app_data.path(), "b").is_err());
         }
     }
 
