@@ -30,8 +30,12 @@ export class FakeDocsRepositoryGateway implements DocsRepositoryGateway {
     return { fullName, okf: this.okf };
   }
 
+  /** 지정하면 pull이 이 약속이 끝날 때까지 기다린다. 진행 중 상태를 만들 때 쓴다. */
+  pullGate: Promise<void> | null = null;
+
   async pull(): Promise<PullOutcome> {
     this.pulls += 1;
+    if (this.pullGate) await this.pullGate;
     return this.pullOutcome;
   }
 }

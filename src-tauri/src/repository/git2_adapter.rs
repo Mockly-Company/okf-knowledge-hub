@@ -31,6 +31,10 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         let access_token = Arc::new(access_token);
         let repository = Repository::open(path).map_err(|_| repository_path_error(path))?;
         let fetch_failed = || repository_git_error("문서 저장소를 GitHub에서 받지 못했습니다.");
+        // 고친 파일이 있으면 어차피 받지 않으므로 네트워크를 쓰기 전에 확인한다.
+        if has_tracked_changes(&repository)? {
+            return Ok(PullOutcome::SkippedLocalChanges);
+        }
         let mut remote = repository
             .find_remote("origin")
             .map_err(|_| fetch_failed())?;
@@ -41,10 +45,6 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
             .map_err(|_| fetch_failed())?;
         let branch = default_branch_name(&repository, &mut remote, clean_remote_url, &access_token)
             .ok_or_else(fetch_failed)?;
-
-        if has_tracked_changes(&repository)? {
-            return Ok(PullOutcome::SkippedLocalChanges);
-        }
         let head = repository.head().map_err(|_| fetch_failed())?;
         if !head.is_branch() || head.shorthand() != Some(branch.as_str()) {
             return Ok(PullOutcome::SkippedNotOnDefaultBranch);
@@ -658,36 +658,39 @@ fn approved_callbacks<'a>(
     callbacks
 }
 
-/// `origin/HEAD`가 가리키는 브랜치. 없으면 원격에 물어본다.
+/// 원격이 알려 주는 기본 브랜치. 묻지 못하면 마지막으로 받은 `origin/HEAD`를 쓴다.
+/// 원격에서 기본 브랜치 이름을 바꿨으면 `origin/HEAD`는 예전 브랜치를 가리킬 수 있다.
 fn default_branch_name(
     repository: &Repository,
     remote: &mut git2::Remote<'_>,
     clean_remote_url: &str,
     access_token: &Arc<AccessToken>,
 ) -> Option<String> {
-    let from_symbolic = repository
-        .find_reference("refs/remotes/origin/HEAD")
-        .ok()
-        .and_then(|reference| reference.symbolic_target().map(str::to_owned))
-        .and_then(|target| {
-            target
-                .strip_prefix("refs/remotes/origin/")
-                .map(str::to_owned)
-        });
-    if from_symbolic.is_some() {
-        return from_symbolic;
-    }
-    let connection = remote
+    let from_remote = remote
         .connect_auth(
             Direction::Fetch,
             Some(approved_callbacks(clean_remote_url, access_token.clone())),
             None,
         )
-        .ok()?;
-    let name = connection.default_branch().ok()?;
-    name.as_str()?
-        .strip_prefix("refs/heads/")
-        .map(str::to_owned)
+        .ok()
+        .and_then(|connection| {
+            connection
+                .default_branch()
+                .ok()
+                .and_then(|name| name.as_str().map(str::to_owned))
+        })
+        .and_then(|name| name.strip_prefix("refs/heads/").map(str::to_owned));
+    from_remote.or_else(|| {
+        repository
+            .find_reference("refs/remotes/origin/HEAD")
+            .ok()
+            .and_then(|reference| reference.symbolic_target().map(str::to_owned))
+            .and_then(|target| {
+                target
+                    .strip_prefix("refs/remotes/origin/")
+                    .map(str::to_owned)
+            })
+    })
 }
 
 /// 추적 중인 파일의 변경만 본다. 미추적 파일(`node_modules` 등)은 받기를 막지 않는다.
@@ -925,6 +928,41 @@ mod tests {
 
             assert_eq!(fixture.pull(), PullOutcome::SkippedLocalChanges);
             assert_eq!(fixture.readme(), "local edit");
+        }
+
+        #[test]
+        fn skips_local_changes_without_reaching_the_remote() {
+            let fixture = Fixture::new("main");
+            fs::write(fixture.clone.join("README.md"), "local edit").unwrap();
+            Repository::open(&fixture.clone)
+                .unwrap()
+                .remote_set_url("origin", "/missing/remote")
+                .unwrap();
+
+            // 원격에 닿지 못해도 고친 파일이 있으면 받기 전에 건너뛴다.
+            let outcome = Git2RepositoryAdapter
+                .fast_forward_default_branch(&fixture.clone, "/missing/remote", token())
+                .unwrap();
+
+            assert_eq!(outcome, PullOutcome::SkippedLocalChanges);
+        }
+
+        #[test]
+        fn follows_a_renamed_remote_default_branch() {
+            let fixture = Fixture::new("main");
+            let local = fixture.source.head().unwrap().name().unwrap().to_owned();
+            fixture
+                .source
+                .find_remote("origin")
+                .unwrap()
+                .push(&[format!("{local}:refs/heads/next")], None)
+                .unwrap();
+            Repository::open(fixture.bare_directory.path())
+                .unwrap()
+                .set_head("refs/heads/next")
+                .unwrap();
+
+            assert_eq!(fixture.pull(), PullOutcome::SkippedNotOnDefaultBranch);
         }
 
         #[test]

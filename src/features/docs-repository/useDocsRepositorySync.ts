@@ -21,6 +21,8 @@ export function useDocsRepositorySync(gateway: DocsRepositoryGateway): void {
 
   useEffect(() => {
     let stopped = false;
+    // 이전 프로젝트의 결과가 새 프로젝트 화면에 남지 않도록 비운다.
+    queryClient.setQueryData(docsPullKey, null);
     const pull = async () => {
       let outcome: PullOutcome;
       try {
