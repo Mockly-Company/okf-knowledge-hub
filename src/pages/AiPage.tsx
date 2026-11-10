@@ -67,7 +67,6 @@ export function AiPage({
   });
 
   const agents = agentsQuery.data ?? null;
-  const appAgents = appAgentsQuery.data ?? null;
   const contextError = agentsQuery.isError
     ? describeAiError(agentsQuery.error)
     : null;
@@ -111,18 +110,23 @@ export function AiPage({
         className="mt-[var(--space-4)] grid gap-[var(--space-1)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
       >
         <p className="m-0">
-          활성 프로젝트:{" "}
+          프로젝트:{" "}
           {activeProject ? activeProject.activeProjectTitle : "선택된 프로젝트 없음"}
         </p>
         <p className="m-0">
-          워크스페이스: {agents ? agents.workspace_path : "불러오는 중"}
+          {agentsQuery.isError ? (
+            <Link to="/documents">문서 저장소를 선택하세요</Link>
+          ) : agents ? (
+            `문서 저장소: ${agents.repository_full_name ?? "이름 없는 저장소"}`
+          ) : (
+            "문서 저장소: 불러오는 중"
+          )}
         </p>
         <p className="m-0">
-          AGENTS.md:{" "}
-          {agents?.path ?? "없음 — .okf/AGENTS.md를 만들면 프로젝트 규칙으로 쓰입니다"}
-        </p>
-        <p className="m-0">
-          앱 AGENTS.md: {appAgents ? appAgents.path : (appAgentsError ?? "불러오는 중")}
+          {`AI 규칙: 앱 기본 규칙 + 작업 규칙(worktree·PR)${
+            agents?.path ? " + 저장소 규칙(.okf/AGENTS.md)" : ""
+          }`}
+          {appAgentsError ? ` (앱 기본 규칙을 읽지 못했습니다: ${appAgentsError})` : null}
         </p>
       </section>
       {contextError ? (

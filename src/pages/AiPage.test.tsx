@@ -49,10 +49,36 @@ describe("AiPage", () => {
     renderPage(new FakeAiGateway());
 
     expect(await screen.findByRole("heading", { name: "AI" })).toBeInTheDocument();
-    expect(await screen.findByText(/활성 프로젝트:/)).toBeInTheDocument();
-    // 워크스페이스 경로와 AGENTS.md 경로 둘 다 표시된다.
-    const pathMatches = await screen.findAllByText(/\/work\/mockly-knowledge/);
-    expect(pathMatches.length).toBeGreaterThanOrEqual(2);
+    expect(await screen.findByText(/프로젝트:/)).toBeInTheDocument();
+  });
+
+  it("shows the docs repository name instead of paths", async () => {
+    const gateway = new FakeAiGateway();
+    gateway.agentsMd = {
+      workspace_path: "C:\\x",
+      path: "C:\\x\\.okf\\AGENTS.md",
+      content: "# 규칙",
+      repository_full_name: "a/docs",
+    };
+    renderPage(gateway);
+
+    expect(await screen.findByText("문서 저장소: a/docs")).toBeInTheDocument();
+    expect(
+      screen.getByText(/AI 규칙: 앱 기본 규칙 \+ 작업 규칙\(worktree·PR\) \+ 저장소 규칙/),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("C:\\x");
+  });
+
+  it("asks to choose a docs repository when none is connected", async () => {
+    const gateway = new FakeAiGateway();
+    gateway.resolveAgentsMd = async () => {
+      throw new Error("연결된 워크스페이스가 없습니다.");
+    };
+    renderPage(gateway);
+
+    expect(
+      await screen.findByRole("link", { name: "문서 저장소를 선택하세요" }),
+    ).toHaveAttribute("href", "/documents");
   });
 
   it("numbers tabs when the same tool is opened twice", async () => {

@@ -130,6 +130,8 @@ pub struct AgentsMdResolution {
     pub workspace_path: String,
     pub path: Option<String>,
     pub content: Option<String>,
+    /// 화면에 보여 줄 문서 저장소 이름(`owner/name`). 경로는 보여 주지 않는다.
+    pub repository_full_name: Option<String>,
 }
 
 #[tauri::command]
@@ -425,6 +427,7 @@ fn resolve_agents_md_inner(services: &AppServices) -> CommandResult<AgentsMdReso
         workspace_path: workspace_path.display().to_string(),
         path,
         content,
+        repository_full_name: current.repository.map(|repository| repository.full_name),
     })
 }
 
