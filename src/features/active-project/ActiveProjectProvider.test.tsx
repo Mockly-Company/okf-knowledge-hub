@@ -2,7 +2,6 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGithubProject } from "@/features/project-board/model";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
-import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import {
   ActiveProjectProvider,
@@ -27,16 +26,10 @@ function Probe() {
   );
 }
 
-function renderProvider(
-  projectGateway: FakeProjectBoardGateway,
-  workspaceGateway: FakeWorkspaceConnectionGateway,
-) {
+function renderProvider(projectGateway: FakeProjectBoardGateway) {
   render(
     <TestQueryProvider>
-      <ActiveProjectProvider
-        projectGateway={projectGateway}
-        workspaceGateway={workspaceGateway}
-      >
+      <ActiveProjectProvider projectGateway={projectGateway}>
         <Probe />
       </ActiveProjectProvider>
     </TestQueryProvider>,
@@ -47,31 +40,26 @@ describe("ActiveProjectProvider", () => {
   beforeEach(() => localStorage.clear());
   afterEach(cleanup);
 
-  it("selecting a project does not touch the workspace mapping", async () => {
+  it("reports the docs repository returned by the backend", async () => {
     const projects = FakeProjectBoardGateway.empty();
     projects.linkedProjects = [project];
     projects.docsRepositories.set("PVT_1", {
       repositoryId: "R_1",
       fullName: "Mockly-Company/docs",
     });
-    const workspace = FakeWorkspaceConnectionGateway.connected("/repo/current");
-    const read = vi.spyOn(workspace, "getWorkspaceForProject");
-    const write = vi.spyOn(workspace, "setWorkspaceForProject");
 
-    renderProvider(projects, workspace);
+    renderProvider(projects);
 
     expect(
       await screen.findByText("active=PVT_1 missing=false"),
     ).toBeInTheDocument();
-    expect(read).not.toHaveBeenCalled();
-    expect(write).not.toHaveBeenCalled();
   });
 
   it("reports missing docs when the project has no docs repository", async () => {
     const projects = FakeProjectBoardGateway.empty();
     projects.linkedProjects = [project];
 
-    renderProvider(projects, FakeWorkspaceConnectionGateway.connected());
+    renderProvider(projects);
 
     expect(
       await screen.findByText("active=PVT_1 missing=true"),
@@ -83,7 +71,7 @@ describe("ActiveProjectProvider", () => {
     const projects = FakeProjectBoardGateway.empty();
     projects.linkedProjects = [project];
 
-    renderProvider(projects, FakeWorkspaceConnectionGateway.connected());
+    renderProvider(projects);
 
     await screen.findByText("active=PVT_1 missing=false");
     await waitFor(() =>
@@ -101,7 +89,7 @@ describe("ActiveProjectProvider", () => {
       .spyOn(projects, "listLinkedProjects")
       .mockRejectedValue(new Error("일시적 실패"));
 
-    renderProvider(projects, FakeWorkspaceConnectionGateway.connected());
+    renderProvider(projects);
 
     await waitFor(() => expect(list).toHaveBeenCalled());
     await waitFor(() => expect(console.warn).toHaveBeenCalled());

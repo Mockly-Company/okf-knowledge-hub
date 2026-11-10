@@ -229,7 +229,6 @@ describe("AppSidebar project search", () => {
           <DocumentsProvider gateway={new FakeDocumentsGateway()}>
             <ActiveProjectProvider
               projectGateway={projectGateway}
-              workspaceGateway={workspaceGateway}
             >
               <MemoryRouter initialEntries={["/"]}>
                 <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />

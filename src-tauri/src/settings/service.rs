@@ -10,7 +10,6 @@ use crate::settings::model::{
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
 pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
-pub const REMEMBERED_WORKSPACES_KEY: &str = "remembered-workspaces";
 pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
 pub const AI_CLI_COMMAND_KEY: &str = "ai-cli-command";
@@ -240,88 +239,6 @@ impl LocalSettingsService {
 
     pub fn clear_current(&self) -> Result<(), AppError> {
         self.store.remove(CURRENT_WORKSPACE_PATH_KEY)
-    }
-
-    pub fn get_workspace_for_project(&self, project_id: &str) -> Result<Option<PathBuf>, AppError> {
-        let project_id = project_id.trim();
-        if project_id.is_empty() {
-            return Ok(None);
-        }
-        let map = self.load_remembered_map()?;
-        let Some(saved) = map.get(project_id) else {
-            return Ok(None);
-        };
-        // 없는 경로는 null로 취급한다. 저장값은 삭제하지 않는다.
-        match self.path_resolver.canonicalize(Path::new(saved)) {
-            Ok(canonical) => Ok(Some(canonical)),
-            Err(_) => Ok(None),
-        }
-    }
-
-    pub fn set_workspace_for_project(
-        &self,
-        project_id: &str,
-        workspace_path: &Path,
-    ) -> Result<PathBuf, AppError> {
-        let project_id = project_id.trim();
-        if project_id.is_empty() {
-            return Err(AppError::new(
-                ErrorCode::LocalSettingsUnavailable,
-                "프로젝트를 지정해 주세요.",
-            )
-            .with_recovery(RecoveryAction::Retry));
-        }
-        let canonical_path = self.path_resolver.canonicalize(workspace_path)?;
-        if !canonical_path.is_dir() {
-            return Err(AppError::new(
-                ErrorCode::LocalSettingsUnavailable,
-                "선택한 폴더가 존재하지 않습니다.",
-            )
-            .with_recovery(RecoveryAction::ChooseAnotherDirectory)
-            .with_detail("path", canonical_path.display().to_string()));
-        }
-        let encoded_path = canonical_path.to_str().ok_or_else(|| {
-            AppError::new(
-                ErrorCode::LocalSettingsUnavailable,
-                "워크스페이스 경로를 로컬 설정에 저장할 수 없습니다.",
-            )
-            .with_recovery(RecoveryAction::ChooseAnotherDirectory)
-        })?;
-        let mut map = self.load_remembered_map()?;
-        map.insert(project_id.to_owned(), encoded_path.to_owned());
-        let encoded = serde_json::to_string(&map).map_err(|_| {
-            AppError::new(
-                ErrorCode::LocalSettingsUnavailable,
-                "워크스페이스 경로를 로컬 설정에 저장할 수 없습니다.",
-            )
-            .with_recovery(RecoveryAction::ChooseAnotherDirectory)
-        })?;
-        self.store.write(REMEMBERED_WORKSPACES_KEY, &encoded)?;
-        Ok(canonical_path)
-    }
-
-    pub fn list_remembered_workspaces(&self) -> Result<Vec<(String, PathBuf)>, AppError> {
-        let map = self.load_remembered_map()?;
-        Ok(map
-            .into_iter()
-            .map(|(project_id, path)| (project_id, PathBuf::from(path)))
-            .collect())
-    }
-
-    fn load_remembered_map(&self) -> Result<std::collections::BTreeMap<String, String>, AppError> {
-        let Some(raw) = self.store.read(REMEMBERED_WORKSPACES_KEY)? else {
-            return Ok(std::collections::BTreeMap::new());
-        };
-        if raw.trim().is_empty() {
-            return Ok(std::collections::BTreeMap::new());
-        }
-        // 빈 맵으로 넘어가면 다음 저장이 복구 가능한 값을 덮어쓴다.
-        serde_json::from_str(&raw).map_err(|_| {
-            AppError::new(
-                ErrorCode::LocalSettingsUnavailable,
-                "기억된 프로젝트 저장소 정보를 읽을 수 없습니다.",
-            )
-        })
     }
 
     pub fn load_display_density(&self) -> Result<DisplayDensity, AppError> {
@@ -608,22 +525,6 @@ fn local_path_error(path: &Path, error: std::io::Error) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn corrupt_remembered_workspaces_are_reported_and_not_overwritten() {
-        let store = MemoryLocalSettingsStore::default();
-        store.write(REMEMBERED_WORKSPACES_KEY, "{broken").unwrap();
-        let service = LocalSettingsService::new(store.clone());
-
-        assert!(service.get_workspace_for_project("project").is_err());
-        assert!(service
-            .set_workspace_for_project("project", std::path::Path::new("."))
-            .is_err());
-        assert_eq!(
-            store.raw(REMEMBERED_WORKSPACES_KEY).as_deref(),
-            Some("{broken")
-        );
-    }
-
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;

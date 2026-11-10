@@ -61,7 +61,6 @@ export function App({
         <WorkspaceConnectionProvider gateway={workspace}>
           <ActiveProjectProvider
             projectGateway={projectBoard}
-            workspaceGateway={workspace}
           >
             <HashRouter>
               <AppRoutes

@@ -1,5 +1,4 @@
 import type {
-  RememberedWorkspace,
   WorkspaceConnectionGateway,
 } from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import { cloneTargetPath } from "@/features/workspace-connection/types";
@@ -107,7 +106,6 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   deferClone = false;
   deferWorkspaceInspection = false;
   /** 프로젝트별 docs 저장소 매핑 기억용. localStorage 대신 메모리 맵을 쓴다. */
-  rememberedWorkspaces = new Map<string, string>();
 
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   readonly openedUrls: string[] = [];
@@ -316,24 +314,6 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   async initializeWorkspace(previewId: string): Promise<InitializationResult> {
     this.record("initializeWorkspace", previewId);
     return this.initializationResult;
-  }
-
-  async getWorkspaceForProject(projectId: string): Promise<string | null> {
-    this.record("getWorkspaceForProject", projectId);
-    return this.rememberedWorkspaces.get(projectId) ?? null;
-  }
-
-  async setWorkspaceForProject(projectId: string, path: string): Promise<void> {
-    this.record("setWorkspaceForProject", projectId, path);
-    this.rememberedWorkspaces.set(projectId, path);
-  }
-
-  async listRememberedWorkspaces(): Promise<RememberedWorkspace[]> {
-    this.record("listRememberedWorkspaces");
-    return [...this.rememberedWorkspaces.entries()].map(([projectId, path]) => ({
-      projectId,
-      path,
-    }));
   }
 
   approveAuthentication(): void {

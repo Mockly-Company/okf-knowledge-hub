@@ -328,7 +328,7 @@ describe("ProjectPage", () => {
     gateway.linkedProjects = [];
     const workspace = FakeWorkspaceConnectionGateway.connected();
     render(
-      <ActiveProjectProvider projectGateway={gateway} workspaceGateway={workspace}>
+      <ActiveProjectProvider projectGateway={gateway}>
         <ProjectPage gateway={gateway} />
       </ActiveProjectProvider>,
     );
@@ -960,7 +960,6 @@ describe("ProjectPage project switching", () => {
     render(
       <ActiveProjectProvider
         projectGateway={gateway}
-        workspaceGateway={workspaceGateway}
       >
         <ProjectSwitcher />
         <ProjectPage gateway={gateway} />
@@ -1049,7 +1048,6 @@ describe("ProjectPage project switching", () => {
     render(
       <ActiveProjectProvider
         projectGateway={gateway}
-        workspaceGateway={workspaceGateway}
       >
         <ProjectSwitcher />
         <ProjectPage gateway={gateway} />
