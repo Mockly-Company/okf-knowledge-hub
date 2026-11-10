@@ -25,7 +25,8 @@ describe("WorkspaceGate", () => {
   it("shows an accessible busy state while the account is loading", () => {
     renderGate(FakeWorkspaceConnectionGateway.disconnected());
 
-    expect(screen.getByRole("status", { name: "앱을 준비하는 중" })).toBeInTheDocument();
+    const main = screen.getByRole("main");
+    expect(main).toContainElement(screen.getByRole("status", { name: "앱을 준비하는 중" }));
   });
 
   it("opens the app without a connection step when signed out", async () => {
