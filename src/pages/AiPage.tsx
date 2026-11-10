@@ -117,7 +117,7 @@ export function AiPage({
           {agentsQuery.isError ? (
             <Link to="/documents">문서 저장소를 선택하세요</Link>
           ) : agents ? (
-            `문서 저장소: ${agents.repository_full_name ?? "이름 없는 저장소"}`
+            `문서 저장소: ${agents.repository_full_name || "이름 없는 저장소"}`
           ) : (
             "문서 저장소: 불러오는 중"
           )}

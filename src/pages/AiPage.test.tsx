@@ -69,6 +69,14 @@ describe("AiPage", () => {
     expect(document.body.textContent).not.toContain("C:\\x");
   });
 
+  it("names an unnamed docs repository instead of leaving it blank", async () => {
+    const gateway = new FakeAiGateway();
+    gateway.agentsMd = { ...gateway.agentsMd, repository_full_name: "" };
+    renderPage(gateway);
+
+    expect(await screen.findByText("문서 저장소: 이름 없는 저장소")).toBeInTheDocument();
+  });
+
   it("asks to choose a docs repository when none is connected", async () => {
     const gateway = new FakeAiGateway();
     gateway.resolveAgentsMd = async () => {
