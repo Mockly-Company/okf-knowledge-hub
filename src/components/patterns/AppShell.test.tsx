@@ -1,5 +1,5 @@
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
@@ -117,4 +117,25 @@ describe("AppShell", () => {
       ).toHaveAttribute("href", "/settings");
     },
   );
+
+  it("asks a signed-out user to sign in from Settings", async () => {
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+    gateway.authState = { status: "signed_out" };
+    renderShell("/", gateway);
+
+    const banner = await screen.findByRole("status");
+    expect(banner).toHaveTextContent("GitHub 로그인 필요");
+    expect(
+      screen.getByRole("link", { name: "Settings에서 로그인" }),
+    ).toHaveAttribute("href", "/settings");
+  });
+
+  it("shows no sign-in banner while signed in", async () => {
+    renderShell("/", FakeWorkspaceConnectionGateway.connected());
+
+    await screen.findByRole("main", { name: "OkHub" });
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: "Settings에서 로그인" })).toBeNull(),
+    );
+  });
 });

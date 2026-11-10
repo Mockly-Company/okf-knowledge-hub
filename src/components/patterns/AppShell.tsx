@@ -82,6 +82,23 @@ export function AppShell() {
               GitHub 인증이 만료되었습니다. 다시 로그인해 주세요.
             </StatusFeedbackDescription>
           </StatusFeedback>
+        ) : account.status === "signed_out" ? (
+          <StatusFeedback
+            variant="banner"
+            tone="info"
+            actionPlacement="end"
+            className="app-shell__reauthentication-banner"
+            action={
+              <Button asChild variant="secondary">
+                <Link to="/settings">Settings에서 로그인</Link>
+              </Button>
+            }
+          >
+            <StatusFeedbackTitle>GitHub 로그인 필요</StatusFeedbackTitle>
+            <StatusFeedbackDescription>
+              프로젝트와 문서 저장소를 연결하려면 GitHub에 로그인하세요.
+            </StatusFeedbackDescription>
+          </StatusFeedback>
         ) : null}
         <Outlet />
       </main>
