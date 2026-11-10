@@ -118,6 +118,7 @@ impl AiTerminalRegistry {
         workspace_dir: &Path,
         cols: u16,
         rows: u16,
+        env: &[(String, String)],
         sink: impl Fn(TerminalEvent) + Send + Sync + 'static,
     ) -> Result<String, String> {
         let pair = native_pty_system()
@@ -127,6 +128,9 @@ impl AiTerminalRegistry {
         command.cwd(shell_path(workspace_dir).as_os_str());
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
+        for (key, value) in env {
+            command.env(key, value);
+        }
 
         // 프로세스를 띄운 뒤 실패하면 정리할 수 없으므로 입출력을 먼저 준비한다.
         let mut reader = pair
@@ -249,9 +253,18 @@ mod tests {
         command_line: &str,
         directory: &Path,
     ) -> (String, Receiver<TerminalEvent>) {
+        collect_with_env(registry, command_line, directory, &[])
+    }
+
+    fn collect_with_env(
+        registry: &AiTerminalRegistry,
+        command_line: &str,
+        directory: &Path,
+        env: &[(String, String)],
+    ) -> (String, Receiver<TerminalEvent>) {
         let (sender, receiver) = channel();
         let session = registry
-            .start(command_line, directory, 200, 40, move |event| {
+            .start(command_line, directory, 200, 40, env, move |event| {
                 let _ = sender.send(event);
             })
             .unwrap();
@@ -399,6 +412,29 @@ mod tests {
 
         wait_for_exit(&registry, &session, &events);
         assert!(!registry.stop(&session));
+    }
+
+    #[test]
+    fn environment_reaches_the_shell() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry = AiTerminalRegistry::default();
+        // cmd는 명령 값 안의 %변수%를 다시 풀지 않으므로, 셸이 뜬 뒤 입력으로 확인한다.
+        let (session, events) = collect_with_env(
+            &registry,
+            "echo ready-marker",
+            directory.path(),
+            &[("OKHUB_TEST_MARKER".to_owned(), "marker-value".to_owned())],
+        );
+        read_until(&registry, &session, &events, "ready-marker");
+
+        let line: &[u8] = if cfg!(windows) {
+            b"echo %OKHUB_TEST_MARKER%\r"
+        } else {
+            b"echo $OKHUB_TEST_MARKER\r"
+        };
+        assert!(registry.write(&session, line));
+        read_until(&registry, &session, &events, "marker-value");
+        registry.stop(&session);
     }
 
     #[test]

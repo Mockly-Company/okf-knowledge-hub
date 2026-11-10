@@ -62,14 +62,56 @@ pub fn shell_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-pub fn compose_rules(app_rules: &str, project_rules: Option<&str>) -> String {
+pub fn compose_rules(app_rules: &str, fixed_rules: &str, project_rules: Option<&str>) -> String {
     let app_rules = app_rules.trim();
+    let fixed_rules = fixed_rules.trim();
     match project_rules.map(str::trim) {
         Some(project) if !project.is_empty() && project != app_rules => {
-            format!("{app_rules}\n\n---\n\n{project}\n")
+            format!("{app_rules}\n\n---\n\n{fixed_rules}\n\n---\n\n{project}\n")
         }
-        _ => format!("{app_rules}\n"),
+        _ => format!("{app_rules}\n\n---\n\n{fixed_rules}\n"),
     }
+}
+
+/// 앱이 항상 붙이는 작업 규칙. 앱이 받아 둔 원본 clone은 최신 받기에 쓰므로
+/// AI는 worktree에서만 작업한다. 사용자가 고칠 수 있는 AGENTS.md에는 넣지 않는다.
+pub fn worktree_rules(repository_root: &Path, worktrees_root: &Path) -> String {
+    let root = repository_root.display();
+    let worktrees = worktrees_root.display();
+    format!(
+        "# OkHub 작업 규칙 (앱이 항상 적용)\n\n\
+1. 원본 저장소 `{root}`에서는 파일을 고치거나 커밋하지 않는다. 앱이 이 폴더를 GitHub 최신으로 계속 받는다.\n\
+2. 작업마다 `git -C \"{root}\" worktree add \"{worktrees}/<branch>\" -b <branch>`로 worktree를 만들고, 그 안에서 작업한다.\n\
+3. 원본 저장소에 있는 git이 추적하지 않는 큰 폴더(`node_modules` 등)는 worktree에 복사하거나 새로 설치하지 말고 링크한다. \
+Windows: `cmd /c mklink /J \"<worktree>\\<dir>\" \"{root}\\<dir>\"`, macOS: `ln -s \"{root}/<dir>\" \"<worktree>/<dir>\"`.\n\
+4. 사용자가 요청하면 worktree에서 커밋하고 푸시한 뒤 `gh pr create`로 PR을 연다.\n\
+5. 세션을 시작하면 `git -C \"{root}\" worktree list`를 확인하고, PR이 머지된 브랜치의 worktree는 `git worktree remove`로 지운 뒤 `git -C \"{root}\" worktree prune`을 실행한다. 머지 전 worktree는 남긴다.\n\
+6. GitHub 권한은 앱 로그인 토큰을 쓴다. 터미널을 8시간 넘게 열어 두면 푸시가 실패할 수 있으니, 그때는 사용자에게 새 터미널을 열어 달라고 말한다.\n"
+    )
+}
+
+/// 앱 로그인 토큰으로 `git push`와 `gh`가 동작하게 하는 환경 변수. 로그인 전이면 비운다.
+pub fn terminal_env(access_token: Option<&str>) -> Vec<(String, String)> {
+    let Some(token) = access_token else {
+        return Vec::new();
+    };
+    let helper_key = "credential.https://github.com.helper";
+    [
+        ("GH_TOKEN", token),
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_CONFIG_COUNT", "2"),
+        // 빈 값으로 기존 helper 목록을 비운 뒤 토큰을 돌려주는 helper만 둔다.
+        ("GIT_CONFIG_KEY_0", helper_key),
+        ("GIT_CONFIG_VALUE_0", ""),
+        ("GIT_CONFIG_KEY_1", helper_key),
+        (
+            "GIT_CONFIG_VALUE_1",
+            "!f() { echo username=x-access-token; echo \"password=$GH_TOKEN\"; }; f",
+        ),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_owned(), value.to_owned()))
+    .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -376,15 +418,56 @@ mod tests {
 
     #[test]
     fn rules_combine_hub_and_project_rules_without_repeating_identical_text() {
-        let both = compose_rules("허브 규칙\n", Some("프로젝트 규칙\n"));
+        let both = compose_rules("허브 규칙\n", "작업 규칙", Some("프로젝트 규칙\n"));
         assert!(both.contains("허브 규칙"));
         assert!(both.contains("프로젝트 규칙"));
 
-        let duplicate = compose_rules("같은 규칙\n", Some("같은 규칙"));
+        let duplicate = compose_rules("같은 규칙\n", "작업 규칙", Some("같은 규칙"));
         assert_eq!(duplicate.matches("같은 규칙").count(), 1);
 
-        let hub_only = compose_rules("허브 규칙", None);
+        let hub_only = compose_rules("허브 규칙", "작업 규칙", None);
         assert!(hub_only.contains("허브 규칙"));
+    }
+
+    #[test]
+    fn fixed_rules_sit_between_app_and_project_rules() {
+        let rules = compose_rules("앱 규칙", "고정 작업 규칙", Some("저장소 규칙"));
+
+        let app = rules.find("앱 규칙").unwrap();
+        let fixed = rules.find("고정 작업 규칙").unwrap();
+        let project = rules.find("저장소 규칙").unwrap();
+        assert!(app < fixed && fixed < project, "{rules}");
+    }
+
+    #[test]
+    fn worktree_rules_name_the_real_paths() {
+        let rules = worktree_rules(
+            Path::new("/data/repos/o/docs"),
+            Path::new("/data/worktrees/o/docs"),
+        );
+
+        assert!(rules.contains("/data/repos/o/docs"), "{rules}");
+        assert!(rules.contains("/data/worktrees/o/docs"), "{rules}");
+        assert!(rules.contains("git worktree"), "{rules}");
+        assert!(rules.contains("gh pr create"), "{rules}");
+        assert!(rules.contains("node_modules"), "{rules}");
+    }
+
+    #[test]
+    fn terminal_env_omits_credentials_when_signed_out() {
+        assert!(terminal_env(None).is_empty());
+    }
+
+    #[test]
+    fn terminal_env_routes_git_credentials_to_the_token() {
+        let env = terminal_env(Some("t"));
+
+        assert!(env.contains(&("GH_TOKEN".to_owned(), "t".to_owned())));
+        assert!(env.contains(&("GIT_TERMINAL_PROMPT".to_owned(), "0".to_owned())));
+        assert!(env.contains(&("GIT_CONFIG_COUNT".to_owned(), "2".to_owned())));
+        assert!(env
+            .iter()
+            .any(|(key, value)| key == "GIT_CONFIG_VALUE_1" && value.contains("$GH_TOKEN")));
     }
 
     #[test]
