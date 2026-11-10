@@ -8,6 +8,7 @@ use tauri::{AppHandle, Manager, State};
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::repository::managed::managed_clone_dir;
 use crate::settings::model::{DocsRepository, KnowledgeRepository};
+use crate::settings::service::LocalSettingsService;
 use crate::state::AppServices;
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
@@ -38,11 +39,27 @@ pub(crate) fn app_data_dir(app: &AppHandle) -> CommandResult<PathBuf> {
 
 /// 앱 폴더의 clone 위치를 알려 준다. 같은 원격을 가리키는 clone이 있으면 다시 받지 않는다.
 #[tauri::command]
-pub fn prepare_docs_repository(
+pub async fn prepare_docs_repository(
     app: AppHandle,
     full_name: String,
 ) -> CommandResult<PreparedDocsRepository> {
-    prepare_docs_repository_inner(&app_data_dir(&app)?, &full_name)
+    let app_data = app_data_dir(&app)?;
+    run_blocking(move || prepare_docs_repository_inner(&app_data, &full_name)).await
+}
+
+/// git·파일 작업은 화면을 그리는 스레드가 아니라 작업 스레드에서 한다.
+pub(crate) async fn run_blocking<T: Send + 'static>(
+    operation: impl FnOnce() -> CommandResult<T> + Send + 'static,
+) -> CommandResult<T> {
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "문서 저장소 작업을 완료하지 못했습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry)
+        })?
 }
 
 pub(crate) fn prepare_docs_repository_inner(
@@ -54,6 +71,15 @@ pub(crate) fn prepare_docs_repository_inner(
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| app_data.to_path_buf());
+    // clone은 부모 폴더 안에 임시 폴더를 만들므로, 처음 받는 owner면 미리 만들어 둔다.
+    std::fs::create_dir_all(&parent_directory).map_err(|error| {
+        AppError::new(
+            ErrorCode::CloneFailed,
+            "문서 저장소를 받을 폴더를 만들지 못했습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("reason", error.to_string())
+    })?;
     Ok(PreparedDocsRepository {
         parent_directory,
         already_cloned: clone_matches(&target, full_name),
@@ -76,24 +102,29 @@ pub(crate) fn clone_matches(directory: &Path, full_name: &str) -> bool {
 
 /// clone이 끝난 저장소를 프로젝트의 문서 저장소로 기억한다. 활성 프로젝트면 바로 전환한다.
 #[tauri::command]
-pub fn connect_project_docs_repository(
+pub async fn connect_project_docs_repository(
     app: AppHandle,
     state: State<'_, AppServices>,
     project_id: String,
     repository_id: String,
     full_name: String,
 ) -> CommandResult<ConnectedDocsRepository> {
-    connect_project_docs_repository_inner(
-        &state,
-        &app_data_dir(&app)?,
-        &project_id,
-        &repository_id,
-        &full_name,
-    )
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || {
+        connect_project_docs_repository_inner(
+            &settings,
+            &app_data,
+            &project_id,
+            &repository_id,
+            &full_name,
+        )
+    })
+    .await
 }
 
 pub(crate) fn connect_project_docs_repository_inner(
-    services: &AppServices,
+    settings: &LocalSettingsService,
     app_data: &Path,
     project_id: &str,
     repository_id: &str,
@@ -107,7 +138,6 @@ pub(crate) fn connect_project_docs_repository_inner(
         )
         .with_recovery(RecoveryAction::Retry));
     }
-    let settings = &services.local_settings;
     settings.set_docs_repository(
         project_id,
         DocsRepository {
@@ -139,11 +169,10 @@ pub(crate) fn connect_project_docs_repository_inner(
 
 /// 활성 프로젝트의 문서 저장소로 현재 워크스페이스를 맞춘다. clone이 없으면 연결을 끊는다.
 pub(crate) fn switch_current_to_project(
-    services: &AppServices,
+    settings: &LocalSettingsService,
     app_data: &Path,
     project_id: &str,
 ) -> CommandResult<Option<DocsRepository>> {
-    let settings = &services.local_settings;
     let Some(repository) = settings.docs_repository_for(project_id)? else {
         settings.clear_current()?;
         return Ok(None);
@@ -153,13 +182,18 @@ pub(crate) fn switch_current_to_project(
         settings.clear_current()?;
         return Ok(None);
     }
-    settings.set_current_for_repository(
+    // 연결할 수 없는 저장소(지원하지 않는 OKF 버전 등)는 없는 것처럼 다뤄 다시 고를 수 있게 한다.
+    let connected = settings.set_current_for_repository(
         &directory,
         KnowledgeRepository {
             id: repository.repository_id.clone(),
             full_name: repository.full_name.clone(),
         },
-    )?;
+    );
+    if connected.is_err() {
+        settings.clear_current()?;
+        return Ok(None);
+    }
     Ok(Some(repository))
 }
 
@@ -233,7 +267,7 @@ mod tests {
         fake_clone(app_data.path(), "o/b-docs");
 
         let connected = connect_project_docs_repository_inner(
-            &services,
+            &services.local_settings,
             app_data.path(),
             "b",
             "R_b",
@@ -255,8 +289,14 @@ mod tests {
         let services = services_with_projects(&["a"]);
         fake_clone(app_data.path(), "o/a-docs");
 
-        connect_project_docs_repository_inner(&services, app_data.path(), "a", "R_a", "o/a-docs")
-            .unwrap();
+        connect_project_docs_repository_inner(
+            &services.local_settings,
+            app_data.path(),
+            "a",
+            "R_a",
+            "o/a-docs",
+        )
+        .unwrap();
 
         let current = services.local_settings.load_current().unwrap().unwrap();
         assert_eq!(
@@ -274,11 +314,18 @@ mod tests {
         let services = services_with_projects(&["a", "b"]);
         for (id, name) in [("a", "o/a-docs"), ("b", "o/b-docs")] {
             fake_clone(app_data.path(), name);
-            connect_project_docs_repository_inner(&services, app_data.path(), id, "R", name)
-                .unwrap();
+            connect_project_docs_repository_inner(
+                &services.local_settings,
+                app_data.path(),
+                id,
+                "R",
+                name,
+            )
+            .unwrap();
         }
 
-        let result = set_active_project_inner(&services, app_data.path(), "b").unwrap();
+        let result =
+            set_active_project_inner(&services.local_settings, app_data.path(), "b").unwrap();
 
         assert_eq!(result.docs_repository.unwrap().full_name, "o/b-docs");
         let current = services.local_settings.load_current().unwrap().unwrap();
@@ -290,11 +337,52 @@ mod tests {
         let app_data = tempfile::tempdir().unwrap();
         let services = services_with_projects(&["a", "b"]);
         fake_clone(app_data.path(), "o/b-docs");
-        connect_project_docs_repository_inner(&services, app_data.path(), "b", "R_b", "o/b-docs")
-            .unwrap();
+        connect_project_docs_repository_inner(
+            &services.local_settings,
+            app_data.path(),
+            "b",
+            "R_b",
+            "o/b-docs",
+        )
+        .unwrap();
         std::fs::remove_dir_all(managed_clone_dir(app_data.path(), "o/b-docs").unwrap()).unwrap();
 
-        let result = set_active_project_inner(&services, app_data.path(), "b").unwrap();
+        let result =
+            set_active_project_inner(&services.local_settings, app_data.path(), "b").unwrap();
+
+        assert_eq!(result.docs_repository, None);
+        assert_eq!(services.local_settings.load_current().unwrap(), None);
+    }
+
+    #[test]
+    fn prepare_creates_the_parent_folder_for_a_first_clone() {
+        let app_data = tempfile::tempdir().unwrap();
+
+        let prepared = prepare_docs_repository_inner(app_data.path(), "o/docs").unwrap();
+
+        assert!(prepared.parent_directory.is_dir());
+        assert!(!prepared.already_cloned);
+    }
+
+    #[test]
+    fn activating_a_project_whose_repository_cannot_be_opened_reports_missing_docs() {
+        let app_data = tempfile::tempdir().unwrap();
+        let services = services_with_projects(&["a", "b"]);
+        fake_clone(app_data.path(), "o/b-docs");
+        connect_project_docs_repository_inner(
+            &services.local_settings,
+            app_data.path(),
+            "b",
+            "R_b",
+            "o/b-docs",
+        )
+        .unwrap();
+        let clone = managed_clone_dir(app_data.path(), "o/b-docs").unwrap();
+        std::fs::create_dir_all(clone.join(".okf")).unwrap();
+        std::fs::write(clone.join(".okf/workspace.yml"), "schema_version: 99\n").unwrap();
+
+        let result =
+            set_active_project_inner(&services.local_settings, app_data.path(), "b").unwrap();
 
         assert_eq!(result.docs_repository, None);
         assert_eq!(services.local_settings.load_current().unwrap(), None);

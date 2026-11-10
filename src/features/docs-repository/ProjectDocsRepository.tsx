@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   StatusFeedback,
@@ -5,6 +6,7 @@ import {
   StatusFeedbackTitle,
 } from "@/components/ui/status-feedback";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
+import { aiKeys } from "@/features/ai/queryKeys";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import {
@@ -65,6 +67,9 @@ export function ProjectDocsRepositoryPicker({
   const activeProject = useOptionalActiveProject();
   const { retrySession } = useDocuments();
   const queryClient = useQueryClient();
+  // clone이 끝나기 전에 다른 프로젝트로 바꿨을 수 있다. 끝난 시점의 활성 프로젝트를 본다.
+  const activeProjectIdRef = useRef(activeProject?.activeProjectId ?? null);
+  activeProjectIdRef.current = activeProject?.activeProjectId ?? null;
   return (
     <DocsRepositoryPicker
       projectId={projectId}
@@ -72,15 +77,37 @@ export function ProjectDocsRepositoryPicker({
       repositoryGateway={repositoryGateway}
       onConnected={() => {
         void (async () => {
-          // 백엔드가 현재 워크스페이스를 이 저장소로 바꾸고 "문서 저장소 없음"을 해제한다.
-          await activeProject?.selectProject(projectId).catch(() => undefined);
-          await queryClient.invalidateQueries({ queryKey: currentDocsRepositoryKey });
-          retrySession();
+          // 저장소는 연결을 시작한 프로젝트에 기억된다. 그 프로젝트가 아직 활성일 때만
+          // 다시 선택해 Documents를 그 저장소로 연다. 사용자가 고른 다른 프로젝트는 그대로 둔다.
+          if (activeProjectIdRef.current === projectId) {
+            await activeProject?.selectProject(projectId).catch(() => undefined);
+            await queryClient.invalidateQueries({ queryKey: currentDocsRepositoryKey });
+            retrySession();
+          }
           onDone?.();
         })();
       }}
     />
   );
+}
+
+/**
+ * 프로젝트를 바꾸면 백엔드가 문서 저장소를 바꾸므로 Documents 세션을 새로 열고,
+ * 이전 프로젝트 기준으로 읽어 둔 저장소 정보와 AI 컨텍스트를 다시 읽게 한다.
+ */
+export function DocumentsFollowActiveProject() {
+  const activeProjectId = useOptionalActiveProject()?.activeProjectId ?? null;
+  const { retrySession } = useDocuments();
+  const queryClient = useQueryClient();
+  const previous = useRef(activeProjectId);
+  useEffect(() => {
+    if (previous.current === activeProjectId) return;
+    previous.current = activeProjectId;
+    void queryClient.invalidateQueries({ queryKey: currentDocsRepositoryKey });
+    void queryClient.invalidateQueries({ queryKey: aiKeys.agentsMd });
+    retrySession();
+  }, [activeProjectId, queryClient, retrySession]);
+  return null;
 }
 
 export function DocsRepositoryErrorDetail({ title }: { title: string }) {
