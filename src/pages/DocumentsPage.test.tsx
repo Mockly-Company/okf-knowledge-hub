@@ -235,7 +235,7 @@ describe("DocumentsPage", () => {
     );
   });
 
-  it("offers a workspace reconnect for invalid document roots", async () => {
+  it("asks to choose a project for invalid document roots without one", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.startError = {
       code: "workspace_invalid",
@@ -248,9 +248,7 @@ describe("DocumentsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "설정한 문서 루트를 찾을 수 없습니다.",
     );
-    expect(
-      screen.getByRole("button", { name: "저장소 연결하기" }),
-    ).toBeInTheDocument();
+    expect(screen.getByText("프로젝트를 먼저 선택하세요")).toBeInTheDocument();
   });
 
   it("offers retry instead of Settings for a retryable start failure", async () => {
@@ -471,33 +469,11 @@ describe("DocumentsPage", () => {
         </MemoryRouter>,
       );
 
-      expect(
-        await screen.findByText("이 프로젝트의 docs 저장소가 연결되지 않았습니다."),
-      ).toBeVisible();
-      expect(
-        await screen.findByText("저장소를 선택하거나 클론해 주세요."),
-      ).toBeVisible();
-      expect(
-        screen.getByText("연결된 docs 저장소가 없어 문서를 숨겼습니다."),
-      ).toHaveAttribute("role", "status");
-      const connectButton = screen.getByRole("button", { name: "저장소 연결하기" });
-      expect(connectButton).toBeVisible();
-      expect(connectButton).toBeEnabled();
-      expect(
-        screen.queryByRole("link", { name: "워크스페이스 연결 화면으로 이동" }),
-      ).toBeNull();
+      expect(await screen.findByText("프로젝트를 먼저 선택하세요")).toBeVisible();
+      expect(screen.queryByRole("button", { name: "저장소 연결하기" })).toBeNull();
       expect(screen.queryByRole("searchbox", { name: "문서 검색" })).toBeNull();
       expect(screen.queryByRole("button", { name: "새 문서" })).toBeNull();
-      expect(screen.queryByRole("region", { name: "Guide" })).toBeNull();
       expect(screen.queryByText("Guide")).toBeNull();
-
-      const user = userEvent.setup();
-      await user.click(connectButton);
-      await waitFor(() =>
-        expect(
-          connectionGateway.calls.some((call) => call.method === "getAuthState"),
-        ).toBe(true),
-      );
     } finally {
       spy.mockRestore();
     }

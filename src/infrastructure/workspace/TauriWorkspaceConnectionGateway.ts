@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type Event } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   WorkspaceConnectionGateway,
 } from "@/features/workspace-connection/WorkspaceConnectionGateway";
@@ -10,17 +9,11 @@ import type {
   AuthStatusEvent,
   CloneJob,
   CloneProgressEvent,
-  ConnectedWorkspace,
   CurrentWorkspaceState,
   DeviceAuthorization,
   GithubRepositorySummary,
-  InitializationPreview,
-  InitializationResult,
   Page,
-  PreviewInitializationInput,
-  RepositorySnapshot,
   Unlisten,
-  WorkspaceInspection,
 } from "@/features/workspace-connection/types";
 
 type InvokeDesktop = <T>(
@@ -31,26 +24,17 @@ type ListenDesktop = <T>(
   event: string,
   listener: (event: Event<T>) => void,
 ) => Promise<Unlisten>;
-type PickDirectory = (options: {
-  directory: true;
-  multiple: false;
-}) => Promise<string | null>;
 type OpenExternal = (url: string) => Promise<void>;
-type OpenLocalPath = (path: string) => Promise<void>;
 
 const invokeDesktop: InvokeDesktop = (command, args) => invoke(command, args);
 const listenDesktop: ListenDesktop = (event, listener) => listen(event, listener);
-const pickDirectory: PickDirectory = (options) => open(options);
 const openExternal: OpenExternal = (url) => openUrl(url);
-const openLocalPath: OpenLocalPath = (path) => openPath(path);
 
 export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGateway {
   constructor(
     private readonly invokeCommand: InvokeDesktop = invokeDesktop,
     private readonly listenEvent: ListenDesktop = listenDesktop,
-    private readonly chooseDirectory: PickDirectory = pickDirectory,
     private readonly launchExternal: OpenExternal = openExternal,
-    private readonly launchPath: OpenLocalPath = openLocalPath,
   ) {}
 
   getCurrentWorkspace(): Promise<CurrentWorkspaceState> {
@@ -83,23 +67,8 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
     return this.invokeCommand("list_github_repositories", { cursor: cursor ?? null });
   }
 
-  async pickDirectory(): Promise<string | null> {
-    return this.chooseDirectory({ directory: true, multiple: false });
-  }
-
   openExternal(url: string): Promise<void> {
     return this.launchExternal(url);
-  }
-
-  openPath(path: string): Promise<void> {
-    return this.launchPath(path);
-  }
-
-  inspectExistingClone(
-    path: string,
-    repositoryId: string,
-  ): Promise<RepositorySnapshot> {
-    return this.invokeCommand("inspect_existing_clone", { path, repositoryId });
   }
 
   cloneRepository(
@@ -133,28 +102,4 @@ export class TauriWorkspaceConnectionGateway implements WorkspaceConnectionGatew
     );
   }
 
-  inspectWorkspace(path: string): Promise<WorkspaceInspection> {
-    return this.invokeCommand("inspect_workspace", { repositoryPath: path });
-  }
-
-  connectWorkspace(
-    path: string,
-    repository: Pick<GithubRepositorySummary, "id" | "fullName">,
-  ): Promise<ConnectedWorkspace> {
-    return this.invokeCommand("connect_workspace", {
-      repositoryPath: path,
-      repositoryId: repository.id,
-      repositoryFullName: repository.fullName,
-    });
-  }
-
-  previewInitialization(
-    input: PreviewInitializationInput,
-  ): Promise<InitializationPreview> {
-    return this.invokeCommand("preview_workspace_initialization", { request: input });
-  }
-
-  initializeWorkspace(previewId: string): Promise<InitializationResult> {
-    return this.invokeCommand("initialize_workspace", { previewId });
-  }
 }

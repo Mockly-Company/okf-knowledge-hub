@@ -46,19 +46,10 @@ function WorkspaceProbe() {
 
   return (
     <div>
-      <output aria-label="workspace-state">
-        {`${connection.state.step}:${connection.state.status}`}
-      </output>
       <output aria-label="account-state">
         {connection.account.status === "authenticated"
           ? `${connection.account.status}:${connection.account.user.login}`
           : connection.account.status}
-      </output>
-      <output aria-label="connected-workspace-path">
-        {connection.state.connectedWorkspace?.path ?? "none"}
-      </output>
-      <output aria-label="recovery-workspace-path">
-        {connection.state.recoveryWorkspace?.path ?? "none"}
       </output>
     </div>
   );
@@ -155,17 +146,8 @@ describe("StorybookAppProviders", () => {
       </StorybookAppProviders>,
     );
 
-    expect(await screen.findByLabelText("workspace-state")).toHaveTextContent(
-      "repository:idle",
-    );
-    expect(screen.getByLabelText("account-state")).toHaveTextContent(
+    expect(await screen.findByLabelText("account-state")).toHaveTextContent(
       "authenticated:storybook-bot",
-    );
-    expect(screen.getByLabelText("connected-workspace-path")).toHaveTextContent(
-      "none",
-    );
-    expect(screen.getByLabelText("recovery-workspace-path")).toHaveTextContent(
-      "none",
     );
     expect(screen.getByLabelText("selected-path")).toHaveTextContent("none");
   });
@@ -185,14 +167,8 @@ describe("StorybookAppProviders", () => {
       </StorybookAppProviders>,
     );
 
-    expect(await screen.findByLabelText("workspace-state")).toHaveTextContent(
-      "repository:idle",
-    );
-    expect(screen.getByLabelText("connected-workspace-path")).toHaveTextContent(
-      "none",
-    );
-    expect(screen.getByLabelText("recovery-workspace-path")).toHaveTextContent(
-      "/workspace/recovery-only",
+    expect(await screen.findByLabelText("account-state")).toHaveTextContent(
+      "authenticated:storybook-bot",
     );
     expect(screen.getByLabelText("selected-path")).toHaveTextContent("none");
   });

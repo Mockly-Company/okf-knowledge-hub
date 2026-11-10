@@ -7,17 +7,11 @@ import type {
   AuthStatusEvent,
   CloneJob,
   CloneProgressEvent,
-  ConnectedWorkspace,
   CurrentWorkspaceState,
   DeviceAuthorization,
   GithubRepositorySummary,
-  InitializationPreview,
-  InitializationResult,
   Page,
-  PreviewInitializationInput,
-  RepositorySnapshot,
   Unlisten,
-  WorkspaceInspection,
 } from "@/features/workspace-connection/types";
 
 const DESKTOP_ONLY_MESSAGE =
@@ -67,22 +61,7 @@ export class UnavailableWorkspaceConnectionGateway
     return unavailable();
   }
 
-  pickDirectory(): Promise<string | null> {
-    return unavailable();
-  }
-
   openExternal(_url: string): Promise<void> {
-    return unavailable();
-  }
-
-  openPath(_path: string): Promise<void> {
-    return unavailable();
-  }
-
-  inspectExistingClone(
-    _path: string,
-    _repositoryId: string,
-  ): Promise<RepositorySnapshot> {
     return unavailable();
   }
 
@@ -104,24 +83,4 @@ export class UnavailableWorkspaceConnectionGateway
     return unavailable();
   }
 
-  inspectWorkspace(_path: string): Promise<WorkspaceInspection> {
-    return unavailable();
-  }
-
-  connectWorkspace(
-    _path: string,
-    _repository: Pick<GithubRepositorySummary, "id" | "fullName">,
-  ): Promise<ConnectedWorkspace> {
-    return unavailable();
-  }
-
-  previewInitialization(
-    _input: PreviewInitializationInput,
-  ): Promise<InitializationPreview> {
-    return unavailable();
-  }
-
-  initializeWorkspace(_previewId: string): Promise<InitializationResult> {
-    return unavailable();
-  }
 }

@@ -1,7 +1,6 @@
 import type {
   WorkspaceConnectionGateway,
 } from "@/features/workspace-connection/WorkspaceConnectionGateway";
-import { cloneTargetPath } from "@/features/workspace-connection/types";
 import type {
   AuthState,
   AppError,
@@ -214,28 +213,9 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     return { items: this.repositories, nextCursor: this.nextRepositoryCursor };
   }
 
-  async pickDirectory(): Promise<string | null> {
-    this.record("pickDirectory");
-    return this.selectedDirectory;
-  }
-
   async openExternal(url: string): Promise<void> {
     this.record("openExternal", url);
     this.openedUrls.push(url);
-  }
-
-  async openPath(path: string): Promise<void> {
-    this.record("openPath", path);
-    this.openedPaths.push(path);
-  }
-
-  async inspectExistingClone(
-    path: string,
-    repositoryId: string,
-  ): Promise<RepositorySnapshot> {
-    this.record("inspectExistingClone", path, repositoryId);
-    if (this.existingCloneError) throw this.existingCloneError;
-    return this.repositorySnapshot;
   }
 
   async cloneRepository(
@@ -248,7 +228,7 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     this.activeCloneRequestId = requestId;
     const job = {
       requestId,
-      targetPath: cloneTargetPath(parentDirectory, repository.name),
+      targetPath: `${parentDirectory}/${repository.name}`,
     };
     if (!this.deferClone) return job;
     return new Promise((resolve) => {
@@ -271,17 +251,6 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
     return () => this.cloneListeners.delete(listener);
   }
 
-  async inspectWorkspace(path: string): Promise<WorkspaceInspection> {
-    this.record("inspectWorkspace", path);
-    if (this.deferWorkspaceInspection) {
-      return new Promise((resolve, reject) => {
-        this.pendingWorkspaceInspection = { resolve, reject };
-      });
-    }
-    if (this.workspaceInspectionError) throw this.workspaceInspectionError;
-    return this.workspaceInspection;
-  }
-
   resolveWorkspaceInspection(inspection = this.workspaceInspection): void {
     this.pendingWorkspaceInspection?.resolve(inspection);
     this.pendingWorkspaceInspection = null;
@@ -290,30 +259,6 @@ export class FakeWorkspaceConnectionGateway implements WorkspaceConnectionGatewa
   rejectWorkspaceInspection(error: AppError): void {
     this.pendingWorkspaceInspection?.reject(error);
     this.pendingWorkspaceInspection = null;
-  }
-
-  async connectWorkspace(
-    path: string,
-    repository: Pick<GithubRepositorySummary, "id" | "fullName">,
-  ): Promise<ConnectedWorkspace> {
-    this.record("connectWorkspace", path, repository);
-    return {
-      ...this.connectedWorkspace,
-      path,
-      repository: { ...repository },
-    };
-  }
-
-  async previewInitialization(
-    input: PreviewInitializationInput,
-  ): Promise<InitializationPreview> {
-    this.record("previewInitialization", input);
-    return this.initializationPreview;
-  }
-
-  async initializeWorkspace(previewId: string): Promise<InitializationResult> {
-    this.record("initializeWorkspace", previewId);
-    return this.initializationResult;
   }
 
   approveAuthentication(): void {

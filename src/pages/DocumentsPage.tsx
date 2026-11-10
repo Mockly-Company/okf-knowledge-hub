@@ -9,11 +9,12 @@ import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
-import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import {
+  ChooseProjectFirst,
   NotOkfNotice,
   ProjectDocsRepositoryPicker,
+  useCurrentDocsRepository,
   sharedDocsRepositoryGateway,
   sharedRepositoryGateway,
   type ProjectRepositoryGateway,
@@ -86,13 +87,8 @@ export function DocumentsPage({
         onDone={() => setPickerOpen(false)}
       />
     ) : null;
-  // hook은 항상 호출하고 값만 분기한다. 미연결이면 strip 숨김.
-  const workspaceConnection = useOptionalWorkspaceConnection();
-  const connectedWorkspace =
-    workspaceConnection?.state.step === "initialize" &&
-    workspaceConnection.state.status === "connected"
-      ? workspaceConnection.state.connectedWorkspace
-      : null;
+  const connectedWorkspace = useCurrentDocsRepository(repositoryGateway);
+  const connectOrChooseProject = picker ?? <ChooseProjectFirst />;
   const creationDialog = (
     <NewDocumentDialog
       state={authoringState}
@@ -124,16 +120,7 @@ export function DocumentsPage({
           actionPlacement="end"
           className="documents-page__notice"
           action={
-            invalidRoot && picker === null ? (
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!workspaceConnection}
-                onClick={() => void workspaceConnection?.startReplacement()}
-              >
-                저장소 연결하기
-              </Button>
-            ) : retryable ? (
+            retryable ? (
               <Button variant="secondary" onClick={retrySession}>
                 다시 시도
               </Button>
@@ -142,21 +129,7 @@ export function DocumentsPage({
         >
           <strong>{state.recoverableError?.message ?? "문서를 불러오지 못했습니다."}</strong>
         </StatusFeedback>
-        {invalidRoot ? picker : null}
-      </section>
-    );
-  }
-
-  if (docsMissing && picker !== null) {
-    return (
-      <section className="documents-page" aria-labelledby="documents-title">
-        <PageHeader
-          titleId="documents-title"
-          title="Documents"
-          description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
-          actions={headerActions}
-        />
-        {picker}
+        {invalidRoot ? connectOrChooseProject : null}
       </section>
     );
   }
@@ -170,28 +143,7 @@ export function DocumentsPage({
           description="프로젝트 문서를 찾고 최근 읽던 문서로 돌아갑니다."
           actions={headerActions}
         />
-        <StatusFeedback
-          variant="banner"
-          tone="info"
-          actionPlacement="end"
-          className="documents-page__notice"
-          action={
-            <Button
-              type="button"
-              variant="secondary"
-              disabled={!workspaceConnection}
-              onClick={() => void workspaceConnection?.startReplacement()}
-            >
-              저장소 연결하기
-            </Button>
-          }
-        >
-          <strong>이 프로젝트의 docs 저장소가 연결되지 않았습니다.</strong>
-          <p>저장소를 선택하거나 클론해 주세요.</p>
-        </StatusFeedback>
-        <p role="status" className="documents-page__notice">
-          연결된 docs 저장소가 없어 문서를 숨겼습니다.
-        </p>
+        {connectOrChooseProject}
       </section>
     );
   }
@@ -291,19 +243,15 @@ export function DocumentsPage({
           <span className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
             {connectedWorkspace.repository?.fullName ?? "저장소 정보 없음"}
           </span>
-          <span aria-hidden="true">·</span>
-          <span className="break-all font-mono">{connectedWorkspace.path}</span>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() =>
-              picker !== null
-                ? setPickerOpen((open) => !open)
-                : void workspaceConnection?.startReplacement()
-            }
-          >
-            다른 저장소 연결
-          </Button>
+          {picker !== null ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setPickerOpen((open) => !open)}
+            >
+              다른 저장소 연결
+            </Button>
+          ) : null}
         </p>
       ) : null}
       {pickerOpen ? picker : null}
