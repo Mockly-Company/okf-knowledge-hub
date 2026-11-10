@@ -81,7 +81,8 @@ pub fn worktree_rules(repository_root: &Path, worktrees_root: &Path) -> String {
     format!(
         "# OkHub 작업 규칙 (앱이 항상 적용)\n\n\
 1. 원본 저장소 `{root}`에서는 파일을 고치거나 커밋하지 않는다. 앱이 이 폴더를 GitHub 최신으로 계속 받는다.\n\
-2. 작업마다 `git -C \"{root}\" worktree add \"{worktrees}/<branch>\" -b <branch>`로 worktree를 만들고, 그 안에서 작업한다.\n\
+2. 작업마다 `git -C \"{root}\" worktree add \"{worktrees}/<branch>\" -b <branch>`로 worktree를 만들고, 그 안에서 작업한다. \
+브랜치 이름은 영문 소문자·숫자·`-`·`/`만 쓰고, 만들기 전에 `git check-ref-format --branch <branch>`로 확인한다.\n\
 3. 원본 저장소에 있는 git이 추적하지 않는 큰 폴더(`node_modules` 등)는 worktree에 복사하거나 새로 설치하지 말고 링크한다. \
 Windows: `cmd /c mklink /J \"<worktree>\\<dir>\" \"{root}\\<dir>\"`, macOS: `ln -s \"{root}/<dir>\" \"<worktree>/<dir>\"`.\n\
 4. 사용자가 요청하면 worktree에서 커밋하고 푸시한 뒤 `gh pr create`로 PR을 연다.\n\
@@ -92,7 +93,8 @@ Windows: `cmd /c mklink /J \"<worktree>\\<dir>\" \"{root}\\<dir>\"`, macOS: `ln 
 
 /// 앱 로그인 토큰으로 `git push`와 `gh`가 동작하게 하는 환경 변수. 로그인 전이면 비운다.
 pub fn terminal_env(access_token: Option<&str>) -> Vec<(String, String)> {
-    let Some(token) = access_token else {
+    // 빈 토큰을 넘기면 git이 묻지도 못하고 조용히 실패하므로 로그인하지 않은 것으로 본다.
+    let Some(token) = access_token.filter(|token| !token.trim().is_empty()) else {
         return Vec::new();
     };
     let helper_key = "credential.https://github.com.helper";
@@ -451,11 +453,13 @@ mod tests {
         assert!(rules.contains("git worktree"), "{rules}");
         assert!(rules.contains("gh pr create"), "{rules}");
         assert!(rules.contains("node_modules"), "{rules}");
+        assert!(rules.contains("git check-ref-format --branch"), "{rules}");
     }
 
     #[test]
     fn terminal_env_omits_credentials_when_signed_out() {
         assert!(terminal_env(None).is_empty());
+        assert!(terminal_env(Some("  ")).is_empty());
     }
 
     #[test]
