@@ -448,8 +448,14 @@ mod tests {
         let app_data = tempfile::tempdir().unwrap();
         let services = services_with_projects(&["a"]);
         fake_clone(app_data.path(), "o/a-docs");
-        connect_project_docs_repository_inner(&services, app_data.path(), "a", "R_a", "o/a-docs")
-            .unwrap();
+        connect_project_docs_repository_inner(
+            &services.local_settings,
+            app_data.path(),
+            "a",
+            "R_a",
+            "o/a-docs",
+        )
+        .unwrap();
         let (path, full_name) = managed_current_clone(&services, app_data.path())
             .unwrap()
             .unwrap();

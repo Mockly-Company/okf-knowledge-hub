@@ -86,6 +86,34 @@ describe("useDocsRepositorySync", () => {
     ).toBeInTheDocument();
   });
 
+  it("clears the previous project's notice while the new pull runs", async () => {
+    const gateway = new FakeDocsRepositoryGateway();
+    gateway.pullOutcome = "skipped_local_changes";
+    const spy = mockActiveProject("a");
+    const { view } = renderSync(gateway);
+    expect(
+      await screen.findByText("작업 중인 변경이 있어 최신 내용을 받지 않았습니다."),
+    ).toBeInTheDocument();
+
+    gateway.pullGate = new Promise(() => {});
+    spy.mockReturnValue({
+      activeProjectId: "b",
+    } as unknown as ActiveProjectModule.ActiveProjectContextValue);
+    view.rerender(
+      <TestQueryProvider>
+        <DocumentsProvider gateway={new FakeDocumentsGateway()} searchDebounceMs={0}>
+          <Sync gateway={gateway} />
+        </DocumentsProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText("작업 중인 변경이 있어 최신 내용을 받지 않았습니다."),
+      ).toBeNull(),
+    );
+  });
+
   it("pulls again when the active project changes", async () => {
     const gateway = new FakeDocsRepositoryGateway();
     const spy = mockActiveProject("a");
