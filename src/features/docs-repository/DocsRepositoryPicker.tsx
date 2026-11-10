@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,7 @@ type RepositoryGateway = Pick<
 
 type Phase =
   | { kind: "idle" }
+  | { kind: "preparing"; fullName: string }
   | { kind: "cloning"; requestId: string; fullName: string }
   | { kind: "connecting"; fullName: string }
   | { kind: "failed"; message: string }
@@ -92,9 +93,15 @@ export function DocsRepositoryPicker({
   const visible = repositories.filter((repository) =>
     repository.fullName.toLowerCase().includes(needle),
   );
-  const busy = phase.kind === "cloning" || phase.kind === "connecting";
+  const busy =
+    phase.kind === "preparing" || phase.kind === "cloning" || phase.kind === "connecting";
+  // 화면이 다시 그려지기 전에 두 번 눌러도 저장소를 한 번만 받는다.
+  const choosingRef = useRef(false);
 
   const choose = async (repository: GithubRepositorySummary) => {
+    if (choosingRef.current) return;
+    choosingRef.current = true;
+    setPhase({ kind: "preparing", fullName: repository.fullName });
     try {
       const prepared = await gateway.prepare(repository.fullName);
       if (!prepared.alreadyCloned) {
@@ -117,6 +124,8 @@ export function DocsRepositoryPicker({
       onConnected(result);
     } catch (error) {
       setPhase({ kind: "failed", message: describeError(error) });
+    } finally {
+      choosingRef.current = false;
     }
   };
 

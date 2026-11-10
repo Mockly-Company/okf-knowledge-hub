@@ -127,6 +127,21 @@ describe("DocsRepositoryPicker", () => {
     expect(document.body.textContent).not.toContain("/app/repos");
   });
 
+  it("ignores a second choice while the first is being prepared", async () => {
+    const user = userEvent.setup();
+    const docs = new FakeDocsRepositoryGateway();
+    docs.prepareGate = new Promise(() => {});
+    renderPicker(docs, FakeWorkspaceConnectionGateway.connected());
+    const button = await screen.findByRole("button", {
+      name: "Mockly-Company/mockly-knowledge",
+    });
+
+    await user.click(button);
+    await user.click(button);
+
+    expect(docs.prepares).toHaveLength(1);
+  });
+
   it("shows the reason when the clone fails", async () => {
     const user = userEvent.setup();
     const docs = new FakeDocsRepositoryGateway();

@@ -23,7 +23,11 @@ export function useDocsRepositorySync(gateway: DocsRepositoryGateway): void {
     let stopped = false;
     // 이전 프로젝트의 결과가 새 프로젝트 화면에 남지 않도록 비운다.
     queryClient.setQueryData(docsPullKey, null);
+    // 받기가 오래 걸려도 다음 주기와 겹쳐 같은 저장소를 동시에 갱신하지 않는다.
+    let pulling = false;
     const pull = async () => {
+      if (pulling) return;
+      pulling = true;
       let outcome: PullOutcome;
       try {
         outcome = await gateway.pull();
@@ -31,6 +35,8 @@ export function useDocsRepositorySync(gateway: DocsRepositoryGateway): void {
         // 네트워크가 끊겼을 수 있다. 다음 주기에 다시 받는다.
         console.warn("[docs-repository] pull failed", error);
         return;
+      } finally {
+        pulling = false;
       }
       if (stopped) return;
       queryClient.setQueryData(docsPullKey, outcome);

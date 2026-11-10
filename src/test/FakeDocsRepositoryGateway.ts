@@ -16,8 +16,12 @@ export class FakeDocsRepositoryGateway implements DocsRepositoryGateway {
   readonly prepares: string[] = [];
   readonly connects: Array<{ projectId: string; repositoryId: string; fullName: string }> = [];
 
+  /** 지정하면 prepare가 이 약속이 끝날 때까지 기다린다. */
+  prepareGate: Promise<void> | null = null;
+
   async prepare(fullName: string): Promise<PreparedDocsRepository> {
     this.prepares.push(fullName);
+    if (this.prepareGate) await this.prepareGate;
     return this.prepareResult;
   }
 

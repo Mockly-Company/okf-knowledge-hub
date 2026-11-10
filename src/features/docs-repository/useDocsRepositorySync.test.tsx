@@ -56,6 +56,19 @@ describe("useDocsRepositorySync", () => {
     expect(DOCS_PULL_INTERVAL_MS).toBe(300_000);
   });
 
+  it("does not start another pull while one is still running", async () => {
+    const gateway = new FakeDocsRepositoryGateway();
+    gateway.pullGate = new Promise(() => {});
+    renderSync(gateway);
+    await waitFor(() => expect(gateway.pulls).toBe(1));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(DOCS_PULL_INTERVAL_MS);
+    });
+
+    expect(gateway.pulls).toBe(1);
+  });
+
   it("refreshes documents only after an update", async () => {
     const gateway = new FakeDocsRepositoryGateway();
     gateway.pullOutcome = "up_to_date";
