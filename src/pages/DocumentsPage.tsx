@@ -69,9 +69,16 @@ export function DocumentsPage({
   const docsMissing = activeProject?.docsMissing ?? false;
   const activeProjectId = activeProject?.activeProjectId ?? null;
   const [pickerOpen, setPickerOpen] = useState(false);
+  // 프로젝트를 바꾸면 열어 둔 저장소 선택을 닫는다.
+  const [pickerProjectId, setPickerProjectId] = useState(activeProjectId);
+  if (pickerProjectId !== activeProjectId) {
+    setPickerProjectId(activeProjectId);
+    setPickerOpen(false);
+  }
   const picker =
     activeProjectId !== null ? (
       <ProjectDocsRepositoryPicker
+        key={activeProjectId}
         projectId={activeProjectId}
         gateway={docsRepositoryGateway}
         repositoryGateway={repositoryGateway}

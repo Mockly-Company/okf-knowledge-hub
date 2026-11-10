@@ -291,19 +291,24 @@ pub async fn set_active_github_project(
     project_id: String,
 ) -> CommandResult<ActiveProjectResult> {
     let app_data = crate::commands::docs_repository::app_data_dir(&app)?;
-    set_active_project_inner(&state, &app_data, project_id.trim())
+    let settings = state.local_settings.clone();
+    let project_id = project_id.trim().to_owned();
+    crate::commands::docs_repository::run_blocking(move || {
+        set_active_project_inner(&settings, &app_data, &project_id)
+    })
+    .await
 }
 
 /// 활성 프로젝트를 바꾸고, Documents·AI 터미널이 읽는 현재 워크스페이스도 그 문서 저장소로 바꾼다.
 pub(crate) fn set_active_project_inner(
-    services: &AppServices,
+    settings: &crate::settings::service::LocalSettingsService,
     app_data: &std::path::Path,
     project_id: &str,
 ) -> CommandResult<ActiveProjectResult> {
-    services.local_settings.set_active_project(project_id)?;
+    settings.set_active_project(project_id)?;
     Ok(ActiveProjectResult {
         docs_repository: crate::commands::docs_repository::switch_current_to_project(
-            services, app_data, project_id,
+            settings, app_data, project_id,
         )?,
     })
 }
@@ -885,13 +890,16 @@ mod tests {
             .unwrap();
 
             let app_data = tempfile::tempdir().unwrap();
-            let switched = set_active_project_inner(&services, app_data.path(), "b").unwrap();
+            let switched =
+                set_active_project_inner(&services.local_settings, app_data.path(), "b").unwrap();
             assert_eq!(switched.docs_repository, None);
             assert_eq!(load_linked_project(&services).unwrap().number, 2);
 
             unlink_project_inner(&services, None).unwrap();
             assert_eq!(load_linked_project(&services).unwrap().id, "a");
-            assert!(set_active_project_inner(&services, app_data.path(), "b").is_err());
+            assert!(
+                set_active_project_inner(&services.local_settings, app_data.path(), "b").is_err()
+            );
         }
     }
 
