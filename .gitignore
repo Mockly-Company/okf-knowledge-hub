@@ -9,3 +9,6 @@ playwright-report/
 src-tauri/target/
 src-tauri/gen/
 *.log
+
+# 개발 도구 상태 파일
+.omc/
