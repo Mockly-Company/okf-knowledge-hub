@@ -189,10 +189,27 @@ pub async fn start_ai_terminal(
     on_event: tauri::ipc::Channel<TerminalEvent>,
 ) -> CommandResult<AiTerminalSession> {
     let (command_line, workspace_dir) = prepare_ai_terminal(&state, tool, &app_data_dir(&app)?)?;
+    // 로그인하지 않았거나 토큰을 받지 못해도 터미널은 연다. 푸시만 안 될 뿐이다.
+    let access_token = match state.auth.clone() {
+        Some(auth) => auth.valid_access_token().await.ok(),
+        None => None,
+    };
+    let env = ai_runner::terminal_env(
+        access_token
+            .as_ref()
+            .map(crate::auth::model::AccessToken::expose_secret),
+    );
     let session_id = terminals
-        .start(&command_line, &workspace_dir, cols, rows, move |event| {
-            let _ = on_event.send(event);
-        })
+        .start(
+            &command_line,
+            &workspace_dir,
+            cols,
+            rows,
+            &env,
+            move |event| {
+                let _ = on_event.send(event);
+            },
+        )
         .map_err(|reason| {
             AppError::new(
                 ErrorCode::LocalSettingsUnavailable,
@@ -242,7 +259,8 @@ fn prepare_ai_terminal(
         ));
     }
     let workspace_dir = connected_workspace_dir(&services.local_settings)?;
-    let rules_file = write_rules_file(app_data_dir, &workspace_dir)?;
+    let worktrees_dir = worktrees_dir_for(services, app_data_dir, &workspace_dir)?;
+    let rules_file = write_rules_file(app_data_dir, &workspace_dir, &worktrees_dir)?;
     Ok((
         tool.terminal_command(&custom_command, &rules_file),
         workspace_dir,
@@ -271,12 +289,41 @@ fn connected_workspace_dir(
     Ok(ai_runner::shell_path(Path::new(&workspace.path)))
 }
 
-/// 허브 공통 규칙과 프로젝트 AGENTS.md를 합친 내용. AI CLI에 전달하는 단일 원본이다.
-fn load_ai_rules(app_data_dir: &Path, workspace_dir: &Path) -> CommandResult<String> {
+/// AI 작업용 worktree를 둘 폴더. 문서 저장소 이름이 없으면 폴더 이름으로 나눈다.
+fn worktrees_dir_for(
+    services: &AppServices,
+    app_data_dir: &Path,
+    workspace_dir: &Path,
+) -> CommandResult<PathBuf> {
+    let full_name = services
+        .local_settings
+        .load_current()?
+        .and_then(|current| current.repository)
+        .map(|repository| repository.full_name);
+    match full_name {
+        Some(full_name) => Ok(ai_runner::shell_path(
+            &crate::repository::managed::managed_worktrees_dir(app_data_dir, &full_name)?,
+        )),
+        None => Ok(app_data_dir.join("worktrees").join(
+            workspace_dir
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "workspace".to_owned()),
+        )),
+    }
+}
+
+/// 허브 공통 규칙, 고정 작업 규칙, 프로젝트 AGENTS.md를 합친 내용. AI CLI에 전달하는 단일 원본이다.
+fn load_ai_rules(
+    app_data_dir: &Path,
+    workspace_dir: &Path,
+    worktrees_dir: &Path,
+) -> CommandResult<String> {
     let app_rules = resolve_app_agents_md_inner(app_data_dir)?.content;
     let (_, project_rules) = read_agents_md(workspace_dir)?;
     Ok(ai_runner::compose_rules(
         &app_rules,
+        &ai_runner::worktree_rules(workspace_dir, worktrees_dir),
         project_rules.as_deref(),
     ))
 }
@@ -290,8 +337,12 @@ fn rules_file_name(workspace_dir: &Path) -> String {
 }
 
 /// 터미널 CLI가 읽을 규칙 파일. 창이 언제 닫힐지 모르므로 고정 경로에 덮어쓴다.
-fn write_rules_file(app_data_dir: &Path, workspace_dir: &Path) -> CommandResult<PathBuf> {
-    let rules = load_ai_rules(app_data_dir, workspace_dir)?;
+fn write_rules_file(
+    app_data_dir: &Path,
+    workspace_dir: &Path,
+    worktrees_dir: &Path,
+) -> CommandResult<PathBuf> {
+    let rules = load_ai_rules(app_data_dir, workspace_dir, worktrees_dir)?;
     let target = app_data_dir
         .join("okhub")
         .join(rules_file_name(workspace_dir));
@@ -671,10 +722,13 @@ mod tests {
         resolve_app_agents_md_inner(app_data.path()).unwrap();
         std::fs::write(workspace.path().join("AGENTS.md"), "# 프로젝트 규칙 표식\n").unwrap();
 
-        let rules_file = write_rules_file(app_data.path(), workspace.path()).unwrap();
+        let worktrees = app_data.path().join("worktrees").join("o").join("docs");
+        let rules_file = write_rules_file(app_data.path(), workspace.path(), &worktrees).unwrap();
 
         let rules = std::fs::read_to_string(rules_file).unwrap();
         assert!(rules.contains("프로젝트 규칙 표식"), "{rules}");
+        assert!(rules.contains("git worktree"), "{rules}");
+        assert!(rules.contains(&worktrees.display().to_string()), "{rules}");
         assert!(rules.contains("OkHub 워크스페이스 작업 규칙"), "{rules}");
     }
 
