@@ -139,9 +139,6 @@ pub fn run() {
             settings::commands::resolve_app_agents_md,
             settings::commands::resolve_agents_md,
             settings::commands::create_agents_md,
-            settings::commands::get_workspace_for_project,
-            settings::commands::set_workspace_for_project,
-            settings::commands::list_remembered_workspaces,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run OkHub");

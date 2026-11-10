@@ -15,9 +15,7 @@ import type {
   ResolvedGithubProject,
 } from "@/features/project-board/model";
 import { projectBoardKeys } from "@/features/project-board/queryKeys";
-import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
-import { TauriWorkspaceConnectionGateway } from "@/infrastructure/workspace/TauriWorkspaceConnectionGateway";
 
 /** 마지막으로 선택한 프로젝트 id를 기억하는 localStorage 키. */
 export const LAST_ACTIVE_PROJECT_KEY = "okhub.last-active-project-id";
@@ -98,11 +96,6 @@ function describeSelectError(error: unknown): string | null {
 
 interface ActiveProjectProviderProps extends PropsWithChildren {
   projectGateway?: ProjectBoardGateway;
-  /** 쓰지 않는다. 예전 로컬 연결 경로와 함께 지운다(계획 Task 12). */
-  workspaceGateway?: Pick<
-    WorkspaceConnectionGateway,
-    "getCurrentWorkspace" | "getWorkspaceForProject" | "setWorkspaceForProject"
-  >;
 }
 
 export function ActiveProjectProvider({
