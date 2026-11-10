@@ -6,8 +6,10 @@ export function WorkspaceGate() {
   const { isCurrentWorkspaceLoading } = useWorkspaceConnection();
   if (isCurrentWorkspaceLoading) {
     return (
-      <main className="workspace-gate__loading" role="status" aria-label="앱을 준비하는 중">
-        앱을 준비하는 중
+      <main className="workspace-gate__loading">
+        <p role="status" aria-label="앱을 준비하는 중" className="m-0">
+          앱을 준비하는 중
+        </p>
       </main>
     );
   }
