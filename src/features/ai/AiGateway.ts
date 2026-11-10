@@ -6,7 +6,7 @@
  * - `start_ai_terminal` `{ tool, cols, rows, onEvent: Channel }` → `{ session_id }`
  * - `write_ai_terminal` `{ sessionId, data }`, `resize_ai_terminal` `{ sessionId, cols, rows }`,
  *   `stop_ai_terminal` `{ sessionId }` → `boolean`
- * - `resolve_agents_md` {} → `{ workspace_path, path, content }`
+ * - `resolve_agents_md` {} → `{ workspace_path, path, content, repository_full_name }`
  * - `resolve_app_agents_md` {} → `{ path: string, content: string }`
  * - `create_agents_md` {} → `{ path: string }`
  * 모두 snake_case. 백엔드가 없으면 게이트웨이가
@@ -31,6 +31,8 @@ export interface AgentsMdResolution {
   workspace_path: string;
   path: string | null;
   content: string | null;
+  /** 문서 저장소 이름(`owner/name`). 예전 백엔드나 이름 없는 폴더면 없다. */
+  repository_full_name?: string | null;
 }
 
 export interface AppAgentsMdResolution {
