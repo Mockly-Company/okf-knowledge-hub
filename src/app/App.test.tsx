@@ -1,4 +1,3 @@
-import { submitLocalConnection } from "@/test/localConnection";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -33,7 +32,7 @@ describe("App", () => {
     expect(await screen.findByRole("main", { name: "OkHub" })).toBeInTheDocument();
   });
 
-  it("shows the app shell with the Documents reconnect guidance when no workspace is saved", async () => {
+  it("asks to choose a project before connecting documents when none is saved", async () => {
     const documentsGateway = new FakeDocumentsGateway();
     documentsGateway.startError = {
       code: "workspace_missing",
@@ -56,62 +55,8 @@ describe("App", () => {
     ).not.toBeInTheDocument();
 
     await user.click(await screen.findByRole("link", { name: "Documents" }));
-    expect(
-      await screen.findByRole("button", { name: "저장소 연결하기" }),
-    ).toBeInTheDocument();
-  });
-
-  it("connects an existing initialized clone and opens Home", async () => {
-    const gateway = FakeWorkspaceConnectionGateway.existingReadyClone();
-    const user = userEvent.setup();
-    render(<App workspaceGateway={gateway} preferencesRepository={new FakePreferencesRepository()} />);
-
-    await user.click(await screen.findByRole("link", { name: "Settings" }));
-    await user.click(await screen.findByRole("button", { name: "외부 연결" }));
-    await user.click(await screen.findByRole("button", { name: "GitHub 다시 로그인" }));
-    gateway.approveAuthentication();
-    await user.click(await screen.findByRole("radio", { name: /mockly-knowledge/ }));
-    await user.click(screen.getByRole("button", { name: "다음" }));
-    await submitLocalConnection(user);
-
-    // 로그인은 Settings에서 시작했으므로 연결 후 Home으로 돌아간다.
-    await user.click(await screen.findByRole("link", { name: "Home" }));
-    expect(await screen.findByRole("heading", { name: "내 작업" })).toBeInTheDocument();
-  });
-
-  it("keeps the current workspace when repository replacement is cancelled", async () => {
-    const gateway = FakeWorkspaceConnectionGateway.connected(
-      "/work/mockly-knowledge",
-    );
-    const documentsGateway = new FakeDocumentsGateway();
-    documentsGateway.sessionSnapshot.lastOpenedPath = null;
-    const user = userEvent.setup();
-    render(
-      <App
-        workspaceGateway={gateway}
-        documentsGateway={documentsGateway}
-        preferencesRepository={new FakePreferencesRepository()}
-      />,
-    );
-
-    await user.click(await screen.findByRole("link", { name: "Documents" }));
-    await user.click(
-      await screen.findByRole("button", { name: "다른 저장소 연결" }),
-    );
-    expect(
-      await screen.findByRole("heading", { name: "OKF 저장소 선택" }),
-    ).toBeInTheDocument();
-    await user.click(
-      await screen.findByRole("button", { name: "연결 취소" }),
-    );
-
-    expect(
-      await screen.findByRole("button", { name: "다른 저장소 연결" }),
-    ).toBeInTheDocument();
-    expect(
-      await screen.findByText("/work/mockly-knowledge"),
-    ).toBeInTheDocument();
-    expect(gateway.currentWorkspace?.path).toBe("/work/mockly-knowledge");
+    expect(await screen.findByText("프로젝트를 먼저 선택하세요")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "저장소 연결하기" })).toBeNull();
   });
 
   it("closes the document session and keeps the app shell after logout", async () => {
@@ -149,32 +94,6 @@ describe("App", () => {
     ).toHaveLength(0);
     expect(documentsGateway.listenerCount()).toBe(1);
     expect(workspaceGateway.currentWorkspace?.status).toBe("connected");
-  });
-
-  it("reuses the authenticated GitHub session when replacing a workspace", async () => {
-    const gateway = FakeWorkspaceConnectionGateway.connected();
-    const documentsGateway = new FakeDocumentsGateway();
-    documentsGateway.sessionSnapshot.lastOpenedPath = null;
-    const user = userEvent.setup();
-    render(
-      <App
-        workspaceGateway={gateway}
-        documentsGateway={documentsGateway}
-        preferencesRepository={new FakePreferencesRepository()}
-      />,
-    );
-
-    await user.click(await screen.findByRole("link", { name: "Documents" }));
-    await user.click(
-      await screen.findByRole("button", { name: "다른 저장소 연결" }),
-    );
-
-    expect(
-      await screen.findByRole("heading", { name: "OKF 저장소 선택" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "GitHub 로그인" }),
-    ).not.toBeInTheDocument();
   });
 
   it("completes the Documents flow and releases its document session on unmount", async () => {

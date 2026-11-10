@@ -41,20 +41,6 @@ describe("app shell design contract", () => {
     );
   });
 
-  it("gives the connection flow its own viewport-height vertical scroll boundary", () => {
-    const connection = declarationBlock(".workspace-connection");
-
-    expect(connection).toMatch(/(?:^|\n)\s*height: 100dvh;/);
-    expect(connection).toContain("overflow-y: auto");
-    expect(connection).toContain(
-      "overscroll-behavior: contain",
-    );
-    expect(connection).toContain("align-items: start");
-    expect(declarationBlock(".workspace-connection__card")).toContain(
-      "margin-block: auto",
-    );
-  });
-
   it("uses a 260px sidebar only on wide desktop screens", () => {
     const wideDesktop = mediaQueryBlock("(min-width: 1440px)");
 

@@ -32,14 +32,20 @@ export type ProjectRepositoryGateway = Pick<
 
 export const currentDocsRepositoryKey = ["docsRepository", "current"] as const;
 
-/** 현재 문서 저장소가 OKF 형식이 아니면 경고한다. 조회에 실패하면 아무것도 보여 주지 않는다. */
-export function NotOkfNotice({ gateway }: { gateway: ProjectRepositoryGateway }) {
+/** 현재 연결된 문서 저장소. 연결되지 않았거나 읽지 못하면 null이다. */
+export function useCurrentDocsRepository(gateway: ProjectRepositoryGateway) {
   const current = useQuery({
     queryKey: currentDocsRepositoryKey,
     queryFn: () => gateway.getCurrentWorkspace(),
   });
   const workspace = current.data;
-  if (workspace?.status !== "connected" || workspace.okf !== false) {
+  return workspace?.status === "connected" ? workspace : null;
+}
+
+/** 현재 문서 저장소가 OKF 형식이 아니면 경고한다. 조회에 실패하면 아무것도 보여 주지 않는다. */
+export function NotOkfNotice({ gateway }: { gateway: ProjectRepositoryGateway }) {
+  const workspace = useCurrentDocsRepository(gateway);
+  if (workspace === null || workspace.okf !== false) {
     return null;
   }
   return (
@@ -110,11 +116,14 @@ export function DocumentsFollowActiveProject() {
   return null;
 }
 
-export function DocsRepositoryErrorDetail({ title }: { title: string }) {
+/** 프로젝트를 고르기 전에는 문서 저장소를 연결할 수 없다고 알린다. */
+export function ChooseProjectFirst() {
   return (
-    <StatusFeedback variant="content" tone="info">
-      <StatusFeedbackTitle>{title}</StatusFeedbackTitle>
-      <StatusFeedbackDescription>사이드바에서 프로젝트를 먼저 선택하세요.</StatusFeedbackDescription>
+    <StatusFeedback variant="content" tone="info" className="documents-page__notice">
+      <StatusFeedbackTitle>프로젝트를 먼저 선택하세요</StatusFeedbackTitle>
+      <StatusFeedbackDescription>
+        사이드바에서 프로젝트를 선택하면 그 프로젝트의 문서 저장소를 연결할 수 있습니다.
+      </StatusFeedbackDescription>
     </StatusFeedback>
   );
 }

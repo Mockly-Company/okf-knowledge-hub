@@ -6,7 +6,6 @@ import {
   useMemo,
   useReducer,
   useRef,
-  useState,
   type PropsWithChildren,
 } from "react";
 import type { WorkspaceConnectionGateway } from "./WorkspaceConnectionGateway";
@@ -15,64 +14,20 @@ import {
   createInitialAccountSessionState,
   type AccountSessionState,
 } from "./account-session";
-import { connectionReducer, createInitialConnectionState } from "./connection-reducer";
-import { cloneTargetPath } from "./types";
-import type {
-  AppError,
-  AuthState,
-  AuthStatusEvent,
-  CloneProgressEvent,
-  CloneStartRequest,
-  ConnectionState,
-  GithubRepositorySummary,
-  InitializationPreviewRequest,
-  InitializationRequest,
-  LocalInspectionRequest,
-  WorkspaceConnectionRequest,
-  WorkspaceInspectionRequest,
-  WorkspaceInspection,
-} from "./types";
+import type { AppError, AuthState, AuthStatusEvent } from "./types";
 
+/**
+ * GitHub 계정 연결 상태. 문서 저장소는 프로젝트별로 Documents 화면에서 고르므로
+ * 여기서는 로그인·로그아웃만 다룬다.
+ */
 export interface WorkspaceConnectionContextValue {
-  state: ConnectionState;
   account: AccountSessionState;
-  canCancelReplacement: boolean;
+  /** 처음 계정 상태를 읽는 동안 참이다. */
   isCurrentWorkspaceLoading: boolean;
-  isWorkspaceValidating: boolean;
-  workspaceValidation:
-    | { requestId: string | null; path: string; inspection: WorkspaceInspection; error: null }
-    | { requestId: string; path: string; inspection: null; error: AppError }
-    | null;
-  cloneTargetPreview: CloneTargetPreview | null;
   startLogin(): Promise<void>;
   cancelLogin(): Promise<void>;
   logoutGithub(): Promise<void>;
   openVerificationUrl(url: string): Promise<void>;
-  openLocalPath(path: string): Promise<void>;
-  refreshRepositories(): Promise<void>;
-  loadNextRepositories(): Promise<void>;
-  selectRepository(repository: GithubRepositorySummary): void;
-  pickLocalDirectory(): Promise<string | null>;
-  connectExistingClone(path?: string): Promise<void>;
-  cloneIntoSelectedParent(parentDirectory?: string): Promise<void>;
-  confirmCloneTarget(): Promise<void>;
-  cancelCloneTarget(): void;
-  chooseAnotherCloneDirectory(): Promise<void>;
-  previewInitialization(): Promise<void>;
-  cancelInitializationPreview(): void;
-  confirmInitialization(): Promise<void>;
-  choosePostMergeClone(): Promise<void>;
-  retryLastAction(): Promise<void>;
-  revalidateCurrentWorkspace(): Promise<void>;
-  startReplacement(): Promise<void>;
-  cancelReplacement(): Promise<void>;
-}
-
-export interface CloneTargetPreview {
-  repositoryId: string;
-  parentDirectory: string;
-  targetPath: string;
-  mode: "start" | "alternate_directory";
 }
 
 const WorkspaceConnectionContext =
@@ -89,6 +44,7 @@ function containsSecretBoundaryMarker(value: string): boolean {
   return secretBoundaryMarkers.some((marker) => normalized.includes(marker));
 }
 
+/** 백엔드 오류를 화면에 보여도 되는 값만 남긴다. 토큰 조각은 버린다. */
 function asAppError(error: unknown): AppError {
   if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
     const candidate = error as AppError;
@@ -122,28 +78,6 @@ function sanitizeAuthStatusEvent(event: AuthStatusEvent): AuthStatusEvent {
   return event.status === "failed" ? { ...event, error: asAppError(event.error) } : event;
 }
 
-function sanitizeCloneProgressEvent(event: CloneProgressEvent): CloneProgressEvent {
-  return event.status === "failed" ? { ...event, error: asAppError(event.error) } : event;
-}
-
-function workspaceNameFromRepository(repositoryName: string): string {
-  const stem = repositoryName.replace(/-knowledge$/i, "");
-  return stem.replace(/(^|[-_\s])(\p{L})/gu, (_, separator: string, letter: string) => `${separator}${letter.toUpperCase()}`);
-}
-
-function canCancelReplacement(state: ConnectionState): boolean {
-  if (state.mode !== "replacement") return false;
-  return !(
-    (state.step === "local" &&
-      (state.status === "clone_starting" ||
-        state.status === "cloning" ||
-        state.status === "clone_cancelling" ||
-        state.status === "workspace_connecting")) ||
-    (state.step === "initialize" &&
-      (state.status === "initializing" || state.status === "connecting"))
-  );
-}
-
 interface WorkspaceConnectionProviderProps extends PropsWithChildren {
   gateway: WorkspaceConnectionGateway;
 }
@@ -152,32 +86,15 @@ export function WorkspaceConnectionProvider({
   gateway,
   children,
 }: WorkspaceConnectionProviderProps) {
-  const [state, dispatch] = useReducer(connectionReducer, undefined, createInitialConnectionState);
-  const stateRef = useRef(state);
   const [account, dispatchAccount] = useReducer(
     accountSessionReducer,
     undefined,
     createInitialAccountSessionState,
   );
   const accountRef = useRef(account);
-  const [isCurrentWorkspaceLoading, setCurrentWorkspaceLoading] = useState(true);
-  const [cloneTargetPreview, setCloneTargetPreview] = useState<CloneTargetPreview | null>(null);
-  const [isWorkspaceValidating, setWorkspaceValidating] = useState(false);
-  const [workspaceValidation, setWorkspaceValidation] = useState<
-    WorkspaceConnectionContextValue["workspaceValidation"]
-  >(null);
-  const activeWorkspaceValidationRef = useRef<{ requestId: string; path: string } | null>(null);
 
-  const dispatchAccepted = useCallback((action: Parameters<typeof connectionReducer>[1]) => {
-    const current = stateRef.current;
-    const next = connectionReducer(current, action);
-    if (next === current) return false;
-    stateRef.current = next;
-    dispatch(action);
-    return true;
-  }, []);
-
-  const dispatchAccountAccepted = useCallback(
+  // 같은 렌더 안에서 연달아 들어온 동작도 최신 상태 기준으로 받아들일지 정한다.
+  const dispatchAccepted = useCallback(
     (action: Parameters<typeof accountSessionReducer>[1]) => {
       const current = accountRef.current;
       const next = accountSessionReducer(current, action);
@@ -189,672 +106,102 @@ export function WorkspaceConnectionProvider({
     [],
   );
 
-  const loadRepositories = useCallback(
-    async (cursor: string | null, append: boolean, authenticatedUserId?: number) => {
-      const current = stateRef.current;
-      const userId = authenticatedUserId ?? (current.auth?.status === "authenticated" ? current.auth.user.id : null);
-      if (userId === null) return;
-      const request = { id: operationId(), userId, cursor, append };
-      if (!dispatchAccepted({ type: "repositoryLoading", request })) return;
-      try {
-        const page = await gateway.listRepositories(cursor ?? undefined);
-        dispatchAccepted({ type: "repositoryPageLoaded", request, page });
-      } catch (error) {
-        dispatchAccepted({ type: "repositoryLoadFailed", request, error: asAppError(error) });
-      }
-    },
-    [dispatchAccepted, gateway],
-  );
-
-  const restoreAuthenticatedWorkspace = useCallback(async (
-    auth: Extract<AuthState, { status: "authenticated" }>,
-  ) => {
-    const request = { id: operationId() };
-    if (!dispatchAccepted({ type: "authLoadStarted", request })) return;
+  const startLogin = useCallback(async () => {
+    const requestId = operationId();
+    if (!dispatchAccepted({ type: "loginBeginStarted", requestId })) return;
     try {
-      const workspace = await gateway.getCurrentWorkspace();
-      if (workspace?.status === "connected") {
-        setWorkspaceValidation({
-          requestId: null,
-          path: workspace.path,
-          inspection: { status: "ready", summary: workspace.summary },
-          error: null,
-        });
-      }
-      dispatchAccepted({ type: "workspaceRestoreLoaded", request, auth, workspace });
+      const authorization = await gateway.beginGithubAuth(requestId);
+      dispatchAccepted({ type: "loginStarted", requestId, authorization });
     } catch (error) {
-      dispatchAccepted({ type: "authLoadFailed", request, error: asAppError(error) });
+      dispatchAccepted({ type: "loginBeginFailed", requestId, error: asAppError(error) });
     }
   }, [dispatchAccepted, gateway]);
 
-  const loadAuth = useCallback(async (restoreSavedWorkspace = true) => {
-    const request = { id: operationId() };
-    const connectionOwnsRequest =
-      stateRef.current.status !== "connected" &&
-      dispatchAccepted({ type: "authLoadStarted", request });
-    let auth: AuthState;
-    try {
-      auth = await gateway.getAuthState();
-    } catch (error) {
-      const appError = asAppError(error);
-      dispatchAccountAccepted({ type: "authLoadFailed", error: appError });
-      if (connectionOwnsRequest) {
-        dispatchAccepted({ type: "authLoadFailed", request, error: appError });
-      }
-      return;
-    }
-    dispatchAccountAccepted({ type: "authLoaded", auth });
-    if (!connectionOwnsRequest) return;
-    if (auth.status === "authenticated" && restoreSavedWorkspace) {
-      try {
-        const workspace = await gateway.getCurrentWorkspace();
-        if (workspace?.status === "connected") {
-          setWorkspaceValidation({
-            requestId: null,
-            path: workspace.path,
-            inspection: { status: "ready", summary: workspace.summary },
-            error: null,
-          });
-        }
-        dispatchAccepted({ type: "workspaceRestoreLoaded", request, auth, workspace });
-      } catch (error) {
-        dispatchAccepted({
-          type: "authLoadFailed",
-          request,
-          error: asAppError(error),
-        });
-      }
-      return;
-    }
-    dispatchAccepted({ type: "authLoaded", request, auth });
-  }, [dispatchAccepted, dispatchAccountAccepted, gateway]);
-
-  const inspectWorkspace = useCallback(
-    async (repositoryRoot: string) => {
-      const request: WorkspaceInspectionRequest = { id: operationId(), repositoryRoot };
-      if (!dispatchAccepted({ type: "workspaceInspectionStarted", request })) return;
-      try {
-        const inspection = await gateway.inspectWorkspace(repositoryRoot);
-        dispatchAccepted({ type: "workspaceInspected", request, inspection });
-      } catch (error) {
-        dispatchAccepted({ type: "workspaceInspectionFailed", request, error: asAppError(error) });
-      }
-    },
-    [dispatchAccepted, gateway],
-  );
-
-  const inspectLocalClone = useCallback(
-    async (request: LocalInspectionRequest, retry = false) => {
-      if (!dispatchAccepted({ type: retry ? "localInspectionRetryStarted" : "localInspectionStarted", request })) return;
-      try {
-        const repository = await gateway.inspectExistingClone(request.path, request.repositoryId);
-        dispatchAccepted({ type: "localRepositoryChanged", request, repository });
-      } catch (error) {
-        dispatchAccepted({ type: "localInspectionFailed", request, error: asAppError(error) });
-      }
-    },
-    [dispatchAccepted, gateway],
-  );
-
-  const clone = useCallback(
-    async (request: CloneStartRequest, mode: "start" | "retry" | "alternate_directory" = "start") => {
-      const current = stateRef.current;
-      const repository = current.selectedRepository;
-      if (!repository || repository.id !== request.repositoryId) return;
-      if (!dispatchAccepted({
-        type:
-          mode === "retry"
-            ? "cloneRetryStarted"
-            : mode === "alternate_directory"
-              ? "cloneAlternateDirectoryStarted"
-              : "cloneStarting",
-        request,
-      })) return;
-      try {
-        const job = await gateway.cloneRepository(
-          request.id,
-          repository,
-          request.parentDirectory,
-        );
-        dispatchAccepted({ type: "cloneStarted", request, job });
-      } catch (error) {
-        dispatchAccepted({ type: "cloneStartFailed", request, error: asAppError(error) });
-      }
-    },
-    [dispatchAccepted, gateway],
-  );
-
-  const startLogin = useCallback(async () => {
-    const request = { id: operationId() };
-    if (!dispatchAccountAccepted({ type: "loginBeginStarted", requestId: request.id })) {
-      return;
-    }
-    const connectionOwnsRequest =
-      stateRef.current.status !== "connected" &&
-      dispatchAccepted({ type: "loginBeginStarted", request });
-    if (stateRef.current.status !== "connected" && !connectionOwnsRequest) return;
-    try {
-      const authorization = await gateway.beginGithubAuth(request.id);
-      dispatchAccountAccepted({
-        type: "loginStarted",
-        requestId: request.id,
-        authorization,
-      });
-      if (connectionOwnsRequest) {
-        dispatchAccepted({ type: "loginStarted", request, authorization });
-      }
-    } catch (error) {
-      const appError = asAppError(error);
-      dispatchAccountAccepted({
-        type: "loginBeginFailed",
-        requestId: request.id,
-        error: appError,
-      });
-      if (connectionOwnsRequest) {
-        dispatchAccepted({ type: "loginBeginFailed", request, error: appError });
-      }
-    }
-  }, [dispatchAccepted, dispatchAccountAccepted, gateway]);
-
-  const logoutGithub = useCallback(async () => {
-    if (!dispatchAccountAccepted({ type: "logoutStarted" })) return;
-    try {
-      await gateway.logoutGithub();
-      dispatchAccountAccepted({ type: "logoutSucceeded" });
-      dispatchAccepted({ type: "logoutSucceeded" });
-      setWorkspaceValidation(null);
-    } catch (error) {
-      dispatchAccountAccepted({ type: "logoutFailed", error: asAppError(error) });
-    }
-  }, [dispatchAccepted, dispatchAccountAccepted, gateway]);
-
   const cancelLogin = useCallback(async () => {
-    const current = stateRef.current;
-    const currentAccount = accountRef.current;
-    const accountRequestId =
-      currentAccount.status === "login_beginning"
-        ? currentAccount.requestId
-        : currentAccount.status === "waiting_for_user"
-          ? currentAccount.authorization.requestId
-          : null;
-    const connectionRequestId =
-      current.step === "auth" && current.status === "login_beginning"
-        ? current.activeLoginBeginRequest.id
-        : current.step === "auth" && current.status === "waiting_for_user"
+    const current = accountRef.current;
+    const requestId =
+      current.status === "login_beginning"
+        ? current.requestId
+        : current.status === "waiting_for_user"
           ? current.authorization.requestId
           : null;
-    const requestId = accountRequestId ?? connectionRequestId;
     if (requestId === null) return;
     try {
       await gateway.cancelGithubAuth(requestId);
     } finally {
-      const event = { status: "cancelled" as const, requestId };
-      dispatchAccountAccepted({ type: "authEventReceived", event });
-      if (stateRef.current.status !== "connected") {
-        dispatchAccepted({ type: "authEventReceived", event });
-      }
-    }
-  }, [dispatchAccepted, dispatchAccountAccepted, gateway]);
-
-  const openVerificationUrl = useCallback(async (url: string) => {
-    await gateway.openExternal(url);
-  }, [gateway]);
-
-  const openLocalPath = useCallback(async (path: string) => {
-    await gateway.openPath(path);
-  }, [gateway]);
-
-  const refreshRepositories = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.step !== "repository") return;
-    await loadRepositories(null, false);
-  }, [loadRepositories]);
-
-  const loadNextRepositories = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.step !== "repository" || !current.nextRepositoryCursor) return;
-    await loadRepositories(current.nextRepositoryCursor, true);
-  }, [loadRepositories]);
-
-  const selectRepository = useCallback((repository: GithubRepositorySummary) => {
-    dispatchAccepted({ type: "repositorySelected", repository });
-  }, [dispatchAccepted]);
-
-  const pickLocalDirectory = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.step !== "local") return null;
-    const path = await gateway.pickDirectory();
-    const latest = stateRef.current;
-    return latest.step === "local" && latest.selectedRepository.id === current.selectedRepository.id ? path : null;
-  }, [gateway]);
-
-  const connectExistingClone = useCallback(async (selectedPath?: string) => {
-    const current = stateRef.current;
-    if (current.step !== "local" || !current.selectedRepository) return;
-    const path = selectedPath ?? await pickLocalDirectory();
-    if (!path) return;
-    await inspectLocalClone({ id: operationId(), repositoryId: current.selectedRepository.id, path });
-  }, [pickLocalDirectory, inspectLocalClone]);
-
-  const choosePostMergeClone = useCallback(async () => {
-    const current = stateRef.current;
-    if (
-      current.step !== "initialize" ||
-      current.status !== "ready_to_connect" ||
-      current.initializationResult.draftPullRequestUrl === null ||
-      !dispatchAccepted({ type: "draftPullRequestCloneSelectionStarted" })
-    ) {
-      return;
-    }
-    const path = await gateway.pickDirectory();
-    if (!path) return;
-    await inspectLocalClone({
-      id: operationId(),
-      repositoryId: current.selectedRepository.id,
-      path,
-    });
-  }, [dispatchAccepted, gateway, inspectLocalClone]);
-
-  const selectCloneTarget = useCallback(async (
-    mode: CloneTargetPreview["mode"],
-    selectedParent?: string,
-  ) => {
-    const current = stateRef.current;
-    if (current.step !== "local" || !current.selectedRepository) return;
-    const parentDirectory = selectedParent ?? await gateway.pickDirectory();
-    if (!parentDirectory) return;
-    const latest = stateRef.current;
-    if (
-      latest.step !== "local" ||
-      latest.selectedRepository.id !== current.selectedRepository.id
-    ) return;
-    setCloneTargetPreview({
-      repositoryId: latest.selectedRepository.id,
-      parentDirectory,
-      targetPath: cloneTargetPath(parentDirectory, latest.selectedRepository.name),
-      mode,
-    });
-  }, [gateway]);
-
-  const cloneIntoSelectedParent = useCallback(async (parentDirectory?: string) => {
-    const current = stateRef.current;
-    const alternate = current.step === "local" && current.status === "error" && current.errorContext === "pre_repository" && current.failedOperation === "clone";
-    await selectCloneTarget(alternate ? "alternate_directory" : "start", parentDirectory);
-  }, [selectCloneTarget]);
-
-  const confirmCloneTarget = useCallback(async () => {
-    const preview = cloneTargetPreview;
-    const current = stateRef.current;
-    if (
-      !preview ||
-      current.step !== "local" ||
-      current.selectedRepository.id !== preview.repositoryId
-    ) return;
-    setCloneTargetPreview(null);
-    await clone(
-      {
-        id: operationId(),
-        repositoryId: preview.repositoryId,
-        parentDirectory: preview.parentDirectory,
-        targetPath: preview.targetPath,
-      },
-      preview.mode,
-    );
-  }, [clone, cloneTargetPreview]);
-
-  const cancelCloneTarget = useCallback(() => {
-    setCloneTargetPreview(null);
-  }, []);
-
-  const chooseAnotherCloneDirectory = useCallback(async () => {
-    const current = stateRef.current;
-    if (
-      current.step !== "local" ||
-      current.status !== "error" ||
-      current.errorContext !== "pre_repository" ||
-      current.error.recovery !== "choose_another_directory"
-    ) return;
-    if (current.failedOperation === "local_inspection") {
-      await connectExistingClone();
-      return;
-    }
-    await selectCloneTarget("alternate_directory");
-  }, [connectExistingClone, selectCloneTarget]);
-
-  const previewInitialization = useCallback(async () => {
-    const current = stateRef.current;
-    if (
-      current.step !== "local" ||
-      !current.localRepository ||
-      current.workspaceInspection?.status !== "initialization_required"
-    ) return;
-    const request: InitializationPreviewRequest = {
-      id: operationId(),
-      repositoryRoot: current.localRepository.root,
-      workspaceName: workspaceNameFromRepository(current.selectedRepository.name),
-    };
-    if (!dispatchAccepted({ type: "initializationPreviewStarted", request })) return;
-    try {
-      const preview = await gateway.previewInitialization({
-        repositoryPath: request.repositoryRoot,
-        workspaceName: request.workspaceName,
-        repositoryId: current.selectedRepository.id,
-        repositoryFullName: current.selectedRepository.fullName,
+      dispatchAccepted({
+        type: "authEventReceived",
+        event: { status: "cancelled", requestId },
       });
-      dispatchAccepted({ type: "initializationPreviewLoaded", request, preview });
-    } catch (error) {
-      dispatchAccepted({ type: "initializationPreviewFailed", request, error: asAppError(error) });
     }
   }, [dispatchAccepted, gateway]);
 
-  const cancelInitializationPreview = useCallback(() => {
-    dispatchAccepted({ type: "initializationPreviewCancelled" });
-  }, [dispatchAccepted]);
+  const logoutGithub = useCallback(async () => {
+    if (!dispatchAccepted({ type: "logoutStarted" })) return;
+    try {
+      await gateway.logoutGithub();
+      dispatchAccepted({ type: "logoutSucceeded" });
+    } catch (error) {
+      dispatchAccepted({ type: "logoutFailed", error: asAppError(error) });
+    }
+  }, [dispatchAccepted, gateway]);
 
-  const connectInitializedWorkspace = useCallback(
-    async (request: WorkspaceConnectionRequest) => {
-      if (!dispatchAccepted({ type: "workspaceConnectionStarted", request })) return;
-      try {
-        const workspace = await gateway.connectWorkspace(request.repositoryRoot, {
-          id: request.repositoryId,
-          fullName: request.repositoryFullName,
-        });
-        if (dispatchAccepted({ type: "workspaceConnected", request, workspace })) {
-          activeWorkspaceValidationRef.current = null;
-          setWorkspaceValidating(false);
-          setWorkspaceValidation({
-            requestId: null,
-            path: workspace.path,
-            inspection: { status: "ready", summary: workspace.summary },
-            error: null,
-          });
-        }
-      } catch (error) {
-        dispatchAccepted({ type: "workspaceConnectionFailed", request, error: asAppError(error) });
-      }
+  const openVerificationUrl = useCallback(
+    async (url: string) => {
+      await gateway.openExternal(url);
     },
-    [dispatchAccepted, gateway],
+    [gateway],
   );
-
-  const confirmInitialization = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.step !== "initialize" || current.status !== "preview") return;
-    const request: InitializationRequest = {
-      id: operationId(),
-      previewId: current.initializationPreview.id,
-      repositoryRoot: current.localRepository.root,
-    };
-    if (!dispatchAccepted({ type: "initializationStarted", request })) return;
-    try {
-      const result = await gateway.initializeWorkspace(request.previewId);
-      dispatchAccepted({ type: "initializationSucceeded", request, result });
-    } catch (error) {
-      dispatchAccepted({ type: "initializationFailed", request, error: asAppError(error) });
-    }
-  }, [dispatchAccepted, gateway]);
-
-  const retryLastAction = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.step === "auth") {
-      await startLogin();
-      return;
-    }
-    if (current.step === "repository") {
-      await loadRepositories(null, false);
-      return;
-    }
-    if (current.step === "local" && current.status === "error") {
-      if (current.errorContext === "pre_repository" && current.failedOperation === "local_inspection") {
-        await inspectLocalClone({ ...current.failedLocalInspectionRequest, id: operationId() }, true);
-      } else if (current.errorContext === "pre_repository" && current.failedOperation === "clone") {
-        await clone({ ...current.failedCloneStartRequest, id: operationId() }, "retry");
-      } else if (current.errorContext === "repository") {
-        await inspectWorkspace(current.localRepository.root);
-      } else if (current.errorContext === "initialization_preview") {
-        await previewInitialization();
-      } else if (current.errorContext === "workspace_connection") {
-        await connectInitializedWorkspace({
-          ...current.failedWorkspaceConnectionRequest,
-          id: operationId(),
-        });
-      }
-      return;
-    }
-    if (current.step === "initialize" && current.status === "error") {
-      if (current.failedOperation === "initialization") {
-        const request = { ...current.failedInitializationRequest, id: operationId() };
-        if (!dispatchAccepted({ type: "initializationStarted", request })) return;
-        try {
-          const result = await gateway.initializeWorkspace(request.previewId);
-          dispatchAccepted({ type: "initializationSucceeded", request, result });
-        } catch (error) {
-          dispatchAccepted({ type: "initializationFailed", request, error: asAppError(error) });
-        }
-      } else {
-        await connectInitializedWorkspace({ ...current.failedWorkspaceConnectionRequest, id: operationId() });
-      }
-    }
-  }, [clone, connectInitializedWorkspace, dispatchAccepted, gateway, inspectLocalClone, inspectWorkspace, loadRepositories, previewInitialization, startLogin]);
-
-  const startReplacement = useCallback(async () => {
-    if (!dispatchAccepted({ type: "replacementStarted" })) return;
-    activeWorkspaceValidationRef.current = null;
-    setWorkspaceValidating(false);
-    setWorkspaceValidation(null);
-    await loadAuth(false);
-  }, [dispatchAccepted, loadAuth]);
-  const cancelReplacement = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.mode !== "replacement") return;
-    if (
-      current.step === "auth" &&
-      (current.status === "login_beginning" ||
-        current.status === "waiting_for_user")
-    ) {
-      await cancelLogin();
-    }
-    if (dispatchAccepted({ type: "replacementCancelled" })) {
-      activeWorkspaceValidationRef.current = null;
-      setWorkspaceValidating(false);
-      setWorkspaceValidation({
-        requestId: null,
-        path: current.replacementWorkspace.path,
-        inspection: { status: "ready", summary: current.replacementWorkspace.summary },
-        error: null,
-      });
-    }
-  }, [cancelLogin, dispatchAccepted]);
-  const revalidateCurrentWorkspace = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.step !== "initialize" || current.status !== "connected") {
-      throw new Error("연결된 워크스페이스가 없습니다.");
-    }
-    const validationRequest = {
-      requestId: operationId(),
-      path: current.connectedWorkspace.path,
-    };
-    activeWorkspaceValidationRef.current = validationRequest;
-    setWorkspaceValidating(true);
-    try {
-      const inspection = await gateway.inspectWorkspace(validationRequest.path);
-      const latest = activeWorkspaceValidationRef.current;
-      const latestState = stateRef.current;
-      if (
-        latest?.requestId === validationRequest.requestId &&
-        latestState.step === "initialize" &&
-        latestState.status === "connected" &&
-        latestState.connectedWorkspace.path === validationRequest.path
-      ) {
-        setWorkspaceValidation({ ...validationRequest, inspection, error: null });
-      }
-    } catch (error) {
-      const latest = activeWorkspaceValidationRef.current;
-      const latestState = stateRef.current;
-      if (
-        latest?.requestId === validationRequest.requestId &&
-        latestState.step === "initialize" &&
-        latestState.status === "connected" &&
-        latestState.connectedWorkspace.path === validationRequest.path
-      ) {
-        setWorkspaceValidation({
-          ...validationRequest,
-          inspection: null,
-          error: asAppError(error),
-        });
-      }
-    } finally {
-      if (activeWorkspaceValidationRef.current?.requestId === validationRequest.requestId) {
-        activeWorkspaceValidationRef.current = null;
-        setWorkspaceValidating(false);
-      }
-    }
-  }, [gateway]);
 
   useEffect(() => {
     let active = true;
-    let unlistenAuth: (() => void) | undefined;
-    let unlistenClone: (() => void) | undefined;
-
+    let unlisten: (() => void) | undefined;
     const setup = async () => {
-      const subscriptions = await Promise.allSettled([
-        gateway.onAuthStatus((event) => {
-          const sanitizedEvent = sanitizeAuthStatusEvent(event);
-          dispatchAccountAccepted({
-            type: "authEventReceived",
-            event: sanitizedEvent,
-          });
-          if (stateRef.current.status !== "connected") {
-            const accepted = dispatchAccepted({ type: "authEventReceived", event: sanitizedEvent });
-            if (accepted && sanitizedEvent.status === "authenticated") {
-              void restoreAuthenticatedWorkspace({
-                status: "authenticated",
-                user: sanitizedEvent.user,
-              });
-            }
-          }
-        }),
-        gateway.onCloneProgress((event) => {
-          dispatchAccepted({ type: "cloneEventReceived", event: sanitizeCloneProgressEvent(event) });
-        }),
-      ]);
-      const [authSubscription, cloneSubscription] = subscriptions;
-      unlistenAuth = authSubscription.status === "fulfilled"
-        ? authSubscription.value
-        : undefined;
-      unlistenClone = cloneSubscription.status === "fulfilled"
-        ? cloneSubscription.value
-        : undefined;
-      if (authSubscription.status === "rejected" || cloneSubscription.status === "rejected") {
-        unlistenAuth?.();
-        unlistenClone?.();
-        unlistenAuth = undefined;
-        unlistenClone = undefined;
+      // 이벤트를 먼저 구독해야 상태를 읽는 사이에 끝난 로그인을 놓치지 않는다.
+      try {
+        const registered = await gateway.onAuthStatus((event) => {
+          dispatchAccepted({ type: "authEventReceived", event: sanitizeAuthStatusEvent(event) });
+        });
+        if (!active) {
+          registered();
+          return;
+        }
+        unlisten = registered;
+      } catch (error) {
+        dispatchAccepted({ type: "authLoadFailed", error: asAppError(error) });
         return;
       }
-      if (!active) {
-        unlistenAuth?.();
-        unlistenClone?.();
+      let auth: AuthState;
+      try {
+        auth = await gateway.getAuthState();
+      } catch (error) {
+        if (active) dispatchAccepted({ type: "authLoadFailed", error: asAppError(error) });
         return;
       }
-      await loadAuth();
-      if (active) setCurrentWorkspaceLoading(false);
+      if (active) dispatchAccepted({ type: "authLoaded", auth });
     };
     void setup();
     return () => {
       active = false;
-      unlistenAuth?.();
-      unlistenClone?.();
+      unlisten?.();
     };
-  }, [dispatchAccepted, dispatchAccountAccepted, gateway, loadAuth, restoreAuthenticatedWorkspace]);
-
-  useEffect(() => {
-    if (
-      state.step === "repository" &&
-      state.status === "idle" &&
-      !state.repositoriesLoaded
-    ) {
-      void loadRepositories(null, false, state.auth.user.id);
-    }
-  }, [loadRepositories, state]);
-
-  useEffect(() => {
-    if (
-      state.step === "local" &&
-      state.status === "idle" &&
-      state.localRepository &&
-      state.workspaceInspection === null
-    ) {
-      void inspectWorkspace(state.localRepository.root);
-      return;
-    }
-    if (
-      state.step === "local" &&
-      state.status === "idle" &&
-      state.localRepository &&
-      state.workspaceInspection?.status === "ready"
-    ) {
-      void connectInitializedWorkspace({
-        id: operationId(),
-        repositoryRoot: state.localRepository.root,
-        repositoryId: state.selectedRepository.id,
-        repositoryFullName: state.selectedRepository.fullName,
-        source: "existing",
-        initializationRequestId: null,
-      });
-      return;
-    }
-    if (
-      state.step === "initialize" &&
-      state.status === "ready_to_connect" &&
-      state.initializationResult.draftPullRequestUrl === null
-    ) {
-      void connectInitializedWorkspace({
-        id: operationId(),
-        repositoryRoot: state.initializationResult.root,
-        repositoryId: state.selectedRepository.id,
-        repositoryFullName: state.selectedRepository.fullName,
-        source: "initialization",
-        initializationRequestId: state.completedInitializationRequest.id,
-      });
-    }
-  }, [connectInitializedWorkspace, inspectWorkspace, state]);
+  }, [dispatchAccepted, gateway]);
 
   const value = useMemo<WorkspaceConnectionContextValue>(
     () => ({
-      state,
       account,
-      canCancelReplacement: canCancelReplacement(state),
-      isCurrentWorkspaceLoading,
-      isWorkspaceValidating,
-      workspaceValidation,
-      cloneTargetPreview,
+      isCurrentWorkspaceLoading: account.status === "loading",
       startLogin,
       cancelLogin,
       logoutGithub,
       openVerificationUrl,
-      openLocalPath,
-      refreshRepositories,
-      loadNextRepositories,
-      selectRepository,
-      pickLocalDirectory,
-      connectExistingClone,
-      cloneIntoSelectedParent,
-      confirmCloneTarget,
-      cancelCloneTarget,
-      chooseAnotherCloneDirectory,
-      previewInitialization,
-      cancelInitializationPreview,
-      confirmInitialization,
-      choosePostMergeClone,
-      retryLastAction,
-      revalidateCurrentWorkspace,
-      startReplacement,
-      cancelReplacement,
     }),
-    [account, cancelCloneTarget, cancelInitializationPreview, cancelLogin, cancelReplacement, chooseAnotherCloneDirectory, choosePostMergeClone, cloneIntoSelectedParent, cloneTargetPreview, confirmCloneTarget, confirmInitialization, connectExistingClone, isCurrentWorkspaceLoading, isWorkspaceValidating, loadNextRepositories, logoutGithub, openLocalPath, openVerificationUrl, pickLocalDirectory, previewInitialization, refreshRepositories, revalidateCurrentWorkspace, retryLastAction, selectRepository, startLogin, startReplacement, state, workspaceValidation],
+    [account, cancelLogin, logoutGithub, openVerificationUrl, startLogin],
   );
 
-  return <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>;
+  return (
+    <WorkspaceConnectionContext.Provider value={value}>{children}</WorkspaceConnectionContext.Provider>
+  );
 }
 
 /** provider 없이 렌더되는 단위 테스트·스토리용. 없으면 null. */

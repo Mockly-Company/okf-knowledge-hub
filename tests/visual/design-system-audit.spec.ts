@@ -12,13 +12,6 @@ const screens = [
   ["pages-settingspage--connections", ".github-account-card"],
   ["pages-settingspage--app-information", "dl"],
   ["pages-settingspage--logout-confirmation", '[role="alertdialog"]'],
-  ["pages-workspaceconnection--login", ".workspace-connection h1"],
-  ["pages-workspaceconnection--login-waiting", ".device-code-copy"],
-  ["pages-workspaceconnection--repository-selection", '[role="radiogroup"]'],
-  ["pages-workspaceconnection--repository-selection-empty", '[role="status"]'],
-  ["pages-workspaceconnection--repository-selection-loading", '[role="status"]'],
-  ["pages-workspaceconnection--local-connection", 'form[aria-label="로컬 연결"]'],
-  ["pages-workspaceconnection--local-connection-error", '[role="alert"]'],
   ["pages-documentspage--home", ".document-search__result-row"],
   ["pages-documentspage--search-results", "mark"],
   ["pages-documentspage--empty-search", ".document-search__empty"],
@@ -72,86 +65,6 @@ test("all toast tones share a borderless surface", async ({ page }) => {
     await expect(toast).toBeVisible();
     await expect(toast).toHaveCSS("border-top-width", "0px");
     await expect(toast).toHaveCSS("border-bottom-width", "0px");
-  }
-});
-
-test("local download target stays inline with one final action", async ({ page }) => {
-  for (const density of ["default", "compact"]) {
-    for (const width of [1440, 720]) {
-      await page.setViewportSize({ width, height: 768 });
-      await page.goto(`/iframe.html?id=pages-workspaceconnection--local-connection&globals=displayDensity:${density}`);
-      await page.locator('#storybook-root[data-review-ready="true"]').waitFor();
-      await expect(page.getByRole("button", { name: "연결", exact: true })).toBeDisabled();
-      await page.getByRole("radio", { name: "새로 다운로드해서 연결", exact: true }).check();
-      await page.getByRole("button", { name: "변경", exact: true }).click();
-      await expect(page.getByText("/workspace/demo-knowledge", { exact: true })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "다운로드 위치 확인" })).toHaveCount(0);
-      await expect(page.getByRole("button", { name: "다운로드해서 연결", exact: true })).toBeEnabled();
-      const input = await page.getByRole("textbox", { name: "다운로드 위치" }).boundingBox();
-      const target = await page.getByText("/workspace/demo-knowledge", { exact: true }).boundingBox();
-      expect(target!.y).toBeGreaterThan(input!.y + input!.height);
-      await page.screenshot({ path: `${captures}/local-download-inline-${density}-${width}.png` });
-      await page.getByRole("button", { name: "다운로드해서 연결", exact: true }).click();
-      await expect(page.getByRole("button", { name: "다운로드 중…", exact: true })).toBeDisabled();
-      await expect(page.getByText("/workspace/demo-knowledge", { exact: true })).toHaveCount(1);
-      const progress = page.getByRole("status");
-      await expect(progress).toHaveClass("sr-only");
-      await expect(progress).not.toBeFocused();
-      await page.screenshot({ path: `${captures}/local-download-loading-${density}-${width}.png` });
-      await expect(page.locator("#home-title")).toHaveText("내 작업");
-    }
-  }
-});
-
-test("local download failure can be retried", async ({ page }) => {
-  await page.goto('/iframe.html?id=pages-workspaceconnection--local-connection&args=downloadOutcome:failure');
-  await page.locator('#storybook-root[data-review-ready="true"]').waitFor();
-  await page.getByRole("radio", { name: "새로 다운로드해서 연결", exact: true }).check();
-  await page.getByRole("button", { name: "다운로드해서 연결", exact: true }).click();
-  await expect(page.getByText("다운로드 연결이 끊겼습니다. 다시 시도하세요.")).toBeVisible();
-  await page.screenshot({ path: `${captures}/local-download-failure.png` });
-  await page.getByRole("button", { name: "다시 시도", exact: true }).click();
-  await expect(page.getByRole("button", { name: "다운로드 중…", exact: true })).toBeDisabled();
-  await expect(page.getByText("다운로드 연결이 끊겼습니다. 다시 시도하세요.")).toBeVisible();
-});
-
-test("repository actions follow their separate list and navigation roles", async ({ page }) => {
-  for (const density of ["default", "compact"]) {
-    for (const width of [1440, 720]) {
-      await page.setViewportSize({ width, height: 768 });
-      await page.goto(`/iframe.html?id=pages-workspaceconnection--repository-selection&globals=displayDensity:${density}`);
-      const list = page.getByRole("radiogroup", { name: "OKF 저장소" });
-      await expect(list).toBeVisible();
-      await expect(page.getByText("조회된 저장소", { exact: true }).locator("..")).toHaveText("조회된 저장소");
-      const createLink = page.getByRole("link", { name: /GitHub에서 새 저장소 만들기/ });
-      await expect(createLink).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-      await createLink.hover();
-      await expect(createLink).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-      const refresh = await page.getByRole("button", { name: "새로고침", exact: true }).boundingBox();
-      const items = await list.boundingBox();
-      const create = await page.getByRole("link", { name: /GitHub에서 새 저장소 만들기/ }).boundingBox();
-      const next = await page.getByRole("button", { name: "다음", exact: true }).boundingBox();
-      expect(refresh!.y + refresh!.height).toBeLessThanOrEqual(items!.y);
-      expect(create!.y).toBeGreaterThanOrEqual(items!.y + items!.height);
-      expect(next!.y).toBeGreaterThanOrEqual(create!.y + create!.height);
-      await page.screenshot({ path: `${captures}/repository-actions-${density}-${width}.png` });
-    }
-  }
-});
-
-test("login action uses a content-width button aligned to the right", async ({ page }) => {
-  for (const density of ["default", "compact"]) {
-    for (const width of [1440, 720]) {
-      await page.setViewportSize({ width, height: 768 });
-      await page.goto(`/iframe.html?id=pages-workspaceconnection--login&globals=displayDensity:${density}`);
-      const button = page.getByRole("button", { name: "GitHub 로그인", exact: true });
-      await expect(button).toBeVisible();
-      const action = await button.boundingBox();
-      const section = await page.getByRole("region", { name: "GitHub에 연결" }).boundingBox();
-      expect(action!.width).toBeLessThan(section!.width / 2);
-      expect(Math.abs(action!.x + action!.width - section!.x - section!.width)).toBeLessThanOrEqual(1);
-      await page.screenshot({ path: `${captures}/login-action-${density}-${width}.png` });
-    }
   }
 });
 
