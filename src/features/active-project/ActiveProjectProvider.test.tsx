@@ -225,4 +225,66 @@ describe("ActiveProjectProvider", () => {
       ),
     );
   });
+
+  it("optimistically updates active workspace without blocking on a pending listWorkspaces refetch", async () => {
+    const user = userEvent.setup();
+    const docsGateway = new FakeDocsRepositoryGateway();
+    const projectGateway = FakeProjectBoardGateway.empty();
+
+    function OptimisticHarness() {
+      const ctx = useActiveProject();
+      return (
+        <div>
+          <p data-testid="optimistic">
+            ws={ctx.activeWorkspaceId ?? "none"} title={ctx.activeWorkspaceTitle}
+          </p>
+          <button
+            type="button"
+            onClick={() =>
+              void ctx.createStandaloneWorkspace("R_fast", "Mockly-Company/fast-docs")
+            }
+          >
+            빠른 생성
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={projectGateway}
+          docsRepositoryGateway={docsGateway}
+        >
+          <OptimisticHarness />
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("optimistic")).toHaveTextContent(
+        "ws=none title=연결된 워크스페이스 없음",
+      ),
+    );
+
+    // 초기 조회 이후 백그라운드 listWorkspaces 재조회가 지연되더라도 낙관 갱신이 즉시 반영된다.
+    let releaseRefetch!: () => void;
+    const originalList = docsGateway.listWorkspaces.bind(docsGateway);
+    vi.spyOn(docsGateway, "listWorkspaces").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseRefetch = resolve;
+      });
+      return originalList();
+    });
+
+    await user.click(screen.getByRole("button", { name: "빠른 생성" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("optimistic")).toHaveTextContent(
+        "ws=repo:R_fast title=fast-docs",
+      ),
+    );
+
+    releaseRefetch?.();
+  });
 });

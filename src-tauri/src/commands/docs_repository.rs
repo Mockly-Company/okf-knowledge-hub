@@ -565,9 +565,19 @@ pub async fn attach_project_to_workspace(
 ) -> CommandResult<HubWorkspace> {
     let _access = state.acquire_authenticated_command().await?;
     let verified = crate::commands::project_board::verify_github_project(&state, &project).await?;
-    state
-        .local_settings
-        .attach_project_to_hub_workspace(workspace_id.trim(), verified)
+    let settings = state.local_settings.clone();
+    run_blocking(move || {
+        attach_project_to_workspace_inner(&settings, workspace_id.trim(), verified)
+    })
+    .await
+}
+
+pub(crate) fn attach_project_to_workspace_inner(
+    settings: &LocalSettingsService,
+    workspace_id: &str,
+    project: LinkedProject,
+) -> CommandResult<HubWorkspace> {
+    settings.attach_project_to_hub_workspace(workspace_id, project)
 }
 
 #[tauri::command]
@@ -634,10 +644,11 @@ mod tests {
     use crate::state::AppServices;
 
     use super::{
-        connect_project_docs_repository_inner, connect_workspace_docs_repository_inner,
-        create_project_workspace_inner, create_standalone_docs_workspace_inner,
-        detach_project_from_workspace_inner, list_hub_workspaces_inner, managed_current_clone,
-        prepare_docs_repository_inner, remove_hub_workspace_inner, set_active_hub_workspace_inner,
+        attach_project_to_workspace_inner, connect_project_docs_repository_inner,
+        connect_workspace_docs_repository_inner, create_project_workspace_inner,
+        create_standalone_docs_workspace_inner, detach_project_from_workspace_inner,
+        list_hub_workspaces_inner, managed_current_clone, prepare_docs_repository_inner,
+        remove_hub_workspace_inner, set_active_hub_workspace_inner,
     };
     use crate::commands::project_board::set_active_project_inner;
 
@@ -1013,6 +1024,24 @@ mod tests {
             list_hub_workspaces_inner(&settings, app_data.path())
                 .unwrap()
                 .active_docs_connected
+        );
+
+        let reattached = attach_project_to_workspace_inner(
+            &settings,
+            &after_detach.workspaces[0].id,
+            LinkedProject {
+                id: "PVT_2".into(),
+                owner: "Mockly".into(),
+                number: 2,
+                title: "재연결 보드".into(),
+                scope: ProjectOwnerScope::Organization,
+            },
+        )
+        .unwrap();
+        assert_eq!(reattached.title, "재연결 보드");
+        assert_eq!(
+            reattached.project.as_ref().map(|p| p.id.as_str()),
+            Some("PVT_2")
         );
     }
 }

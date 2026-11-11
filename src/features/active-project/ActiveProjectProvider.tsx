@@ -233,6 +233,7 @@ export function ActiveProjectProvider({
     (snapshot: HubWorkspaceList) => {
       queryClient.setQueryData(hubWorkspaceQueryKey, snapshot);
       userClearedRef.current = false;
+      alignedStoredRef.current = true;
       if (snapshot.activeWorkspaceId) {
         setActiveWorkspaceId(snapshot.activeWorkspaceId);
         rememberLastActiveProjectId(snapshot.activeWorkspaceId);
@@ -244,6 +245,44 @@ export function ActiveProjectProvider({
       }
     },
     [queryClient],
+  );
+
+  const applyOptimisticWorkspace = useCallback(
+    (
+      workspace: HubWorkspace,
+      options: { makeActive: boolean; docsConnected?: boolean },
+    ) => {
+      const prev =
+        queryClient.getQueryData<HubWorkspaceList>(hubWorkspaceQueryKey);
+      const previousWorkspaces = prev?.workspaces ?? [];
+      const exists = previousWorkspaces.some((item) => item.id === workspace.id);
+      const nextWorkspaces = exists
+        ? previousWorkspaces.map((item) =>
+            item.id === workspace.id ? workspace : item,
+          )
+        : [...previousWorkspaces, workspace];
+      const nextActiveId = options.makeActive
+        ? workspace.id
+        : (prev?.activeWorkspaceId ?? nextWorkspaces[0]?.id ?? null);
+      const nextActiveWorkspace =
+        nextWorkspaces.find((item) => item.id === nextActiveId) ?? null;
+      const nextActiveDocsConnected =
+        nextActiveId === null
+          ? false
+          : nextActiveId === workspace.id && options.docsConnected !== undefined
+            ? options.docsConnected
+            : nextActiveId === prev?.activeWorkspaceId &&
+                prev?.activeDocsConnected !== undefined
+              ? prev.activeDocsConnected
+              : Boolean(nextActiveWorkspace?.docsRepository);
+      applyWorkspaceSnapshot({
+        workspaces: nextWorkspaces,
+        activeWorkspaceId: nextActiveId,
+        activeDocsConnected: nextActiveDocsConnected,
+      });
+      void queryClient.invalidateQueries({ queryKey: hubWorkspaceQueryKey });
+    },
+    [applyWorkspaceSnapshot, queryClient],
   );
 
   const listLinkedProjects = useCallback(async (): Promise<void> => {
@@ -372,8 +411,10 @@ export function ActiveProjectProvider({
           repositoryId,
           fullName,
         );
-        const list = await docsRepositoryGateway.listWorkspaces!();
-        applyWorkspaceSnapshot(list);
+        applyOptimisticWorkspace(created.workspace, {
+          makeActive: true,
+          docsConnected: created.docsConnected,
+        });
         return created;
       }
       const workspace: HubWorkspace = {
@@ -392,7 +433,7 @@ export function ActiveProjectProvider({
       setDocsMissing(false);
       return { workspace, docsConnected: true, okf: true };
     },
-    [applyWorkspaceSnapshot, docsRepositoryGateway, hasWorkspaceGateway],
+    [applyOptimisticWorkspace, docsRepositoryGateway, hasWorkspaceGateway],
   );
 
   const createProjectWorkspace = useCallback(
@@ -408,8 +449,10 @@ export function ActiveProjectProvider({
           resolved,
           repository ?? null,
         );
-        const list = await docsRepositoryGateway.listWorkspaces!();
-        applyWorkspaceSnapshot(list);
+        applyOptimisticWorkspace(created.workspace, {
+          makeActive: true,
+          docsConnected: created.docsConnected,
+        });
         return created;
       }
       await project.linkGithubProject(resolved);
@@ -441,7 +484,7 @@ export function ActiveProjectProvider({
       };
     },
     [
-      applyWorkspaceSnapshot,
+      applyOptimisticWorkspace,
       docsRepositoryGateway,
       hasWorkspaceGateway,
       project,
@@ -488,8 +531,10 @@ export function ActiveProjectProvider({
           repositoryId,
           fullName,
         );
-        const list = await docsRepositoryGateway.listWorkspaces!();
-        applyWorkspaceSnapshot(list);
+        applyOptimisticWorkspace(connected.workspace, {
+          makeActive: false,
+          docsConnected: connected.docsConnected,
+        });
         return connected;
       }
       if (docsRepositoryGateway) {
@@ -542,7 +587,7 @@ export function ActiveProjectProvider({
     },
     [
       activeWorkspaceId,
-      applyWorkspaceSnapshot,
+      applyOptimisticWorkspace,
       docsRepositoryGateway,
       hasWorkspaceGateway,
       workspaces,
@@ -559,8 +604,7 @@ export function ActiveProjectProvider({
           workspaceId,
           resolved,
         );
-        const list = await docsRepositoryGateway.listWorkspaces!();
-        applyWorkspaceSnapshot(list);
+        applyOptimisticWorkspace(updated, { makeActive: false });
         return updated;
       }
       await project.linkGithubProject(resolved);
@@ -585,7 +629,7 @@ export function ActiveProjectProvider({
       };
     },
     [
-      applyWorkspaceSnapshot,
+      applyOptimisticWorkspace,
       docsRepositoryGateway,
       hasWorkspaceGateway,
       legacyStandaloneWorkspaces,

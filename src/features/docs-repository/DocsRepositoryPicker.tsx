@@ -125,7 +125,9 @@ export function DocsRepositoryPicker({
       const scoreDiff =
         repositoryPriorityScore(right.fullName, preferredOwner) -
         repositoryPriorityScore(left.fullName, preferredOwner);
-      return scoreDiff !== 0 ? scoreDiff : 0;
+      return scoreDiff !== 0
+        ? scoreDiff
+        : left.fullName.localeCompare(right.fullName);
     });
   }, [needle, preferredOwner, repositories]);
   const normalizedOwner = preferredOwner?.trim().toLowerCase() ?? "";

@@ -231,4 +231,59 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
       ),
     );
   });
+
+  it("supports keyboard arrow/Home/End tab switching and links tabs to tabpanel", async () => {
+    const user = userEvent.setup();
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    workspaceGateway.currentWorkspace = null;
+    const projectGateway = FakeProjectBoardGateway.empty();
+    const docsGateway = new FakeDocsRepositoryGateway();
+    const documentsGateway = new FakeDocumentsGateway();
+
+    render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={workspaceGateway}>
+          <ActiveProjectProvider
+            projectGateway={projectGateway}
+            docsRepositoryGateway={docsGateway}
+          >
+            <DocumentsProvider gateway={documentsGateway} searchDebounceMs={0}>
+              <WorkspaceSetupFlow
+                docsRepositoryGateway={docsGateway}
+                repositoryGateway={workspaceGateway}
+              />
+            </DocumentsProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    const projectTab = await screen.findByRole("tab", {
+      name: "Project와 함께 시작",
+    });
+    const docsTab = screen.getByRole("tab", { name: "문서 저장소만 관리" });
+    const panel = screen.getByRole("tabpanel");
+
+    expect(projectTab).toHaveAttribute("aria-selected", "true");
+    expect(docsTab).toHaveAttribute("aria-selected", "false");
+    expect(panel).toHaveAttribute("aria-labelledby", projectTab.id);
+
+    projectTab.focus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(docsTab).toHaveFocus();
+    expect(docsTab).toHaveAttribute("aria-selected", "true");
+    expect(panel).toHaveAttribute("aria-labelledby", docsTab.id);
+    expect(
+      await screen.findByText(/GitHub Project 보드 없이 문서 저장소만 단독으로 연결합니다/),
+    ).toBeInTheDocument();
+
+    await user.keyboard("{Home}");
+    expect(projectTab).toHaveFocus();
+    expect(projectTab).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{End}");
+    expect(docsTab).toHaveFocus();
+    expect(docsTab).toHaveAttribute("aria-selected", "true");
+  });
 });
