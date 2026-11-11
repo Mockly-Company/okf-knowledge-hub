@@ -32,12 +32,16 @@ export type ProjectRepositoryGateway = Pick<
 
 export const currentDocsRepositoryKey = ["docsRepository", "current"] as const;
 
-/** 현재 연결된 문서 저장소. 연결되지 않았거나 읽지 못하면 null이다. */
-export function useCurrentDocsRepository(gateway: ProjectRepositoryGateway) {
-  const current = useQuery({
+export function useCurrentDocsRepositoryQuery(gateway: ProjectRepositoryGateway) {
+  return useQuery({
     queryKey: currentDocsRepositoryKey,
     queryFn: () => gateway.getCurrentWorkspace(),
   });
+}
+
+/** 현재 연결된 문서 저장소. 연결되지 않았거나 읽지 못하면 null이다. */
+export function useCurrentDocsRepository(gateway: ProjectRepositoryGateway) {
+  const current = useCurrentDocsRepositoryQuery(gateway);
   const workspace = current.data;
   return workspace?.status === "connected" ? workspace : null;
 }

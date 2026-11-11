@@ -410,11 +410,15 @@ pub(crate) fn create_standalone_docs_workspace_inner(
     repository_id: &str,
     full_name: &str,
 ) -> CommandResult<ConnectedHubWorkspace> {
-    let (directory, okf) = ensure_managed_clone(app_data, full_name)?;
-    let workspace = settings.upsert_standalone_docs_workspace(DocsRepository {
+    let repository_id = repository_id.trim();
+    let full_name = full_name.trim();
+    let docs_repo = DocsRepository {
         repository_id: repository_id.to_owned(),
         full_name: full_name.to_owned(),
-    })?;
+    };
+    crate::settings::service::validate_docs_repository(&docs_repo)?;
+    let (directory, okf) = ensure_managed_clone(app_data, full_name)?;
+    let workspace = settings.upsert_standalone_docs_workspace(docs_repo)?;
     settings.set_current_for_repository(
         &directory,
         KnowledgeRepository {
@@ -467,14 +471,13 @@ pub(crate) fn create_project_workspace_inner(
     let normalized_name = full_name.map(str::trim).filter(|value| !value.is_empty());
     match (normalized_id, normalized_name) {
         (Some(repo_id), Some(name)) => {
+            let docs_repo = DocsRepository {
+                repository_id: repo_id.to_owned(),
+                full_name: name.to_owned(),
+            };
+            crate::settings::service::validate_docs_repository(&docs_repo)?;
             let (directory, okf) = ensure_managed_clone(app_data, name)?;
-            let workspace = settings.upsert_project_workspace(
-                project,
-                Some(DocsRepository {
-                    repository_id: repo_id.to_owned(),
-                    full_name: name.to_owned(),
-                }),
-            )?;
+            let workspace = settings.upsert_project_workspace(project, Some(docs_repo))?;
             settings.set_current_for_repository(
                 &directory,
                 KnowledgeRepository {
@@ -533,14 +536,15 @@ pub(crate) fn connect_workspace_docs_repository_inner(
     repository_id: &str,
     full_name: &str,
 ) -> CommandResult<ConnectedHubWorkspace> {
+    let repository_id = repository_id.trim();
+    let full_name = full_name.trim();
+    let docs_repo = DocsRepository {
+        repository_id: repository_id.to_owned(),
+        full_name: full_name.to_owned(),
+    };
+    crate::settings::service::validate_docs_repository(&docs_repo)?;
     let (directory, okf) = ensure_managed_clone(app_data, full_name)?;
-    let workspace = settings.set_hub_workspace_docs_repository(
-        workspace_id,
-        DocsRepository {
-            repository_id: repository_id.to_owned(),
-            full_name: full_name.to_owned(),
-        },
-    )?;
+    let workspace = settings.set_hub_workspace_docs_repository(workspace_id, docs_repo)?;
     if settings.load_active_hub_workspace_id()?.as_deref() == Some(workspace.id.as_str()) {
         settings.set_current_for_repository(
             &directory,
@@ -1042,6 +1046,31 @@ mod tests {
         assert_eq!(
             reattached.project.as_ref().map(|p| p.id.as_str()),
             Some("PVT_2")
+        );
+
+        let invalid_repo = create_standalone_docs_workspace_inner(
+            &settings,
+            app_data.path(),
+            "   ",
+            "Mockly/sprint-docs",
+        )
+        .unwrap_err();
+        assert_eq!(invalid_repo.code, crate::error::ErrorCode::WorkspaceInvalid);
+
+        let trimmed_standalone = create_standalone_docs_workspace_inner(
+            &settings,
+            app_data.path(),
+            "  R_sprint  ",
+            "  Mockly/sprint-docs  ",
+        )
+        .unwrap();
+        assert_eq!(
+            trimmed_standalone
+                .workspace
+                .docs_repository
+                .as_ref()
+                .map(|repo| repo.full_name.as_str()),
+            Some("Mockly/sprint-docs")
         );
     }
 }

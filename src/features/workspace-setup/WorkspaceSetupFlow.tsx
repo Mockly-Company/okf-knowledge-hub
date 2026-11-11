@@ -75,6 +75,7 @@ export function WorkspaceSetupFlow({
 
   const selectMode = (nextMode: WorkspaceSetupMode) => {
     setMode(nextMode);
+    setSelectedProject(null);
     setSkipError(null);
   };
 
@@ -174,6 +175,7 @@ export function WorkspaceSetupFlow({
     try {
       await activeProject.createProjectWorkspace(selectedProject, null);
       await refreshConnectedState();
+      setSelectedProject(null);
       onComplete?.();
     } catch (error) {
       setSkipError(describeSetupError(error));
@@ -326,6 +328,7 @@ export function WorkspaceSetupFlow({
                   };
                 }}
                 onConnected={() => {
+                  setSelectedProject(null);
                   onComplete?.();
                 }}
               />

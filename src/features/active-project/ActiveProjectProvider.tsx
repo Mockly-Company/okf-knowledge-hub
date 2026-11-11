@@ -44,6 +44,7 @@ export interface ActiveProjectContextValue {
   /** 활성 워크스페이스에 연결된 문서 저장소가 없을 때 true. */
   docsMissing: boolean;
   isListing: boolean;
+  isListError?: boolean;
   isSelecting: boolean;
   selectError: string | null;
   /** 연결된 워크스페이스/프로젝트 목록을 다시 불러온다. 실패하면 이전 목록과 선택을 유지한다. */
@@ -830,6 +831,9 @@ export function ActiveProjectProvider({
   const isListing = hasWorkspaceGateway
     ? workspacesQuery.isPending
     : linkedQuery.isPending;
+  const isListError = hasWorkspaceGateway
+    ? workspacesQuery.isError
+    : linkedQuery.isError;
 
   const value = useMemo<ActiveProjectContextValue>(
     () => ({
@@ -842,6 +846,7 @@ export function ActiveProjectProvider({
       activeProjectTitle,
       docsMissing,
       isListing,
+      isListError,
       isSelecting: selectMutation.isPending,
       selectError: describeSelectError(selectMutation.error),
       listLinkedProjects,
@@ -867,6 +872,7 @@ export function ActiveProjectProvider({
       activeProjectTitle,
       docsMissing,
       isListing,
+      isListError,
       selectMutation.isPending,
       selectMutation.error,
       listLinkedProjects,

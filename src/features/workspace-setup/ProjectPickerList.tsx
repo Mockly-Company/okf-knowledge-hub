@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/status-feedback";
 import { useActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { ResolvedGithubProject } from "@/features/project-board/model";
+import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 
 function describeProjectError(error: unknown): string {
   if (error instanceof Error && error.message.trim() !== "") {
@@ -59,6 +60,11 @@ export function ProjectPickerList({
   onSwitchToDocsOnly?(): void;
 }) {
   const { searchProjects } = useActiveProject();
+  const workspaceConnection = useOptionalWorkspaceConnection();
+  const accountLogin =
+    workspaceConnection?.account.status === "authenticated"
+      ? workspaceConnection.account.user.login
+      : null;
   const [query, setQuery] = useState("");
   const disabledSet = useMemo(
     () => new Set(disabledProjectIds),
@@ -66,7 +72,7 @@ export function ProjectPickerList({
   );
 
   const projectsQuery = useQuery({
-    queryKey: ["workspaceSetup", "accessibleProjects"],
+    queryKey: ["workspaceSetup", "accessibleProjects", accountLogin],
     queryFn: () => searchProjects(),
     staleTime: 60_000,
     retry: false,

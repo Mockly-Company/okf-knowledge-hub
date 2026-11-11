@@ -919,7 +919,7 @@ fn valid_repository_full_name(full_name: &str) -> bool {
         && !repository.chars().any(char::is_whitespace)
 }
 
-fn validate_docs_repository(repository: &DocsRepository) -> Result<(), AppError> {
+pub(crate) fn validate_docs_repository(repository: &DocsRepository) -> Result<(), AppError> {
     if repository.repository_id.trim().is_empty()
         || !valid_repository_full_name(&repository.full_name)
     {

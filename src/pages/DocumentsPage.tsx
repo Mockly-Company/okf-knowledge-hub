@@ -16,7 +16,7 @@ import {
   NotOkfNotice,
   ProjectDocsRepositoryPicker,
   WorkspaceDocsRepositoryPicker,
-  useCurrentDocsRepository,
+  useCurrentDocsRepositoryQuery,
   sharedDocsRepositoryGateway,
   sharedRepositoryGateway,
   type ProjectRepositoryGateway,
@@ -115,7 +115,11 @@ export function DocumentsPage({
         onDone={() => setPickerOpen(false)}
       />
     ) : null;
-  const connectedWorkspace = useCurrentDocsRepository(repositoryGateway);
+  const currentDocsQuery = useCurrentDocsRepositoryQuery(repositoryGateway);
+  const connectedWorkspace =
+    currentDocsQuery.data?.status === "connected"
+      ? currentDocsQuery.data
+      : null;
   const connectOrChooseProject = picker ?? <ChooseProjectFirst />;
   const invalidRoot = [
     "workspace_missing",
@@ -126,7 +130,10 @@ export function DocumentsPage({
     hasWorkspaceModel &&
     activeProject!.workspaces.length === 0 &&
     !connectedWorkspace &&
+    !currentDocsQuery.isPending &&
+    !currentDocsQuery.isError &&
     !activeProject!.isListing &&
+    !activeProject!.isListError &&
     (state.status !== "error" || invalidRoot);
   const creationDialog = (
     <NewDocumentDialog
