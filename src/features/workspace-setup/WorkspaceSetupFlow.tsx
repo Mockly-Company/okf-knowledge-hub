@@ -5,7 +5,7 @@ import {
   FolderGit2,
   SquareKanban,
 } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -67,6 +67,8 @@ export function WorkspaceSetupFlow({
   const queryClient = useQueryClient();
 
   const tabsId = useId();
+  const projectTabRef = useRef<HTMLButtonElement>(null);
+  const docsTabRef = useRef<HTMLButtonElement>(null);
   const [mode, setMode] = useState<WorkspaceSetupMode>(initialMode);
   const [selectedProject, setSelectedProject] =
     useState<ResolvedGithubProject | null>(null);
@@ -223,13 +225,14 @@ export function WorkspaceSetupFlow({
           if (nextMode !== null) {
             event.preventDefault();
             selectMode(nextMode);
-            const nextTabId =
-              nextMode === "project-with-docs" ? projectTabId : docsTabId;
-            document.getElementById(nextTabId)?.focus();
+            const nextTabRef =
+              nextMode === "project-with-docs" ? projectTabRef : docsTabRef;
+            nextTabRef.current?.focus();
           }
         }}
       >
         <TabsTrigger
+          ref={projectTabRef}
           id={projectTabId}
           aria-controls={panelId}
           selected={mode === "project-with-docs"}
@@ -238,6 +241,7 @@ export function WorkspaceSetupFlow({
           Project와 함께 시작
         </TabsTrigger>
         <TabsTrigger
+          ref={docsTabRef}
           id={docsTabId}
           aria-controls={panelId}
           selected={mode === "docs-only"}

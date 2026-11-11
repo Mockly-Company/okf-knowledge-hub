@@ -501,7 +501,7 @@ export function ProjectPage({
         }
       />
 
-      {isStandaloneDocsWorkspace ? (
+      {isStandaloneDocsWorkspace && activeWorkspace ? (
         <section
           aria-label="Project 보드 연결 안내"
           className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"

@@ -131,6 +131,7 @@ export function AppSidebar({
       <div className="app-sidebar__section app-sidebar__section--primary">
         {activeProject ? (
           <div
+            role="group"
             className="grid gap-[var(--space-2)] px-[var(--space-2)] pb-[var(--space-3)]"
             aria-label="활성 워크스페이스"
           >
