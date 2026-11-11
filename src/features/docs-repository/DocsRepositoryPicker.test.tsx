@@ -217,4 +217,36 @@ describe("DocsRepositoryPicker", () => {
     expect(labels[1]).toContain("Mockly-Company/zeta-docs");
     expect(labels[2]).toContain("Mockly-Company/beta-app");
   });
+
+  it("rejects empty projectId instead of calling gateway.connect with a blank id", async () => {
+    const user = userEvent.setup();
+    const docs = new FakeDocsRepositoryGateway();
+    docs.prepareResult = {
+      parentDirectory: "/app/repos/Mockly-Company",
+      alreadyCloned: true,
+    };
+    const repositories = FakeWorkspaceConnectionGateway.connected();
+    const onConnected = vi.fn();
+
+    render(
+      <TestQueryProvider>
+        <DocsRepositoryPicker
+          projectId="   "
+          gateway={docs}
+          repositoryGateway={repositories}
+          onConnected={onConnected}
+        />
+      </TestQueryProvider>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Mockly-Company/mockly-knowledge" }),
+    );
+
+    expect(
+      await screen.findByText("문서 저장소를 연결하지 못했습니다"),
+    ).toBeInTheDocument();
+    expect(docs.connects).toEqual([]);
+    expect(onConnected).not.toHaveBeenCalled();
+  });
 });

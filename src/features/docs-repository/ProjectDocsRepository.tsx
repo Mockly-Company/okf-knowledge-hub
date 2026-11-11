@@ -78,8 +78,11 @@ export function ProjectDocsRepositoryPicker({
   const { retrySession } = useDocuments();
   const queryClient = useQueryClient();
   // clone이 끝나기 전에 다른 프로젝트로 바꿨을 수 있다. 끝난 시점의 활성 프로젝트를 본다.
-  const activeProjectIdRef = useRef(activeProject?.activeProjectId ?? null);
-  activeProjectIdRef.current = activeProject?.activeProjectId ?? null;
+  const currentActiveProjectId = activeProject?.activeProjectId ?? null;
+  const activeProjectIdRef = useRef(currentActiveProjectId);
+  useEffect(() => {
+    activeProjectIdRef.current = currentActiveProjectId;
+  }, [currentActiveProjectId]);
   return (
     <DocsRepositoryPicker
       projectId={projectId}
@@ -120,11 +123,12 @@ export function WorkspaceDocsRepositoryPicker({
   const activeProject = useOptionalActiveProject();
   const { retrySession } = useDocuments();
   const queryClient = useQueryClient();
-  const activeWorkspaceIdRef = useRef(
-    activeProject?.activeWorkspaceId ?? activeProject?.activeProjectId ?? null,
-  );
-  activeWorkspaceIdRef.current =
+  const currentActiveWorkspaceId =
     activeProject?.activeWorkspaceId ?? activeProject?.activeProjectId ?? null;
+  const activeWorkspaceIdRef = useRef(currentActiveWorkspaceId);
+  useEffect(() => {
+    activeWorkspaceIdRef.current = currentActiveWorkspaceId;
+  }, [currentActiveWorkspaceId]);
   return (
     <DocsRepositoryPicker
       projectId={workspaceId}

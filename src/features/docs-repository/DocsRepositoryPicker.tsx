@@ -87,6 +87,28 @@ async function cloneAndWait(
   }
 }
 
+type DocsRepositoryPickerBaseProps = {
+  gateway: DocsRepositoryGateway;
+  repositoryGateway: RepositoryGateway;
+  preferredOwner?: string | null;
+  description?: string;
+  onConnected(result: ConnectedDocsRepository): void;
+};
+
+export type DocsRepositoryPickerProps =
+  | (DocsRepositoryPickerBaseProps & {
+      projectId: string;
+      onConnectRepository?: (
+        repository: GithubRepositorySummary,
+      ) => Promise<ConnectedDocsRepository>;
+    })
+  | (DocsRepositoryPickerBaseProps & {
+      projectId?: undefined;
+      onConnectRepository: (
+        repository: GithubRepositorySummary,
+      ) => Promise<ConnectedDocsRepository>;
+    });
+
 /** 문서 저장소를 GitHub 저장소 목록에서 고른다. 앱이 알아서 받아 연결한다. */
 export function DocsRepositoryPicker({
   projectId,
@@ -96,17 +118,7 @@ export function DocsRepositoryPicker({
   description,
   onConnectRepository,
   onConnected,
-}: {
-  projectId?: string;
-  gateway: DocsRepositoryGateway;
-  repositoryGateway: RepositoryGateway;
-  preferredOwner?: string | null;
-  description?: string;
-  onConnectRepository?: (
-    repository: GithubRepositorySummary,
-  ) => Promise<ConnectedDocsRepository>;
-  onConnected(result: ConnectedDocsRepository): void;
-}) {
+}: DocsRepositoryPickerProps) {
   const [query, setQuery] = useState("");
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const repositoriesQuery = useInfiniteQuery({
@@ -160,13 +172,20 @@ export function DocsRepositoryPicker({
         }
       }
       setPhase({ kind: "connecting", fullName: repository.fullName });
-      const result = onConnectRepository
-        ? await onConnectRepository(repository)
-        : await gateway.connect(
-            projectId ?? "",
-            repository.id,
-            repository.fullName,
-          );
+      let result: ConnectedDocsRepository;
+      if (onConnectRepository) {
+        result = await onConnectRepository(repository);
+      } else {
+        const trimmedProjectId = projectId?.trim();
+        if (!trimmedProjectId) {
+          throw new Error("연결할 프로젝트 정보가 없습니다.");
+        }
+        result = await gateway.connect(
+          trimmedProjectId,
+          repository.id,
+          repository.fullName,
+        );
+      }
       setPhase({ kind: "connected", result });
       onConnected(result);
     } catch (error) {

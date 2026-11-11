@@ -75,13 +75,17 @@ export function WorkspaceManageDialog({
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (open && !workspace) {
+      onOpenChange(false);
+      return;
+    }
     if (open) {
       setEditingProject(initialView === "attach-project");
       setEditingDocs(initialView === "change-docs");
       setConfirmingRemove(false);
       setActionError(null);
     }
-  }, [initialView, open, workspace?.id]);
+  }, [initialView, onOpenChange, open, workspace]);
 
   if (!workspace) {
     return null;
