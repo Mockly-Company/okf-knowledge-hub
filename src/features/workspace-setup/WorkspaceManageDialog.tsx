@@ -74,8 +74,10 @@ export function WorkspaceManageDialog({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const workspaceId = workspace?.id ?? null;
+
   useEffect(() => {
-    if (open && !workspace) {
+    if (open && workspaceId === null) {
       onOpenChange(false);
       return;
     }
@@ -85,7 +87,7 @@ export function WorkspaceManageDialog({
       setConfirmingRemove(false);
       setActionError(null);
     }
-  }, [initialView, onOpenChange, open, workspace]);
+  }, [initialView, onOpenChange, open, workspaceId]);
 
   if (!workspace) {
     return null;

@@ -321,6 +321,7 @@ pub(crate) fn switch_current_to_hub_workspace(
                     .full_name
                     .eq_ignore_ascii_case(&repository.full_name)
             })
+            && clone_matches(&current.path, &repository.full_name)
         {
             return Ok(true);
         }
@@ -1072,5 +1073,11 @@ mod tests {
                 .map(|repo| repo.full_name.as_str()),
             Some("Mockly/sprint-docs")
         );
+
+        let clone_dir = managed_clone_dir(app_data.path(), "Mockly/sprint-docs").unwrap();
+        std::fs::remove_dir_all(&clone_dir).unwrap();
+        let after_missing_clone = list_hub_workspaces_inner(&settings, app_data.path()).unwrap();
+        assert!(!after_missing_clone.active_docs_connected);
+        assert!(settings.load_current().unwrap().is_none());
     }
 }

@@ -61,6 +61,9 @@ export function ProjectPickerList({
 }) {
   const { searchProjects } = useActiveProject();
   const workspaceConnection = useOptionalWorkspaceConnection();
+  const isAuthenticated = workspaceConnection
+    ? workspaceConnection.account.status === "authenticated"
+    : true;
   const accountLogin =
     workspaceConnection?.account.status === "authenticated"
       ? workspaceConnection.account.user.login
@@ -74,6 +77,7 @@ export function ProjectPickerList({
   const projectsQuery = useQuery({
     queryKey: ["workspaceSetup", "accessibleProjects", accountLogin],
     queryFn: () => searchProjects(),
+    enabled: isAuthenticated,
     staleTime: 60_000,
     retry: false,
   });

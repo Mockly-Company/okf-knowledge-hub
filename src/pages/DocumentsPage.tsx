@@ -1,5 +1,5 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -87,11 +87,9 @@ export function DocumentsPage({
   const [manageInitialView, setManageInitialView] =
     useState<WorkspaceManageInitialView>("overview");
   // 워크스페이스를 바꾸면 열어 둔 저장소 선택을 닫는다.
-  const [pickerWorkspaceKey, setPickerWorkspaceKey] = useState(pickerResetKey);
-  if (pickerWorkspaceKey !== pickerResetKey) {
-    setPickerWorkspaceKey(pickerResetKey);
+  useEffect(() => {
     setPickerOpen(false);
-  }
+  }, [pickerResetKey]);
   const openManageDialog = (view: WorkspaceManageInitialView) => {
     setManageInitialView(view);
     setManageOpen(true);
