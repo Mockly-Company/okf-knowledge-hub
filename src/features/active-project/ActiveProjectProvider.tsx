@@ -828,8 +828,8 @@ export function ActiveProjectProvider({
       "선택된 프로젝트 없음");
 
   const isListing = hasWorkspaceGateway
-    ? workspacesQuery.isFetching
-    : linkedQuery.isFetching;
+    ? workspacesQuery.isPending
+    : linkedQuery.isPending;
 
   const value = useMemo<ActiveProjectContextValue>(
     () => ({

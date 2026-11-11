@@ -209,14 +209,21 @@ export function WorkspaceSetupFlow({
           ) {
             return;
           }
+          let nextMode: WorkspaceSetupMode | null = null;
           if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
-            selectMode(
-              event.target.id === projectTabId ? "docs-only" : "project-with-docs",
-            );
+            nextMode =
+              event.target.id === projectTabId ? "docs-only" : "project-with-docs";
           } else if (event.key === "Home") {
-            selectMode("project-with-docs");
+            nextMode = "project-with-docs";
           } else if (event.key === "End") {
-            selectMode("docs-only");
+            nextMode = "docs-only";
+          }
+          if (nextMode !== null) {
+            event.preventDefault();
+            selectMode(nextMode);
+            const nextTabId =
+              nextMode === "project-with-docs" ? projectTabId : docsTabId;
+            document.getElementById(nextTabId)?.focus();
           }
         }}
       >

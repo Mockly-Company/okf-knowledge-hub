@@ -236,7 +236,8 @@ describe("ActiveProjectProvider", () => {
       return (
         <div>
           <p data-testid="optimistic">
-            ws={ctx.activeWorkspaceId ?? "none"} title={ctx.activeWorkspaceTitle}
+            ws={ctx.activeWorkspaceId ?? "none"} title={ctx.activeWorkspaceTitle} listing=
+            {String(ctx.isListing)}
           </p>
           <button
             type="button"
@@ -263,7 +264,7 @@ describe("ActiveProjectProvider", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("optimistic")).toHaveTextContent(
-        "ws=none title=연결된 워크스페이스 없음",
+        "ws=none title=연결된 워크스페이스 없음 listing=false",
       ),
     );
 
@@ -281,7 +282,7 @@ describe("ActiveProjectProvider", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("optimistic")).toHaveTextContent(
-        "ws=repo:R_fast title=fast-docs",
+        "ws=repo:R_fast title=fast-docs listing=false",
       ),
     );
 

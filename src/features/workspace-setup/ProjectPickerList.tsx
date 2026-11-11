@@ -68,6 +68,8 @@ export function ProjectPickerList({
   const projectsQuery = useQuery({
     queryKey: ["workspaceSetup", "accessibleProjects"],
     queryFn: () => searchProjects(),
+    staleTime: 60_000,
+    retry: false,
   });
 
   const projects = projectsQuery.data?.projects ?? [];
