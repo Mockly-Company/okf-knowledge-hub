@@ -139,7 +139,7 @@ export function AppSidebar({
                 <DropdownMenuTrigger asChild>
                   <UnstyledButton
                     type="button"
-                    aria-label="워크스페이스 전환"
+                    aria-label={`워크스페이스 전환, 현재 ${currentWorkspace.title} (${describeWorkspaceSubtitle(currentWorkspace)})`}
                     disabled={activeProject.isSelecting}
                     className="flex min-h-[var(--control-height)] w-full min-w-0 items-center gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--space-3)] py-[var(--space-2)] text-left hover:border-[var(--color-border-hover)] disabled:opacity-60"
                   >

@@ -261,7 +261,7 @@ describe("App", () => {
     );
 
     const switcher = await screen.findByRole("button", {
-      name: "워크스페이스 전환",
+      name: /^워크스페이스 전환/,
     });
     await waitFor(() => {
       expect(switcher).toHaveTextContent("Mockly Board");
@@ -290,7 +290,7 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "워크스페이스 전환" }),
+        screen.getByRole("button", { name: /^워크스페이스 전환/ }),
       ).toHaveTextContent("문서 전용 · Mockly-Company/handbook");
     });
 

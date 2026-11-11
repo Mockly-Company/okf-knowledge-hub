@@ -441,7 +441,14 @@ impl LocalSettingsService {
 
     pub fn load_hub_workspaces(&self) -> Result<Vec<HubWorkspace>, AppError> {
         if let Some(raw) = self.store.read(HUB_WORKSPACES_KEY)? {
-            let parsed: Vec<HubWorkspace> = serde_json::from_str(&raw).unwrap_or_default();
+            let parsed: Vec<HubWorkspace> = serde_json::from_str(&raw).map_err(|error| {
+                eprintln!("[settings] failed to parse {HUB_WORKSPACES_KEY}: {error}");
+                AppError::new(
+                    ErrorCode::LocalSettingsUnavailable,
+                    "워크스페이스 설정을 읽지 못했습니다.",
+                )
+                .with_detail("reason", error.to_string())
+            })?;
             return Ok(parsed
                 .into_iter()
                 .filter(|workspace| {
@@ -1689,6 +1696,22 @@ mod tests {
             repo_service.load_active_hub_workspace_id().unwrap(),
             Some(migrated_standalone[0].id.clone())
         );
+    }
+
+    #[test]
+    fn corrupted_hub_workspaces_json_returns_error_instead_of_overwriting_on_upsert() {
+        let corrupted = "{not-valid-json";
+        let store = MemoryLocalSettingsStore::with_values([(HUB_WORKSPACES_KEY, corrupted.into())]);
+        let service = LocalSettingsService::new(store.clone());
+
+        let load_err = service.load_hub_workspaces().unwrap_err();
+        assert_eq!(load_err.code, ErrorCode::LocalSettingsUnavailable);
+
+        let upsert_err = service
+            .upsert_standalone_docs_workspace(docs("Mockly/new-docs"))
+            .unwrap_err();
+        assert_eq!(upsert_err.code, ErrorCode::LocalSettingsUnavailable);
+        assert_eq!(store.raw(HUB_WORKSPACES_KEY).as_deref(), Some(corrupted));
     }
 
     #[test]

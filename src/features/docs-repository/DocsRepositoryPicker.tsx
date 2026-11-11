@@ -115,7 +115,10 @@ export function DocsRepositoryPicker({
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor,
   });
-  const repositories = (repositoriesQuery.data?.pages ?? []).flatMap((page) => page.items);
+  const repositories = useMemo(
+    () => (repositoriesQuery.data?.pages ?? []).flatMap((page) => page.items),
+    [repositoriesQuery.data],
+  );
   const needle = query.trim().toLowerCase();
   const visible = useMemo(() => {
     const filtered = repositories.filter((repository) =>

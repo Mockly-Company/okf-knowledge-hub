@@ -287,8 +287,11 @@ describe("AppSidebar workspace switcher", () => {
     const { view } = renderSidebarWithWorkspaces([projectWorkspace]);
 
     const switcher = await screen.findByRole("button", {
-      name: "워크스페이스 전환",
+      name: /^워크스페이스 전환/,
     });
+    expect(switcher).toHaveAccessibleName(
+      "워크스페이스 전환, 현재 Mockly Board (문서 · Mockly-Company/Mockly)",
+    );
     expect(switcher).toHaveTextContent("Mockly Board");
     expect(switcher).toHaveTextContent("문서 · Mockly-Company/Mockly");
 
@@ -300,8 +303,11 @@ describe("AppSidebar workspace switcher", () => {
     renderSidebarWithWorkspaces([standaloneWorkspace]);
 
     const switcher = await screen.findByRole("button", {
-      name: "워크스페이스 전환",
+      name: /^워크스페이스 전환/,
     });
+    expect(switcher).toHaveAccessibleName(
+      "워크스페이스 전환, 현재 Mockly-Company/handbook (문서 전용 · Mockly-Company/handbook)",
+    );
     expect(switcher).toHaveTextContent("Mockly-Company/handbook");
     expect(switcher).toHaveTextContent("문서 전용 · Mockly-Company/handbook");
   });
@@ -310,8 +316,11 @@ describe("AppSidebar workspace switcher", () => {
     renderSidebarWithWorkspaces([missingDocsWorkspace]);
 
     const switcher = await screen.findByRole("button", {
-      name: "워크스페이스 전환",
+      name: /^워크스페이스 전환/,
     });
+    expect(switcher).toHaveAccessibleName(
+      "워크스페이스 전환, 현재 New Project (문서 저장소 연결 필요)",
+    );
     expect(switcher).toHaveTextContent("New Project");
     expect(switcher).toHaveTextContent("문서 저장소 연결 필요");
   });
@@ -324,7 +333,7 @@ describe("AppSidebar workspace switcher", () => {
     ]);
 
     const switcher = await screen.findByRole("button", {
-      name: "워크스페이스 전환",
+      name: /^워크스페이스 전환/,
     });
     await waitFor(() => expect(switcher).toHaveTextContent("Mockly Board"));
 
@@ -337,7 +346,7 @@ describe("AppSidebar workspace switcher", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "워크스페이스 전환" }),
+        screen.getByRole("button", { name: /^워크스페이스 전환/ }),
       ).toHaveTextContent("문서 전용 · Mockly-Company/handbook"),
     );
 
@@ -345,7 +354,9 @@ describe("AppSidebar workspace switcher", () => {
       throw "Command set_active_hub_workspace failed oddly";
     };
 
-    await user.click(screen.getByRole("button", { name: "워크스페이스 전환" }));
+    await user.click(
+      screen.getByRole("button", { name: /^워크스페이스 전환/ }),
+    );
     await user.click(
       await screen.findByRole("menuitemradio", {
         name: /Mockly Board/,
@@ -371,7 +382,7 @@ describe("AppSidebar workspace switcher", () => {
 
     renderSidebarWithWorkspaces([projectWorkspace]);
     await user.click(
-      await screen.findByRole("button", { name: "워크스페이스 전환" }),
+      await screen.findByRole("button", { name: /^워크스페이스 전환/ }),
     );
     await user.click(
       await screen.findByRole("menuitem", { name: "워크스페이스 설정" }),
@@ -390,7 +401,7 @@ describe("AppSidebar workspace switcher", () => {
     ]);
 
     const switcher = await screen.findByRole("button", {
-      name: "워크스페이스 전환",
+      name: /^워크스페이스 전환/,
     });
     expect(switcher.className).toContain("min-w-0");
     expect(switcher.querySelectorAll(".truncate").length).toBeGreaterThanOrEqual(2);
