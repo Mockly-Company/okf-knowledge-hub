@@ -6,10 +6,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, State};
 
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
+use crate::project_board::ResolvedGithubProject;
 use crate::repository::managed::managed_clone_dir;
 use crate::repository::model::PullOutcome;
 use crate::settings::model::CurrentWorkspaceStatus;
-use crate::settings::model::{DocsRepository, KnowledgeRepository};
+use crate::settings::model::{DocsRepository, HubWorkspace, KnowledgeRepository, LinkedProject};
 use crate::settings::service::LocalSettingsService;
 use crate::state::AppServices;
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
@@ -27,6 +28,29 @@ pub struct PreparedDocsRepository {
 pub struct ConnectedDocsRepository {
     pub full_name: String,
     pub okf: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubWorkspaceList {
+    pub workspaces: Vec<HubWorkspace>,
+    pub active_workspace_id: Option<String>,
+    pub active_docs_connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivatedHubWorkspace {
+    pub workspace: HubWorkspace,
+    pub docs_connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectedHubWorkspace {
+    pub workspace: HubWorkspace,
+    pub docs_connected: bool,
+    pub okf: Option<bool>,
 }
 
 pub(crate) fn app_data_dir(app: &AppHandle) -> CommandResult<PathBuf> {
@@ -250,6 +274,352 @@ pub(crate) fn switch_current_to_project(
     Ok(Some(repository))
 }
 
+fn ensure_managed_clone(app_data: &Path, full_name: &str) -> CommandResult<(PathBuf, bool)> {
+    let directory = managed_clone_dir(app_data, full_name)?;
+    if !clone_matches(&directory, full_name) {
+        return Err(AppError::new(
+            ErrorCode::CloneFailed,
+            "문서 저장소를 아직 받지 못했습니다. 다시 시도해 주세요.",
+        )
+        .with_recovery(RecoveryAction::Retry));
+    }
+    let okf = matches!(
+        WorkspaceService::inspect(&directory),
+        Ok(WorkspaceInspection::Ready { .. })
+    );
+    Ok((directory, okf))
+}
+
+pub(crate) fn switch_current_to_hub_workspace(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+    workspace: &HubWorkspace,
+) -> CommandResult<bool> {
+    let Some(ref repository) = workspace.docs_repository else {
+        settings.clear_current()?;
+        return Ok(false);
+    };
+    let directory = managed_clone_dir(app_data, &repository.full_name)?;
+    if clone_matches(&directory, &repository.full_name) {
+        let connected = settings.set_current_for_repository(
+            &directory,
+            KnowledgeRepository {
+                id: repository.repository_id.clone(),
+                full_name: repository.full_name.clone(),
+            },
+        );
+        if connected.is_err() {
+            settings.clear_current()?;
+            return Ok(false);
+        }
+        return Ok(true);
+    }
+    if let Some(current) = settings.load_current()? {
+        if current.status == CurrentWorkspaceStatus::Connected
+            && current.repository.as_ref().is_some_and(|current_repo| {
+                current_repo
+                    .full_name
+                    .eq_ignore_ascii_case(&repository.full_name)
+            })
+        {
+            return Ok(true);
+        }
+    }
+    settings.clear_current()?;
+    Ok(false)
+}
+
+#[tauri::command]
+pub async fn list_hub_workspaces(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+) -> CommandResult<HubWorkspaceList> {
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || list_hub_workspaces_inner(&settings, &app_data)).await
+}
+
+pub(crate) fn list_hub_workspaces_inner(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+) -> CommandResult<HubWorkspaceList> {
+    let workspaces = settings.load_hub_workspaces()?;
+    if workspaces.is_empty() {
+        return Ok(HubWorkspaceList {
+            workspaces: Vec::new(),
+            active_workspace_id: None,
+            active_docs_connected: false,
+        });
+    }
+    let active_workspace = match settings.load_active_hub_workspace()? {
+        Some(active) => active,
+        None => settings.set_active_hub_workspace(&workspaces[0].id)?,
+    };
+    let active_docs_connected =
+        switch_current_to_hub_workspace(settings, app_data, &active_workspace)?;
+    Ok(HubWorkspaceList {
+        workspaces,
+        active_workspace_id: Some(active_workspace.id),
+        active_docs_connected,
+    })
+}
+
+#[tauri::command]
+pub async fn set_active_hub_workspace(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    workspace_id: String,
+) -> CommandResult<ActivatedHubWorkspace> {
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || set_active_hub_workspace_inner(&settings, &app_data, workspace_id.trim()))
+        .await
+}
+
+pub(crate) fn set_active_hub_workspace_inner(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+    workspace_id: &str,
+) -> CommandResult<ActivatedHubWorkspace> {
+    let workspace = settings.set_active_hub_workspace(workspace_id)?;
+    let docs_connected = switch_current_to_hub_workspace(settings, app_data, &workspace)?;
+    Ok(ActivatedHubWorkspace {
+        workspace,
+        docs_connected,
+    })
+}
+
+#[tauri::command]
+pub async fn create_standalone_docs_workspace(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    repository_id: String,
+    full_name: String,
+) -> CommandResult<ConnectedHubWorkspace> {
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || {
+        create_standalone_docs_workspace_inner(&settings, &app_data, &repository_id, &full_name)
+    })
+    .await
+}
+
+pub(crate) fn create_standalone_docs_workspace_inner(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+    repository_id: &str,
+    full_name: &str,
+) -> CommandResult<ConnectedHubWorkspace> {
+    let (directory, okf) = ensure_managed_clone(app_data, full_name)?;
+    let workspace = settings.upsert_standalone_docs_workspace(DocsRepository {
+        repository_id: repository_id.to_owned(),
+        full_name: full_name.to_owned(),
+    })?;
+    settings.set_current_for_repository(
+        &directory,
+        KnowledgeRepository {
+            id: repository_id.to_owned(),
+            full_name: full_name.to_owned(),
+        },
+    )?;
+    Ok(ConnectedHubWorkspace {
+        workspace,
+        docs_connected: true,
+        okf: Some(okf),
+    })
+}
+
+#[tauri::command]
+pub async fn create_project_workspace(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    project: ResolvedGithubProject,
+    repository_id: Option<String>,
+    full_name: Option<String>,
+) -> CommandResult<ConnectedHubWorkspace> {
+    let _access = state.acquire_authenticated_command().await?;
+    let verified_project =
+        crate::commands::project_board::verify_github_project(&state, &project).await?;
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || {
+        create_project_workspace_inner(
+            &settings,
+            &app_data,
+            verified_project,
+            repository_id.as_deref(),
+            full_name.as_deref(),
+        )
+    })
+    .await
+}
+
+pub(crate) fn create_project_workspace_inner(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+    project: LinkedProject,
+    repository_id: Option<&str>,
+    full_name: Option<&str>,
+) -> CommandResult<ConnectedHubWorkspace> {
+    let normalized_id = repository_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let normalized_name = full_name.map(str::trim).filter(|value| !value.is_empty());
+    match (normalized_id, normalized_name) {
+        (Some(repo_id), Some(name)) => {
+            let (directory, okf) = ensure_managed_clone(app_data, name)?;
+            let workspace = settings.upsert_project_workspace(
+                project,
+                Some(DocsRepository {
+                    repository_id: repo_id.to_owned(),
+                    full_name: name.to_owned(),
+                }),
+            )?;
+            settings.set_current_for_repository(
+                &directory,
+                KnowledgeRepository {
+                    id: repo_id.to_owned(),
+                    full_name: name.to_owned(),
+                },
+            )?;
+            Ok(ConnectedHubWorkspace {
+                workspace,
+                docs_connected: true,
+                okf: Some(okf),
+            })
+        }
+        (None, None) => {
+            let workspace = settings.upsert_project_workspace(project, None)?;
+            let docs_connected = switch_current_to_hub_workspace(settings, app_data, &workspace)?;
+            Ok(ConnectedHubWorkspace {
+                workspace,
+                docs_connected,
+                okf: None,
+            })
+        }
+        _ => Err(AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "문서 저장소 정보가 불완전합니다.",
+        )),
+    }
+}
+
+#[tauri::command]
+pub async fn connect_workspace_docs_repository(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    workspace_id: String,
+    repository_id: String,
+    full_name: String,
+) -> CommandResult<ConnectedHubWorkspace> {
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || {
+        connect_workspace_docs_repository_inner(
+            &settings,
+            &app_data,
+            workspace_id.trim(),
+            &repository_id,
+            &full_name,
+        )
+    })
+    .await
+}
+
+pub(crate) fn connect_workspace_docs_repository_inner(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+    workspace_id: &str,
+    repository_id: &str,
+    full_name: &str,
+) -> CommandResult<ConnectedHubWorkspace> {
+    let (directory, okf) = ensure_managed_clone(app_data, full_name)?;
+    let workspace = settings.set_hub_workspace_docs_repository(
+        workspace_id,
+        DocsRepository {
+            repository_id: repository_id.to_owned(),
+            full_name: full_name.to_owned(),
+        },
+    )?;
+    if settings.load_active_hub_workspace_id()?.as_deref() == Some(workspace.id.as_str()) {
+        settings.set_current_for_repository(
+            &directory,
+            KnowledgeRepository {
+                id: repository_id.to_owned(),
+                full_name: full_name.to_owned(),
+            },
+        )?;
+    }
+    Ok(ConnectedHubWorkspace {
+        workspace,
+        docs_connected: true,
+        okf: Some(okf),
+    })
+}
+
+#[tauri::command]
+pub async fn attach_project_to_workspace(
+    state: State<'_, AppServices>,
+    workspace_id: String,
+    project: ResolvedGithubProject,
+) -> CommandResult<HubWorkspace> {
+    let _access = state.acquire_authenticated_command().await?;
+    let verified = crate::commands::project_board::verify_github_project(&state, &project).await?;
+    state
+        .local_settings
+        .attach_project_to_hub_workspace(workspace_id.trim(), verified)
+}
+
+#[tauri::command]
+pub async fn detach_project_from_workspace(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    workspace_id: String,
+) -> CommandResult<HubWorkspaceList> {
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || {
+        detach_project_from_workspace_inner(&settings, &app_data, workspace_id.trim())
+    })
+    .await
+}
+
+pub(crate) fn detach_project_from_workspace_inner(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+    workspace_id: &str,
+) -> CommandResult<HubWorkspaceList> {
+    settings.detach_project_from_hub_workspace(workspace_id)?;
+    if settings.load_hub_workspaces()?.is_empty() {
+        settings.clear_current()?;
+    }
+    list_hub_workspaces_inner(settings, app_data)
+}
+
+#[tauri::command]
+pub async fn remove_hub_workspace(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    workspace_id: String,
+) -> CommandResult<HubWorkspaceList> {
+    let app_data = app_data_dir(&app)?;
+    let settings = state.local_settings.clone();
+    run_blocking(move || remove_hub_workspace_inner(&settings, &app_data, workspace_id.trim()))
+        .await
+}
+
+pub(crate) fn remove_hub_workspace_inner(
+    settings: &LocalSettingsService,
+    app_data: &Path,
+    workspace_id: &str,
+) -> CommandResult<HubWorkspaceList> {
+    settings.remove_hub_workspace(workspace_id)?;
+    if settings.load_hub_workspaces()?.is_empty() {
+        settings.clear_current()?;
+    }
+    list_hub_workspaces_inner(settings, app_data)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -264,7 +634,10 @@ mod tests {
     use crate::state::AppServices;
 
     use super::{
-        connect_project_docs_repository_inner, managed_current_clone, prepare_docs_repository_inner,
+        connect_project_docs_repository_inner, connect_workspace_docs_repository_inner,
+        create_project_workspace_inner, create_standalone_docs_workspace_inner,
+        detach_project_from_workspace_inner, list_hub_workspaces_inner, managed_current_clone,
+        prepare_docs_repository_inner, remove_hub_workspace_inner, set_active_hub_workspace_inner,
     };
     use crate::commands::project_board::set_active_project_inner;
 
@@ -510,6 +883,136 @@ mod tests {
             !prepare_docs_repository_inner(app_data.path(), "o/missing")
                 .unwrap()
                 .already_cloned
+        );
+    }
+
+    #[test]
+    fn hub_workspaces_support_standalone_and_project_switching_and_removal() {
+        let app_data = tempfile::tempdir().unwrap();
+        let settings = LocalSettingsService::new(MemoryStore::default());
+        fake_clone(app_data.path(), "Mockly/tech-specs");
+        fake_clone(app_data.path(), "Mockly/sprint-docs");
+
+        let standalone = create_standalone_docs_workspace_inner(
+            &settings,
+            app_data.path(),
+            "R_specs",
+            "Mockly/tech-specs",
+        )
+        .unwrap();
+        assert_eq!(standalone.workspace.title, "tech-specs");
+        assert!(standalone.workspace.project.is_none());
+        assert!(standalone.docs_connected);
+        assert!(settings
+            .load_current()
+            .unwrap()
+            .unwrap()
+            .path
+            .ends_with("tech-specs"));
+
+        let project_ws = create_project_workspace_inner(
+            &settings,
+            app_data.path(),
+            LinkedProject {
+                id: "PVT_sprint".into(),
+                owner: "Mockly".into(),
+                number: 3,
+                title: "Mockly Sprint".into(),
+                scope: ProjectOwnerScope::Organization,
+            },
+            Some("R_sprint"),
+            Some("Mockly/sprint-docs"),
+        )
+        .unwrap();
+        assert_eq!(project_ws.workspace.title, "Mockly Sprint");
+        assert!(project_ws.docs_connected);
+        assert!(settings
+            .load_current()
+            .unwrap()
+            .unwrap()
+            .path
+            .ends_with("sprint-docs"));
+
+        // 다시 단독 문서 워크스페이스로 전환하면 현재 문서 저장소 경로도 함께 바뀐다.
+        let switched =
+            set_active_hub_workspace_inner(&settings, app_data.path(), &standalone.workspace.id)
+                .unwrap();
+        assert!(switched.docs_connected);
+        assert!(settings
+            .load_current()
+            .unwrap()
+            .unwrap()
+            .path
+            .ends_with("tech-specs"));
+
+        // 활성 워크스페이스를 제거하면 남은 워크스페이스와 그 문서 저장소로 자동 전환된다.
+        let after_remove =
+            remove_hub_workspace_inner(&settings, app_data.path(), &standalone.workspace.id)
+                .unwrap();
+        assert_eq!(after_remove.workspaces.len(), 1);
+        assert_eq!(
+            after_remove.active_workspace_id.as_deref(),
+            Some(project_ws.workspace.id.as_str())
+        );
+        assert!(after_remove.active_docs_connected);
+        assert!(settings
+            .load_current()
+            .unwrap()
+            .unwrap()
+            .path
+            .ends_with("sprint-docs"));
+    }
+
+    #[test]
+    fn project_workspace_without_docs_can_connect_docs_later_and_detach_board() {
+        let app_data = tempfile::tempdir().unwrap();
+        let settings = LocalSettingsService::new(MemoryStore::default());
+        fake_clone(app_data.path(), "Mockly/sprint-docs");
+
+        let created = create_project_workspace_inner(
+            &settings,
+            app_data.path(),
+            LinkedProject {
+                id: "PVT_1".into(),
+                owner: "Mockly".into(),
+                number: 1,
+                title: "보드 전용 시작".into(),
+                scope: ProjectOwnerScope::Organization,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!created.docs_connected);
+        assert!(settings.load_current().unwrap().is_none());
+
+        let connected = connect_workspace_docs_repository_inner(
+            &settings,
+            app_data.path(),
+            &created.workspace.id,
+            "R_sprint",
+            "Mockly/sprint-docs",
+        )
+        .unwrap();
+        assert!(connected.docs_connected);
+        assert!(settings
+            .load_current()
+            .unwrap()
+            .unwrap()
+            .path
+            .ends_with("sprint-docs"));
+
+        let after_detach =
+            detach_project_from_workspace_inner(&settings, app_data.path(), &created.workspace.id)
+                .unwrap();
+        assert_eq!(after_detach.workspaces.len(), 1);
+        assert!(after_detach.workspaces[0].project.is_none());
+        assert_eq!(after_detach.workspaces[0].title, "sprint-docs");
+        assert!(after_detach.active_docs_connected);
+        assert!(
+            list_hub_workspaces_inner(&settings, app_data.path())
+                .unwrap()
+                .active_docs_connected
         );
     }
 }

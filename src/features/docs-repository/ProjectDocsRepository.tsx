@@ -97,22 +97,87 @@ export function ProjectDocsRepositoryPicker({
   );
 }
 
-/**
- * 프로젝트를 바꾸면 백엔드가 문서 저장소를 바꾸므로 Documents 세션을 새로 열고,
- * 이전 프로젝트 기준으로 읽어 둔 저장소 정보와 AI 컨텍스트를 다시 읽게 한다.
- */
-export function DocumentsFollowActiveProject() {
-  const activeProjectId = useOptionalActiveProject()?.activeProjectId ?? null;
+/** 활성 워크스페이스의 문서 저장소를 고른다. */
+export function WorkspaceDocsRepositoryPicker({
+  workspaceId,
+  preferredOwner,
+  description,
+  gateway,
+  repositoryGateway,
+  onDone,
+}: {
+  workspaceId: string;
+  preferredOwner?: string | null;
+  description?: string;
+  gateway: DocsRepositoryGateway;
+  repositoryGateway: ProjectRepositoryGateway;
+  onDone?(): void;
+}) {
+  const activeProject = useOptionalActiveProject();
   const { retrySession } = useDocuments();
   const queryClient = useQueryClient();
-  const previous = useRef(activeProjectId);
+  const activeWorkspaceIdRef = useRef(
+    activeProject?.activeWorkspaceId ?? activeProject?.activeProjectId ?? null,
+  );
+  activeWorkspaceIdRef.current =
+    activeProject?.activeWorkspaceId ?? activeProject?.activeProjectId ?? null;
+  return (
+    <DocsRepositoryPicker
+      projectId={workspaceId}
+      preferredOwner={preferredOwner}
+      description={description}
+      gateway={gateway}
+      repositoryGateway={repositoryGateway}
+      onConnectRepository={async (repository) => {
+        if (activeProject?.connectWorkspaceDocs) {
+          const connected = await activeProject.connectWorkspaceDocs(
+            workspaceId,
+            repository.id,
+            repository.fullName,
+          );
+          return {
+            fullName: repository.fullName,
+            okf: connected.okf !== false,
+          };
+        }
+        return gateway.connect(workspaceId, repository.id, repository.fullName);
+      }}
+      onConnected={() => {
+        void (async () => {
+          if (activeWorkspaceIdRef.current === workspaceId) {
+            await queryClient.invalidateQueries({
+              queryKey: currentDocsRepositoryKey,
+            });
+            await queryClient.invalidateQueries({ queryKey: aiKeys.agentsMd });
+            retrySession();
+          }
+          onDone?.();
+        })();
+      }}
+    />
+  );
+}
+
+/**
+ * 워크스페이스(또는 소속 문서 저장소)가 바뀌면 Documents 세션을 새로 열고,
+ * 이전 기준으로 읽어 둔 저장소 정보와 AI 컨텍스트를 다시 읽게 한다.
+ */
+export function DocumentsFollowActiveProject() {
+  const activeProject = useOptionalActiveProject();
+  const workspaceKey =
+    activeProject?.activeWorkspaceId ?? activeProject?.activeProjectId ?? null;
+  const repoKey = activeProject?.activeWorkspace?.docsRepository?.fullName ?? "";
+  const signature = `${workspaceKey ?? "none"}::${repoKey}`;
+  const { retrySession } = useDocuments();
+  const queryClient = useQueryClient();
+  const previous = useRef(signature);
   useEffect(() => {
-    if (previous.current === activeProjectId) return;
-    previous.current = activeProjectId;
+    if (previous.current === signature) return;
+    previous.current = signature;
     void queryClient.invalidateQueries({ queryKey: currentDocsRepositoryKey });
     void queryClient.invalidateQueries({ queryKey: aiKeys.agentsMd });
     retrySession();
-  }, [activeProjectId, queryClient, retrySession]);
+  }, [signature, queryClient, retrySession]);
   return null;
 }
 

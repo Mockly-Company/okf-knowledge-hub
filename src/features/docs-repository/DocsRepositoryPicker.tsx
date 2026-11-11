@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -18,6 +19,24 @@ import type {
 } from "@/features/workspace-connection/model/protocol";
 
 export const NOT_OKF_WARNING = "OKF 형식에 맞지 않는 저장소입니다.";
+
+const DOC_NAME_KEYWORDS = ["doc", "spec", "knowledge", "wiki", "okf", "plan"];
+
+function repositoryPriorityScore(
+  fullName: string,
+  preferredOwner?: string | null,
+): number {
+  const [owner = "", repoName = ""] = fullName.toLowerCase().split("/");
+  const wantOwner = preferredOwner?.trim().toLowerCase() ?? "";
+  let score = 0;
+  if (wantOwner && owner === wantOwner) {
+    score += 10;
+  }
+  if (DOC_NAME_KEYWORDS.some((keyword) => repoName.includes(keyword))) {
+    score += 4;
+  }
+  return score;
+}
 
 type RepositoryGateway = Pick<
   WorkspaceConnectionGateway,
@@ -68,16 +87,24 @@ async function cloneAndWait(
   }
 }
 
-/** 프로젝트의 문서 저장소를 GitHub 저장소 목록에서 고른다. 앱이 알아서 받아 연결한다. */
+/** 문서 저장소를 GitHub 저장소 목록에서 고른다. 앱이 알아서 받아 연결한다. */
 export function DocsRepositoryPicker({
   projectId,
   gateway,
   repositoryGateway,
+  preferredOwner,
+  description,
+  onConnectRepository,
   onConnected,
 }: {
-  projectId: string;
+  projectId?: string;
   gateway: DocsRepositoryGateway;
   repositoryGateway: RepositoryGateway;
+  preferredOwner?: string | null;
+  description?: string;
+  onConnectRepository?: (
+    repository: GithubRepositorySummary,
+  ) => Promise<ConnectedDocsRepository>;
   onConnected(result: ConnectedDocsRepository): void;
 }) {
   const [query, setQuery] = useState("");
@@ -90,9 +117,18 @@ export function DocsRepositoryPicker({
   });
   const repositories = (repositoriesQuery.data?.pages ?? []).flatMap((page) => page.items);
   const needle = query.trim().toLowerCase();
-  const visible = repositories.filter((repository) =>
-    repository.fullName.toLowerCase().includes(needle),
-  );
+  const visible = useMemo(() => {
+    const filtered = repositories.filter((repository) =>
+      repository.fullName.toLowerCase().includes(needle),
+    );
+    return [...filtered].sort((left, right) => {
+      const scoreDiff =
+        repositoryPriorityScore(right.fullName, preferredOwner) -
+        repositoryPriorityScore(left.fullName, preferredOwner);
+      return scoreDiff !== 0 ? scoreDiff : 0;
+    });
+  }, [needle, preferredOwner, repositories]);
+  const normalizedOwner = preferredOwner?.trim().toLowerCase() ?? "";
   const busy =
     phase.kind === "preparing" || phase.kind === "cloning" || phase.kind === "connecting";
   // 화면이 다시 그려지기 전에 두 번 눌러도 저장소를 한 번만 받는다.
@@ -119,7 +155,13 @@ export function DocsRepositoryPicker({
         }
       }
       setPhase({ kind: "connecting", fullName: repository.fullName });
-      const result = await gateway.connect(projectId, repository.id, repository.fullName);
+      const result = onConnectRepository
+        ? await onConnectRepository(repository)
+        : await gateway.connect(
+            projectId ?? "",
+            repository.id,
+            repository.fullName,
+          );
       setPhase({ kind: "connected", result });
       onConnected(result);
     } catch (error) {
@@ -138,7 +180,8 @@ export function DocsRepositoryPicker({
   return (
     <div className="grid gap-[var(--space-3)]" role="group" aria-label="문서 저장소 선택">
       <p className="m-0 text-[var(--color-text-muted)]">
-        이 프로젝트의 문서를 둘 GitHub 저장소를 고르세요. 앱이 받아서 최신 상태로 유지합니다.
+        {description ??
+          "이 프로젝트의 문서를 둘 GitHub 저장소를 고르세요. 앱이 받아서 최신 상태로 유지합니다."}
       </p>
       <Input
         value={query}
@@ -187,18 +230,23 @@ export function DocsRepositoryPicker({
         </p>
       ) : (
         <div className="grid max-h-80 gap-[var(--space-1)] overflow-y-auto">
-          {visible.map((repository) => (
-            <Button
-              key={repository.id}
-              type="button"
-              variant="secondary"
-              className="justify-start"
-              disabled={busy}
-              onClick={() => void choose(repository)}
-            >
-              {repository.fullName}
-            </Button>
-          ))}
+          {visible.map((repository) => {
+            const [owner = ""] = repository.fullName.toLowerCase().split("/");
+            const isSameOwner = Boolean(normalizedOwner && owner === normalizedOwner);
+            return (
+              <Button
+                key={repository.id}
+                type="button"
+                variant="secondary"
+                className="justify-between gap-[var(--space-2)]"
+                disabled={busy}
+                onClick={() => void choose(repository)}
+              >
+                <span className="truncate text-left">{repository.fullName}</span>
+                {isSameOwner ? <StatusBadge tone="info">같은 소유자</StatusBadge> : null}
+              </Button>
+            );
+          })}
           {visible.length === 0 && !repositoriesQuery.isError ? (
             <p className="m-0 text-[var(--color-text-muted)]">맞는 저장소가 없습니다.</p>
           ) : null}

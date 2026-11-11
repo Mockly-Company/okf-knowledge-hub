@@ -1238,3 +1238,7 @@ export function useDocuments(): DocumentsContextValue {
   }
   return value;
 }
+
+export function useOptionalDocuments(): DocumentsContextValue | null {
+  return useContext(DocumentsContext);
+}

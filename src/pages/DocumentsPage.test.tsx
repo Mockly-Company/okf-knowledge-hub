@@ -15,6 +15,7 @@ import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGa
 import * as ActiveProjectModule from "@/features/active-project/ActiveProjectProvider";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
+import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
@@ -500,5 +501,128 @@ describe("DocumentsPage", () => {
     expect(view.container.querySelector("script")).toBeNull();
     expect(view.container.querySelector("img[src='x']")).toBeNull();
     expect(gateway.openedUrls).toEqual([]);
+  });
+
+  it("renders the unified workspace setup flow instead of a dead-end error when no workspaces exist", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.startError = {
+      code: "workspace_missing",
+      message: "워크스페이스가 연결되지 않았습니다.",
+      recovery: "open_workspace_file",
+      details: {},
+    };
+    const connectionGateway = FakeWorkspaceConnectionGateway.disconnected();
+    const projectGateway = new FakeProjectBoardGateway();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+
+    render(
+      <MemoryRouter>
+        <WorkspaceConnectionProvider gateway={connectionGateway}>
+          <ActiveProjectModule.ActiveProjectProvider
+            projectGateway={projectGateway}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+              <main aria-label="OkHub">
+                <DocumentsPage
+                  docsRepositoryGateway={docsRepoGateway}
+                  repositoryGateway={connectionGateway}
+                />
+              </main>
+            </DocumentsProvider>
+          </ActiveProjectModule.ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("GitHub에 로그인하고 문서 워크스페이스를 시작하세요"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "GitHub로 로그인" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("shows project ownership context when linked to a Project and standalone badge when docs-only", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const connectionGateway = FakeWorkspaceConnectionGateway.connected();
+    const projectGateway = new FakeProjectBoardGateway();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [
+      {
+        id: "project:PVT_1",
+        title: "Mockly 기획 보드",
+        project: {
+          id: "PVT_1",
+          owner: "Mockly-Company",
+          number: 1,
+          title: "Mockly 기획 보드",
+          scope: "organization",
+        },
+        docsRepository: {
+          repositoryId: "R_1",
+          fullName: "Mockly-Company/Mockly",
+        },
+      },
+      {
+        id: "docs:Mockly-Company/handbook",
+        title: "Mockly-Company/handbook",
+        project: null,
+        docsRepository: {
+          repositoryId: "R_2",
+          fullName: "Mockly-Company/handbook",
+        },
+      },
+    ];
+    docsRepoGateway.activeWorkspaceId = "project:PVT_1";
+
+    function SwitchStandaloneButton() {
+      const { selectWorkspace } = ActiveProjectModule.useActiveProject();
+      return (
+        <button
+          type="button"
+          onClick={() => void selectWorkspace("docs:Mockly-Company/handbook")}
+        >
+          switch-standalone
+        </button>
+      );
+    }
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter>
+        <WorkspaceConnectionProvider gateway={connectionGateway}>
+          <ActiveProjectModule.ActiveProjectProvider
+            projectGateway={projectGateway}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+              <SwitchStandaloneButton />
+              <main aria-label="OkHub">
+                <DocumentsPage
+                  docsRepositoryGateway={docsRepoGateway}
+                  repositoryGateway={connectionGateway}
+                />
+              </main>
+            </DocumentsProvider>
+          </ActiveProjectModule.ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText("Project · Mockly-Company #1"),
+    ).toBeVisible();
+    expect(screen.getByText("Mockly 기획 보드")).toBeVisible();
+    expect(screen.getByText(/Mockly-Company\/Mockly/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "switch-standalone" }));
+
+    expect(await screen.findByText("문서 전용")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Project 보드 연결" }),
+    ).toBeVisible();
   });
 });

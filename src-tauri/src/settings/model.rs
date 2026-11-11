@@ -25,6 +25,19 @@ pub struct DocsRepository {
     pub full_name: String,
 }
 
+/// 앱에서 관리하는 통합 작업 단위(워크스페이스).
+/// `Project + 문서 저장소` 모드와 `문서 저장소 단독` 모드를 모두 표현한다.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HubWorkspace {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub project: Option<LinkedProject>,
+    #[serde(default)]
+    pub docs_repository: Option<DocsRepository>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayDensity {

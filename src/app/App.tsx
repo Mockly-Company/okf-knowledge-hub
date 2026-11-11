@@ -7,10 +7,12 @@ import type { AiGateway } from "@/features/ai/AiGateway";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
 import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
+import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import { createDocumentsGateway } from "@/infrastructure/documents/createDocumentsGateway";
+import { TauriDocsRepositoryGateway } from "@/infrastructure/docs-repository/TauriDocsRepositoryGateway";
 import { createPreferencesRepository } from "@/infrastructure/preferences/createPreferencesRepository";
 import { createWorkspaceConnectionGateway } from "@/infrastructure/workspace/createWorkspaceConnectionGateway";
 import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
@@ -22,6 +24,7 @@ interface AppProps {
   preferencesRepository?: PreferencesRepository;
   documentsGateway?: DocumentsGateway;
   projectBoardGateway?: ProjectBoardGateway;
+  docsRepositoryGateway?: DocsRepositoryGateway;
   aiGateway?: AiGateway;
 }
 
@@ -44,6 +47,7 @@ export function App({
   preferencesRepository = createPreferencesRepository(),
   documentsGateway = createDocumentsGateway(),
   projectBoardGateway,
+  docsRepositoryGateway,
   aiGateway,
 }: AppProps) {
   const [repository] = useState(() => preferencesRepository);
@@ -51,6 +55,9 @@ export function App({
   const [documents] = useState(() => documentsGateway);
   const [projectBoard] = useState(
     () => projectBoardGateway ?? new TauriProjectBoardGateway(),
+  );
+  const [docsRepo] = useState(
+    () => docsRepositoryGateway ?? new TauriDocsRepositoryGateway(),
   );
   const [ai] = useState(() => aiGateway ?? new TauriAiGateway());
   const [queryClient] = useState(() => createQueryClient());
@@ -61,12 +68,15 @@ export function App({
         <WorkspaceConnectionProvider gateway={workspace}>
           <ActiveProjectProvider
             projectGateway={projectBoard}
+            docsRepositoryGateway={docsRepo}
           >
             <HashRouter>
               <AppRoutes
                 documentsGateway={documents}
                 aiGateway={ai}
                 projectBoardGateway={projectBoard}
+                docsRepositoryGateway={docsRepo}
+                repositoryGateway={workspace}
               />
             </HashRouter>
           </ActiveProjectProvider>

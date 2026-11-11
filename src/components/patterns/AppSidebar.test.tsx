@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
-import type { ResolvedGithubProject } from "@/features/project-board/model";
+import type { HubWorkspace } from "@/features/docs-repository/DocsRepositoryGateway";
+import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
@@ -16,7 +17,7 @@ import { AppSidebar } from "./AppSidebar";
 
 function renderSidebar(
   gateway: FakeWorkspaceConnectionGateway,
-  initialPath = "/",
+  initialPath = "/documents",
   documentsGateway = new FakeDocumentsGateway(),
 ) {
   return render(
@@ -136,31 +137,24 @@ describe("AppSidebar", () => {
     );
   });
 
-  it.each(["/", "/documents", "/project"])(
-    "keeps the primary navigation divider directly below Ticket on %s",
+  it.each(["/documents", "/project", "/ai"])(
+    "scopes primary navigation to workspace tools and separates Settings into the bottom footer on %s",
     async (initialPath) => {
       renderSidebar(FakeWorkspaceConnectionGateway.connected(), initialPath);
 
       await screen.findByText("@hyeeun");
       const primaryNavigation = screen.getByRole("navigation", { name: "주 메뉴" });
       const divider = screen.getByRole("separator");
-
-      expect(primaryNavigation.nextElementSibling).toBe(divider);
-    },
-  );
-
-  it.each(["/", "/documents", "/project"])(
-    "keeps Settings directly below Ticket on %s",
-    async (initialPath) => {
-      renderSidebar(FakeWorkspaceConnectionGateway.connected(), initialPath);
-
-      await screen.findByText("@hyeeun");
-      const primaryNavigation = screen.getByRole("navigation", { name: "주 메뉴" });
-      const project = screen.getByRole("link", { name: "Ticket" });
+      const documents = screen.getByRole("link", { name: "Documents" });
+      const board = screen.getByRole("link", { name: "Board" });
+      const ai = screen.getByRole("link", { name: "AI" });
       const settings = screen.getByRole("link", { name: "Settings" });
 
-      expect(project.nextElementSibling).toBe(settings);
-      expect(settings.parentElement).toBe(primaryNavigation);
+      expect(primaryNavigation.nextElementSibling).toBe(divider);
+      expect(documents.nextElementSibling).toBe(board);
+      expect(board.nextElementSibling).toBe(ai);
+      expect(settings.parentElement).not.toBe(primaryNavigation);
+      expect(screen.queryByRole("link", { name: "Home" })).toBeNull();
     },
   );
 
@@ -182,7 +176,6 @@ describe("AppSidebar", () => {
 
     await user.tab();
     await user.tab();
-    await user.tab();
 
     const documents = screen.getByRole("link", { name: "Documents" });
     expect(documents).toHaveFocus();
@@ -199,331 +192,207 @@ describe("AppSidebar", () => {
   });
 });
 
-describe("AppSidebar project search", () => {
-  const linkedProject: ResolvedGithubProject = {
-    id: "PVT_linked",
-    owner: "Mockly-Company",
-    number: 1,
+describe("AppSidebar workspace switcher", () => {
+  const projectWorkspace: HubWorkspace = {
+    id: "project:PVT_linked",
     title: "Mockly Board",
-    scope: "organization",
-  };
-  const otherProject: ResolvedGithubProject = {
-    id: "PVT_other",
-    owner: "Mockly-Company",
-    number: 2,
-    title: "Other Thing",
-    scope: "organization",
+    project: {
+      id: "PVT_linked",
+      owner: "Mockly-Company",
+      number: 1,
+      title: "Mockly Board",
+      scope: "organization",
+    },
+    docsRepository: {
+      repositoryId: "R_1",
+      fullName: "Mockly-Company/Mockly",
+    },
   };
 
-  function renderSidebarWithProjects(options: {
-    linked: ResolvedGithubProject[];
-    searchable: ResolvedGithubProject[] | Error;
-  }) {
+  const standaloneWorkspace: HubWorkspace = {
+    id: "docs:Mockly-Company/handbook",
+    title: "Mockly-Company/handbook",
+    project: null,
+    docsRepository: {
+      repositoryId: "R_2",
+      fullName: "Mockly-Company/handbook",
+    },
+  };
+
+  const missingDocsWorkspace: HubWorkspace = {
+    id: "project:PVT_empty",
+    title: "New Project",
+    project: {
+      id: "PVT_empty",
+      owner: "Mockly-Company",
+      number: 3,
+      title: "New Project",
+      scope: "organization",
+    },
+    docsRepository: null,
+  };
+
+  function renderSidebarWithWorkspaces(
+    workspaces: HubWorkspace[],
+    activeWorkspaceId: string | null = workspaces[0]?.id ?? null,
+  ) {
     const projectGateway = new FakeProjectBoardGateway();
-    projectGateway.linkedProjects = options.linked;
-    projectGateway.projectList = options.searchable;
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = workspaces;
+    docsRepoGateway.activeWorkspaceId = activeWorkspaceId;
     const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
-    render(
+    const view = render(
       <TestQueryProvider>
         <WorkspaceConnectionProvider gateway={workspaceGateway}>
           <DocumentsProvider gateway={new FakeDocumentsGateway()}>
             <ActiveProjectProvider
               projectGateway={projectGateway}
+              docsRepositoryGateway={docsRepoGateway}
             >
-              <MemoryRouter initialEntries={["/"]}>
-                <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />
+              <MemoryRouter initialEntries={["/documents"]}>
+                <AppSidebar
+                  collapseButtonRef={createRef()}
+                  onCollapse={() => {}}
+                  docsRepositoryGateway={docsRepoGateway}
+                  repositoryGateway={workspaceGateway}
+                />
               </MemoryRouter>
             </ActiveProjectProvider>
           </DocumentsProvider>
         </WorkspaceConnectionProvider>
       </TestQueryProvider>,
     );
-    return { projectGateway };
+    return { view, projectGateway, docsRepoGateway, workspaceGateway };
   }
 
   beforeEach(() => {
     localStorage.clear();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
   });
 
   afterEach(() => {
     cleanup();
     localStorage.clear();
+    vi.unstubAllGlobals();
   });
 
-  async function openAddPanel(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(
-      await screen.findByRole("button", { name: "프로젝트 추가" }),
-    );
-    await screen.findByRole("button", { name: "검색" });
-  }
+  it("displays the active Project workspace and its subordinate docs repository", async () => {
+    const { view } = renderSidebarWithWorkspaces([projectWorkspace]);
 
-  it("searches by project name instead of org", async () => {
-    const user = userEvent.setup();
-    const { projectGateway } = renderSidebarWithProjects({
-      linked: [],
-      searchable: [linkedProject, otherProject],
+    const switcher = await screen.findByRole("button", {
+      name: "워크스페이스 전환",
     });
-    await openAddPanel(user);
+    expect(switcher).toHaveTextContent("Mockly Board");
+    expect(switcher).toHaveTextContent("문서 · Mockly-Company/Mockly");
 
-    const query = screen.getByLabelText("프로젝트 명");
-    expect(query).toHaveAttribute("placeholder", "프로젝트 명으로 검색");
-    await user.type(query, "other");
-    await user.click(screen.getByRole("button", { name: "검색" }));
-
-    expect(
-      await screen.findByRole("button", {
-        name: "Other Thing · Mockly-Company #2",
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Mockly Board/ }),
-    ).toBeNull();
-    // 이름 검색은 전체 목록을 가져와 화면에서 거른다. Org exact-match가 아니다.
-    expect(projectGateway.calls).toContainEqual({
-      method: "listGithubProjects",
-      owner: undefined,
-    });
+    const result = await axe.run(view.container);
+    expect(result.violations).toEqual([]);
   });
 
-  it("excludes already-linked projects from search results", async () => {
-    const user = userEvent.setup();
-    renderSidebarWithProjects({
-      linked: [linkedProject],
-      searchable: [linkedProject, otherProject],
+  it("displays standalone docs mode clearly when no GitHub Project board is attached", async () => {
+    renderSidebarWithWorkspaces([standaloneWorkspace]);
+
+    const switcher = await screen.findByRole("button", {
+      name: "워크스페이스 전환",
     });
-    await openAddPanel(user);
-
-    await user.click(screen.getByRole("button", { name: "검색" }));
-
-    expect(
-      await screen.findByRole("button", {
-        name: "Other Thing · Mockly-Company #2",
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Mockly Board/ }),
-    ).toBeNull();
+    expect(switcher).toHaveTextContent("Mockly-Company/handbook");
+    expect(switcher).toHaveTextContent("문서 전용 · Mockly-Company/handbook");
   });
 
-  it("hints when the only match is already linked", async () => {
-    const user = userEvent.setup();
-    renderSidebarWithProjects({
-      linked: [linkedProject],
-      searchable: [linkedProject],
+  it("indicates when a Project workspace still needs a docs repository", async () => {
+    renderSidebarWithWorkspaces([missingDocsWorkspace]);
+
+    const switcher = await screen.findByRole("button", {
+      name: "워크스페이스 전환",
     });
-    await openAddPanel(user);
-
-    await user.type(screen.getByLabelText("프로젝트 명"), "mockly");
-    await user.click(screen.getByRole("button", { name: "검색" }));
-
-    expect(
-      await screen.findByText("이미 연결된 프로젝트입니다."),
-    ).toBeInTheDocument();
+    expect(switcher).toHaveTextContent("New Project");
+    expect(switcher).toHaveTextContent("문서 저장소 연결 필요");
   });
 
-  it("removes a project from the results right after linking it", async () => {
+  it("switches workspaces from the dropdown menu and surfaces errors on failure", async () => {
     const user = userEvent.setup();
-    renderSidebarWithProjects({ linked: [], searchable: [otherProject] });
-    await openAddPanel(user);
-
-    await user.click(screen.getByRole("button", { name: "검색" }));
-    const result = await screen.findByRole("button", {
-      name: "Other Thing · Mockly-Company #2",
-    });
-    await user.click(result);
-
-    // 연결 후 패널이 닫힌다. 다시 열어 검색하면 연결된 항목은 제외된다.
-    await user.click(await screen.findByRole("button", { name: "프로젝트 추가" }));
-    await user.click(screen.getByRole("button", { name: "검색" }));
-    expect(
-      await screen.findByText("이미 연결된 프로젝트입니다."),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /Other Thing/ }),
-    ).toBeNull();
-  });
-
-  it("says when project search results were truncated", async () => {
-    const user = userEvent.setup();
-    const { projectGateway } = renderSidebarWithProjects({
-      linked: [linkedProject],
-      searchable: [otherProject],
-    });
-    projectGateway.listTruncated = true;
-
-    await user.click(await screen.findByRole("button", { name: "프로젝트 추가" }));
-    await user.click(screen.getByRole("button", { name: "검색" }));
-
-    expect(
-      await screen.findByText("프로젝트가 많아 일부만 검색했습니다."),
-    ).toBeInTheDocument();
-  });
-
-  it("shows an error when switching projects fails", async () => {
-    const user = userEvent.setup();
-    const { projectGateway } = renderSidebarWithProjects({
-      linked: [linkedProject, otherProject],
-      searchable: [],
-    });
-    const trigger = await screen.findByRole("combobox", {
-      name: "활성 프로젝트",
-    });
-    // 자동 선택이 끝난 뒤부터 실패를 유도한다.
-    await waitFor(() =>
-      expect(trigger).toHaveTextContent("Mockly Board"),
-    );
-    projectGateway.setActiveProject = async () => {
-      throw new Error("전환 실패");
-    };
-
-    await user.click(trigger);
-    await user.click(
-      await screen.findByRole("option", {
-        name: "Other Thing · Mockly-Company #2",
-      }),
-    );
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("전환 실패");
-    // 실패한 선택으로 넘어가지 않는다.
-    expect(
-      screen.getByRole("combobox", { name: "활성 프로젝트" }),
-    ).toHaveTextContent("Mockly Board");
-  });
-
-  it("lists only linked projects without a local option", async () => {
-    const user = userEvent.setup();
-    renderSidebarWithProjects({
-      linked: [linkedProject, otherProject],
-      searchable: [],
-    });
-    const trigger = await screen.findByRole("combobox", {
-      name: "활성 프로젝트",
-    });
-    await waitFor(() => expect(trigger).toHaveTextContent("Mockly Board"));
-
-    await user.click(trigger);
-
-    const options = await screen.findAllByRole("option");
-    expect(options.map((option) => option.textContent)).toEqual([
-      expect.stringContaining("Mockly Board"),
-      expect.stringContaining("Other Thing"),
+    const { docsRepoGateway } = renderSidebarWithWorkspaces([
+      projectWorkspace,
+      standaloneWorkspace,
     ]);
-  });
 
-  it("shows the backend reason when linking fails", async () => {
-    const user = userEvent.setup();
-    const { projectGateway } = renderSidebarWithProjects({
-      linked: [],
-      searchable: [otherProject],
+    const switcher = await screen.findByRole("button", {
+      name: "워크스페이스 전환",
     });
-    projectGateway.linkGithubProject = async () => {
-      throw new Error("워크스페이스가 연결되지 않았습니다.");
-    };
-    await openAddPanel(user);
+    await waitFor(() => expect(switcher).toHaveTextContent("Mockly Board"));
 
-    await user.click(screen.getByRole("button", { name: "검색" }));
+    await user.click(switcher);
     await user.click(
-      await screen.findByRole("button", {
-        name: "Other Thing · Mockly-Company #2",
+      await screen.findByRole("menuitemradio", {
+        name: /Mockly-Company\/handbook/,
       }),
     );
 
-    expect(
-      await screen.findByText(/프로젝트 연결에 실패했습니다/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/워크스페이스가 연결되지 않았습니다/),
-    ).toBeInTheDocument();
-  });
-
-  it("offers a retry when selecting right after linking fails", async () => {
-    const user = userEvent.setup();
-    const { projectGateway } = renderSidebarWithProjects({
-      linked: [],
-      searchable: [otherProject],
-    });
-    let selectCalls = 0;
-    projectGateway.setActiveProject = async () => {
-      selectCalls += 1;
-      if (selectCalls === 1) {
-        throw new Error("연결되지 않은 Project입니다.");
-      }
-      return { docsRepository: null };
-    };
-    await openAddPanel(user);
-
-    await user.click(screen.getByRole("button", { name: "검색" }));
-    await user.click(
-      await screen.findByRole("button", {
-        name: "Other Thing · Mockly-Company #2",
-      }),
-    );
-
-    // 연결은 됐으니 결과에서는 빠지고, 선택만 다시 시도하면 된다.
-    expect(
-      await screen.findByText(/프로젝트를 연결했지만 선택하지 못했습니다/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getAllByText(/연결되지 않은 Project입니다/).length,
-    ).toBeGreaterThanOrEqual(1);
-
-    await user.click(screen.getByRole("button", { name: "다시 선택" }));
-
-    expect(
-      screen.queryByRole("button", { name: "검색" }),
-    ).toBeNull();
-    expect(
-      screen.getByRole("combobox", { name: "활성 프로젝트" }),
-    ).toHaveTextContent("Other Thing");
-  });
-
-  it("shows the raw reason when switching fails with a string error", async () => {
-    const user = userEvent.setup();
-    const { projectGateway } = renderSidebarWithProjects({
-      linked: [linkedProject, otherProject],
-      searchable: [],
-    });
-    const trigger = await screen.findByRole("combobox", {
-      name: "활성 프로젝트",
-    });
     await waitFor(() =>
-      expect(trigger).toHaveTextContent("Mockly Board"),
+      expect(
+        screen.getByRole("button", { name: "워크스페이스 전환" }),
+      ).toHaveTextContent("문서 전용 · Mockly-Company/handbook"),
     );
-    projectGateway.setActiveProject = async () => {
-      throw "Command set_active_github_project failed oddly";
+
+    docsRepoGateway.setActiveWorkspace = async () => {
+      throw "Command set_active_hub_workspace failed oddly";
     };
 
-    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "워크스페이스 전환" }));
     await user.click(
-      await screen.findByRole("option", {
-        name: "Other Thing · Mockly-Company #2",
+      await screen.findByRole("menuitemradio", {
+        name: /Mockly Board/,
       }),
     );
 
-    // 사유 없는 "전환에 실패했습니다"만 보여주면 진단이 안 된다.
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Command set_active_github_project failed oddly",
+      "Command set_active_hub_workspace failed oddly",
     );
   });
 
-  it("keeps long search result labels inside the sidebar width", async () => {
+  it("opens the unified workspace connect and manage dialogs", async () => {
     const user = userEvent.setup();
-    renderSidebarWithProjects({
-      linked: [],
-      searchable: [
-        {
-          ...otherProject,
-          title:
-            "아주 긴 프로젝트 이름이 사이드바 너비를 넘지 않고 말줄임되어야 합니다",
-        },
-      ],
+    const emptyView = renderSidebarWithWorkspaces([]);
+
+    await user.click(
+      await screen.findByRole("button", { name: "워크스페이스 연결" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "새 워크스페이스 연결" }),
+    ).toBeVisible();
+    emptyView.view.unmount();
+
+    renderSidebarWithWorkspaces([projectWorkspace]);
+    await user.click(
+      await screen.findByRole("button", { name: "워크스페이스 전환" }),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "워크스페이스 설정" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: /워크스페이스 설정/ }),
+    ).toBeVisible();
+  });
+
+  it("keeps long workspace titles truncated inside the sidebar width", async () => {
+    renderSidebarWithWorkspaces([
+      {
+        ...projectWorkspace,
+        title: "아주 긴 프로젝트 이름이 사이드바 너비를 넘지 않고 말줄임되어야 합니다",
+      },
+    ]);
+
+    const switcher = await screen.findByRole("button", {
+      name: "워크스페이스 전환",
     });
-    await openAddPanel(user);
-
-    await user.click(screen.getByRole("button", { name: "검색" }));
-    const result = await screen.findByRole("button", { name: /아주 긴 프로젝트/ });
-
-    expect(result.className).toContain("min-w-0");
-    expect(result.querySelector(".truncate")).not.toBeNull();
+    expect(switcher.className).toContain("min-w-0");
+    expect(switcher.querySelectorAll(".truncate").length).toBeGreaterThanOrEqual(2);
   });
 });
