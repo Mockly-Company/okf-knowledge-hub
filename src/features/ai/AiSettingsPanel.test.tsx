@@ -98,7 +98,7 @@ describe("AiSettingsPanel", () => {
     );
 
     expect(
-      await screen.findByText(/Claude Code와 Codex는 설정 없이/),
+      await screen.findByText(/Claude Code, Codex, Antigravity는 설정 없이/),
     ).toBeInTheDocument();
     expect(screen.queryByLabelText("명령 템플릿")).toBeNull();
   });

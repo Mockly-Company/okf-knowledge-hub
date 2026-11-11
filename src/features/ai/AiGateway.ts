@@ -2,7 +2,7 @@
  * AI CLI 연동 게이트웨이 계약. invoke명/인자는 백엔드 lane과 공유한다.
  * - `get_ai_config` {} → `{ cli_command: string }`
  * - `set_ai_config` `{ cliCommand: string }`
- * - `detect_ai_tools` {} → `{ claude: boolean, codex: boolean }`
+ * - `detect_ai_tools` {} → `{ claude: boolean, codex: boolean, antigravity: boolean }`
  * - `start_ai_terminal` `{ tool, cols, rows, onEvent: Channel }` → `{ session_id }`
  * - `write_ai_terminal` `{ sessionId, data }`, `resize_ai_terminal` `{ sessionId, cols, rows }`,
  *   `stop_ai_terminal` `{ sessionId }` → `boolean`
@@ -12,11 +12,14 @@
  * 모두 snake_case. 백엔드가 없으면 게이트웨이가
  * "아직 지원되지 않습니다" 에러로 폴백한다.
  */
-export type AiToolId = "claude" | "codex" | "custom";
+export type BuiltinAiToolId = "claude" | "codex" | "antigravity";
+
+export type AiToolId = BuiltinAiToolId | "custom";
 
 export interface AiToolAvailability {
   claude: boolean;
   codex: boolean;
+  antigravity: boolean;
 }
 
 export type AiTerminalEvent =

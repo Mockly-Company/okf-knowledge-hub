@@ -36,7 +36,7 @@ export class FakeAiGateway implements AiGateway {
   readonly terminalStops: string[] = [];
   private readonly terminalListeners: Array<(event: AiTerminalEvent) => void> =
     [];
-  tools: AiToolAvailability = { claude: true, codex: true };
+  tools: AiToolAvailability = { claude: true, codex: true, antigravity: true };
 
   async getConfig(): Promise<AiConfig> {
     return { cli_command: this.cliCommand };

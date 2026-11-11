@@ -5,10 +5,12 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AiGateway } from "@/features/ai/AiGateway";
 import { FakeAiGateway } from "@/test/FakeAiGateway";
+import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { TestQueryProvider, createTestQueryClient } from "@/test/queryTestUtils";
+import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import {
   LEGACY_BOARD_ID,
@@ -130,6 +132,19 @@ describe("AiPage", () => {
     await waitFor(() => expect(gateway.terminalStarts).toEqual(["codex"]));
   });
 
+  it("opens Antigravity inside the app", async () => {
+    const gateway = new FakeAiGateway();
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    const button = await screen.findByRole("button", { name: "Antigravity" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+
+    await waitFor(() => expect(gateway.terminalStarts).toEqual(["antigravity"]));
+    expect(await screen.findByRole("tab", { name: "Antigravity" })).toBeInTheDocument();
+  });
+
   it("switches between open terminals without restarting them", async () => {
     const gateway = new FakeAiGateway();
     const user = userEvent.setup();
@@ -199,13 +214,17 @@ describe("AiPage", () => {
 
   it("disables a tool that is not installed and says so", async () => {
     const gateway = new FakeAiGateway();
-    gateway.tools = { claude: true, codex: false };
+    gateway.tools = { claude: true, codex: false, antigravity: false };
     renderPage(gateway);
 
     expect(
       await screen.findByText("Codex가 설치되어 있지 않습니다."),
     ).toBeInTheDocument();
+    expect(
+      await screen.findByText("Antigravity가 설치되어 있지 않습니다."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Codex" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Antigravity" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Claude Code" })).toBeEnabled();
   });
 
@@ -272,6 +291,52 @@ describe("AiPage", () => {
     renderPage(failing);
 
     expect(await screen.findByText("아직 지원되지 않습니다")).toBeInTheDocument();
+  });
+
+  it("displays standalone docs mode clearly in the context summary when no Project board is attached", async () => {
+    const aiGateway = new FakeAiGateway();
+    aiGateway.agentsMd = {
+      workspace_path: "C:\\workspaces\\handbook",
+      path: null,
+      content: null,
+      repository_full_name: "Mockly-Company/handbook",
+    };
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [
+      {
+        id: "docs:Mockly-Company/handbook",
+        title: "Mockly-Company/handbook",
+        project: null,
+        docsRepository: {
+          repositoryId: "R_2",
+          fullName: "Mockly-Company/handbook",
+        },
+      },
+    ];
+    docsRepoGateway.activeWorkspaceId = "docs:Mockly-Company/handbook";
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={new FakeProjectBoardGateway()}
+          docsRepositoryGateway={docsRepoGateway}
+        >
+          <MemoryRouter>
+            <AiPage
+              aiGateway={aiGateway}
+              terminalRendererFactory={FakeTerminalRenderer.create}
+            />
+          </MemoryRouter>
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    expect(
+      await screen.findByText("프로젝트: 문서 전용 (보드 연결 없음)"),
+    ).toBeVisible();
+    expect(
+      await screen.findByText("문서 저장소: Mockly-Company/handbook"),
+    ).toBeVisible();
   });
 
 });
