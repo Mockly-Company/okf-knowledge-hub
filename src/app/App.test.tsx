@@ -2,6 +2,8 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
+import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 import { App } from "./App";
@@ -17,6 +19,7 @@ vi.mock("mermaid", () => ({
 
 afterEach(() => {
   cleanup();
+  window.location.hash = "";
   initializeMermaid.mockReset();
   renderMermaid.mockReset();
 });
@@ -32,7 +35,7 @@ describe("App", () => {
     expect(await screen.findByRole("main", { name: "OkHub" })).toBeInTheDocument();
   });
 
-  it("asks to choose a project before connecting documents when none is saved", async () => {
+  it("lands directly on Documents and shows inline workspace onboarding when none is saved", async () => {
     const documentsGateway = new FakeDocumentsGateway();
     documentsGateway.startError = {
       code: "workspace_missing",
@@ -40,23 +43,25 @@ describe("App", () => {
       recovery: "open_workspace_file",
       details: {},
     };
-    const user = userEvent.setup();
     render(
       <App
         workspaceGateway={FakeWorkspaceConnectionGateway.disconnected()}
         documentsGateway={documentsGateway}
+        docsRepositoryGateway={new FakeDocsRepositoryGateway()}
         preferencesRepository={new FakePreferencesRepository()}
       />,
     );
 
     expect(await screen.findByRole("main", { name: "OkHub" })).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "GitHub에 연결" }),
-    ).not.toBeInTheDocument();
-
-    await user.click(await screen.findByRole("link", { name: "Documents" }));
-    expect(await screen.findByText("프로젝트를 먼저 선택하세요")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "저장소 연결하기" })).toBeNull();
+      await screen.findByRole("heading", { name: "Documents" }),
+    ).toBeVisible();
+    expect(
+      await screen.findByText("GitHub에 로그인하고 문서 워크스페이스를 시작하세요"),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "GitHub로 로그인" }),
+    ).toBeVisible();
   });
 
   it("closes the document session and keeps the app shell after logout", async () => {
@@ -195,5 +200,104 @@ describe("App", () => {
       });
       expect(documentsGateway.listenerCount()).toBe(0);
     });
+  });
+
+  it("supports creating both Project+Docs and standalone Docs workspaces and switching between them", async () => {
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    workspaceGateway.currentWorkspace = null;
+    workspaceGateway.repositories = [
+      {
+        id: "R_mockly",
+        owner: "Mockly-Company",
+        name: "Mockly",
+        fullName: "Mockly-Company/Mockly",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+      {
+        id: "R_handbook",
+        owner: "Mockly-Company",
+        name: "handbook",
+        fullName: "Mockly-Company/handbook",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+    ];
+    const projectGateway = FakeProjectBoardGateway.empty();
+    projectGateway.projectList = [
+      {
+        id: "PVT_1",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Mockly Board",
+        scope: "organization",
+      },
+    ];
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.prepareResult = {
+      parentDirectory: "/app/repos/Mockly-Company",
+      alreadyCloned: true,
+    };
+    const documentsGateway = new FakeDocumentsGateway();
+    documentsGateway.sessionSnapshot.lastOpenedPath = null;
+    const user = userEvent.setup();
+
+    render(
+      <App
+        workspaceGateway={workspaceGateway}
+        projectBoardGateway={projectGateway}
+        docsRepositoryGateway={docsRepoGateway}
+        documentsGateway={documentsGateway}
+        preferencesRepository={new FakePreferencesRepository()}
+      />,
+    );
+
+    // 1. Project + 소속 문서 저장소 연결
+    await user.click(
+      await screen.findByRole("button", { name: /Mockly Board/ }),
+    );
+    await user.click(
+      await screen.findByRole("button", { name: /Mockly-Company\/Mockly/ }),
+    );
+
+    const switcher = await screen.findByRole("button", {
+      name: /^워크스페이스 전환/,
+    });
+    await waitFor(() => {
+      expect(switcher).toHaveTextContent("Mockly Board");
+      expect(switcher).toHaveTextContent("문서 · Mockly-Company/Mockly");
+    });
+    expect(
+      await screen.findByText("Project · Mockly-Company #1"),
+    ).toBeVisible();
+
+    // 2. 사이드바에서 단독 문서 저장소 워크스페이스 추가
+    await user.click(switcher);
+    await user.click(
+      await screen.findByRole("menuitem", { name: "새 워크스페이스 연결" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "새 워크스페이스 연결",
+    });
+    await user.click(
+      within(dialog).getByRole("tab", { name: /문서 저장소만 관리/ }),
+    );
+    await user.click(
+      await within(dialog).findByRole("button", {
+        name: /Mockly-Company\/handbook/,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /^워크스페이스 전환/ }),
+      ).toHaveTextContent("문서 전용 · Mockly-Company/handbook");
+    });
+
+    // 3. 단독 문서 모드에서 Board 탭으로 이동 시 친절한 보드 연결 안내 제공
+    await user.click(screen.getByRole("link", { name: "Board" }));
+    expect(
+      await screen.findByText("문서 저장소 단독으로 관리 중인 워크스페이스입니다"),
+    ).toBeVisible();
   });
 });

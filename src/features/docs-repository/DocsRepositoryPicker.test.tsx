@@ -165,4 +165,88 @@ describe("DocsRepositoryPicker", () => {
     expect(await screen.findByText(/네트워크 오류/)).toBeInTheDocument();
     expect(docs.connects).toEqual([]);
   });
+
+  it("sorts repositories alphabetically by fullName when priority scores are tied", async () => {
+    const docs = new FakeDocsRepositoryGateway();
+    const repositories = FakeWorkspaceConnectionGateway.connected();
+    repositories.repositories = [
+      {
+        id: "R_zeta",
+        owner: "Mockly-Company",
+        name: "zeta-docs",
+        fullName: "Mockly-Company/zeta-docs",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+      {
+        id: "R_alpha",
+        owner: "Mockly-Company",
+        name: "alpha-docs",
+        fullName: "Mockly-Company/alpha-docs",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+      {
+        id: "R_beta",
+        owner: "Mockly-Company",
+        name: "beta-app",
+        fullName: "Mockly-Company/beta-app",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+    ];
+
+    render(
+      <TestQueryProvider>
+        <DocsRepositoryPicker
+          projectId="project-1"
+          preferredOwner="Mockly-Company"
+          gateway={docs}
+          repositoryGateway={repositories}
+          onConnected={vi.fn()}
+        />
+      </TestQueryProvider>,
+    );
+
+    await screen.findByRole("button", { name: /Mockly-Company\/alpha-docs/ });
+    const labels = screen
+      .getAllByRole("button")
+      .map((button) => button.textContent ?? "");
+
+    expect(labels[0]).toContain("Mockly-Company/alpha-docs");
+    expect(labels[1]).toContain("Mockly-Company/zeta-docs");
+    expect(labels[2]).toContain("Mockly-Company/beta-app");
+  });
+
+  it("rejects empty projectId instead of calling gateway.connect with a blank id", async () => {
+    const user = userEvent.setup();
+    const docs = new FakeDocsRepositoryGateway();
+    docs.prepareResult = {
+      parentDirectory: "/app/repos/Mockly-Company",
+      alreadyCloned: true,
+    };
+    const repositories = FakeWorkspaceConnectionGateway.connected();
+    const onConnected = vi.fn();
+
+    render(
+      <TestQueryProvider>
+        <DocsRepositoryPicker
+          projectId="   "
+          gateway={docs}
+          repositoryGateway={repositories}
+          onConnected={onConnected}
+        />
+      </TestQueryProvider>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Mockly-Company/mockly-knowledge" }),
+    );
+
+    expect(
+      await screen.findByText("문서 저장소를 연결하지 못했습니다"),
+    ).toBeInTheDocument();
+    expect(docs.connects).toEqual([]);
+    expect(onConnected).not.toHaveBeenCalled();
+  });
 });

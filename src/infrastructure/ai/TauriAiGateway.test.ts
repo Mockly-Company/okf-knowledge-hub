@@ -136,18 +136,48 @@ describe("TauriAiGateway", () => {
     await expect(gateway.getConfig()).resolves.toEqual({ cli_command: "" });
   });
 
+  it("starts an antigravity terminal and forwards channel events", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const channel = fakeChannel();
+    const gateway = new TauriAiGateway(
+      async <T,>(command: string, args?: Record<string, unknown>) => {
+        calls.push({ command, args });
+        return { session_id: "agy-1" } as T;
+      },
+      () => channel,
+    );
+    const events: AiTerminalEvent[] = [];
+
+    const id = await gateway.startTerminal(
+      "antigravity",
+      { cols: 90, rows: 20 },
+      (event) => events.push(event),
+    );
+    channel.onmessage({ kind: "output", data: "ready" });
+
+    expect(id).toBe("agy-1");
+    expect(calls).toEqual([
+      {
+        command: "start_ai_terminal",
+        args: { tool: "antigravity", cols: 90, rows: 20, onEvent: channel },
+      },
+    ]);
+    expect(events).toEqual([{ kind: "output", data: "ready" }]);
+  });
+
   it("detects tools through the backend", async () => {
     const calls: string[] = [];
     const gateway = new TauriAiGateway(async <T,>(command: string) => {
       calls.push(command);
       return (command === "detect_ai_tools"
-        ? { claude: true, codex: false }
+        ? { claude: true, codex: false, antigravity: true }
         : true) as T;
     });
 
     await expect(gateway.detectTools()).resolves.toEqual({
       claude: true,
       codex: false,
+      antigravity: true,
     });
 
     expect(calls).toEqual(["detect_ai_tools"]);

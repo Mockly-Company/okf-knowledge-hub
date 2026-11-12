@@ -14,6 +14,14 @@ describe("FakeAiGateway", () => {
     await expect(
       gateway.startTerminal("claude", { cols: 80, rows: 24 }, () => {}),
     ).resolves.toBe("session-0");
-    expect(gateway.terminalStarts).toEqual(["claude"]);
+    await expect(
+      gateway.startTerminal("antigravity", { cols: 80, rows: 24 }, () => {}),
+    ).resolves.toBe("session-1");
+    expect(gateway.terminalStarts).toEqual(["claude", "antigravity"]);
+    await expect(gateway.detectTools()).resolves.toEqual({
+      claude: true,
+      codex: true,
+      antigravity: true,
+    });
   });
 });

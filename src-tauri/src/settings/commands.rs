@@ -75,6 +75,7 @@ fn set_ai_config_inner(services: &AppServices, cli_command: &str) -> CommandResu
 pub struct AiToolAvailability {
     pub claude: bool,
     pub codex: bool,
+    pub antigravity: bool,
 }
 
 #[tauri::command]
@@ -82,6 +83,7 @@ pub async fn detect_ai_tools() -> CommandResult<AiToolAvailability> {
     tauri::async_runtime::spawn_blocking(|| AiToolAvailability {
         claude: ai_runner::is_on_path("claude"),
         codex: ai_runner::is_on_path("codex"),
+        antigravity: ai_runner::is_on_path("agy"),
     })
     .await
     .map_err(|_| ai_blocking_error())
@@ -618,9 +620,28 @@ mod tests {
         let services = AppServices::new(LocalSettingsService::new(MemoryStore::default()));
         let app_data = tempfile::tempdir().unwrap();
 
-        let error = prepare_ai_terminal(&services, AiTool::Claude, app_data.path()).unwrap_err();
+        for preset in [AiTool::Claude, AiTool::Codex, AiTool::Antigravity] {
+            let error = prepare_ai_terminal(&services, preset, app_data.path()).unwrap_err();
+            assert_eq!(error.code, crate::error::ErrorCode::WorkspaceMissing);
+        }
+    }
 
-        assert_eq!(error.code, crate::error::ErrorCode::WorkspaceMissing);
+    #[test]
+    fn tool_availability_serializes_claude_codex_and_antigravity() {
+        let value = serde_json::to_value(AiToolAvailability {
+            claude: true,
+            codex: false,
+            antigravity: true,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "claude": true,
+                "codex": false,
+                "antigravity": true,
+            })
+        );
     }
 
     #[test]

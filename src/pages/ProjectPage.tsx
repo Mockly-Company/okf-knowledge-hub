@@ -28,6 +28,14 @@ import {
 } from "@/features/project-board/boardUtils";
 import { ProjectTree } from "@/features/project-board/ProjectTree";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
+import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
+import {
+  sharedDocsRepositoryGateway,
+  sharedRepositoryGateway,
+  type ProjectRepositoryGateway,
+} from "@/features/docs-repository/ProjectDocsRepository";
+import { WorkspaceConnectDialog } from "@/features/workspace-setup/WorkspaceConnectDialog";
+import { WorkspaceManageDialog } from "@/features/workspace-setup/WorkspaceManageDialog";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 type LayerFilter = "all" | BoardLayer;
@@ -309,10 +317,17 @@ type BoardView = "layers" | "tree";
 
 export function ProjectPage({
   gateway = sharedGateway,
+  docsRepositoryGateway = sharedDocsRepositoryGateway,
+  repositoryGateway = sharedRepositoryGateway,
 }: {
   gateway?: ProjectBoardGateway;
+  docsRepositoryGateway?: DocsRepositoryGateway;
+  repositoryGateway?: ProjectRepositoryGateway;
 }) {
   const activeProject = useOptionalActiveProject();
+  const activeWorkspace = activeProject?.activeWorkspace ?? null;
+  const isStandaloneDocsWorkspace =
+    activeWorkspace !== null && activeWorkspace.project === null;
   const activeProjectId = activeProject?.activeProjectId ?? null;
   // provider 없으면 기존 단일 프로젝트 경로로 조회한다(테스트·스토리 폴백).
   const queryProjectId = activeProject ? activeProjectId : LEGACY_BOARD_ID;
@@ -372,6 +387,16 @@ export function ProjectPage({
   const [filter, setFilter] = useState<LayerFilter>("all");
   const [view, setView] = useState<BoardView>("tree");
   const [hideDone, setHideDone] = useState(true);
+  const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
+
+  const boardSubtitle = activeWorkspace?.project
+    ? `${activeWorkspace.project.title} · ${activeWorkspace.project.owner} #${activeWorkspace.project.number}${
+        activeWorkspace.docsRepository
+          ? ` · 소속 문서 저장소 ${activeWorkspace.docsRepository.fullName}`
+          : ""
+      }`
+    : undefined;
 
   // 전환 중 로딩 문구에 쓸 프로젝트 명. 목록에 없으면 일반 문구로 폴백.
   const switchingTitle =
@@ -436,7 +461,8 @@ export function ProjectPage({
     >
       <PageHeader
         titleId="project-title"
-        title="Ticket"
+        title="Board"
+        description={boardSubtitle}
         actions={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-[var(--space-3)]">
             <span
@@ -475,13 +501,58 @@ export function ProjectPage({
         }
       />
 
-      {isUnlinked ? (
-        <p
-          role="status"
-          className="m-0 mt-[var(--space-4)] text-[var(--color-text-muted)]"
+      {isStandaloneDocsWorkspace && activeWorkspace ? (
+        <section
+          aria-label="Project 보드 연결 안내"
+          className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
         >
-          선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.
-        </p>
+          <StatusBadge tone="neutral">문서 전용</StatusBadge>
+          <h2 className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]">
+            문서 저장소 단독으로 관리 중인 워크스페이스입니다
+          </h2>
+          <p className="m-0 text-[var(--color-text-muted)]">
+            현재 &ldquo;{activeWorkspace.docsRepository?.fullName ?? activeWorkspace.title}&rdquo; 저장소의 문서만 단독으로 관리하고 있습니다. 칸반 보드와 이슈 흐름이 필요해지면 언제든 GitHub Project 보드를 이 워크스페이스에 연결할 수 있습니다.
+          </p>
+          <Button
+            type="button"
+            variant="primary"
+            onClick={() => setManageDialogOpen(true)}
+          >
+            GitHub Project 보드 연결
+          </Button>
+          <WorkspaceManageDialog
+            open={manageDialogOpen}
+            onOpenChange={setManageDialogOpen}
+            initialView="attach-project"
+            docsRepositoryGateway={docsRepositoryGateway}
+            repositoryGateway={repositoryGateway}
+          />
+        </section>
+      ) : isUnlinked ? (
+        <div className="mt-[var(--space-4)] grid justify-items-start gap-[var(--space-3)]">
+          <p role="status" className="m-0 text-[var(--color-text-muted)]">
+            선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.
+          </p>
+          {activeProject &&
+          Array.isArray(activeProject.workspaces) &&
+          activeProject.workspaces.length === 0 ? (
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setConnectDialogOpen(true)}
+              >
+                워크스페이스 연결
+              </Button>
+              <WorkspaceConnectDialog
+                open={connectDialogOpen}
+                onOpenChange={setConnectDialogOpen}
+                docsRepositoryGateway={docsRepositoryGateway}
+                repositoryGateway={repositoryGateway}
+              />
+            </>
+          ) : null}
+        </div>
       ) : null}
 
       {isUnlinked || board === null ? null : (

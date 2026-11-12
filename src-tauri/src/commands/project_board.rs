@@ -221,17 +221,12 @@ pub async fn resolve_github_project(
     })
 }
 
-/// 확인된 프로젝트를 앱 설정에 연결한다.
-#[tauri::command]
-pub async fn link_github_project(
-    state: State<'_, AppServices>,
-    project: ResolvedGithubProject,
-) -> CommandResult<()> {
-    let _access = state.acquire_authenticated_command().await?;
-    // 프론트가 보낸 값을 그대로 저장하지 않고 GitHub에 재조회해 검증한다.
-    // id·owner·number가 어긋나면 다른 프로젝트를 가리킬 수 있다.
-    // 스코프가 어긋났을 수 있어 반대 스코프로 한 번 더 시도한다.
-    let github = state.github.clone().ok_or_else(service_unavailable)?;
+/// 프론트가 보낸 Project 정보를 GitHub에 재조회해 검증하고 `LinkedProject`로 바꾼다.
+pub(crate) async fn verify_github_project(
+    services: &AppServices,
+    project: &ResolvedGithubProject,
+) -> CommandResult<LinkedProject> {
+    let github = services.github.clone().ok_or_else(service_unavailable)?;
     let (verified, verified_scope) = match github
         .resolve_project(project.scope, &project.owner, project.number)
         .await
@@ -258,7 +253,40 @@ pub async fn link_github_project(
             "Project 정보가 일치하지 않습니다. 다시 불러와 연결해 주세요.".to_owned(),
         ));
     }
-    link_verified_project_inner(&state, project, verified_scope)
+    let trimmed = project.title.trim();
+    let title = if trimmed.is_empty() {
+        verified.title.trim().to_owned()
+    } else {
+        trimmed.to_owned()
+    };
+    Ok(LinkedProject {
+        id: verified.id,
+        owner: verified.owner,
+        number: verified.number,
+        title,
+        scope: verified_scope,
+    })
+}
+
+/// 확인된 프로젝트를 앱 설정에 연결한다.
+#[tauri::command]
+pub async fn link_github_project(
+    state: State<'_, AppServices>,
+    project: ResolvedGithubProject,
+) -> CommandResult<()> {
+    let _access = state.acquire_authenticated_command().await?;
+    let verified = verify_github_project(&state, &project).await?;
+    link_verified_project_inner(
+        &state,
+        ResolvedGithubProject {
+            id: verified.id,
+            owner: verified.owner,
+            number: verified.number,
+            title: verified.title,
+            scope: verified.scope,
+        },
+        verified.scope,
+    )
 }
 
 /// GitHub에서 확인한 스코프로 저장한다. 처음 연결한 프로젝트는 활성이 된다.

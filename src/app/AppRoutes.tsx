@@ -1,5 +1,5 @@
 import { Suspense, lazy } from "react";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/patterns/AppShell";
 import { DocumentsPage } from "@/pages/DocumentsPage";
 import { HomePage } from "@/pages/HomePage";
@@ -8,9 +8,13 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { DesignSystemPage } from "@/pages/DesignSystemPage";
 import { WorkspaceGate } from "@/features/workspace-connection/WorkspaceGate";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
-import { DocumentsFollowActiveProject } from "@/features/docs-repository/ProjectDocsRepository";
+import {
+  DocumentsFollowActiveProject,
+  sharedDocsRepositoryGateway,
+  sharedRepositoryGateway,
+  type ProjectRepositoryGateway,
+} from "@/features/docs-repository/ProjectDocsRepository";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
-import { sharedDocsRepositoryGateway } from "@/features/docs-repository/ProjectDocsRepository";
 import { useDocsRepositorySync } from "@/features/docs-repository/useDocsRepositorySync";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
 import type { AiGateway } from "@/features/ai/AiGateway";
@@ -26,15 +30,20 @@ function DocsRepositorySync({ gateway }: { gateway: DocsRepositoryGateway }) {
 function ConnectedAppShell({
   documentsGateway,
   docsRepositoryGateway,
+  repositoryGateway,
 }: {
   documentsGateway: DocumentsGateway;
   docsRepositoryGateway: DocsRepositoryGateway;
+  repositoryGateway: ProjectRepositoryGateway;
 }) {
   return (
     <DocumentsProvider gateway={documentsGateway}>
       <DocumentsFollowActiveProject />
       <DocsRepositorySync gateway={docsRepositoryGateway} />
-      <AppShell />
+      <AppShell
+        docsRepositoryGateway={docsRepositoryGateway}
+        repositoryGateway={repositoryGateway}
+      />
     </DocumentsProvider>
   );
 }
@@ -60,11 +69,13 @@ export function AppRoutes({
   aiGateway = sharedAiGateway,
   projectBoardGateway = sharedProjectBoardGateway,
   docsRepositoryGateway = sharedDocsRepositoryGateway,
+  repositoryGateway = sharedRepositoryGateway,
 }: {
   documentsGateway: DocumentsGateway;
   aiGateway?: AiGateway;
   projectBoardGateway?: ProjectBoardGateway;
   docsRepositoryGateway?: DocsRepositoryGateway;
+  repositoryGateway?: ProjectRepositoryGateway;
 }) {
   return (
     <Routes>
@@ -74,14 +85,42 @@ export function AppRoutes({
             <ConnectedAppShell
               documentsGateway={documentsGateway}
               docsRepositoryGateway={docsRepositoryGateway}
+              repositoryGateway={repositoryGateway}
             />
           }
         >
-          <Route index element={<HomePage />} />
-          <Route path="documents" element={<DocumentsPage />} />
-          <Route path="project" element={<ProjectPage />} />
-          {/* /work는 /project 별칭. 사이드바 "Ticket" 탭과 같은 화면이다. */}
-          <Route path="work" element={<ProjectPage />} />
+          <Route index element={<Navigate to="/documents" replace />} />
+          <Route path="home" element={<HomePage />} />
+          <Route
+            path="documents"
+            element={
+              <DocumentsPage
+                docsRepositoryGateway={docsRepositoryGateway}
+                repositoryGateway={repositoryGateway}
+              />
+            }
+          />
+          <Route
+            path="project"
+            element={
+              <ProjectPage
+                gateway={projectBoardGateway}
+                docsRepositoryGateway={docsRepositoryGateway}
+                repositoryGateway={repositoryGateway}
+              />
+            }
+          />
+          {/* /work는 /project 별칭. 사이드바 "Board" 탭과 같은 화면이다. */}
+          <Route
+            path="work"
+            element={
+              <ProjectPage
+                gateway={projectBoardGateway}
+                docsRepositoryGateway={docsRepositoryGateway}
+                repositoryGateway={repositoryGateway}
+              />
+            }
+          />
           <Route
             path="ai"
             element={

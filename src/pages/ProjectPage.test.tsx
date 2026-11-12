@@ -11,7 +11,9 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
+import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
+import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import {
   ActiveProjectProvider,
@@ -1079,5 +1081,54 @@ describe("ProjectPage project switching", () => {
     expect(
       screen.queryByRole("article", { name: "단일 항목 #1 Alpha 작업" }),
     ).toBeNull();
+  });
+
+  it("shows standalone docs guidance and lets the user attach a GitHub Project board later", async () => {
+    const user = userEvent.setup();
+    const projectGateway = FakeProjectBoardGateway.empty();
+    projectGateway.projectList = [alpha];
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [
+      {
+        id: "docs:Mockly-Company/handbook",
+        title: "Mockly-Company/handbook",
+        project: null,
+        docsRepository: {
+          repositoryId: "R_2",
+          fullName: "Mockly-Company/handbook",
+        },
+      },
+    ];
+    docsRepoGateway.activeWorkspaceId = "docs:Mockly-Company/handbook";
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+
+    render(
+      <WorkspaceConnectionProvider gateway={workspaceGateway}>
+        <ActiveProjectProvider
+          projectGateway={projectGateway}
+          docsRepositoryGateway={docsRepoGateway}
+        >
+          <ProjectPage
+            gateway={projectGateway}
+            docsRepositoryGateway={docsRepoGateway}
+            repositoryGateway={workspaceGateway}
+          />
+        </ActiveProjectProvider>
+      </WorkspaceConnectionProvider>,
+    );
+
+    expect(
+      await screen.findByText("문서 저장소 단독으로 관리 중인 워크스페이스입니다"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Mockly-Company\/handbook/),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "GitHub Project 보드 연결" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: /워크스페이스 설정/ }),
+    ).toBeVisible();
   });
 });

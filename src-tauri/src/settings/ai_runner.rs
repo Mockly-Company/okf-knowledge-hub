@@ -1,4 +1,4 @@
-//! AI CLI(Claude Code, Codex, 사용자 지정) 실행의 순수 로직과 프로세스 제어.
+//! AI CLI(Claude Code, Codex, Antigravity, 사용자 지정) 실행의 순수 로직과 프로세스 제어.
 //! Tauri 명령 계층은 `settings::commands`에 둔다. Windows와 macOS를 지원한다.
 
 use std::ffi::{OsStr, OsString};
@@ -27,11 +27,12 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub enum AiTool {
     Claude,
     Codex,
+    Antigravity,
     Custom,
 }
 
 impl AiTool {
-    /// 터미널에서 대화형으로 띄울 명령. Codex에는 규칙 파일 옵션이 없어 첫 프롬프트로 전달한다.
+    /// 터미널에서 대화형으로 띄울 명령. Codex와 Antigravity는 첫 대화형 프롬프트로 규칙 파일을 전달한다.
     pub fn terminal_command(self, custom_command: &str, rules_file: &Path) -> String {
         let rules = rules_file.display();
         match self {
@@ -41,6 +42,12 @@ impl AiTool {
             ),
             AiTool::Codex => format!(
                 "codex {}",
+                shell_quote(&format!(
+                    "Read the workspace rules in {rules} and follow them during this session. Then wait for my request."
+                ))
+            ),
+            AiTool::Antigravity => format!(
+                "agy --prompt-interactive {}",
                 shell_quote(&format!(
                     "Read the workspace rules in {rules} and follow them during this session. Then wait for my request."
                 ))
@@ -144,15 +151,22 @@ fn extend_search_path(current: Option<&OsStr>, extras: &[PathBuf]) -> OsString {
         .unwrap_or_else(|_| current.map(OsStr::to_os_string).unwrap_or_default())
 }
 
-/// Claude Code 단독 설치와 npm 전역 설치 폴더. 레지스트리 PATH에 없을 수 있다.
+/// Claude Code·Antigravity 단독 설치와 npm 전역 설치 폴더. 레지스트리 PATH에 없을 수 있다.
 #[cfg(windows)]
-fn windows_cli_folders(home: Option<&OsStr>, app_data: Option<&OsStr>) -> Vec<PathBuf> {
+fn windows_cli_folders(
+    home: Option<&OsStr>,
+    app_data: Option<&OsStr>,
+    local_app_data: Option<&OsStr>,
+) -> Vec<PathBuf> {
     let mut folders = Vec::new();
     if let Some(home) = home {
         folders.push(Path::new(home).join(".local").join("bin"));
     }
     if let Some(app_data) = app_data {
         folders.push(Path::new(app_data).join("npm"));
+    }
+    if let Some(local_app_data) = local_app_data {
+        folders.push(Path::new(local_app_data).join("agy").join("bin"));
     }
     folders
 }
@@ -162,9 +176,14 @@ fn windows_cli_folders(home: Option<&OsStr>, app_data: Option<&OsStr>) -> Vec<Pa
 pub fn cli_search_path() -> OsString {
     let home = std::env::var_os("USERPROFILE");
     let app_data = std::env::var_os("APPDATA");
+    let local_app_data = std::env::var_os("LOCALAPPDATA");
     extend_search_path(
         std::env::var_os("PATH").as_deref(),
-        &windows_cli_folders(home.as_deref(), app_data.as_deref()),
+        &windows_cli_folders(
+            home.as_deref(),
+            app_data.as_deref(),
+            local_app_data.as_deref(),
+        ),
     )
 }
 
@@ -395,6 +414,24 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_terminal_asks_to_read_rules_via_prompt_interactive() {
+        let command = AiTool::Antigravity.terminal_command("", Path::new("C:\\app data\\rules.md"));
+        let quote = if cfg!(windows) { '"' } else { '\'' };
+        assert!(
+            command.starts_with(&format!("agy --prompt-interactive {quote}")),
+            "{command}"
+        );
+        assert!(command.contains("C:\\app data\\rules.md"), "{command}");
+        assert!(command.ends_with(quote), "{command}");
+    }
+
+    #[test]
+    fn ai_tool_deserializes_antigravity_in_lowercase() {
+        let parsed: AiTool = serde_json::from_str("\"antigravity\"").unwrap();
+        assert_eq!(parsed, AiTool::Antigravity);
+    }
+
+    #[test]
     fn custom_terminal_keeps_the_arguments_the_user_typed() {
         assert_eq!(
             AiTool::Custom.terminal_command("  opencode --model x ", Path::new("rules.md")),
@@ -505,15 +542,17 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_cli_folders_cover_the_standalone_and_npm_installs() {
+    fn windows_cli_folders_cover_the_standalone_npm_and_agy_installs() {
         assert_eq!(
             windows_cli_folders(
                 Some(std::ffi::OsStr::new(r"C:\Users\me")),
                 Some(std::ffi::OsStr::new(r"C:\Users\me\AppData\Roaming")),
+                Some(std::ffi::OsStr::new(r"C:\Users\me\AppData\Local")),
             ),
             [
                 PathBuf::from(r"C:\Users\me\.local\bin"),
                 PathBuf::from(r"C:\Users\me\AppData\Roaming\npm"),
+                PathBuf::from(r"C:\Users\me\AppData\Local\agy\bin"),
             ]
         );
     }

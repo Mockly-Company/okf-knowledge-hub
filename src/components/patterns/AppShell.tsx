@@ -8,9 +8,17 @@ import {
   StatusFeedbackTitle,
 } from "@/components/ui/status-feedback";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
+import type { ProjectRepositoryGateway } from "@/features/docs-repository/ProjectDocsRepository";
 import { AppSidebar } from "./AppSidebar";
 
-export function AppShell() {
+export function AppShell({
+  docsRepositoryGateway,
+  repositoryGateway,
+}: {
+  docsRepositoryGateway?: DocsRepositoryGateway;
+  repositoryGateway?: ProjectRepositoryGateway;
+}) {
   const { account } = useWorkspaceConnection();
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const collapseButtonRef = useRef<HTMLButtonElement>(null);
@@ -47,6 +55,8 @@ export function AppShell() {
         <AppSidebar
           collapseButtonRef={collapseButtonRef}
           onCollapse={() => updateSidebar(false)}
+          docsRepositoryGateway={docsRepositoryGateway}
+          repositoryGateway={repositoryGateway}
         />
       ) : (
         <div className="app-shell__open-sidebar">

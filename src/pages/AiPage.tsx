@@ -9,7 +9,11 @@ import {
   StatusFeedbackTitle,
 } from "@/components/ui/status-feedback";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
-import type { AiGateway, AiToolId } from "@/features/ai/AiGateway";
+import type {
+  AiGateway,
+  AiToolId,
+  BuiltinAiToolId,
+} from "@/features/ai/AiGateway";
 import { AiTerminalPanel } from "@/features/ai/AiTerminalPanel";
 import {
   terminalStoreFor,
@@ -21,15 +25,23 @@ import { createXtermRenderer } from "@/infrastructure/ai/XtermRenderer";
 
 const sharedAiGateway = new TauriAiGateway();
 
+const BUILTIN_TOOLS: readonly BuiltinAiToolId[] = [
+  "claude",
+  "codex",
+  "antigravity",
+];
+
 const TOOL_LABELS: Record<AiToolId, string> = {
   claude: "Claude Code",
   codex: "Codex",
+  antigravity: "Antigravity",
   custom: "사용자 지정",
 };
 
-const NOT_INSTALLED_MESSAGES: Record<"claude" | "codex", string> = {
+const NOT_INSTALLED_MESSAGES: Record<BuiltinAiToolId, string> = {
   claude: "Claude Code가 설치되어 있지 않습니다.",
   codex: "Codex가 설치되어 있지 않습니다.",
+  antigravity: "Antigravity가 설치되어 있지 않습니다.",
 };
 
 function describeAiError(error: unknown): string {
@@ -75,11 +87,9 @@ export function AiPage({
     : null;
 
   // 감지가 끝나기 전이나 감지에 실패했을 때는 막지 않는다. 최종 판단은 실행 결과에 맡긴다.
-  const isInstalled = (tool: "claude" | "codex") =>
+  const isInstalled = (tool: BuiltinAiToolId) =>
     toolsQuery.data?.[tool] !== false;
-  const missingTools = (["claude", "codex"] as const).filter(
-    (tool) => !isInstalled(tool),
-  );
+  const missingTools = BUILTIN_TOOLS.filter((tool) => !isInstalled(tool));
   const hasCustomTerminal = Boolean(configQuery.data?.cli_command.trim());
   const openTerminal = async (tool: AiToolId) => {
     setOpeningTool(tool);
@@ -96,8 +106,8 @@ export function AiPage({
   };
 
   const terminalTools: AiToolId[] = hasCustomTerminal
-    ? ["claude", "codex", "custom"]
-    : ["claude", "codex"];
+    ? [...BUILTIN_TOOLS, "custom"]
+    : [...BUILTIN_TOOLS];
 
   return (
     <section
@@ -143,7 +153,7 @@ export function AiPage({
             터미널에서 열기
           </h2>
           <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-            앱 안 터미널에서 워크스페이스 폴더로 바로 실행합니다. Claude Code와 Codex에는 프로젝트 규칙을 함께 전달합니다.
+            앱 안 터미널에서 워크스페이스 폴더로 바로 실행합니다. Claude Code, Codex, Antigravity에는 프로젝트 규칙을 함께 전달합니다.
           </p>
           <div className="flex flex-wrap gap-[var(--space-2)]">
             {terminalTools.map((tool) => (

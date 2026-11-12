@@ -99,7 +99,7 @@ export function AiSettingsPanel({
     <div>
       <SectionHeader
         title="AI 연동"
-        description="Claude Code와 Codex는 설정 없이 AI 화면의 버튼으로 실행됩니다. 다른 CLI를 쓸 때만 아래 명령을 입력하세요."
+        description="Claude Code, Codex, Antigravity는 설정 없이 AI 화면의 버튼으로 실행됩니다. 다른 CLI를 쓸 때만 아래 명령을 입력하세요."
       />
       {loadError ? (
         <div className="mt-[var(--space-4)]">
