@@ -163,7 +163,8 @@ export type DocumentAuthoringAction =
   | { type: "draftSwitchRequested"; requestId: string; changeId: string | null }
   | { type: "draftSwitchStarted"; requestId: string }
   | { type: "draftSwitchSucceeded"; requestId: string; changeId: string | null }
-  | { type: "draftSwitchFailed"; requestId: string; error: AppError };
+  | { type: "draftSwitchFailed"; requestId: string; error: AppError }
+  | { type: "workspaceAuthoringReset" };
 
 const EMPTY_CATALOG: DocumentTemplateCatalog = {
   templates: [],
@@ -686,5 +687,7 @@ export function documentAuthoringReducer(
             },
           }
         : state;
+    case "workspaceAuthoringReset":
+      return createInitialAuthoringState();
   }
 }

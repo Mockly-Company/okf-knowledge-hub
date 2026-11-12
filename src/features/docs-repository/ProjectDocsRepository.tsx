@@ -176,7 +176,7 @@ export function DocumentsFollowActiveProject() {
     activeProject?.activeWorkspaceId ?? activeProject?.activeProjectId ?? null;
   const repoKey = activeProject?.activeWorkspace?.docsRepository?.fullName ?? "";
   const signature = `${workspaceKey ?? "none"}::${repoKey}`;
-  const { retrySession } = useDocuments();
+  const { resetForWorkspaceSwitch } = useDocuments();
   const queryClient = useQueryClient();
   const previous = useRef(signature);
   useEffect(() => {
@@ -184,8 +184,8 @@ export function DocumentsFollowActiveProject() {
     previous.current = signature;
     void queryClient.invalidateQueries({ queryKey: currentDocsRepositoryKey });
     void queryClient.invalidateQueries({ queryKey: aiKeys.agentsMd });
-    retrySession();
-  }, [signature, queryClient, retrySession]);
+    resetForWorkspaceSwitch();
+  }, [signature, queryClient, resetForWorkspaceSwitch]);
   return null;
 }
 

@@ -10,6 +10,7 @@ import {
   type PropsWithChildren,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { DocumentsGateway } from "./DocumentsGateway";
 import { documentsKeys } from "./queryKeys";
 import {
@@ -119,6 +120,7 @@ export interface DocumentsContextValue {
   ): void;
   showDocumentsHome(): void;
   retrySession(): void;
+  resetForWorkspaceSwitch(): void;
   selectCurrentVersion(): void;
   selectDocumentVersion(
     version: SelectedDocumentVersion | Pick<HistoryItem, "commitOid" | "pathAtCommit">,
@@ -179,7 +181,11 @@ export function DocumentsProvider({
   );
   const stateRef = useRef(state);
   const authoringStateRef = useRef(authoringState);
+  const pendingWorkspaceResetRef = useRef(false);
   const queryClient = useQueryClient();
+  const activeProject = useOptionalActiveProject();
+  const registerBeforeWorkspaceSwitch =
+    activeProject?.registerBeforeWorkspaceSwitch;
 
   const dispatchAccepted = useCallback((action: DocumentsAction) => {
     const current = stateRef.current;
@@ -210,7 +216,12 @@ export function DocumentsProvider({
     const sessionId = createId();
     let active = true;
     let unlisten: (() => void) | undefined;
-    dispatchAccepted({ type: "sessionStarting", sessionId });
+    const isWorkspaceReset = pendingWorkspaceResetRef.current;
+    pendingWorkspaceResetRef.current = false;
+    dispatchAccepted({
+      type: isWorkspaceReset ? "workspaceSessionStarting" : "sessionStarting",
+      sessionId,
+    });
 
     const setup = async () => {
       try {
@@ -544,6 +555,21 @@ export function DocumentsProvider({
       dispatchAccepted({ type: "documentsHomeRequested", sessionId });
     })();
   }, [dispatchAccepted, dispatchAuthoringAccepted, flushCurrentEditor]);
+
+  useEffect(() => {
+    if (!registerBeforeWorkspaceSwitch) return;
+    return registerBeforeWorkspaceSwitch(async () => {
+      if (!(await flushCurrentEditor())) {
+        return false;
+      }
+      dispatchAuthoringAccepted({ type: "editorCloseRequested" });
+      return true;
+    });
+  }, [
+    dispatchAuthoringAccepted,
+    flushCurrentEditor,
+    registerBeforeWorkspaceSwitch,
+  ]);
 
   useEffect(() => {
     let active = true;
@@ -913,6 +939,13 @@ export function DocumentsProvider({
     setSessionAttempt((attempt) => attempt + 1);
   }, []);
 
+  const resetForWorkspaceSwitch = useCallback(() => {
+    dispatchAuthoringAccepted({ type: "workspaceAuthoringReset" });
+    dispatchAccepted({ type: "searchQueryChanged", query: "" });
+    pendingWorkspaceResetRef.current = true;
+    setSessionAttempt((attempt) => attempt + 1);
+  }, [dispatchAccepted, dispatchAuthoringAccepted]);
+
   const selectCurrentVersion = useCallback(() => {
     const sessionId = stateRef.current.activeSessionId;
     if (sessionId === null) return;
@@ -1168,6 +1201,7 @@ export function DocumentsProvider({
       selectDocument,
       showDocumentsHome,
       retrySession,
+      resetForWorkspaceSwitch,
       selectCurrentVersion,
       selectDocumentVersion,
       loadHistory,
@@ -1215,6 +1249,7 @@ export function DocumentsProvider({
       showDocumentsHome,
       switchDraft,
       retrySession,
+      resetForWorkspaceSwitch,
       state,
       startConflictMerge,
       openNewDocument,
