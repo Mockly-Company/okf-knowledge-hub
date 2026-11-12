@@ -6,6 +6,8 @@ describe("aiKeys", () => {
     expect(aiKeys.all).toEqual(["ai"]);
     expect(aiKeys.config).toEqual(["ai", "config"]);
     expect(aiKeys.agentsMd).toEqual(["ai", "agentsMd"]);
+    expect(aiKeys.agentsMdFor("PVT_1")).toEqual(["ai", "agentsMd", "PVT_1"]);
+    expect(aiKeys.agentsMdFor("PVT_1").slice(0, 2)).toEqual(aiKeys.agentsMd);
     expect(aiKeys.appAgentsMd).toEqual(["ai", "appAgentsMd"]);
   });
 });

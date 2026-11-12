@@ -9,6 +9,11 @@ import {
   type PropsWithChildren,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { AiGateway } from "@/features/ai/AiGateway";
+import {
+  closeWorkspaceTerminals,
+  migrateWorkspaceTerminals,
+} from "@/features/ai/TerminalSessionStore";
 import type {
   ConnectedHubWorkspace,
   DocsRepositoryGateway,
@@ -74,6 +79,10 @@ export interface ActiveProjectContextValue {
   ): Promise<HubWorkspace>;
   detachProjectFromWorkspace(workspaceId: string): Promise<void>;
   removeWorkspace(workspaceId: string): Promise<void>;
+  /** 전환 전 미저장 초안 등을 선저장·검증하는 가드를 등록한다. false를 반환하면 전환을 중단한다. */
+  registerBeforeWorkspaceSwitch?(
+    guard: (nextWorkspaceId: string) => Promise<boolean>,
+  ): () => void;
   /** 명시적 선택 해제. */
   clearActiveProject(): void;
 }
@@ -136,14 +145,19 @@ function describeSelectError(error: unknown): string | null {
   return "프로젝트 전환에 실패했습니다.";
 }
 
+const UNSAVED_DRAFT_SWITCH_ERROR =
+  "저장하지 못한 문서 초안이 있어 작업 공간을 변경할 수 없습니다. Documents에서 초안 저장 상태를 확인하세요.";
+
 interface ActiveProjectProviderProps extends PropsWithChildren {
   projectGateway?: ProjectBoardGateway;
   docsRepositoryGateway?: DocsRepositoryGateway;
+  aiGateway?: AiGateway;
 }
 
 export function ActiveProjectProvider({
   projectGateway,
   docsRepositoryGateway,
+  aiGateway,
   children,
 }: ActiveProjectProviderProps) {
   // Tauri 게이트웨이는 invoke 래퍼라 인스턴스를 공유해도 안전하다.
@@ -155,7 +169,34 @@ export function ActiveProjectProvider({
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(() =>
     readLastActiveProjectId(),
   );
+  const activeWorkspaceIdRef = useRef(activeWorkspaceId);
+  activeWorkspaceIdRef.current = activeWorkspaceId;
   const [docsMissing, setDocsMissing] = useState(false);
+  const [guardSelectError, setGuardSelectError] = useState<string | null>(null);
+
+  const beforeSwitchGuardsRef = useRef(
+    new Set<(nextWorkspaceId: string) => Promise<boolean>>(),
+  );
+  const registerBeforeWorkspaceSwitch = useCallback(
+    (guard: (nextWorkspaceId: string) => Promise<boolean>) => {
+      beforeSwitchGuardsRef.current.add(guard);
+      return () => {
+        beforeSwitchGuardsRef.current.delete(guard);
+      };
+    },
+    [],
+  );
+  const runBeforeSwitchGuards = useCallback(
+    async (nextWorkspaceId: string): Promise<boolean> => {
+      for (const guard of Array.from(beforeSwitchGuardsRef.current)) {
+        if (!(await guard(nextWorkspaceId))) {
+          return false;
+        }
+      }
+      return true;
+    },
+    [],
+  );
 
   // projectGateway 단독 모드(기존 테스트·스토리)에서 사용하는 인메모리 보조 상태.
   const [legacyDocsById, setLegacyDocsById] = useState<
@@ -235,6 +276,7 @@ export function ActiveProjectProvider({
       queryClient.setQueryData(hubWorkspaceQueryKey, snapshot);
       userClearedRef.current = false;
       alignedStoredRef.current = true;
+      setGuardSelectError(null);
       if (snapshot.activeWorkspaceId) {
         setActiveWorkspaceId(snapshot.activeWorkspaceId);
         rememberLastActiveProjectId(snapshot.activeWorkspaceId);
@@ -251,17 +293,25 @@ export function ActiveProjectProvider({
   const applyOptimisticWorkspace = useCallback(
     (
       workspace: HubWorkspace,
-      options: { makeActive: boolean; docsConnected?: boolean },
+      options: {
+        makeActive: boolean;
+        docsConnected?: boolean;
+        replaceId?: string;
+      },
     ) => {
       const prev =
         queryClient.getQueryData<HubWorkspaceList>(hubWorkspaceQueryKey);
       const previousWorkspaces = prev?.workspaces ?? [];
-      const exists = previousWorkspaces.some((item) => item.id === workspace.id);
+      const filteredWorkspaces =
+        options.replaceId && options.replaceId !== workspace.id
+          ? previousWorkspaces.filter((item) => item.id !== options.replaceId)
+          : previousWorkspaces;
+      const exists = filteredWorkspaces.some((item) => item.id === workspace.id);
       const nextWorkspaces = exists
-        ? previousWorkspaces.map((item) =>
+        ? filteredWorkspaces.map((item) =>
             item.id === workspace.id ? workspace : item,
           )
-        : [...previousWorkspaces, workspace];
+        : [...filteredWorkspaces, workspace];
       const nextActiveId = options.makeActive
         ? workspace.id
         : (prev?.activeWorkspaceId ?? nextWorkspaces[0]?.id ?? null);
@@ -369,6 +419,7 @@ export function ActiveProjectProvider({
     userClearedRef.current = true;
     setActiveWorkspaceId(null);
     setDocsMissing(false);
+    setGuardSelectError(null);
     selectMutation.reset();
     forgetLastActiveProjectId();
   }, [selectMutation.reset]);
@@ -379,9 +430,19 @@ export function ActiveProjectProvider({
         clearActiveProject();
         return;
       }
+      setGuardSelectError(null);
+      if (
+        activeWorkspaceIdRef.current !== null &&
+        workspaceId !== activeWorkspaceIdRef.current
+      ) {
+        if (!(await runBeforeSwitchGuards(workspaceId))) {
+          setGuardSelectError(UNSAVED_DRAFT_SWITCH_ERROR);
+          return;
+        }
+      }
       await selectMutation.mutateAsync(workspaceId);
     },
-    [clearActiveProject, selectMutation.mutateAsync],
+    [clearActiveProject, runBeforeSwitchGuards, selectMutation.mutateAsync],
   );
 
   const selectProject = useCallback(
@@ -404,6 +465,14 @@ export function ActiveProjectProvider({
       repositoryId: string,
       fullName: string,
     ): Promise<ConnectedHubWorkspace> => {
+      const candidateId = `repo:${repositoryId}`;
+      if (
+        activeWorkspaceIdRef.current !== null &&
+        activeWorkspaceIdRef.current !== candidateId &&
+        !(await runBeforeSwitchGuards(candidateId))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
       if (
         hasWorkspaceGateway &&
         docsRepositoryGateway?.createStandaloneWorkspace
@@ -429,12 +498,18 @@ export function ActiveProjectProvider({
         return [...filtered, workspace];
       });
       userClearedRef.current = false;
+      setGuardSelectError(null);
       setActiveWorkspaceId(workspace.id);
       rememberLastActiveProjectId(workspace.id);
       setDocsMissing(false);
       return { workspace, docsConnected: true, okf: true };
     },
-    [applyOptimisticWorkspace, docsRepositoryGateway, hasWorkspaceGateway],
+    [
+      applyOptimisticWorkspace,
+      docsRepositoryGateway,
+      hasWorkspaceGateway,
+      runBeforeSwitchGuards,
+    ],
   );
 
   const createProjectWorkspace = useCallback(
@@ -442,6 +517,13 @@ export function ActiveProjectProvider({
       resolved: ResolvedGithubProject,
       repository?: DocsRepositoryRef | null,
     ): Promise<ConnectedHubWorkspace> => {
+      if (
+        activeWorkspaceIdRef.current !== null &&
+        activeWorkspaceIdRef.current !== resolved.id &&
+        !(await runBeforeSwitchGuards(resolved.id))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
       if (
         hasWorkspaceGateway &&
         docsRepositoryGateway?.createProjectWorkspace
@@ -470,6 +552,7 @@ export function ActiveProjectProvider({
             : [...prev, resolved],
       );
       userClearedRef.current = false;
+      setGuardSelectError(null);
       setActiveWorkspaceId(resolved.id);
       rememberLastActiveProjectId(resolved.id);
       setDocsMissing(!repository);
@@ -490,6 +573,7 @@ export function ActiveProjectProvider({
       hasWorkspaceGateway,
       project,
       queryClient,
+      runBeforeSwitchGuards,
     ],
   );
 
@@ -526,15 +610,41 @@ export function ActiveProjectProvider({
       repositoryId: string,
       fullName: string,
     ): Promise<ConnectedHubWorkspace> => {
+      const previous = workspaces.find((item) => item.id === workspaceId);
+      const previousRepoId =
+        previous?.docsRepository?.repositoryId ??
+        legacyDocsById[workspaceId]?.repositoryId ??
+        null;
+      if (
+        activeWorkspaceIdRef.current === workspaceId &&
+        previousRepoId !== null &&
+        previousRepoId !== repositoryId &&
+        !(await runBeforeSwitchGuards(workspaceId))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
+      const syncTerminalsAfterDocsConnect = (nextWorkspaceId: string) => {
+        if (!aiGateway) return;
+        if (previousRepoId !== null && previousRepoId !== repositoryId) {
+          closeWorkspaceTerminals(aiGateway, workspaceId);
+          return;
+        }
+        if (nextWorkspaceId !== workspaceId) {
+          migrateWorkspaceTerminals(aiGateway, workspaceId, nextWorkspaceId);
+        }
+      };
+
       if (hasWorkspaceGateway && docsRepositoryGateway?.connectWorkspaceDocs) {
         const connected = await docsRepositoryGateway.connectWorkspaceDocs(
           workspaceId,
           repositoryId,
           fullName,
         );
+        syncTerminalsAfterDocsConnect(connected.workspace.id);
         applyOptimisticWorkspace(connected.workspace, {
-          makeActive: false,
+          makeActive: activeWorkspaceIdRef.current === workspaceId,
           docsConnected: connected.docsConnected,
+          replaceId: workspaceId,
         });
         return connected;
       }
@@ -544,6 +654,7 @@ export function ActiveProjectProvider({
           repositoryId,
           fullName,
         );
+        syncTerminalsAfterDocsConnect(workspaceId);
         setLegacyDocsById((prev) => ({
           ...prev,
           [workspaceId]: { repositoryId, fullName },
@@ -568,6 +679,7 @@ export function ActiveProjectProvider({
           okf: result.okf,
         };
       }
+      syncTerminalsAfterDocsConnect(workspaceId);
       setLegacyDocsById((prev) => ({
         ...prev,
         [workspaceId]: { repositoryId, fullName },
@@ -588,9 +700,12 @@ export function ActiveProjectProvider({
     },
     [
       activeWorkspaceId,
+      aiGateway,
       applyOptimisticWorkspace,
       docsRepositoryGateway,
       hasWorkspaceGateway,
+      legacyDocsById,
+      runBeforeSwitchGuards,
       workspaces,
     ],
   );
@@ -600,12 +715,24 @@ export function ActiveProjectProvider({
       workspaceId: string,
       resolved: ResolvedGithubProject,
     ): Promise<HubWorkspace> => {
+      if (
+        activeWorkspaceIdRef.current === workspaceId &&
+        !(await runBeforeSwitchGuards(resolved.id))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
       if (hasWorkspaceGateway && docsRepositoryGateway?.attachProject) {
         const updated = await docsRepositoryGateway.attachProject(
           workspaceId,
           resolved,
         );
-        applyOptimisticWorkspace(updated, { makeActive: false });
+        if (aiGateway && updated.id !== workspaceId) {
+          migrateWorkspaceTerminals(aiGateway, workspaceId, updated.id);
+        }
+        applyOptimisticWorkspace(updated, {
+          makeActive: activeWorkspaceIdRef.current === workspaceId,
+          replaceId: workspaceId,
+        });
         return updated;
       }
       await project.linkGithubProject(resolved);
@@ -615,6 +742,9 @@ export function ActiveProjectProvider({
       if (standalone?.docsRepository) {
         const repo = standalone.docsRepository;
         setLegacyDocsById((prev) => ({ ...prev, [resolved.id]: repo }));
+      }
+      if (aiGateway && resolved.id !== workspaceId) {
+        migrateWorkspaceTerminals(aiGateway, workspaceId, resolved.id);
       }
       setLegacyStandaloneWorkspaces((prev) =>
         prev.filter((item) => item.id !== workspaceId),
@@ -630,47 +760,92 @@ export function ActiveProjectProvider({
       };
     },
     [
+      aiGateway,
       applyOptimisticWorkspace,
       docsRepositoryGateway,
       hasWorkspaceGateway,
       legacyStandaloneWorkspaces,
       listLinkedProjects,
       project,
+      runBeforeSwitchGuards,
     ],
   );
 
   const detachProjectFromWorkspace = useCallback(
     async (workspaceId: string): Promise<void> => {
+      const previous = workspaces.find((item) => item.id === workspaceId);
+      if (activeWorkspaceIdRef.current === workspaceId) {
+        const nextHintId = previous?.docsRepository
+          ? `repo:${previous.docsRepository.repositoryId}`
+          : "";
+        if (!(await runBeforeSwitchGuards(nextHintId))) {
+          throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+        }
+      }
       if (hasWorkspaceGateway && docsRepositoryGateway?.detachProject) {
+        const otherWorkspaceIds = new Set(
+          workspaces
+            .filter((item) => item.id !== workspaceId)
+            .map((item) => item.id),
+        );
         const list = await docsRepositoryGateway.detachProject(workspaceId);
+        if (aiGateway) {
+          const prevRepoId = previous?.docsRepository?.repositoryId ?? null;
+          const retained = prevRepoId
+            ? list.workspaces.find(
+                (item) =>
+                  item.id === workspaceId ||
+                  (!otherWorkspaceIds.has(item.id) &&
+                    item.project === null &&
+                    item.docsRepository?.repositoryId === prevRepoId),
+              )
+            : null;
+          if (retained) {
+            if (retained.id !== workspaceId) {
+              migrateWorkspaceTerminals(aiGateway, workspaceId, retained.id);
+            }
+          } else {
+            closeWorkspaceTerminals(aiGateway, workspaceId);
+          }
+        }
         applyWorkspaceSnapshot(list);
         return;
       }
-      const target = workspaces.find((item) => item.id === workspaceId);
+      const target = previous;
       if (target?.project && project.unlinkGithubProject) {
         await project.unlinkGithubProject(target.project.id);
       }
       if (target?.docsRepository) {
         const standaloneId = `repo:${target.docsRepository.repositoryId}`;
+        if (aiGateway && standaloneId !== workspaceId) {
+          migrateWorkspaceTerminals(aiGateway, workspaceId, standaloneId);
+        }
         const standalone: HubWorkspace = {
           id: standaloneId,
           title: shortRepositoryName(target.docsRepository.fullName),
           project: null,
           docsRepository: target.docsRepository,
         };
-        setLegacyStandaloneWorkspaces((prev) => [...prev, standalone]);
+        setLegacyStandaloneWorkspaces((prev) => [
+          ...prev.filter((item) => item.id !== standalone.id),
+          standalone,
+        ]);
         setActiveWorkspaceId(standaloneId);
         rememberLastActiveProjectId(standaloneId);
         setDocsMissing(false);
+      } else if (aiGateway) {
+        closeWorkspaceTerminals(aiGateway, workspaceId);
       }
       await listLinkedProjects();
     },
     [
+      aiGateway,
       applyWorkspaceSnapshot,
       docsRepositoryGateway,
       hasWorkspaceGateway,
       listLinkedProjects,
       project,
+      runBeforeSwitchGuards,
       workspaces,
     ],
   );
@@ -679,6 +854,9 @@ export function ActiveProjectProvider({
     async (workspaceId: string): Promise<void> => {
       if (hasWorkspaceGateway && docsRepositoryGateway?.removeWorkspace) {
         const list = await docsRepositoryGateway.removeWorkspace(workspaceId);
+        if (aiGateway) {
+          closeWorkspaceTerminals(aiGateway, workspaceId);
+        }
         applyWorkspaceSnapshot(list);
         return;
       }
@@ -689,9 +867,13 @@ export function ActiveProjectProvider({
       setLegacyStandaloneWorkspaces((prev) =>
         prev.filter((item) => item.id !== workspaceId),
       );
+      if (aiGateway) {
+        closeWorkspaceTerminals(aiGateway, workspaceId);
+      }
       await listLinkedProjects();
     },
     [
+      aiGateway,
       applyWorkspaceSnapshot,
       docsRepositoryGateway,
       hasWorkspaceGateway,
@@ -848,7 +1030,7 @@ export function ActiveProjectProvider({
       isListing,
       isListError,
       isSelecting: selectMutation.isPending,
-      selectError: describeSelectError(selectMutation.error),
+      selectError: guardSelectError ?? describeSelectError(selectMutation.error),
       listLinkedProjects,
       searchProjects,
       linkProject,
@@ -860,6 +1042,7 @@ export function ActiveProjectProvider({
       attachProjectToWorkspace,
       detachProjectFromWorkspace,
       removeWorkspace,
+      registerBeforeWorkspaceSwitch,
       clearActiveProject,
     }),
     [
@@ -875,6 +1058,7 @@ export function ActiveProjectProvider({
       isListError,
       selectMutation.isPending,
       selectMutation.error,
+      guardSelectError,
       listLinkedProjects,
       searchProjects,
       linkProject,
@@ -886,6 +1070,7 @@ export function ActiveProjectProvider({
       attachProjectToWorkspace,
       detachProjectFromWorkspace,
       removeWorkspace,
+      registerBeforeWorkspaceSwitch,
       clearActiveProject,
     ],
   );

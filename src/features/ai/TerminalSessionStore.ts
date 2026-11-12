@@ -4,6 +4,9 @@ import type {
   AiToolId,
 } from "@/features/ai/AiGateway";
 
+/** 활성 워크스페이스가 없을 때(단독 단위 테스트·스토리 등) 사용하는 기본 스코프 키. */
+export const DEFAULT_WORKSPACE_SCOPE = "__default__";
+
 /** 터미널 화면 하나. 세션과 수명을 같이하고, 화면 이동 때는 붙였다 뗐다 한다. */
 export interface TerminalRenderer {
   attach(parent: HTMLElement): void;
@@ -26,18 +29,29 @@ export interface TerminalSession {
   renderer: TerminalRenderer;
 }
 
+interface SessionRoute {
+  store: TerminalSessionStore;
+  key: string;
+}
+
 interface SessionLink {
   backendId: string | null;
   /** 시작 완료를 기다린 뒤 입력·크기 변경을 순서대로 보내는 작업 사슬. */
   queue: Promise<void>;
   lastSize: { cols: number; rows: number } | null;
+  route: SessionRoute;
+}
+
+interface AdoptedSession {
+  session: TerminalSession;
+  link: SessionLink;
 }
 
 const INITIAL_SIZE = { cols: 120, rows: 30 };
 
 /**
- * 앱 안 터미널 세션 저장소. React 밖에 두어 AI 화면을 떠나도 프로세스와
- * 출력이 유지된다.
+ * 워크스페이스 하나에 속한 앱 안 터미널 세션 저장소.
+ * React 밖에 두어 AI 화면이나 다른 프로젝트로 잠시 이동해도 프로세스와 출력이 유지된다.
  */
 export class TerminalSessionStore {
   private sessions: readonly TerminalSession[] = [];
@@ -51,6 +65,7 @@ export class TerminalSessionStore {
   constructor(
     private readonly gateway: AiGateway,
     private readonly createRenderer: TerminalRendererFactory,
+    private readonly onRegistryChange?: () => void,
   ) {}
 
   subscribe = (listener: () => void): (() => void) => {
@@ -61,6 +76,16 @@ export class TerminalSessionStore {
   getSnapshot = (): readonly TerminalSession[] => this.sessions;
 
   getActiveKey = (): string | null => this.activeKey;
+
+  getRunningCount(): number {
+    let count = 0;
+    for (const session of this.sessions) {
+      if (session.status === "starting" || session.status === "running") {
+        count += 1;
+      }
+    }
+    return count;
+  }
 
   select(key: string): void {
     if (key !== this.activeKey) {
@@ -80,29 +105,33 @@ export class TerminalSessionStore {
   }
 
   async open(tool: AiToolId): Promise<void> {
-    const key = String(this.nextKey++);
+    const initialKey = String(this.nextKey++);
     const renderer = this.createRenderer();
+    const route: SessionRoute = { store: this, key: initialKey };
     const link: SessionLink = {
       backendId: null,
       queue: Promise.resolve(),
       lastSize: null,
+      route,
     };
-    this.links.set(key, link);
+    this.links.set(initialKey, link);
     // 백엔드 시작이 끝나기 전에 오는 입력도 잃지 않도록 먼저 연결한다.
     // ConPTY의 커서 위치 질의에 대한 응답이 이 시점에 나올 수 있다.
     renderer.onInput((data) => {
-      this.enqueue(key, (id) => this.gateway.writeTerminal(id, data));
+      route.store.enqueue(route.key, (id) =>
+        route.store.gateway.writeTerminal(id, data),
+      );
     });
     this.sessions = [
       ...this.sessions,
-      { key, tool, status: "starting", exitCode: null, renderer },
+      { key: initialKey, tool, status: "starting", exitCode: null, renderer },
     ];
-    this.activeKey = key;
-    this.focusKey = key;
+    this.activeKey = initialKey;
+    this.focusKey = initialKey;
     this.notify();
 
     const started = this.gateway.startTerminal(tool, INITIAL_SIZE, (event) =>
-      this.handleEvent(key, event),
+      route.store.handleEvent(route.key, event),
     );
     link.queue = started.then(
       (id) => {
@@ -113,11 +142,11 @@ export class TerminalSessionStore {
     try {
       await started;
     } catch (error) {
-      this.remove(key);
+      route.store.remove(route.key);
       throw error;
     }
     await link.queue;
-    this.update(key, (session) =>
+    route.store.update(route.key, (session) =>
       session.status === "starting"
         ? { ...session, status: "running" }
         : session,
@@ -146,6 +175,52 @@ export class TerminalSessionStore {
   close(key: string): void {
     this.enqueue(key, (id) => this.gateway.stopTerminal(id));
     this.remove(key);
+  }
+
+  closeAll(): void {
+    for (const session of [...this.sessions]) {
+      this.close(session.key);
+    }
+  }
+
+  /** @internal 다른 워크스페이스 스코프로 세션을 끊지 않고 이관할 때 꺼낸다. */
+  takeAllForMigration(): AdoptedSession[] {
+    if (this.sessions.length === 0) {
+      return [];
+    }
+    const items: AdoptedSession[] = [];
+    for (const session of this.sessions) {
+      const link = this.links.get(session.key);
+      if (link) {
+        items.push({ session, link });
+      }
+    }
+    this.links.clear();
+    this.sessions = [];
+    this.activeKey = null;
+    this.focusKey = null;
+    this.notify();
+    return items;
+  }
+
+  /** @internal 이관된 세션을 충돌 없는 새 키로 편입한다. */
+  adoptMigrated(items: readonly AdoptedSession[]): void {
+    if (items.length === 0) {
+      return;
+    }
+    const appended: TerminalSession[] = [];
+    for (const { session, link } of items) {
+      const key = String(this.nextKey++);
+      link.route.store = this;
+      link.route.key = key;
+      this.links.set(key, link);
+      appended.push({ ...session, key });
+    }
+    this.sessions = [...this.sessions, ...appended];
+    if (this.activeKey === null) {
+      this.activeKey = this.sessions.at(-1)?.key ?? null;
+    }
+    this.notify();
   }
 
   private enqueue(key: string, task: (backendId: string) => Promise<void>) {
@@ -199,20 +274,153 @@ export class TerminalSessionStore {
 
   private notify() {
     this.listeners.forEach((listener) => listener());
+    this.onRegistryChange?.();
   }
 }
 
-const stores = new WeakMap<AiGateway, TerminalSessionStore>();
+const EMPTY_RUNNING_COUNTS: Readonly<Record<string, number>> = Object.freeze({});
 
-/** 게이트웨이당 저장소 하나. 화면이 다시 마운트되어도 같은 세션을 본다. */
+function shallowEqualCounts(
+  left: Readonly<Record<string, number>>,
+  right: Readonly<Record<string, number>>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+  return leftKeys.every((key) => left[key] === right[key]);
+}
+
+class WorkspaceTerminalRegistry {
+  private readonly stores = new Map<string, TerminalSessionStore>();
+  private readonly listeners = new Set<() => void>();
+  private countsSnapshot: Readonly<Record<string, number>> =
+    EMPTY_RUNNING_COUNTS;
+
+  constructor(private readonly gateway: AiGateway) {}
+
+  storeFor(
+    createRenderer: TerminalRendererFactory,
+    scopeKey: string,
+  ): TerminalSessionStore {
+    const normalized = scopeKey || DEFAULT_WORKSPACE_SCOPE;
+    let store = this.stores.get(normalized);
+    if (!store) {
+      store = new TerminalSessionStore(this.gateway, createRenderer, () =>
+        this.recomputeCounts(),
+      );
+      this.stores.set(normalized, store);
+    }
+    return store;
+  }
+
+  closeScope(scopeKey: string): void {
+    const normalized = scopeKey || DEFAULT_WORKSPACE_SCOPE;
+    const store = this.stores.get(normalized);
+    if (!store) {
+      return;
+    }
+    store.closeAll();
+  }
+
+  migrateScope(fromScopeKey: string, toScopeKey: string): void {
+    const fromKey = fromScopeKey || DEFAULT_WORKSPACE_SCOPE;
+    const toKey = toScopeKey || DEFAULT_WORKSPACE_SCOPE;
+    if (fromKey === toKey) {
+      return;
+    }
+    const fromStore = this.stores.get(fromKey);
+    if (!fromStore || fromStore.getSnapshot().length === 0) {
+      return;
+    }
+    const existingTarget = this.stores.get(toKey);
+    if (!existingTarget) {
+      this.stores.delete(fromKey);
+      this.stores.set(toKey, fromStore);
+      this.recomputeCounts();
+      return;
+    }
+    const migrated = fromStore.takeAllForMigration();
+    existingTarget.adoptMigrated(migrated);
+    this.recomputeCounts();
+  }
+
+  subscribeCounts = (listener: () => void): (() => void) => {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  };
+
+  getCounts = (): Readonly<Record<string, number>> => this.countsSnapshot;
+
+  private recomputeCounts(): void {
+    const next: Record<string, number> = {};
+    for (const [scopeKey, store] of this.stores) {
+      const count = store.getRunningCount();
+      if (count > 0) {
+        next[scopeKey] = count;
+      }
+    }
+    const normalizedNext =
+      Object.keys(next).length === 0
+        ? EMPTY_RUNNING_COUNTS
+        : Object.freeze(next);
+    if (shallowEqualCounts(this.countsSnapshot, normalizedNext)) {
+      return;
+    }
+    this.countsSnapshot = normalizedNext;
+    this.listeners.forEach((listener) => listener());
+  }
+}
+
+const registries = new WeakMap<AiGateway, WorkspaceTerminalRegistry>();
+
+function registryFor(gateway: AiGateway): WorkspaceTerminalRegistry {
+  let registry = registries.get(gateway);
+  if (!registry) {
+    registry = new WorkspaceTerminalRegistry(gateway);
+    registries.set(gateway, registry);
+  }
+  return registry;
+}
+
+/** 게이트웨이·워크스페이스 스코프당 저장소 하나. 화면을 오가도 같은 세션을 본다. */
 export function terminalStoreFor(
   gateway: AiGateway,
   createRenderer: TerminalRendererFactory,
+  scopeKey: string = DEFAULT_WORKSPACE_SCOPE,
 ): TerminalSessionStore {
-  let store = stores.get(gateway);
-  if (!store) {
-    store = new TerminalSessionStore(gateway, createRenderer);
-    stores.set(gateway, store);
-  }
-  return store;
+  return registryFor(gateway).storeFor(createRenderer, scopeKey);
+}
+
+/** 워크스페이스 연결 해제나 문서 저장소 교체 시 해당 스코프의 터미널을 모두 닫는다. */
+export function closeWorkspaceTerminals(
+  gateway: AiGateway,
+  scopeKey: string,
+): void {
+  registryFor(gateway).closeScope(scopeKey);
+}
+
+/** 같은 문서 저장소를 유지한 채 워크스페이스 ID만 바뀔 때 실행 중인 세션을 이관한다. */
+export function migrateWorkspaceTerminals(
+  gateway: AiGateway,
+  fromScopeKey: string,
+  toScopeKey: string,
+): void {
+  registryFor(gateway).migrateScope(fromScopeKey, toScopeKey);
+}
+
+/** 워크스페이스별 실행 중(starting | running) 터미널 개수 변화를 구독한다. */
+export function subscribeRunningTerminalCounts(
+  gateway: AiGateway,
+  listener: () => void,
+): () => void {
+  return registryFor(gateway).subscribeCounts(listener);
+}
+
+/** 워크스페이스별 실행 중(starting | running) 터미널 개수 스냅샷을 돌려준다. */
+export function getRunningTerminalCounts(
+  gateway: AiGateway,
+): Readonly<Record<string, number>> {
+  return registryFor(gateway).getCounts();
 }

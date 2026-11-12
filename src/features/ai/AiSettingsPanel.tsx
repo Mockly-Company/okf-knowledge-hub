@@ -7,8 +7,10 @@ import {
   StatusFeedbackDescription,
   StatusFeedbackTitle,
 } from "@/components/ui/status-feedback";
+import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { AiGateway } from "@/features/ai/AiGateway";
 import { aiKeys } from "@/features/ai/queryKeys";
+import { DEFAULT_WORKSPACE_SCOPE } from "@/features/ai/TerminalSessionStore";
 import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
 
 const sharedGateway = new TauriAiGateway();
@@ -31,16 +33,21 @@ export function AiSettingsPanel({
   gateway?: AiGateway;
 }) {
   const queryClient = useQueryClient();
+  const activeProject = useOptionalActiveProject();
+  const scopeKey =
+    activeProject?.activeWorkspaceId ??
+    activeProject?.activeWorkspace?.id ??
+    DEFAULT_WORKSPACE_SCOPE;
   const [cliCommand, setCliCommand] = useState("");
   const seededRef = useRef(false);
 
-  // AI 화면과 같은 키를 쓴다. 저장 후 invalidate하면 양쪽이 함께 갱신된다.
+  // AI 화면과 같은 스코프 키를 쓴다. 상위 prefix(aiKeys.agentsMd)로 invalidate하면 양쪽이 함께 갱신된다.
   const configQuery = useQuery({
     queryKey: aiKeys.config,
     queryFn: () => gateway.getConfig(),
   });
   const agentsQuery = useQuery({
-    queryKey: aiKeys.agentsMd,
+    queryKey: aiKeys.agentsMdFor(scopeKey),
     queryFn: () => gateway.resolveAgentsMd(),
   });
   const appAgentsQuery = useQuery({

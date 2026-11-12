@@ -9,8 +9,14 @@ import {
   Sparkles,
   SquareKanban,
 } from "lucide-react";
-import { useState, type RefObject } from "react";
+import {
+  useCallback,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button, IconButton } from "@/components/ui/button";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
 import {
@@ -23,6 +29,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
+import type { AiGateway } from "@/features/ai/AiGateway";
+import {
+  DEFAULT_WORKSPACE_SCOPE,
+  getRunningTerminalCounts,
+  subscribeRunningTerminalCounts,
+} from "@/features/ai/TerminalSessionStore";
 import type {
   DocsRepositoryGateway,
   HubWorkspace,
@@ -50,14 +62,18 @@ interface AppSidebarProps {
   onCollapse(): void;
   docsRepositoryGateway?: DocsRepositoryGateway;
   repositoryGateway?: ProjectRepositoryGateway;
+  aiGateway?: AiGateway;
 }
+
+const EMPTY_RUNNING_COUNTS: Readonly<Record<string, number>> = Object.freeze({});
+const NOOP_UNSUBSCRIBE = () => {};
 
 function describeWorkspaceSubtitle(workspace: HubWorkspace): string {
   if (workspace.project && workspace.docsRepository) {
-    return `문서 · ${workspace.docsRepository.fullName}`;
+    return `└ 문서 · ${workspace.docsRepository.fullName}`;
   }
   if (workspace.project && !workspace.docsRepository) {
-    return "문서 저장소 연결 필요";
+    return "└ 문서 저장소 연결 필요";
   }
   if (!workspace.project && workspace.docsRepository) {
     return `문서 전용 · ${workspace.docsRepository.fullName}`;
@@ -68,7 +84,7 @@ function describeWorkspaceSubtitle(workspace: HubWorkspace): string {
 function describeDropdownWorkspaceMeta(workspace: HubWorkspace): string {
   if (workspace.project) {
     const repoLabel = workspace.docsRepository?.fullName ?? "문서 미연결";
-    return `${workspace.project.owner} #${workspace.project.number} · ${repoLabel}`;
+    return `${workspace.project.owner} #${workspace.project.number} · └ 문서 · ${repoLabel}`;
   }
   return `문서 전용 · ${workspace.docsRepository?.fullName ?? "저장소 미연결"}`;
 }
@@ -78,6 +94,7 @@ export function AppSidebar({
   onCollapse,
   docsRepositoryGateway = sharedDocsRepositoryGateway,
   repositoryGateway = sharedRepositoryGateway,
+  aiGateway,
 }: AppSidebarProps) {
   const location = useLocation();
   const {
@@ -110,6 +127,33 @@ export function AppSidebar({
 
   const currentWorkspace = activeProject?.activeWorkspace ?? null;
   const workspaces = activeProject?.workspaces ?? [];
+
+  const subscribeCounts = useCallback(
+    (listener: () => void) =>
+      aiGateway
+        ? subscribeRunningTerminalCounts(aiGateway, listener)
+        : NOOP_UNSUBSCRIBE,
+    [aiGateway],
+  );
+  const getCounts = useCallback(
+    () => (aiGateway ? getRunningTerminalCounts(aiGateway) : EMPTY_RUNNING_COUNTS),
+    [aiGateway],
+  );
+  const runningCounts = useSyncExternalStore(
+    subscribeCounts,
+    getCounts,
+    getCounts,
+  );
+  const activeScopeKey =
+    activeProject?.activeWorkspaceId ??
+    currentWorkspace?.id ??
+    DEFAULT_WORKSPACE_SCOPE;
+  const activeRunningCount = runningCounts[activeScopeKey] ?? 0;
+  const backgroundRunningCount = Object.entries(runningCounts).reduce(
+    (sum, [scopeKey, count]) =>
+      scopeKey === activeScopeKey ? sum : sum + count,
+    0,
+  );
 
   return (
     <aside className="app-sidebar">
@@ -182,36 +226,47 @@ export function AppSidebar({
                       void activeProject.selectWorkspace(id).catch(() => undefined)
                     }
                   >
-                    {workspaces.map((workspace) => (
-                      <DropdownMenuRadioItem
-                        key={workspace.id}
-                        value={workspace.id}
-                        disabled={activeProject.isSelecting}
-                        className="items-start py-[var(--space-2)]"
-                      >
-                        {workspace.project ? (
-                          <SquareKanban
-                            aria-hidden="true"
-                            strokeWidth={1.75}
-                            className="mt-0.5 shrink-0 text-[var(--color-primary-text)]"
-                          />
-                        ) : (
-                          <FolderGit2
-                            aria-hidden="true"
-                            strokeWidth={1.75}
-                            className="mt-0.5 shrink-0 text-[var(--color-text-muted)]"
-                          />
-                        )}
-                        <span className="grid min-w-0 flex-1">
-                          <span className="truncate font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                            {workspace.title}
+                    {workspaces.map((workspace) => {
+                      const workspaceRunningCount =
+                        runningCounts[workspace.id] ?? 0;
+                      return (
+                        <DropdownMenuRadioItem
+                          key={workspace.id}
+                          value={workspace.id}
+                          disabled={activeProject.isSelecting}
+                          className="items-start py-[var(--space-2)]"
+                        >
+                          {workspace.project ? (
+                            <SquareKanban
+                              aria-hidden="true"
+                              strokeWidth={1.75}
+                              className="mt-0.5 shrink-0 text-[var(--color-primary-text)]"
+                            />
+                          ) : (
+                            <FolderGit2
+                              aria-hidden="true"
+                              strokeWidth={1.75}
+                              className="mt-0.5 shrink-0 text-[var(--color-text-muted)]"
+                            />
+                          )}
+                          <span className="grid min-w-0 flex-1">
+                            <span className="flex items-center justify-between gap-[var(--space-2)]">
+                              <span className="truncate font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+                                {workspace.title}
+                              </span>
+                              {workspaceRunningCount > 0 ? (
+                                <StatusBadge tone="info">
+                                  {`AI ${workspaceRunningCount}`}
+                                </StatusBadge>
+                              ) : null}
+                            </span>
+                            <span className="truncate text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+                              {describeDropdownWorkspaceMeta(workspace)}
+                            </span>
                           </span>
-                          <span className="truncate text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-                            {describeDropdownWorkspaceMeta(workspace)}
-                          </span>
-                        </span>
-                      </DropdownMenuRadioItem>
-                    ))}
+                        </DropdownMenuRadioItem>
+                      );
+                    })}
                   </DropdownMenuRadioGroup>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => setConnectDialogOpen(true)}>
@@ -238,6 +293,12 @@ export function AppSidebar({
                   : "워크스페이스 연결"}
               </Button>
             )}
+
+            {backgroundRunningCount > 0 ? (
+              <p className="m-0 px-[var(--space-1)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+                {`다른 워크스페이스 AI 실행 중 ${backgroundRunningCount}개`}
+              </p>
+            ) : null}
 
             {activeProject.selectError ? (
               <p
@@ -281,7 +342,10 @@ export function AppSidebar({
               }
             >
               <Icon aria-hidden="true" strokeWidth={1.75} />
-              <span>{label}</span>
+              <span className="flex-1">{label}</span>
+              {to === "/ai" && activeRunningCount > 0 ? (
+                <StatusBadge tone="info">{`${activeRunningCount}`}</StatusBadge>
+              ) : null}
             </NavLink>
           ))}
         </nav>

@@ -31,10 +31,12 @@ function ConnectedAppShell({
   documentsGateway,
   docsRepositoryGateway,
   repositoryGateway,
+  aiGateway,
 }: {
   documentsGateway: DocumentsGateway;
   docsRepositoryGateway: DocsRepositoryGateway;
   repositoryGateway: ProjectRepositoryGateway;
+  aiGateway: AiGateway;
 }) {
   return (
     <DocumentsProvider gateway={documentsGateway}>
@@ -43,6 +45,7 @@ function ConnectedAppShell({
       <AppShell
         docsRepositoryGateway={docsRepositoryGateway}
         repositoryGateway={repositoryGateway}
+        aiGateway={aiGateway}
       />
     </DocumentsProvider>
   );
@@ -56,10 +59,22 @@ const AiPage = lazy(() =>
 const sharedAiGateway = new TauriAiGateway();
 const sharedProjectBoardGateway = new TauriProjectBoardGateway();
 
-function ConnectedAiPage({ aiGateway }: { aiGateway: AiGateway }) {
+function ConnectedAiPage({
+  aiGateway,
+  docsRepositoryGateway,
+  repositoryGateway,
+}: {
+  aiGateway: AiGateway;
+  docsRepositoryGateway: DocsRepositoryGateway;
+  repositoryGateway: ProjectRepositoryGateway;
+}) {
   return (
     <Suspense fallback={<p role="status">AI 화면을 불러오는 중…</p>}>
-      <AiPage aiGateway={aiGateway} />
+      <AiPage
+        aiGateway={aiGateway}
+        docsRepositoryGateway={docsRepositoryGateway}
+        repositoryGateway={repositoryGateway}
+      />
     </Suspense>
   );
 }
@@ -86,6 +101,7 @@ export function AppRoutes({
               documentsGateway={documentsGateway}
               docsRepositoryGateway={docsRepositoryGateway}
               repositoryGateway={repositoryGateway}
+              aiGateway={aiGateway}
             />
           }
         >
@@ -124,7 +140,11 @@ export function AppRoutes({
           <Route
             path="ai"
             element={
-              <ConnectedAiPage aiGateway={aiGateway} />
+              <ConnectedAiPage
+                aiGateway={aiGateway}
+                docsRepositoryGateway={docsRepositoryGateway}
+                repositoryGateway={repositoryGateway}
+              />
             }
           />
           <Route path="settings" element={<SettingsPage aiGateway={aiGateway} />} />

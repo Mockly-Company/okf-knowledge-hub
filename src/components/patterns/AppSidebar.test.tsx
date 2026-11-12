@@ -1,16 +1,19 @@
 import { createRef } from "react";
 import axe from "axe-core";
 import { MemoryRouter } from "react-router-dom";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
+import { terminalStoreFor } from "@/features/ai/TerminalSessionStore";
 import type { HubWorkspace } from "@/features/docs-repository/DocsRepositoryGateway";
+import { FakeAiGateway } from "@/test/FakeAiGateway";
 import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
+import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import { AppSidebar } from "./AppSidebar";
@@ -235,6 +238,7 @@ describe("AppSidebar workspace switcher", () => {
   function renderSidebarWithWorkspaces(
     workspaces: HubWorkspace[],
     activeWorkspaceId: string | null = workspaces[0]?.id ?? null,
+    aiGateway?: FakeAiGateway,
   ) {
     const projectGateway = new FakeProjectBoardGateway();
     const docsRepoGateway = new FakeDocsRepositoryGateway();
@@ -248,6 +252,7 @@ describe("AppSidebar workspace switcher", () => {
             <ActiveProjectProvider
               projectGateway={projectGateway}
               docsRepositoryGateway={docsRepoGateway}
+              aiGateway={aiGateway}
             >
               <MemoryRouter initialEntries={["/documents"]}>
                 <AppSidebar
@@ -255,6 +260,7 @@ describe("AppSidebar workspace switcher", () => {
                   onCollapse={() => {}}
                   docsRepositoryGateway={docsRepoGateway}
                   repositoryGateway={workspaceGateway}
+                  aiGateway={aiGateway}
                 />
               </MemoryRouter>
             </ActiveProjectProvider>
@@ -290,10 +296,10 @@ describe("AppSidebar workspace switcher", () => {
       name: /^워크스페이스 전환/,
     });
     expect(switcher).toHaveAccessibleName(
-      "워크스페이스 전환, 현재 Mockly Board (문서 · Mockly-Company/Mockly)",
+      "워크스페이스 전환, 현재 Mockly Board (└ 문서 · Mockly-Company/Mockly)",
     );
     expect(switcher).toHaveTextContent("Mockly Board");
-    expect(switcher).toHaveTextContent("문서 · Mockly-Company/Mockly");
+    expect(switcher).toHaveTextContent("└ 문서 · Mockly-Company/Mockly");
 
     const result = await axe.run(view.container);
     expect(result.violations).toEqual([]);
@@ -319,10 +325,10 @@ describe("AppSidebar workspace switcher", () => {
       name: /^워크스페이스 전환/,
     });
     expect(switcher).toHaveAccessibleName(
-      "워크스페이스 전환, 현재 New Project (문서 저장소 연결 필요)",
+      "워크스페이스 전환, 현재 New Project (└ 문서 저장소 연결 필요)",
     );
     expect(switcher).toHaveTextContent("New Project");
-    expect(switcher).toHaveTextContent("문서 저장소 연결 필요");
+    expect(switcher).toHaveTextContent("└ 문서 저장소 연결 필요");
   });
 
   it("switches workspaces from the dropdown menu and surfaces errors on failure", async () => {
@@ -405,5 +411,84 @@ describe("AppSidebar workspace switcher", () => {
     });
     expect(switcher.className).toContain("min-w-0");
     expect(switcher.querySelectorAll(".truncate").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("shows active workspace AI badge on nav link, background AI counts on switcher and dropdown items, and decrements immediately on exit", async () => {
+    const user = userEvent.setup();
+    const aiGateway = new FakeAiGateway();
+    const makeRenderer = () => new FakeTerminalRenderer();
+
+    // session-0: projectWorkspace, session-1 & session-2: standaloneWorkspace
+    await terminalStoreFor(aiGateway, makeRenderer, projectWorkspace.id).open(
+      "claude",
+    );
+    await terminalStoreFor(
+      aiGateway,
+      makeRenderer,
+      standaloneWorkspace.id,
+    ).open("codex");
+    await terminalStoreFor(
+      aiGateway,
+      makeRenderer,
+      standaloneWorkspace.id,
+    ).open("antigravity");
+
+    const { view } = renderSidebarWithWorkspaces(
+      [projectWorkspace, standaloneWorkspace],
+      projectWorkspace.id,
+      aiGateway,
+    );
+
+    const switcher = await screen.findByRole("button", {
+      name: /^워크스페이스 전환/,
+    });
+    await waitFor(() => expect(switcher).toHaveTextContent("Mockly Board"));
+
+    // 주 메뉴 AI 링크에는 현재 활성 워크스페이스의 실행 개수(1)만 표시
+    const aiNavLink = screen.getByRole("link", { name: /^AI/ });
+    expect(within(aiNavLink).getByText("1")).toBeInTheDocument();
+
+    // 전환기 영역에는 백그라운드 실행 개수(2) 표시
+    expect(
+      screen.getByText("다른 워크스페이스 AI 실행 중 2개"),
+    ).toBeInTheDocument();
+
+    const a11y = await axe.run(view.container);
+    expect(a11y.violations).toEqual([]);
+
+    // 드롭다운을 열면 각 워크스페이스 항목에 AI 실행 배지가 표시된다
+    await user.click(switcher);
+    const activeItem = await screen.findByRole("menuitemradio", {
+      name: /Mockly Board/,
+    });
+    const backgroundItem = screen.getByRole("menuitemradio", {
+      name: /Mockly-Company\/handbook/,
+    });
+    expect(within(activeItem).getByText("AI 1")).toBeInTheDocument();
+    expect(within(backgroundItem).getByText("AI 2")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    // 터미널 프로세스가 자연 종료(exit)되면 탭을 닫지 않아도 즉시 배지가 감소·제거된다
+    act(() => {
+      aiGateway.emitTerminal(0, { kind: "exit", exit_code: 0 });
+      aiGateway.emitTerminal(1, { kind: "exit", exit_code: 0 });
+    });
+
+    await waitFor(() =>
+      expect(within(aiNavLink).queryByText("1")).not.toBeInTheDocument(),
+    );
+    expect(
+      screen.getByText("다른 워크스페이스 AI 실행 중 1개"),
+    ).toBeInTheDocument();
+
+    act(() => {
+      aiGateway.emitTerminal(2, { kind: "exit", exit_code: 0 });
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/다른 워크스페이스 AI 실행 중/),
+      ).not.toBeInTheDocument(),
+    );
   });
 });

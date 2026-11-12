@@ -22,10 +22,7 @@ import {
   type ProjectRepositoryGateway,
 } from "@/features/docs-repository/ProjectDocsRepository";
 import { DocsPullNotice } from "@/features/docs-repository/DocsPullNotice";
-import {
-  WorkspaceManageDialog,
-  type WorkspaceManageInitialView,
-} from "@/features/workspace-setup/WorkspaceManageDialog";
+import { WorkspaceContextBar } from "@/features/workspace-setup/WorkspaceContextBar";
 import { WorkspaceSetupFlow } from "@/features/workspace-setup/WorkspaceSetupFlow";
 import "@/features/documents/documents.css";
 import type { DocumentSummary } from "@/features/documents/model";
@@ -83,17 +80,10 @@ export function DocumentsPage({
   );
   const pickerResetKey = activeWorkspace?.id ?? activeProjectId;
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [manageOpen, setManageOpen] = useState(false);
-  const [manageInitialView, setManageInitialView] =
-    useState<WorkspaceManageInitialView>("overview");
   // 워크스페이스를 바꾸면 열어 둔 저장소 선택을 닫는다.
   useEffect(() => {
     setPickerOpen(false);
   }, [pickerResetKey]);
-  const openManageDialog = (view: WorkspaceManageInitialView) => {
-    setManageInitialView(view);
-    setManageOpen(true);
-  };
   const picker =
     activeWorkspace !== null ? (
       <WorkspaceDocsRepositoryPicker
@@ -242,6 +232,13 @@ export function DocumentsPage({
     return (
       <section className="documents-page documents-page--reader" aria-labelledby="documents-title">
         <h1 id="documents-title" className="sr-only">Documents</h1>
+        {activeWorkspace && !docsMissing ? (
+          <WorkspaceContextBar
+            className="mb-[var(--space-4)]"
+            docsRepositoryGateway={docsRepositoryGateway}
+            repositoryGateway={repositoryGateway}
+          />
+        ) : null}
         {state.selectedDocument ? (
           <DocumentReader
             document={state.selectedDocument}
@@ -302,76 +299,20 @@ export function DocumentsPage({
       />
 
       {activeWorkspace && !docsMissing ? (
-        <>
-          <section
-            aria-label="현재 워크스페이스"
-            className="mb-[var(--space-4)] flex flex-wrap items-center justify-between gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] px-[var(--space-4)] py-[var(--space-3)]"
-          >
-            <div className="flex min-w-0 flex-wrap items-center gap-x-[var(--space-2)] gap-y-[var(--space-1)]">
-              {activeWorkspace.project ? (
-                <>
-                  <StatusBadge tone="info">
-                    {`Project · ${activeWorkspace.project.owner} #${activeWorkspace.project.number}`}
-                  </StatusBadge>
-                  <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                    {activeWorkspace.title}
-                  </strong>
-                  <span className="text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]">
-                    소속 문서 저장소 ·{" "}
-                    {activeWorkspace.docsRepository?.fullName ??
-                      connectedWorkspace?.repository?.fullName ??
-                      "저장소 정보 없음"}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <StatusBadge tone="neutral">문서 전용</StatusBadge>
-                  <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                    {activeWorkspace.docsRepository?.fullName ??
-                      connectedWorkspace?.repository?.fullName ??
-                      activeWorkspace.title}
-                  </strong>
-                  <span className="text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]">
-                    Project 보드 없이 문서만 단독 관리 중
-                  </span>
-                </>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-              {activeWorkspace.project ? (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => openManageDialog("overview")}
-                >
-                  워크스페이스 설정
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => openManageDialog("attach-project")}
-                >
-                  Project 보드 연결
-                </Button>
-              )}
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setPickerOpen((open) => !open)}
-              >
-                다른 저장소 연결
-              </Button>
-            </div>
-          </section>
-          <WorkspaceManageDialog
-            open={manageOpen}
-            onOpenChange={setManageOpen}
-            initialView={manageInitialView}
-            docsRepositoryGateway={docsRepositoryGateway}
-            repositoryGateway={repositoryGateway}
-          />
-        </>
+        <WorkspaceContextBar
+          className="mb-[var(--space-4)]"
+          docsRepositoryGateway={docsRepositoryGateway}
+          repositoryGateway={repositoryGateway}
+          extraActions={
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setPickerOpen((open) => !open)}
+            >
+              다른 저장소 연결
+            </Button>
+          }
+        />
       ) : connectedWorkspace && !docsMissing ? (
         <p
           role="status"

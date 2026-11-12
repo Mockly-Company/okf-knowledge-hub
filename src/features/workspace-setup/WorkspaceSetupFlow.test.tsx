@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -12,6 +12,7 @@ import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { TestQueryProvider } from "@/test/queryTestUtils";
+import { WorkspaceContextBar } from "./WorkspaceContextBar";
 import { WorkspaceSetupFlow } from "./WorkspaceSetupFlow";
 import { WorkspaceManageDialog } from "./WorkspaceManageDialog";
 
@@ -285,5 +286,108 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
     await user.keyboard("{End}");
     expect(docsTab).toHaveFocus();
     expect(docsTab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("renders nested Project > 소속 문서 저장소 hierarchy in WorkspaceManageDialog and WorkspaceContextBar", async () => {
+    const user = userEvent.setup();
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    const projectGateway = FakeProjectBoardGateway.empty();
+    projectGateway.projectList = [
+      {
+        id: "PVT_roadmap",
+        owner: "Mockly-Company",
+        number: 7,
+        title: "제품 로드맵",
+        scope: "organization",
+      },
+    ];
+    const docsGateway = new FakeDocsRepositoryGateway();
+    await docsGateway.createStandaloneWorkspace(
+      "R_1",
+      "Mockly-Company/mockly-knowledge",
+    );
+    const documentsGateway = new FakeDocumentsGateway();
+
+    render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={workspaceGateway}>
+          <ActiveProjectProvider
+            projectGateway={projectGateway}
+            docsRepositoryGateway={docsGateway}
+          >
+            <DocumentsProvider gateway={documentsGateway} searchDebounceMs={0}>
+              <WorkspaceContextBar
+                docsRepositoryGateway={docsGateway}
+                repositoryGateway={workspaceGateway}
+              />
+            </DocumentsProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    // 1. 단독 문서 모드: WorkspaceContextBar에서 단독 상태 확인 후 설정 다이얼로그 열기
+    const contextBar = await screen.findByRole("region", {
+      name: "현재 작업 공간",
+    });
+    expect(within(contextBar).getByText("문서 저장소 단독")).toBeInTheDocument();
+    expect(
+      within(contextBar).getByText("Mockly-Company/mockly-knowledge"),
+    ).toBeInTheDocument();
+    expect(within(contextBar).getByText("상위 Project 없음")).toBeInTheDocument();
+
+    await user.click(
+      within(contextBar).getByRole("button", { name: "워크스페이스 설정" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: /워크스페이스 설정/,
+    });
+    const unlinkedParent = within(dialog).getByRole("region", {
+      name: "상위 GitHub Project 미연결",
+    });
+    const standaloneDocsSection = within(dialog).getByRole("region", {
+      name: "단독 문서 저장소 설정",
+    });
+    expect(
+      within(unlinkedParent).queryByRole("region", {
+        name: "단독 문서 저장소 설정",
+      }),
+    ).toBeNull();
+    expect(standaloneDocsSection).toHaveTextContent(
+      "Mockly-Company/mockly-knowledge",
+    );
+
+    // 2. Project 연결 후: 상위 GitHub Project 설정 컨테이너 내부에 소속 문서 저장소 설정이 중첩된다
+    await user.click(
+      within(unlinkedParent).getByRole("button", {
+        name: "GitHub Project 보드 연결",
+      }),
+    );
+    await user.click(await screen.findByRole("button", { name: /제품 로드맵/ }));
+
+    const projectSection = await within(dialog).findByRole("region", {
+      name: "상위 GitHub Project 설정",
+    });
+    const nestedDocsGroup = within(projectSection).getByRole("group", {
+      name: "소속 문서 저장소 설정",
+    });
+    expect(nestedDocsGroup).toHaveTextContent(
+      "Mockly-Company/mockly-knowledge",
+    );
+
+    await user.click(within(dialog).getByRole("button", { name: "닫기" }));
+
+    const updatedBar = await screen.findByRole("region", {
+      name: "현재 작업 공간",
+    });
+    expect(
+      within(updatedBar).getByText("Project · Mockly-Company #7"),
+    ).toBeInTheDocument();
+    expect(within(updatedBar).getByText("제품 로드맵")).toBeInTheDocument();
+    expect(
+      within(updatedBar).getByText(
+        "└ 소속 문서 저장소 · Mockly-Company/mockly-knowledge",
+      ),
+    ).toBeInTheDocument();
   });
 });

@@ -69,6 +69,7 @@ export function App({
           <ActiveProjectProvider
             projectGateway={projectBoard}
             docsRepositoryGateway={docsRepo}
+            aiGateway={ai}
           >
             <HashRouter>
               <AppRoutes

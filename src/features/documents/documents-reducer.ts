@@ -80,6 +80,7 @@ export interface DocumentsState {
 
 export type DocumentsAction =
   | { type: "sessionStarting"; sessionId: string }
+  | { type: "workspaceSessionStarting"; sessionId: string }
   | {
       type: "sessionStarted";
       sessionId: string;
@@ -377,6 +378,13 @@ export function documentsReducer(
       return {
         ...createInitialDocumentsState(),
         searchQuery: state.searchQuery,
+        status: "starting",
+        activeSessionId: action.sessionId,
+      };
+
+    case "workspaceSessionStarting":
+      return {
+        ...createInitialDocumentsState(),
         status: "starting",
         activeSessionId: action.sessionId,
       };

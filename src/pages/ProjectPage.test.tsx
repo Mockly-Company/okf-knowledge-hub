@@ -1131,4 +1131,119 @@ describe("ProjectPage project switching", () => {
       await screen.findByRole("dialog", { name: /워크스페이스 설정/ }),
     ).toBeVisible();
   });
+
+  it("resets layer filter and updates WorkspaceContextBar when switching between project workspaces", async () => {
+    const user = userEvent.setup();
+    const projectGateway = FakeProjectBoardGateway.empty();
+    projectGateway.boardsByProjectId.set("PVT_alpha", {
+      issues: [
+        {
+          number: 10,
+          title: "Alpha 기획 이슈",
+          url: "https://example.test/alpha/10",
+          layer: "planning",
+          status: "in_progress",
+          children: [],
+          kind: null,
+        },
+      ],
+      fetchedAt: "2026-11-12T00:00:00Z",
+      skipped: 0,
+      truncated: false,
+    });
+    projectGateway.boardsByProjectId.set("PVT_beta", {
+      issues: [
+        {
+          number: 20,
+          title: "Beta 백엔드 이슈",
+          url: "https://example.test/beta/20",
+          layer: "backend",
+          status: "in_progress",
+          children: [],
+          kind: null,
+        },
+      ],
+      fetchedAt: "2026-11-12T00:00:00Z",
+      skipped: 0,
+      truncated: false,
+    });
+
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(alpha, {
+      repositoryId: "R_alpha",
+      fullName: "Mockly-Company/alpha-docs",
+    });
+    await docsRepoGateway.createProjectWorkspace(beta, {
+      repositoryId: "R_beta",
+      fullName: "Mockly-Company/beta-docs",
+    });
+    const originalSetActive =
+      docsRepoGateway.setActiveWorkspace.bind(docsRepoGateway);
+    docsRepoGateway.setActiveWorkspace = async (workspaceId: string) => {
+      const activated = await originalSetActive(workspaceId);
+      projectGateway.activeProjectId = activated.workspace.project?.id ?? null;
+      return activated;
+    };
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+
+    render(
+      <WorkspaceConnectionProvider gateway={workspaceGateway}>
+        <ActiveProjectProvider
+          projectGateway={projectGateway}
+          docsRepositoryGateway={docsRepoGateway}
+        >
+          <ProjectSwitcher />
+          <ProjectPage
+            gateway={projectGateway}
+            docsRepositoryGateway={docsRepoGateway}
+            repositoryGateway={workspaceGateway}
+          />
+        </ActiveProjectProvider>
+      </WorkspaceConnectionProvider>,
+    );
+
+    const contextBar = await screen.findByRole("region", {
+      name: "현재 작업 공간",
+    });
+    await waitFor(() =>
+      expect(within(contextBar).getByText("Alpha")).toBeInTheDocument(),
+    );
+    expect(
+      within(contextBar).getByText(
+        "└ 소속 문서 저장소 · Mockly-Company/alpha-docs",
+      ),
+    ).toBeInTheDocument();
+
+    // Alpha에서 영역별 보기 + "기획" 필터 선택
+    await user.click(await screen.findByRole("button", { name: "영역별" }));
+    await user.click(screen.getByRole("button", { name: "기획" }));
+    expect(
+      screen.getByRole("article", { name: "Issue #10 Alpha 기획 이슈" }),
+    ).toBeInTheDocument();
+
+    // Beta로 전환하면 보기 방식(계층별)과 레이어 필터(전체)가 초기화되어 Beta의 백엔드 이슈가 즉시 보인다
+    await user.click(screen.getByRole("button", { name: "switch-to-beta" }));
+    await waitFor(() =>
+      expect(within(contextBar).getByText("Beta")).toBeInTheDocument(),
+    );
+    expect(
+      within(contextBar).getByText(
+        "└ 소속 문서 저장소 · Mockly-Company/beta-docs",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("article", {
+        name: "단일 항목 #20 Beta 백엔드 이슈",
+      }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "영역별" }));
+    expect(screen.getByRole("button", { name: "전체" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      screen.getByRole("article", { name: "Issue #20 Beta 백엔드 이슈" }),
+    ).toBeInTheDocument();
+  });
 });

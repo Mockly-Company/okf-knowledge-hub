@@ -1,7 +1,14 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ActiveProjectProvider,
+  useActiveProject,
+} from "@/features/active-project/ActiveProjectProvider";
+import { DocumentsFollowActiveProject } from "@/features/docs-repository/ProjectDocsRepository";
+import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import type { DocumentEventEnvelope } from "./model";
 import { DocumentsProvider, useDocuments } from "./DocumentsProvider";
@@ -720,6 +727,264 @@ describe("DocumentsProvider", () => {
         method: "startSession",
         args: [mainSession],
       }),
+    );
+  });
+
+  it("flushes dirty editor before workspace switch and aborts switch when save is in conflict or error so draft edits are never lost", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const docsGateway = new FakeDocsRepositoryGateway();
+    await docsGateway.createStandaloneWorkspace("R_a", "Mockly-Company/docs-a");
+    await docsGateway.createStandaloneWorkspace("R_b", "Mockly-Company/docs-b");
+    await docsGateway.setActiveWorkspace("repo:R_a");
+
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.activeRecovery = {
+      document: {
+        changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+        documentId: "90e4ad45-f4f4-4cf4-9ef4-5e3d30e46261",
+        path: "docs/draft-a.md",
+        markdown: "# 초기 본문\n",
+        contentHash: "hash-1",
+        draft: {
+          workspaceId: gateway.sessionSnapshot.workspaceId,
+          changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+          authorLogin: "hyeeun",
+          baseCommit: "abc123",
+          branch: "draft/hyeeun/ad1d6c6e-draft-a",
+          createdAtUnixMs: 1,
+          lastOpenedAtUnixMs: 2,
+        },
+      },
+      conflict: null,
+      hasUnsavedRecovery: false,
+    };
+
+    function SwitchProbe() {
+      const active = useActiveProject();
+      const docs = useDocuments();
+      return (
+        <div>
+          <DocumentsFollowActiveProject />
+          <output data-testid="active-ws">
+            {active.activeWorkspaceId ?? "none"}
+          </output>
+          <output data-testid="editor-markdown">
+            {docs.authoringState.editor?.markdown ?? "none"}
+          </output>
+          <output data-testid="editor-save-status">
+            {docs.authoringState.editor?.saveStatus ?? "none"}
+          </output>
+          <button
+            type="button"
+            onClick={() => docs.updateDraftMarkdown("# A에서 수정 중인 본문\n")}
+          >
+            본문 수정
+          </button>
+          <button type="button" onClick={docs.acceptHubConflict}>
+            허브 본문 채택
+          </button>
+          <button
+            type="button"
+            onClick={() => void active.selectWorkspace("repo:R_b")}
+          >
+            B로 전환
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={FakeProjectBoardGateway.empty()}
+          docsRepositoryGateway={docsGateway}
+        >
+          <DocumentsProvider
+            gateway={gateway}
+            searchDebounceMs={0}
+            saveDebounceMs={60_000}
+          >
+            <SwitchProbe />
+          </DocumentsProvider>
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_a"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-save-status")).toHaveTextContent(
+        "saved",
+      ),
+    );
+
+    const setActiveSpy = vi.spyOn(docsGateway, "setActiveWorkspace");
+    vi.spyOn(gateway, "saveDocumentDraft").mockImplementationOnce(
+      async (request) => ({
+        requestId: request.requestId,
+        result: {
+          status: "conflict",
+          changeId: request.changeId,
+          documentId: request.documentId,
+          path: request.path,
+          diskHash: "disk-hash-2",
+          diskMarkdown: "# 외부 디스크 본문\n",
+          hubMarkdown: request.markdown,
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "본문 수정" }));
+    expect(screen.getByTestId("editor-save-status")).toHaveTextContent("dirty");
+
+    // 저장 충돌 시 전환이 백엔드 호출 전에 중단되고 인메모리 편집 본문이 보존된다.
+    await user.click(screen.getByRole("button", { name: "B로 전환" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-save-status")).toHaveTextContent(
+        "conflict",
+      ),
+    );
+    expect(setActiveSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_a");
+    expect(screen.getByTestId("editor-markdown")).toHaveTextContent(
+      "# A에서 수정 중인 본문",
+    );
+
+    // 충돌 해결 후 전환하면 선저장 성공 뒤 새 워크스페이스로 전환된다.
+    gateway.activeRecovery = null;
+    await user.click(screen.getByRole("button", { name: "허브 본문 채택" }));
+    await user.click(screen.getByRole("button", { name: "B로 전환" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_b"),
+    );
+    expect(setActiveSpy).toHaveBeenCalledWith("repo:R_b");
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-markdown")).toHaveTextContent("none"),
+    );
+  });
+
+  it("clears searchQuery, closes saved editor, and starts a fresh document session when switching workspaces", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const docsGateway = new FakeDocsRepositoryGateway();
+    await docsGateway.createStandaloneWorkspace("R_a", "Mockly-Company/docs-a");
+    await docsGateway.createStandaloneWorkspace("R_b", "Mockly-Company/docs-b");
+    await docsGateway.setActiveWorkspace("repo:R_a");
+
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.searchResults = [
+      {
+        path: "docs/guide.md",
+        title: "Guide",
+        matchField: "title",
+        matchText: "alpha",
+        snippet: "alpha guide",
+      },
+    ];
+    gateway.activeRecovery = {
+      document: {
+        changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+        documentId: "90e4ad45-f4f4-4cf4-9ef4-5e3d30e46261",
+        path: "docs/saved-a.md",
+        markdown: "# 저장된 A 문서\n",
+        contentHash: "hash-a",
+        draft: {
+          workspaceId: gateway.sessionSnapshot.workspaceId,
+          changeId: "ad1d6c6e-e8ec-4a1f-a1b7-f47a50e12a80",
+          authorLogin: "hyeeun",
+          baseCommit: "abc123",
+          branch: "draft/hyeeun/ad1d6c6e-saved-a",
+          createdAtUnixMs: 1,
+          lastOpenedAtUnixMs: 2,
+        },
+      },
+      conflict: null,
+      hasUnsavedRecovery: false,
+    };
+
+    function CleanSwitchProbe() {
+      const active = useActiveProject();
+      const docs = useDocuments();
+      return (
+        <div>
+          <DocumentsFollowActiveProject />
+          <output data-testid="active-ws">
+            {active.activeWorkspaceId ?? "none"}
+          </output>
+          <output data-testid="session-id">
+            {docs.state.activeSessionId ?? "none"}
+          </output>
+          <output data-testid="search-query">{docs.state.searchQuery}</output>
+          <output data-testid="search-count">
+            {docs.state.searchResults.length}
+          </output>
+          <output data-testid="editor-path">
+            {docs.authoringState.editor?.document.path ?? "none"}
+          </output>
+          <button
+            type="button"
+            onClick={() => docs.setSearchQuery("alpha")}
+          >
+            검색 입력
+          </button>
+          <button
+            type="button"
+            onClick={() => void active.selectWorkspace("repo:R_b")}
+          >
+            B로 전환
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={FakeProjectBoardGateway.empty()}
+          docsRepositoryGateway={docsGateway}
+        >
+          <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+            <CleanSwitchProbe />
+          </DocumentsProvider>
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_a"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-path")).toHaveTextContent(
+        "docs/saved-a.md",
+      ),
+    );
+    const firstSessionId = screen.getByTestId("session-id").textContent;
+
+    await user.click(screen.getByRole("button", { name: "검색 입력" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("search-count")).toHaveTextContent("1"),
+    );
+    expect(screen.getByTestId("search-query")).toHaveTextContent("alpha");
+
+    gateway.activeRecovery = null;
+    await user.click(screen.getByRole("button", { name: "B로 전환" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_b"),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-path")).toHaveTextContent("none"),
+    );
+    expect(screen.getByTestId("search-query")).toHaveTextContent("");
+    expect(screen.getByTestId("search-count")).toHaveTextContent("0");
+    expect(screen.getByTestId("session-id").textContent).not.toBe(
+      firstSessionId,
     );
   });
 });
