@@ -31,10 +31,12 @@ function ConnectedAppShell({
   documentsGateway,
   docsRepositoryGateway,
   repositoryGateway,
+  aiGateway,
 }: {
   documentsGateway: DocumentsGateway;
   docsRepositoryGateway: DocsRepositoryGateway;
   repositoryGateway: ProjectRepositoryGateway;
+  aiGateway: AiGateway;
 }) {
   return (
     <DocumentsProvider gateway={documentsGateway}>
@@ -43,6 +45,7 @@ function ConnectedAppShell({
       <AppShell
         docsRepositoryGateway={docsRepositoryGateway}
         repositoryGateway={repositoryGateway}
+        aiGateway={aiGateway}
       />
     </DocumentsProvider>
   );
@@ -86,6 +89,7 @@ export function AppRoutes({
               documentsGateway={documentsGateway}
               docsRepositoryGateway={docsRepositoryGateway}
               repositoryGateway={repositoryGateway}
+              aiGateway={aiGateway}
             />
           }
         >
