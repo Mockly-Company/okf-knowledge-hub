@@ -9,6 +9,7 @@ export const aiKeys = {
   all: ["ai"] as const,
   config: ["ai", "config"] as const,
   agentsMd: ["ai", "agentsMd"] as const,
+  agentsMdFor: (scopeKey: string) => ["ai", "agentsMd", scopeKey] as const,
   appAgentsMd: ["ai", "appAgentsMd"] as const,
   tools: ["ai", "tools"] as const,
 };

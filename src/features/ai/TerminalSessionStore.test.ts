@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeAiGateway } from "@/test/FakeAiGateway";
 import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
-import { TerminalSessionStore } from "./TerminalSessionStore";
+import {
+  DEFAULT_WORKSPACE_SCOPE,
+  TerminalSessionStore,
+  closeWorkspaceTerminals,
+  getRunningTerminalCounts,
+  migrateWorkspaceTerminals,
+  subscribeRunningTerminalCounts,
+  terminalStoreFor,
+} from "./TerminalSessionStore";
 
 function setup() {
   const gateway = new FakeAiGateway();
@@ -199,5 +207,122 @@ describe("TerminalSessionStore", () => {
 
     expect(listener).toHaveBeenCalled();
     expect(store.getSnapshot()).not.toBe(before);
+  });
+
+  it("isolates terminal sessions per workspace scopeKey while keeping background sessions alive", async () => {
+    const gateway = new FakeAiGateway();
+    const storeA = terminalStoreFor(gateway, FakeTerminalRenderer.create, "ws-a");
+    const storeB = terminalStoreFor(gateway, FakeTerminalRenderer.create, "ws-b");
+    const defaultStore = terminalStoreFor(gateway, FakeTerminalRenderer.create);
+
+    expect(storeA).not.toBe(storeB);
+    expect(defaultStore).toBe(
+      terminalStoreFor(gateway, FakeTerminalRenderer.create, DEFAULT_WORKSPACE_SCOPE),
+    );
+
+    await storeA.open("claude");
+    expect(storeA.getSnapshot()).toHaveLength(1);
+    expect(storeB.getSnapshot()).toEqual([]);
+
+    await storeB.open("antigravity");
+    expect(storeA.getSnapshot()[0].tool).toBe("claude");
+    expect(storeB.getSnapshot()[0].tool).toBe("antigravity");
+    expect(gateway.terminalStops).toEqual([]);
+  });
+
+  it("tracks running terminal counts per scope and decrements immediately on exit or closeAll", async () => {
+    const gateway = new FakeAiGateway();
+    const listener = vi.fn();
+    const unsubscribe = subscribeRunningTerminalCounts(gateway, listener);
+    const initialCounts = getRunningTerminalCounts(gateway);
+    expect(initialCounts).toEqual({});
+    expect(getRunningTerminalCounts(gateway)).toBe(initialCounts);
+
+    const storeA = terminalStoreFor(gateway, FakeTerminalRenderer.create, "ws-a");
+    const storeB = terminalStoreFor(gateway, FakeTerminalRenderer.create, "ws-b");
+
+    await storeA.open("claude");
+    await storeB.open("codex");
+    const activeSnapshot = getRunningTerminalCounts(gateway);
+    expect(activeSnapshot).toEqual({ "ws-a": 1, "ws-b": 1 });
+    expect(getRunningTerminalCounts(gateway)).toBe(activeSnapshot);
+    expect(listener).toHaveBeenCalled();
+
+    gateway.emitTerminal(0, { kind: "exit", exit_code: 0 });
+    expect(getRunningTerminalCounts(gateway)).toEqual({ "ws-b": 1 });
+
+    storeB.closeAll();
+    expect(getRunningTerminalCounts(gateway)).toEqual({});
+    await vi.waitFor(() => expect(gateway.terminalStops).toEqual(["session-1"]));
+    unsubscribe();
+  });
+
+  it("stops late-resolving starting sessions when closeWorkspaceTerminals is called", async () => {
+    const gateway = new FakeAiGateway();
+    let finishStart: (id: string) => void = () => {};
+    gateway.startTerminal = vi.fn(
+      () => new Promise<string>((resolve) => (finishStart = resolve)),
+    );
+    const stop = vi.spyOn(gateway, "stopTerminal");
+
+    const storeA = terminalStoreFor(gateway, FakeTerminalRenderer.create, "ws-a");
+    const opening = storeA.open("claude");
+    expect(getRunningTerminalCounts(gateway)).toEqual({ "ws-a": 1 });
+
+    closeWorkspaceTerminals(gateway, "ws-a");
+    expect(getRunningTerminalCounts(gateway)).toEqual({});
+    expect(storeA.getSnapshot()).toEqual([]);
+
+    finishStart("late-ws-session");
+    await opening;
+    expect(stop).toHaveBeenCalledWith("late-ws-session");
+  });
+
+  it("migrates running sessions to a new workspace key without stopping them and merges safely", async () => {
+    const gateway = new FakeAiGateway();
+    const fromStore = terminalStoreFor(
+      gateway,
+      FakeTerminalRenderer.create,
+      "repo:R_1",
+    );
+    await fromStore.open("claude");
+
+    // 동일 키 이관은 무해한 no-op이다.
+    migrateWorkspaceTerminals(gateway, "repo:R_1", "repo:R_1");
+    expect(fromStore.getSnapshot()).toHaveLength(1);
+
+    // 대상 스코프에 이미 세션이 있어도 손실 없이 병합된다.
+    const existingTarget = terminalStoreFor(
+      gateway,
+      FakeTerminalRenderer.create,
+      "PVT_1",
+    );
+    await existingTarget.open("codex");
+
+    migrateWorkspaceTerminals(gateway, "repo:R_1", "PVT_1");
+
+    expect(fromStore.getSnapshot()).toEqual([]);
+    const targetStore = terminalStoreFor(
+      gateway,
+      FakeTerminalRenderer.create,
+      "PVT_1",
+    );
+    expect(targetStore.getSnapshot().map((s) => s.tool)).toEqual([
+      "codex",
+      "claude",
+    ]);
+    expect(getRunningTerminalCounts(gateway)).toEqual({ PVT_1: 2 });
+    expect(gateway.terminalStops).toEqual([]);
+
+    // 이관된 렌더러 입출력도 끊기지 않고 동작한다.
+    FakeTerminalRenderer.created[0].type("ls\n");
+    await vi.waitFor(() =>
+      expect(gateway.terminalWrites).toContainEqual({
+        sessionId: "session-0",
+        data: "ls\n",
+      }),
+    );
+    gateway.emitTerminal(0, { kind: "output", data: "migrated-ok" });
+    expect(FakeTerminalRenderer.created[0].written).toContain("migrated-ok");
   });
 });
