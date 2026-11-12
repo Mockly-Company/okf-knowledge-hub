@@ -470,8 +470,8 @@ describe("AppSidebar workspace switcher", () => {
 
     // 터미널 프로세스가 자연 종료(exit)되면 탭을 닫지 않아도 즉시 배지가 감소·제거된다
     act(() => {
-      aiGateway.emitTerminal(0, { type: "exit", exit_code: 0 });
-      aiGateway.emitTerminal(1, { type: "exit", exit_code: 0 });
+      aiGateway.emitTerminal(0, { kind: "exit", exit_code: 0 });
+      aiGateway.emitTerminal(1, { kind: "exit", exit_code: 0 });
     });
 
     await waitFor(() =>
@@ -482,7 +482,7 @@ describe("AppSidebar workspace switcher", () => {
     ).toBeInTheDocument();
 
     act(() => {
-      aiGateway.emitTerminal(2, { type: "exit", exit_code: 0 });
+      aiGateway.emitTerminal(2, { kind: "exit", exit_code: 0 });
     });
 
     await waitFor(() =>

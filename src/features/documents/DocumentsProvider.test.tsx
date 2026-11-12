@@ -882,10 +882,9 @@ describe("DocumentsProvider", () => {
       {
         path: "docs/guide.md",
         title: "Guide",
-        documentId: "39d2bfb7-2e0d-4b4b-ab5d-7663d5cc3389",
         matchField: "title",
         matchText: "alpha",
-        score: 10,
+        snippet: "alpha guide",
       },
     ];
     gateway.activeRecovery = {

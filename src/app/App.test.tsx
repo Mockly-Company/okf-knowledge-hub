@@ -1,9 +1,11 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FakeAiGateway } from "@/test/FakeAiGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
+import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 import { App } from "./App";
@@ -17,9 +19,20 @@ vi.mock("mermaid", () => ({
   default: { initialize: initializeMermaid, render: renderMermaid },
 }));
 
+vi.mock("@/infrastructure/ai/XtermRenderer", async () => {
+  const { FakeTerminalRenderer: FakeRenderer } = await import(
+    "@/test/FakeTerminalRenderer"
+  );
+  return {
+    createXtermRenderer: FakeRenderer.create,
+  };
+});
+
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   window.location.hash = "";
+  FakeTerminalRenderer.created = [];
   initializeMermaid.mockReset();
   renderMermaid.mockReset();
 });
@@ -299,5 +312,103 @@ describe("App", () => {
     expect(
       await screen.findByText("문서 저장소 단독으로 관리 중인 워크스페이스입니다"),
     ).toBeVisible();
+  });
+
+  it("isolates AI CLI sessions per project workspace and preserves background terminals across switches", async () => {
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    const projectGateway = FakeProjectBoardGateway.empty();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_beta",
+        owner: "Mockly-Company",
+        number: 2,
+        title: "Beta Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_beta", fullName: "Mockly-Company/beta-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    const documentsGateway = new FakeDocumentsGateway();
+    documentsGateway.sessionSnapshot.lastOpenedPath = null;
+    const aiGateway = new FakeAiGateway();
+    const user = userEvent.setup();
+
+    render(
+      <App
+        workspaceGateway={workspaceGateway}
+        projectBoardGateway={projectGateway}
+        docsRepositoryGateway={docsRepoGateway}
+        documentsGateway={documentsGateway}
+        aiGateway={aiGateway}
+        preferencesRepository={new FakePreferencesRepository()}
+      />,
+    );
+
+    const switcher = await screen.findByRole("button", {
+      name: /^워크스페이스 전환/,
+    });
+    await waitFor(() =>
+      expect(switcher).toHaveTextContent("Alpha Project"),
+    );
+
+    // Alpha Project에서 AI 화면으로 이동 후 Antigravity CLI 실행
+    await user.click(screen.getByRole("link", { name: "AI" }));
+    await user.click(await screen.findByRole("button", { name: "Antigravity" }));
+    expect(
+      await screen.findByRole("tab", { name: /Antigravity/ }),
+    ).toBeInTheDocument();
+
+    const aiNavLink = screen.getByRole("link", { name: /^AI/ });
+    expect(within(aiNavLink).getByText("1")).toBeInTheDocument();
+
+    // 사이드바에서 Beta Project로 전환
+    await user.click(switcher);
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /Beta Project/ }),
+    );
+
+    const contextBar = await screen.findByRole("region", {
+      name: "현재 작업 공간",
+    });
+    await waitFor(() =>
+      expect(within(contextBar).getByText("Beta Project")).toBeInTheDocument(),
+    );
+    expect(
+      within(contextBar).getByText(
+        "└ 소속 문서 저장소 · Mockly-Company/beta-docs",
+      ),
+    ).toBeInTheDocument();
+
+    // Beta Project에서는 이전 Alpha의 CLI 탭이 보이지 않고 백그라운드 실행 안내가 표시된다
+    expect(screen.queryByRole("tab", { name: /Antigravity/ })).toBeNull();
+    expect(within(aiNavLink).queryByText("1")).toBeNull();
+    expect(
+      screen.getByText("다른 워크스페이스 AI 실행 중 1개"),
+    ).toBeInTheDocument();
+
+    // 다시 Alpha Project로 돌아오면 실행 중이던 Antigravity 탭이 그대로 복원된다
+    await user.click(screen.getByRole("button", { name: /^워크스페이스 전환/ }));
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /Alpha Project/ }),
+    );
+    await waitFor(() =>
+      expect(within(contextBar).getByText("Alpha Project")).toBeInTheDocument(),
+    );
+    expect(
+      await screen.findByRole("tab", { name: /Antigravity/ }),
+    ).toBeInTheDocument();
+    expect(aiGateway.terminalStops).toEqual([]);
   });
 });

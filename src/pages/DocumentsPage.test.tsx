@@ -617,10 +617,13 @@ describe("DocumentsPage", () => {
     ).toBeVisible();
     expect(screen.getByText("Mockly 기획 보드")).toBeVisible();
     expect(screen.getByText(/Mockly-Company\/Mockly/)).toBeVisible();
+    expect(
+      screen.getByRole("region", { name: "현재 작업 공간" }),
+    ).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "switch-standalone" }));
 
-    expect(await screen.findByText("문서 전용")).toBeVisible();
+    expect(await screen.findByText("문서 저장소 단독")).toBeVisible();
     expect(
       screen.getByRole("button", { name: "Project 보드 연결" }),
     ).toBeVisible();

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormField } from "@/components/patterns/FormField";
@@ -35,6 +35,7 @@ import {
   type ProjectRepositoryGateway,
 } from "@/features/docs-repository/ProjectDocsRepository";
 import { WorkspaceConnectDialog } from "@/features/workspace-setup/WorkspaceConnectDialog";
+import { WorkspaceContextBar } from "@/features/workspace-setup/WorkspaceContextBar";
 import { WorkspaceManageDialog } from "@/features/workspace-setup/WorkspaceManageDialog";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
@@ -390,13 +391,14 @@ export function ProjectPage({
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
   const [connectDialogOpen, setConnectDialogOpen] = useState(false);
 
-  const boardSubtitle = activeWorkspace?.project
-    ? `${activeWorkspace.project.title} · ${activeWorkspace.project.owner} #${activeWorkspace.project.number}${
-        activeWorkspace.docsRepository
-          ? ` · 소속 문서 저장소 ${activeWorkspace.docsRepository.fullName}`
-          : ""
-      }`
-    : undefined;
+  const workspaceResetKey = activeWorkspace?.id ?? queryProjectId ?? "none";
+  useEffect(() => {
+    setFilter("all");
+    setView("tree");
+    setHideDone(true);
+    setManageDialogOpen(false);
+    setConnectDialogOpen(false);
+  }, [workspaceResetKey]);
 
   // 전환 중 로딩 문구에 쓸 프로젝트 명. 목록에 없으면 일반 문구로 폴백.
   const switchingTitle =
@@ -462,7 +464,6 @@ export function ProjectPage({
       <PageHeader
         titleId="project-title"
         title="Board"
-        description={boardSubtitle}
         actions={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-[var(--space-3)]">
             <span
@@ -501,6 +502,14 @@ export function ProjectPage({
         }
       />
 
+      {activeWorkspace ? (
+        <WorkspaceContextBar
+          className="mt-[var(--space-4)]"
+          docsRepositoryGateway={docsRepositoryGateway}
+          repositoryGateway={repositoryGateway}
+        />
+      ) : null}
+
       {isStandaloneDocsWorkspace && activeWorkspace ? (
         <section
           aria-label="Project 보드 연결 안내"
@@ -511,7 +520,7 @@ export function ProjectPage({
             문서 저장소 단독으로 관리 중인 워크스페이스입니다
           </h2>
           <p className="m-0 text-[var(--color-text-muted)]">
-            현재 &ldquo;{activeWorkspace.docsRepository?.fullName ?? activeWorkspace.title}&rdquo; 저장소의 문서만 단독으로 관리하고 있습니다. 칸반 보드와 이슈 흐름이 필요해지면 언제든 GitHub Project 보드를 이 워크스페이스에 연결할 수 있습니다.
+            현재는 상위 Project 보드 없이 문서만 단독으로 관리하고 있습니다. 칸반 보드와 이슈 흐름이 필요해지면 언제든 GitHub Project 보드를 이 워크스페이스에 연결할 수 있습니다.
           </p>
           <Button
             type="button"

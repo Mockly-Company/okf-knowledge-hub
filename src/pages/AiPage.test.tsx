@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -10,7 +10,10 @@ import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
 import { TestQueryProvider, createTestQueryClient } from "@/test/queryTestUtils";
-import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
+import {
+  ActiveProjectProvider,
+  useActiveProject,
+} from "@/features/active-project/ActiveProjectProvider";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import {
   LEGACY_BOARD_ID,
@@ -331,12 +334,134 @@ describe("AiPage", () => {
       </TestQueryProvider>,
     );
 
+    const contextBar = await screen.findByRole("region", {
+      name: "현재 작업 공간",
+    });
+    expect(within(contextBar).getByText("문서 저장소 단독")).toBeVisible();
     expect(
-      await screen.findByText("프로젝트: 문서 전용 (보드 연결 없음)"),
+      within(contextBar).getByText("Mockly-Company/handbook"),
     ).toBeVisible();
+    expect(within(contextBar).getByText("상위 Project 없음")).toBeVisible();
+  });
+
+  it("isolates open CLI terminals per workspace, shows background running terminal hint, and restores the previous workspace's running terminal on switch back", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const aiGateway = new FakeAiGateway();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_beta",
+        owner: "Mockly-Company",
+        number: 2,
+        title: "Beta",
+        scope: "organization",
+      },
+      { repositoryId: "R_beta", fullName: "Mockly-Company/beta-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    function SwitcherControls() {
+      const { selectWorkspace } = useActiveProject();
+      return (
+        <div>
+          <button
+            type="button"
+            onClick={() => void selectWorkspace("PVT_alpha")}
+          >
+            Alpha 전환
+          </button>
+          <button
+            type="button"
+            onClick={() => void selectWorkspace("PVT_beta")}
+          >
+            Beta 전환
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={new FakeProjectBoardGateway()}
+          docsRepositoryGateway={docsRepoGateway}
+          aiGateway={aiGateway}
+        >
+          <MemoryRouter>
+            <SwitcherControls />
+            <AiPage
+              aiGateway={aiGateway}
+              terminalRendererFactory={FakeTerminalRenderer.create}
+            />
+          </MemoryRouter>
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    const contextBar = await screen.findByRole("region", {
+      name: "현재 작업 공간",
+    });
+    await waitFor(() =>
+      expect(within(contextBar).getByText("Alpha")).toBeInTheDocument(),
+    );
     expect(
-      await screen.findByText("문서 저장소: Mockly-Company/handbook"),
-    ).toBeVisible();
+      within(contextBar).getByText(
+        "└ 소속 문서 저장소 · Mockly-Company/alpha-docs",
+      ),
+    ).toBeInTheDocument();
+
+    // Alpha에서 Claude Code 터미널 실행
+    await user.click(await screen.findByRole("button", { name: "Claude Code" }));
+    expect(
+      await screen.findByRole("tab", { name: /Claude Code/ }),
+    ).toBeInTheDocument();
+
+    // Beta로 전환하면 Beta는 깨끗한 AI 화면이고 Alpha 터미널은 종료되지 않은 채 백그라운드 안내가 뜬다
+    await user.click(screen.getByRole("button", { name: "Beta 전환" }));
+    await waitFor(() =>
+      expect(within(contextBar).getByText("Beta")).toBeInTheDocument(),
+    );
+    expect(
+      within(contextBar).getByText(
+        "└ 소속 문서 저장소 · Mockly-Company/beta-docs",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Claude Code/ })).toBeNull();
+    expect(aiGateway.terminalStops).toEqual([]);
+    expect(
+      screen.getByText("다른 워크스페이스에서 실행 중인 AI 터미널 1개"),
+    ).toBeInTheDocument();
+
+    // Beta에서는 Antigravity 실행
+    await user.click(screen.getByRole("button", { name: "Antigravity" }));
+    expect(
+      await screen.findByRole("tab", { name: /Antigravity/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Claude Code/ })).toBeNull();
+
+    // 다시 Alpha로 돌아오면 Claude Code 탭이 그대로 복원된다
+    await user.click(screen.getByRole("button", { name: "Alpha 전환" }));
+    await waitFor(() =>
+      expect(within(contextBar).getByText("Alpha")).toBeInTheDocument(),
+    );
+    expect(
+      await screen.findByRole("tab", { name: /Claude Code/ }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Antigravity/ })).toBeNull();
+    expect(
+      screen.getByText("다른 워크스페이스에서 실행 중인 AI 터미널 1개"),
+    ).toBeInTheDocument();
   });
 
 });
