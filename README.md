@@ -1,8 +1,6 @@
 # okf-knowledge-hub
 
-백엔드와 프론트엔드 개발자가 서로 다른 시간에 작업하더라도 기능의 맥락, 설계 변경, 리뷰, 구현 상태와 이력을 한곳에서 이어갈 수 있도록 만드는 소규모 팀용 개발 워크스페이스입니다.
-
-현재는 구현 전 제품 탐색과 설계 단계입니다. 프로젝트명은 아직 `okf-knowledge-hub`를 사용하며, 별도 합의 없이 다른 이름으로 확정하지 않습니다.
+백엔드와 프론트엔드 개발자가 서로 다른 시간에 작업하더라도 기능의 맥락, 설계 변경, 리뷰, 구현 상태와 이력을 한곳에서 이어갈 수 있도록 만드는 소규모 팀용 개발 워크스페이스(**OkHub**)입니다.
 
 ## 왜 만드는가
 
@@ -22,36 +20,36 @@
 
 ## 문서
 
-전체 문서의 권장 읽기 순서는 [docs/README.md](docs/README.md)에 정리되어 있습니다.
+제품 기획, 아키텍처, 개발 가이드, 사용자 안내 문서는 최신 OKF 규격에 맞춰 별도 지식 저장소인 [`Mockly-Company/hub-knowledge`](https://github.com/Mockly-Company/hub-knowledge)에서 관리합니다. 전체 읽기 순서는 [`docs/README.md`](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/README.md), 분류별 목차는 [`docs/index.md`](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/index.md)에서 확인할 수 있습니다.
 
 | 문서 | 내용 |
 |---|---|
-| [제품 개요](docs/product/overview.md) | 문제, 목표, 사용자와 제품 원칙 |
-| [문서 변경 워크플로](docs/product/workflow.html) | 문서 생성부터 잠금, 편집, 검수, 병합과 오프라인 복구까지의 전체 흐름 |
-| [유스케이스와 작업 흐름](docs/product/use-cases.md) | 실제 개발 과정에서 Hub를 사용하는 흐름 |
-| [기능 정의](docs/product/features.md) | 기능 영역과 현재 범위 |
-| [화면 구성](docs/product/screens.md) | 화면 후보와 화면별 책임 |
-| [정보 모델](docs/product/information-model.md) | 제품 구조, 문서, 리뷰와 이력의 관계 |
-| [기술 구조](docs/architecture/system-design.md) | 저장소, GitHub, 로컬 앱, 인증, MCP, API 문서 전략 |
-| [승인된 GitHub 워크스페이스 연결 설계](docs/superpowers/specs/2026-07-25-github-workspace-connection-design.md) | GitHub App 인증, OKF 저장소 연결과 초기화의 승인된 경계 |
-| [GitHub App 개발 설정](docs/development/github-app.md) | 공개 GitHub App 등록, 로컬 Device Flow와 보안 저장소 확인 방법 |
-| [미결정 사항](docs/product/open-questions.md) | 트리 깊이, 문서 타입 등 추가 논의가 필요한 항목 |
+| [제품 개요](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/product/overview.md) | 문제, 목표, 사용자와 제품 원칙 |
+| [문서 변경 워크플로](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/product/workflow.html) | 문서 생성부터 잠금, 편집, 검수, 병합과 오프라인 복구까지의 전체 흐름 |
+| [유스케이스와 작업 흐름](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/product/use-cases.md) | 실제 개발 과정에서 Hub를 사용하는 흐름 |
+| [기능 정의](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/product/features.md) | 기능 영역과 현재 범위 |
+| [화면 구성](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/product/screens.md) | 화면 후보와 화면별 책임 |
+| [정보 모델](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/product/information-model.md) | 제품 구조, 문서, 리뷰와 이력의 관계 |
+| [기술 구조](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/architecture/system-design.md) | 저장소, GitHub, 로컬 앱, 인증, MCP, API 문서 전략 |
+| [문서 중심 통합 워크스페이스 설계](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/superpowers/specs/2026-11-11-workspace-centric-ux-design.md) | GitHub Project 연동 및 문서 저장소 단독 워크스페이스 구조와 UX |
+| [승인된 GitHub 워크스페이스 연결 설계](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/superpowers/specs/2026-07-25-github-workspace-connection-design.md) | GitHub App 인증, OKF 저장소 연결과 초기화의 승인된 경계 |
+| [GitHub App 개발 설정](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/development/github-app.md) | 공개 GitHub App 등록, 로컬 Device Flow와 보안 저장소 확인 방법 |
+| [미결정 사항](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/product/open-questions.md) | 트리 깊이, 문서 타입 등 추가 논의가 필요한 항목 |
 
 ## 현재 합의된 원칙
 
-- 앱 저장소와 각 프로젝트의 OKF 지식 저장소를 분리합니다.
-- 초기에는 `OKF 지식 저장소 1개 = 워크스페이스 1개`로 사용하며, 저장소의 `.okf/workspace.yml`을 팀이 공유하는 워크스페이스 정의로 사용합니다.
-- 앱은 여러 워크스페이스 목록이나 전환 UI를 제공하지 않고, 최초 연결 뒤에는 단일 워크스페이스를 바로 엽니다.
+- 앱 코드 저장소(`Mockly-Company/okf-knowledge-hub`)와 각 프로젝트의 OKF 지식 저장소(예: [`Mockly-Company/hub-knowledge`](https://github.com/Mockly-Company/hub-knowledge))를 분리합니다.
+- 저장소의 `.okf/workspace.yml`을 팀이 공유하는 워크스페이스 정의로 사용하며, GitHub Project와 소속 문서 저장소를 함께 연결하거나 문서 저장소만 단독으로 연결해 여러 워크스페이스를 전환할 수 있습니다.
 - 초기 앱은 SQLite를 포함한 별도 데이터베이스를 두지 않고 Git 파일, GitHub와 기기별 로컬 설정 파일로 동작합니다.
 - Windows와 macOS를 지원하는 Tauri 기반 로컬 앱으로 시작합니다.
 - GitHub 인증 정보는 중앙에 저장하지 않고 각 사용자 기기의 보안 저장소에서 관리합니다.
 - Hub는 코드를 읽고 검색하고 diff를 보여주지만, 실제 코드 수정과 실행은 IDE에서 진행합니다.
-- 별도 AI API를 내장하지 않고, Codex 같은 외부 AI가 MCP를 통해 Hub 기능을 사용할 수 있도록 설계합니다.
+- 별도 AI API 키를 자체 서버에 두지 않고, Claude Code·Codex·Antigravity 등 로컬 AI CLI가 격리된 Git worktree와 `.okf/AGENTS.md` 규칙 위에서 작업할 수 있도록 연동합니다.
 - 처음부터 Jira·Confluence·Postman 전체를 대체하지 않고 반복되는 협업 불편부터 해결합니다.
 
 ## 개발
 
-Node.js 22.12 이상과 pnpm 10, Rust 1.88.0을 준비한 뒤 의존성을 설치합니다. 공식 GitHub App의 공개 Client ID가 앱에 포함되어 있어 별도 환경변수 없이 GitHub 연결을 확인할 수 있습니다. 포크나 자체 GitHub App을 사용할 때는 [GitHub App 개발 설정](docs/development/github-app.md)에 따라 Client ID를 재정의하세요.
+Node.js 22.12 이상과 pnpm 10, Rust 1.88.0을 준비한 뒤 의존성을 설치합니다. 공식 GitHub App의 공개 Client ID가 앱에 포함되어 있어 별도 환경변수 없이 GitHub 연결을 확인할 수 있습니다. 포크나 자체 GitHub App을 사용할 때는 [GitHub App 개발 설정](https://github.com/Mockly-Company/hub-knowledge/blob/main/docs/development/github-app.md)에 따라 Client ID를 재정의하세요.
 
 macOS에서 소스를 직접 개발할 때는 Apple Developer 계정 대신 개발자 기기에 한 번 생성하는 로컬 code-signing identity를 사용합니다. 최초 한 번 설정한 뒤에는 현재 worktree에서 `pnpm tauri dev`로 실행합니다.
 
