@@ -214,10 +214,22 @@ export class FakeDocsRepositoryGateway implements DocsRepositoryGateway {
     const target = this.workspaces[index];
     if (target.docsRepository) {
       const wasActive = this.activeWorkspaceId === target.id;
-      const newId =
+      let newId =
         target.project?.id === target.id
           ? `repo:${target.docsRepository.repositoryId}`
           : target.id;
+      if (newId !== target.id) {
+        const baseId = newId;
+        let suffix = 2;
+        while (
+          this.workspaces.some(
+            (item, idx) => idx !== index && item.id === newId,
+          )
+        ) {
+          newId = `${baseId}:${suffix}`;
+          suffix += 1;
+        }
+      }
       target.id = newId;
       target.project = null;
       target.title = shortRepoName(target.docsRepository.fullName);

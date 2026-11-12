@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
@@ -80,6 +81,8 @@ export function AiPage({
     activeProject?.activeWorkspaceId ??
     activeWorkspace?.id ??
     DEFAULT_WORKSPACE_SCOPE;
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
   const terminalStore = terminalStoreFor(
     aiGateway,
     terminalRendererFactory,
@@ -144,16 +147,21 @@ export function AiPage({
   const missingTools = BUILTIN_TOOLS.filter((tool) => !isInstalled(tool));
   const hasCustomTerminal = Boolean(configQuery.data?.cli_command.trim());
   const openTerminal = async (tool: AiToolId) => {
+    const requestScopeKey = scopeKey;
     setOpeningTool(tool);
     setOpenError(null);
     try {
       await terminalStore.open(tool);
     } catch (error) {
-      setOpenError(
-        error instanceof Error ? error.message : "아직 지원되지 않습니다",
-      );
+      if (scopeKeyRef.current === requestScopeKey) {
+        setOpenError(
+          error instanceof Error ? error.message : "아직 지원되지 않습니다",
+        );
+      }
     } finally {
-      setOpeningTool(null);
+      if (scopeKeyRef.current === requestScopeKey) {
+        setOpeningTool(null);
+      }
     }
   };
 

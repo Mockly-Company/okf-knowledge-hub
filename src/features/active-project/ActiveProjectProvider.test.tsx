@@ -26,6 +26,14 @@ const project: ResolvedGithubProject = {
   scope: "organization",
 };
 
+const secondProject: ResolvedGithubProject = {
+  id: "PVT_2",
+  owner: "Mockly-Company",
+  number: 2,
+  title: "Second Board",
+  scope: "organization",
+};
+
 function Probe() {
   const { activeProjectId, docsMissing } = useActiveProject();
   return (
@@ -317,6 +325,9 @@ describe("ActiveProjectProvider", () => {
           <output data-testid="active-ws">
             {ctx.activeWorkspaceId ?? "none"}
           </output>
+          <output data-testid="select-error">
+            {ctx.selectError ?? "none"}
+          </output>
           <button
             type="button"
             onClick={() => void ctx.selectWorkspace("repo:R_b")}
@@ -348,6 +359,9 @@ describe("ActiveProjectProvider", () => {
     await waitFor(() => expect(guardSpy).toHaveBeenCalledWith("repo:R_b"));
     expect(setActiveSpy).not.toHaveBeenCalled();
     expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_a");
+    expect(screen.getByTestId("select-error")).toHaveTextContent(
+      /저장하지 못한 문서 초안/,
+    );
 
     allowSwitch = true;
     await user.click(screen.getByRole("button", { name: "B로 전환" }));
@@ -356,6 +370,152 @@ describe("ActiveProjectProvider", () => {
       expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_b"),
     );
     expect(setActiveSpy).toHaveBeenCalledWith("repo:R_b");
+    expect(screen.getByTestId("select-error")).toHaveTextContent("none");
+  });
+
+  it("blocks createStandaloneWorkspace, createProjectWorkspace, connectWorkspaceDocs replacement, and detachProjectFromWorkspace when a beforeWorkspaceSwitch guard rejects", async () => {
+    const docsGateway = new FakeDocsRepositoryGateway();
+    await docsGateway.createProjectWorkspace(project, {
+      repositoryId: "R_a",
+      fullName: "Mockly-Company/docs-a",
+    });
+
+    const createStandaloneSpy = vi.spyOn(
+      docsGateway,
+      "createStandaloneWorkspace",
+    );
+    const createProjectSpy = vi.spyOn(docsGateway, "createProjectWorkspace");
+    const connectDocsSpy = vi.spyOn(docsGateway, "connectWorkspaceDocs");
+    const detachSpy = vi.spyOn(docsGateway, "detachProject");
+
+    let capturedCtx: ReturnType<typeof useActiveProject> | null = null;
+    function CaptureHarness() {
+      const ctx = useActiveProject();
+      capturedCtx = ctx;
+      useEffect(() => {
+        return ctx.registerBeforeWorkspaceSwitch?.(async () => false);
+      }, [ctx]);
+      return (
+        <output data-testid="active-ws">
+          {ctx.activeWorkspaceId ?? "none"}
+        </output>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={FakeProjectBoardGateway.empty()}
+          docsRepositoryGateway={docsGateway}
+        >
+          <CaptureHarness />
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("PVT_1"),
+    );
+
+    await expect(
+      capturedCtx!.createStandaloneWorkspace("R_new", "Mockly-Company/new-docs"),
+    ).rejects.toThrow(/저장하지 못한 문서 초안/);
+    expect(createStandaloneSpy).not.toHaveBeenCalled();
+
+    await expect(
+      capturedCtx!.createProjectWorkspace(secondProject, {
+        repositoryId: "R_2",
+        fullName: "Mockly-Company/docs-2",
+      }),
+    ).rejects.toThrow(/저장하지 못한 문서 초안/);
+    expect(createProjectSpy).not.toHaveBeenCalled();
+
+    await expect(
+      capturedCtx!.connectWorkspaceDocs(
+        "PVT_1",
+        "R_replaced",
+        "Mockly-Company/replaced-docs",
+      ),
+    ).rejects.toThrow(/저장하지 못한 문서 초안/);
+    expect(connectDocsSpy).not.toHaveBeenCalled();
+
+    await expect(
+      capturedCtx!.detachProjectFromWorkspace("PVT_1"),
+    ).rejects.toThrow(/저장하지 못한 문서 초안/);
+    expect(detachSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId("active-ws")).toHaveTextContent("PVT_1");
+  });
+
+  it("migrates terminals to the newly detached workspace id instead of a pre-existing standalone workspace sharing the same repositoryId", async () => {
+    const user = userEvent.setup();
+    const aiGateway = new FakeAiGateway();
+    const docsGateway = new FakeDocsRepositoryGateway();
+    const makeRenderer = () => new FakeTerminalRenderer();
+
+    await docsGateway.createStandaloneWorkspace(
+      "R_shared",
+      "Mockly-Company/shared-docs",
+    );
+    await docsGateway.createProjectWorkspace(project, {
+      repositoryId: "R_shared",
+      fullName: "Mockly-Company/shared-docs",
+    });
+    await docsGateway.setActiveWorkspace("PVT_1");
+
+    await terminalStoreFor(aiGateway, makeRenderer, "repo:R_shared").open(
+      "codex",
+    );
+    await terminalStoreFor(aiGateway, makeRenderer, "PVT_1").open("claude");
+    expect(getRunningTerminalCounts(aiGateway)).toEqual({
+      "repo:R_shared": 1,
+      PVT_1: 1,
+    });
+
+    function DetachSharedHarness() {
+      const ctx = useActiveProject();
+      return (
+        <div>
+          <output data-testid="active-ws">
+            {ctx.activeWorkspaceId ?? "none"}
+          </output>
+          <button
+            type="button"
+            onClick={() => void ctx.detachProjectFromWorkspace("PVT_1")}
+          >
+            공유 저장소 보드 해제
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={FakeProjectBoardGateway.empty()}
+          docsRepositoryGateway={docsGateway}
+          aiGateway={aiGateway}
+        >
+          <DetachSharedHarness />
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("PVT_1"),
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "공유 저장소 보드 해제" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent(
+        "repo:R_shared:2",
+      ),
+    );
+    expect(getRunningTerminalCounts(aiGateway)).toEqual({
+      "repo:R_shared": 1,
+      "repo:R_shared:2": 1,
+    });
   });
 
   it("closes workspace terminals on removeWorkspace or docs repository replacement, and migrates terminals when attachProject / detachProject changes workspace.id with the same docsRepository", async () => {

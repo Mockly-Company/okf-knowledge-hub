@@ -2,7 +2,13 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useQuery } from "@tanstack/react-query";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  ActiveProjectProvider,
+  useActiveProject,
+} from "@/features/active-project/ActiveProjectProvider";
 import { FakeAiGateway } from "@/test/FakeAiGateway";
+import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
+import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import { aiKeys } from "./queryKeys";
 import { AiSettingsPanel } from "./AiSettingsPanel";
@@ -115,5 +121,73 @@ describe("AiSettingsPanel", () => {
     expect(await screen.findByText("/app/AGENTS.md")).toBeInTheDocument();
     const preview = await screen.findByLabelText("앱 AGENTS.md 미리보기");
     expect(preview.textContent?.split("\n").length).toBeLessThanOrEqual(10);
+  });
+
+  it("scopes AGENTS.md query per active workspace so switching workspaces refreshes the preview", async () => {
+    localStorage.clear();
+    const user = userEvent.setup();
+    const gateway = new FakeAiGateway();
+    gateway.agentsMd = {
+      workspace_path: "/work/docs-a",
+      path: "/work/docs-a/.okf/AGENTS.md",
+      content: "# Alpha 규칙\n",
+    };
+
+    const docsGateway = new FakeDocsRepositoryGateway();
+    await docsGateway.createStandaloneWorkspace("R_a", "Mockly-Company/docs-a");
+    await docsGateway.createStandaloneWorkspace("R_b", "Mockly-Company/docs-b");
+    await docsGateway.setActiveWorkspace("repo:R_a");
+
+    function SwitchButton() {
+      const { activeWorkspaceId, selectWorkspace } = useActiveProject();
+      return (
+        <div>
+          <output data-testid="active-ws">{activeWorkspaceId ?? "none"}</output>
+          <button
+            type="button"
+            onClick={() => {
+              gateway.agentsMd = {
+                workspace_path: "/work/docs-b",
+                path: "/work/docs-b/.okf/AGENTS.md",
+                content: "# Beta 규칙\n",
+              };
+              void selectWorkspace("repo:R_b");
+            }}
+          >
+            Beta로 전환
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={FakeProjectBoardGateway.empty()}
+          docsRepositoryGateway={docsGateway}
+          aiGateway={gateway}
+        >
+          <SwitchButton />
+          <AiSettingsPanel gateway={gateway} />
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_a"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByText(/\/work\/docs-a\/\.okf\/AGENTS\.md/),
+      ).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Beta로 전환" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/\/work\/docs-b\/\.okf\/AGENTS\.md/),
+      ).toBeInTheDocument(),
+    );
   });
 });

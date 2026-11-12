@@ -464,4 +464,101 @@ describe("AiPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("does not leak openError or clobber openingTool when an in-flight startTerminal settles after switching workspaces", async () => {
+    const user = userEvent.setup();
+    const aiGateway = new FakeAiGateway();
+    let rejectAlphaStart: ((err: Error) => void) | null = null;
+    let resolveBetaStart: ((id: string) => void) | null = null;
+    aiGateway.startTerminal = (tool) => {
+      if (tool === "claude") {
+        return new Promise<string>((_, reject) => {
+          rejectAlphaStart = reject;
+        });
+      }
+      return new Promise<string>((resolve) => {
+        resolveBetaStart = resolve;
+      });
+    };
+
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_beta",
+        owner: "Mockly-Company",
+        number: 2,
+        title: "Beta",
+        scope: "organization",
+      },
+      { repositoryId: "R_beta", fullName: "Mockly-Company/beta-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    function SwitcherControls() {
+      const { selectWorkspace } = useActiveProject();
+      return (
+        <button
+          type="button"
+          onClick={() => void selectWorkspace("PVT_beta")}
+        >
+          Beta 전환
+        </button>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={new FakeProjectBoardGateway()}
+          docsRepositoryGateway={docsRepoGateway}
+          aiGateway={aiGateway}
+        >
+          <MemoryRouter>
+            <SwitcherControls />
+            <AiPage
+              aiGateway={aiGateway}
+              terminalRendererFactory={FakeTerminalRenderer.create}
+            />
+          </MemoryRouter>
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    const claudeBtn = await screen.findByRole("button", { name: "Claude Code" });
+    await user.click(claudeBtn);
+    expect(rejectAlphaStart).not.toBeNull();
+
+    // Alpha의 startTerminal이 아직 끝나기 전에 Beta로 전환 후 Antigravity 실행 시작
+    await user.click(screen.getByRole("button", { name: "Beta 전환" }));
+    const agyBtn = await screen.findByRole("button", { name: "Antigravity" });
+    await waitFor(() => expect(agyBtn).toBeEnabled());
+    await user.click(agyBtn);
+    expect(resolveBetaStart).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Claude Code" })).toBeDisabled();
+
+    // 뒤늦게 Alpha의 startTerminal이 실패해도 Beta 화면에 에러가 뜨거나 Beta의 로딩 중 상태가 풀리지 않아야 한다
+    await act(async () => {
+      rejectAlphaStart!(new Error("Alpha PTY 실행 실패"));
+    });
+    expect(screen.queryByText(/Alpha PTY 실행 실패/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Claude Code" })).toBeDisabled();
+
+    await act(async () => {
+      resolveBetaStart!("beta-pty-1");
+    });
+    expect(
+      await screen.findByRole("tab", { name: /Antigravity/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Claude Code" })).toBeEnabled();
+  });
+
 });

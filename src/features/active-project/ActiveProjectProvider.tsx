@@ -145,6 +145,9 @@ function describeSelectError(error: unknown): string | null {
   return "프로젝트 전환에 실패했습니다.";
 }
 
+const UNSAVED_DRAFT_SWITCH_ERROR =
+  "저장하지 못한 문서 초안이 있어 작업 공간을 변경할 수 없습니다. Documents에서 초안 저장 상태를 확인하세요.";
+
 interface ActiveProjectProviderProps extends PropsWithChildren {
   projectGateway?: ProjectBoardGateway;
   docsRepositoryGateway?: DocsRepositoryGateway;
@@ -169,6 +172,7 @@ export function ActiveProjectProvider({
   const activeWorkspaceIdRef = useRef(activeWorkspaceId);
   activeWorkspaceIdRef.current = activeWorkspaceId;
   const [docsMissing, setDocsMissing] = useState(false);
+  const [guardSelectError, setGuardSelectError] = useState<string | null>(null);
 
   const beforeSwitchGuardsRef = useRef(
     new Set<(nextWorkspaceId: string) => Promise<boolean>>(),
@@ -179,6 +183,17 @@ export function ActiveProjectProvider({
       return () => {
         beforeSwitchGuardsRef.current.delete(guard);
       };
+    },
+    [],
+  );
+  const runBeforeSwitchGuards = useCallback(
+    async (nextWorkspaceId: string): Promise<boolean> => {
+      for (const guard of Array.from(beforeSwitchGuardsRef.current)) {
+        if (!(await guard(nextWorkspaceId))) {
+          return false;
+        }
+      }
+      return true;
     },
     [],
   );
@@ -261,6 +276,7 @@ export function ActiveProjectProvider({
       queryClient.setQueryData(hubWorkspaceQueryKey, snapshot);
       userClearedRef.current = false;
       alignedStoredRef.current = true;
+      setGuardSelectError(null);
       if (snapshot.activeWorkspaceId) {
         setActiveWorkspaceId(snapshot.activeWorkspaceId);
         rememberLastActiveProjectId(snapshot.activeWorkspaceId);
@@ -403,6 +419,7 @@ export function ActiveProjectProvider({
     userClearedRef.current = true;
     setActiveWorkspaceId(null);
     setDocsMissing(false);
+    setGuardSelectError(null);
     selectMutation.reset();
     forgetLastActiveProjectId();
   }, [selectMutation.reset]);
@@ -413,19 +430,19 @@ export function ActiveProjectProvider({
         clearActiveProject();
         return;
       }
+      setGuardSelectError(null);
       if (
         activeWorkspaceIdRef.current !== null &&
         workspaceId !== activeWorkspaceIdRef.current
       ) {
-        for (const guard of Array.from(beforeSwitchGuardsRef.current)) {
-          if (!(await guard(workspaceId))) {
-            return;
-          }
+        if (!(await runBeforeSwitchGuards(workspaceId))) {
+          setGuardSelectError(UNSAVED_DRAFT_SWITCH_ERROR);
+          return;
         }
       }
       await selectMutation.mutateAsync(workspaceId);
     },
-    [clearActiveProject, selectMutation.mutateAsync],
+    [clearActiveProject, runBeforeSwitchGuards, selectMutation.mutateAsync],
   );
 
   const selectProject = useCallback(
@@ -448,6 +465,14 @@ export function ActiveProjectProvider({
       repositoryId: string,
       fullName: string,
     ): Promise<ConnectedHubWorkspace> => {
+      const candidateId = `repo:${repositoryId}`;
+      if (
+        activeWorkspaceIdRef.current !== null &&
+        activeWorkspaceIdRef.current !== candidateId &&
+        !(await runBeforeSwitchGuards(candidateId))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
       if (
         hasWorkspaceGateway &&
         docsRepositoryGateway?.createStandaloneWorkspace
@@ -473,12 +498,18 @@ export function ActiveProjectProvider({
         return [...filtered, workspace];
       });
       userClearedRef.current = false;
+      setGuardSelectError(null);
       setActiveWorkspaceId(workspace.id);
       rememberLastActiveProjectId(workspace.id);
       setDocsMissing(false);
       return { workspace, docsConnected: true, okf: true };
     },
-    [applyOptimisticWorkspace, docsRepositoryGateway, hasWorkspaceGateway],
+    [
+      applyOptimisticWorkspace,
+      docsRepositoryGateway,
+      hasWorkspaceGateway,
+      runBeforeSwitchGuards,
+    ],
   );
 
   const createProjectWorkspace = useCallback(
@@ -486,6 +517,13 @@ export function ActiveProjectProvider({
       resolved: ResolvedGithubProject,
       repository?: DocsRepositoryRef | null,
     ): Promise<ConnectedHubWorkspace> => {
+      if (
+        activeWorkspaceIdRef.current !== null &&
+        activeWorkspaceIdRef.current !== resolved.id &&
+        !(await runBeforeSwitchGuards(resolved.id))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
       if (
         hasWorkspaceGateway &&
         docsRepositoryGateway?.createProjectWorkspace
@@ -514,6 +552,7 @@ export function ActiveProjectProvider({
             : [...prev, resolved],
       );
       userClearedRef.current = false;
+      setGuardSelectError(null);
       setActiveWorkspaceId(resolved.id);
       rememberLastActiveProjectId(resolved.id);
       setDocsMissing(!repository);
@@ -534,6 +573,7 @@ export function ActiveProjectProvider({
       hasWorkspaceGateway,
       project,
       queryClient,
+      runBeforeSwitchGuards,
     ],
   );
 
@@ -575,6 +615,14 @@ export function ActiveProjectProvider({
         previous?.docsRepository?.repositoryId ??
         legacyDocsById[workspaceId]?.repositoryId ??
         null;
+      if (
+        activeWorkspaceIdRef.current === workspaceId &&
+        previousRepoId !== null &&
+        previousRepoId !== repositoryId &&
+        !(await runBeforeSwitchGuards(workspaceId))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
       const syncTerminalsAfterDocsConnect = (nextWorkspaceId: string) => {
         if (!aiGateway) return;
         if (previousRepoId !== null && previousRepoId !== repositoryId) {
@@ -657,6 +705,7 @@ export function ActiveProjectProvider({
       docsRepositoryGateway,
       hasWorkspaceGateway,
       legacyDocsById,
+      runBeforeSwitchGuards,
       workspaces,
     ],
   );
@@ -666,6 +715,12 @@ export function ActiveProjectProvider({
       workspaceId: string,
       resolved: ResolvedGithubProject,
     ): Promise<HubWorkspace> => {
+      if (
+        activeWorkspaceIdRef.current === workspaceId &&
+        !(await runBeforeSwitchGuards(resolved.id))
+      ) {
+        throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+      }
       if (hasWorkspaceGateway && docsRepositoryGateway?.attachProject) {
         const updated = await docsRepositoryGateway.attachProject(
           workspaceId,
@@ -712,13 +767,27 @@ export function ActiveProjectProvider({
       legacyStandaloneWorkspaces,
       listLinkedProjects,
       project,
+      runBeforeSwitchGuards,
     ],
   );
 
   const detachProjectFromWorkspace = useCallback(
     async (workspaceId: string): Promise<void> => {
       const previous = workspaces.find((item) => item.id === workspaceId);
+      if (activeWorkspaceIdRef.current === workspaceId) {
+        const nextHintId = previous?.docsRepository
+          ? `repo:${previous.docsRepository.repositoryId}`
+          : "";
+        if (!(await runBeforeSwitchGuards(nextHintId))) {
+          throw new Error(UNSAVED_DRAFT_SWITCH_ERROR);
+        }
+      }
       if (hasWorkspaceGateway && docsRepositoryGateway?.detachProject) {
+        const otherWorkspaceIds = new Set(
+          workspaces
+            .filter((item) => item.id !== workspaceId)
+            .map((item) => item.id),
+        );
         const list = await docsRepositoryGateway.detachProject(workspaceId);
         if (aiGateway) {
           const prevRepoId = previous?.docsRepository?.repositoryId ?? null;
@@ -726,7 +795,8 @@ export function ActiveProjectProvider({
             ? list.workspaces.find(
                 (item) =>
                   item.id === workspaceId ||
-                  (item.project === null &&
+                  (!otherWorkspaceIds.has(item.id) &&
+                    item.project === null &&
                     item.docsRepository?.repositoryId === prevRepoId),
               )
             : null;
@@ -756,7 +826,10 @@ export function ActiveProjectProvider({
           project: null,
           docsRepository: target.docsRepository,
         };
-        setLegacyStandaloneWorkspaces((prev) => [...prev, standalone]);
+        setLegacyStandaloneWorkspaces((prev) => [
+          ...prev.filter((item) => item.id !== standalone.id),
+          standalone,
+        ]);
         setActiveWorkspaceId(standaloneId);
         rememberLastActiveProjectId(standaloneId);
         setDocsMissing(false);
@@ -772,6 +845,7 @@ export function ActiveProjectProvider({
       hasWorkspaceGateway,
       listLinkedProjects,
       project,
+      runBeforeSwitchGuards,
       workspaces,
     ],
   );
@@ -956,7 +1030,7 @@ export function ActiveProjectProvider({
       isListing,
       isListError,
       isSelecting: selectMutation.isPending,
-      selectError: describeSelectError(selectMutation.error),
+      selectError: guardSelectError ?? describeSelectError(selectMutation.error),
       listLinkedProjects,
       searchProjects,
       linkProject,
@@ -984,6 +1058,7 @@ export function ActiveProjectProvider({
       isListError,
       selectMutation.isPending,
       selectMutation.error,
+      guardSelectError,
       listLinkedProjects,
       searchProjects,
       linkProject,
