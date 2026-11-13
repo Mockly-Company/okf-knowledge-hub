@@ -65,6 +65,9 @@ export function DocumentReader({
   } = useDocuments();
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
+  const [viewMode, setViewMode] = useState<"html" | "markdown">(() =>
+    document.companionHtml ? "html" : "markdown",
+  );
   const [menuOpen, setMenuOpen] = useState(false);
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const isNarrow = useSyncExternalStore(subscribeNarrow, isNarrowScreen, () => false);
@@ -73,6 +76,11 @@ export function DocumentReader({
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const navigationTargetRef = useRef<string | null>(null);
   useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
+  useEffect(() => {
+    setViewMode(document.companionHtml ? "html" : "markdown");
+  }, [document.summary.path, Boolean(document.companionHtml)]);
+  const hasCompanionHtml = Boolean(document.companionHtml) && state.selectedVersion === null;
+  const effectiveView = hasCompanionHtml ? viewMode : "markdown";
   const headerRef = useRef<HTMLElement>(null);
   const contextToggleRef = useRef<HTMLButtonElement>(null);
   const contextCloseRef = useRef<HTMLButtonElement>(null);
@@ -140,6 +148,22 @@ export function DocumentReader({
           </div>
         </div>
         <div className="document-reader__actions">
+          {hasCompanionHtml ? (
+            <TabsList className="document-reader__view-tabs" aria-label="문서 표시 형식">
+              <TabsTrigger
+                selected={effectiveView === "html"}
+                onClick={() => setViewMode("html")}
+              >
+                사람용 보기 (.html)
+              </TabsTrigger>
+              <TabsTrigger
+                selected={effectiveView === "markdown"}
+                onClick={() => setViewMode("markdown")}
+              >
+                원문 (.md)
+              </TabsTrigger>
+            </TabsList>
+          ) : null}
           {state.selectedVersion === null ? (
             <Button
               disabled={authoringState.existingEdit.status === "opening"}
@@ -220,7 +244,22 @@ export function DocumentReader({
           <span>본문은 계속 표시됩니다</span>
         </div>
       ) : null}
-          <MarkdownDocument document={document} hideHeader suppressSourceTitle />
+      {state.selectedVersion === null && document.htmlSyncStatus === "outdated" ? (
+        <div className="document-reader__warning" role="status">
+          <strong>사람용 .html 뷰가 .md 원본보다 오래되었습니다.</strong>
+          <span>최신 내용은 원문 (.md)에서 확인하고 다음 PR에서 함께 갱신해 주세요.</span>
+        </div>
+      ) : null}
+          {effectiveView === "html" && document.companionHtml ? (
+            <iframe
+              className="document-reader__html-frame"
+              sandbox=""
+              srcDoc={document.companionHtml.html}
+              title={`${document.summary.title} 사람용 보기`}
+            />
+          ) : (
+            <MarkdownDocument document={document} hideHeader suppressSourceTitle />
+          )}
         </div>
         {contextCollapsed && !isNarrow ? <IconButton
           ref={contextToggleRef}

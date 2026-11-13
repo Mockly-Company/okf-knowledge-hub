@@ -110,12 +110,22 @@ export interface DocumentCommitSummary {
   message: string;
 }
 
+export type HtmlSyncStatus = "in_sync" | "outdated" | "missing" | "not_applicable";
+
+export interface CompanionHtml {
+  path: string;
+  html: string;
+  modifiedAtUnixMs: number;
+}
+
 export interface DocumentContent {
   summary: DocumentSummary;
   markdown: string;
   properties: unknown;
   tableOfContents: TableOfContentsItem[];
   lastCommit: DocumentCommitSummary | null;
+  companionHtml?: CompanionHtml | null;
+  htmlSyncStatus?: HtmlSyncStatus;
 }
 
 export type DocumentAsset =

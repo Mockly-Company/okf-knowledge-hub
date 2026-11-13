@@ -13,6 +13,23 @@ pub struct DocumentSummary {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HtmlSyncStatus {
+    InSync,
+    Outdated,
+    Missing,
+    NotApplicable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanionHtml {
+    pub path: String,
+    pub html: String,
+    pub modified_at_unix_ms: i64,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentContent {
@@ -21,6 +38,8 @@ pub struct DocumentContent {
     pub properties: serde_json::Value,
     pub table_of_contents: Vec<TableOfContentsItem>,
     pub last_commit: Option<DocumentCommitSummary>,
+    pub companion_html: Option<CompanionHtml>,
+    pub html_sync_status: HtmlSyncStatus,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -1847,6 +1847,19 @@
   line-height: var(--font-code-line);
 }
 
+.document-reader__view-tabs {
+  flex: 0 0 auto;
+}
+
+.document-reader__html-frame {
+  display: block;
+  width: 100%;
+  min-height: 72vh;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
 @media (max-width: 760px) {
   .documents-page {
     padding-block-end: var(--documents-space-group);
