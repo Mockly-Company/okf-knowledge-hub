@@ -468,4 +468,58 @@ describe("DocumentReader", () => {
       "height: 100%",
     );
   });
+
+  it("defaults to the sandboxed human .html view when companionHtml is present and switches to .md source", async () => {
+    const user = userEvent.setup();
+    const document: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      summary: {
+        ...invalidFrontmatterDocument().summary,
+        path: "docs/product/roadmap-v2.md",
+        fileName: "roadmap-v2.md",
+        title: "OkHub v2 전체 컨셉",
+      },
+      markdown: "# OkHub v2 전체 컨셉\n\n원문 마크다운 내용입니다.",
+      companionHtml: {
+        path: "docs/product/roadmap-v2.html",
+        html: "<!doctype html><html><body><h1>구조화 HTML 뷰</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync",
+    };
+
+    renderSelectedDocument(document);
+
+    const htmlTab = await screen.findByRole("tab", { name: "사람용 보기 (.html)" });
+    const mdTab = screen.getByRole("tab", { name: "원문 (.md)" });
+    expect(htmlTab).toHaveAttribute("aria-selected", "true");
+    expect(mdTab).toHaveAttribute("aria-selected", "false");
+
+    const frame = screen.getByTitle("OkHub v2 전체 컨셉 사람용 보기");
+    expect(frame).toHaveAttribute("sandbox", "");
+    expect(frame).toHaveAttribute("srcdoc", document.companionHtml!.html);
+    expect(screen.queryByText("원문 마크다운 내용입니다.")).not.toBeInTheDocument();
+
+    await user.click(mdTab);
+    expect(mdTab).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("원문 마크다운 내용입니다.")).toBeVisible();
+  });
+
+  it("shows an outdated sync notice when .md is newer than companion .html", async () => {
+    const document: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      companionHtml: {
+        path: "docs/invalid.html",
+        html: "<html><body>Old HTML</body></html>",
+        modifiedAtUnixMs: 1_720_000_000_000,
+      },
+      htmlSyncStatus: "outdated",
+    };
+
+    renderSelectedDocument(document);
+
+    expect(
+      await screen.findByText(/사람용 \.html 뷰가 \.md 원본보다 오래되었습니다/),
+    ).toBeVisible();
+  });
 });

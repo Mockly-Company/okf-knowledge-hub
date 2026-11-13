@@ -177,7 +177,13 @@ fn prepare_ai_terminal(
     }
     let workspace_dir = connected_workspace_dir(&services.local_settings)?;
     let worktrees_dir = worktrees_dir_for(services, app_data_dir, &workspace_dir)?;
-    let rules_file = write_rules_file(app_data_dir, &workspace_dir, &worktrees_dir)?;
+    let active_context = resolve_active_ai_context(services, &workspace_dir);
+    let rules_file = write_rules_file_with_context(
+        app_data_dir,
+        &workspace_dir,
+        &worktrees_dir,
+        Some(&active_context),
+    )?;
     Ok((
         tool.terminal_command(&custom_command, &rules_file),
         workspace_dir,
@@ -230,19 +236,133 @@ fn worktrees_dir_for(
     }
 }
 
-/// 허브 공통 규칙, 고정 작업 규칙, 프로젝트 AGENTS.md를 합친 내용. AI CLI에 전달하는 단일 원본이다.
+/// 허브 공통 규칙, 고정 작업 규칙, 선택된 프로젝트·저장소 컨텍스트, 프로젝트 AGENTS.md를 합친 내용.
 fn load_ai_rules(
     app_data_dir: &Path,
     workspace_dir: &Path,
     worktrees_dir: &Path,
+    active_context: Option<&ai_runner::ActiveWorkspaceAiContext>,
 ) -> CommandResult<String> {
     let app_rules = resolve_app_agents_md_inner(app_data_dir)?.content;
     let (_, project_rules) = read_agents_md(workspace_dir)?;
+    let fixed = match active_context {
+        Some(ctx) => format!(
+            "{}\n\n---\n\n{}",
+            ai_runner::active_context_rules(ctx).trim(),
+            ai_runner::worktree_rules(workspace_dir, worktrees_dir).trim()
+        ),
+        None => ai_runner::worktree_rules(workspace_dir, worktrees_dir),
+    };
     Ok(ai_runner::compose_rules(
         &app_rules,
-        &ai_runner::worktree_rules(workspace_dir, worktrees_dir),
+        &fixed,
         project_rules.as_deref(),
     ))
+}
+
+fn resolve_active_ai_context(
+    services: &AppServices,
+    workspace_dir: &Path,
+) -> ai_runner::ActiveWorkspaceAiContext {
+    let current = services.local_settings.load_current().ok().flatten();
+    let active_hub = services
+        .local_settings
+        .load_active_hub_workspace()
+        .ok()
+        .flatten();
+    let active_project = services.local_settings.load_active_project().ok().flatten();
+
+    let manifest = std::fs::read_to_string(workspace_dir.join(".okf/workspace.yml"))
+        .ok()
+        .and_then(|raw| {
+            serde_yaml_ng::from_str::<crate::workspace::model::WorkspaceConfigV1>(&raw).ok()
+        });
+
+    let project = active_project
+        .map(|p| ai_runner::ActiveProjectRuleInfo {
+            id: p.id,
+            owner: p.owner,
+            number: p.number,
+            title: p.title,
+            scope: match p.scope {
+                crate::project_board::model::ProjectOwnerScope::Organization => "organization",
+                crate::project_board::model::ProjectOwnerScope::User => "user",
+            }
+            .to_owned(),
+        })
+        .or_else(|| {
+            manifest
+                .as_ref()
+                .and_then(|m| m.github.as_ref())
+                .and_then(|gh| gh.active_project())
+                .map(|p| {
+                    let fallback_title = manifest
+                        .as_ref()
+                        .map(|m| m.workspace.name.clone())
+                        .unwrap_or_else(|| format!("{}/#{}", p.owner, p.number));
+                    ai_runner::ActiveProjectRuleInfo {
+                        id: p.id,
+                        owner: p.owner,
+                        number: p.number,
+                        title: fallback_title,
+                        scope: match p.scope {
+                            Some(crate::project_board::model::ProjectOwnerScope::Organization)
+                            | None => "organization",
+                            Some(crate::project_board::model::ProjectOwnerScope::User) => "user",
+                        }
+                        .to_owned(),
+                    }
+                })
+        });
+
+    let docs_repository_full_name = current
+        .as_ref()
+        .and_then(|c| c.repository.as_ref().map(|r| r.full_name.clone()))
+        .or_else(|| {
+            active_hub
+                .as_ref()
+                .and_then(|w| w.docs_repository.as_ref().map(|d| d.full_name.clone()))
+        });
+
+    let workspace_title = active_hub
+        .as_ref()
+        .map(|w| w.title.clone())
+        .or_else(|| manifest.as_ref().map(|m| m.workspace.name.clone()));
+
+    let parent_dir = workspace_dir.parent();
+    let code_repositories = manifest
+        .as_ref()
+        .map(|m| {
+            m.repositories
+                .iter()
+                .map(|repo| {
+                    let repo_short = repo
+                        .github
+                        .full_name
+                        .split('/')
+                        .next_back()
+                        .unwrap_or(&repo.key);
+                    let sibling = parent_dir
+                        .map(|parent| parent.join(repo_short))
+                        .filter(|candidate| candidate.join(".git").exists())
+                        .map(|candidate| ai_runner::shell_path(&candidate).display().to_string());
+                    ai_runner::LinkedCodeRepoRuleInfo {
+                        key: repo.key.clone(),
+                        label: repo.label.clone(),
+                        full_name: repo.github.full_name.clone(),
+                        local_path: sibling,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    ai_runner::ActiveWorkspaceAiContext {
+        workspace_title,
+        docs_repository_full_name,
+        project,
+        code_repositories,
+    }
 }
 
 /// 다른 워크스페이스의 터미널이 서로의 규칙을 덮어쓰지 않도록 파일을 나눈다.
@@ -253,16 +373,33 @@ fn rules_file_name(workspace_dir: &Path) -> String {
     format!("AI_SESSION_RULES-{:016x}.md", hasher.finish())
 }
 
-/// 터미널 CLI가 읽을 규칙 파일. 창이 언제 닫힐지 모르므로 고정 경로에 덮어쓴다.
+#[cfg(test)]
 fn write_rules_file(
     app_data_dir: &Path,
     workspace_dir: &Path,
     worktrees_dir: &Path,
 ) -> CommandResult<PathBuf> {
-    let rules = load_ai_rules(app_data_dir, workspace_dir, worktrees_dir)?;
-    let target = app_data_dir
-        .join("okhub")
-        .join(rules_file_name(workspace_dir));
+    write_rules_file_with_context(app_data_dir, workspace_dir, worktrees_dir, None)
+}
+
+/// 터미널 CLI가 읽을 규칙 파일. 창이 언제 닫힐지 모르므로 고정 경로에 덮어쓴다.
+fn write_rules_file_with_context(
+    app_data_dir: &Path,
+    workspace_dir: &Path,
+    worktrees_dir: &Path,
+    active_context: Option<&ai_runner::ActiveWorkspaceAiContext>,
+) -> CommandResult<PathBuf> {
+    let rules = load_ai_rules(app_data_dir, workspace_dir, worktrees_dir, active_context)?;
+    let okhub_dir = app_data_dir.join("okhub");
+    std::fs::create_dir_all(&okhub_dir).map_err(|error| {
+        AppError::new(
+            ErrorCode::LocalSettingsUnavailable,
+            "AI 규칙 파일을 만들 수 없습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+        .with_detail("reason", error.to_string())
+    })?;
+    let target = okhub_dir.join(rules_file_name(workspace_dir));
     std::fs::write(&target, rules).map_err(|error| {
         AppError::new(
             ErrorCode::LocalSettingsUnavailable,
@@ -688,5 +825,128 @@ mod tests {
         .unwrap();
         let resolved = resolve_app_agents_md_inner(app_data_dir.path()).unwrap();
         assert_eq!(resolved.content, "# custom\n");
+    }
+
+    #[test]
+    fn agents_md_template_codifies_dual_format_reset_mark_and_cascading_layers() {
+        assert!(AGENTS_MD_TEMPLATE.contains(".md"));
+        assert!(AGENTS_MD_TEMPLATE.contains(".html"));
+        assert!(AGENTS_MD_TEMPLATE.contains("Reset → Mark"));
+        assert!(AGENTS_MD_TEMPLATE.contains("[기획]"));
+        assert!(AGENTS_MD_TEMPLATE.contains("[디자인]"));
+        assert!(AGENTS_MD_TEMPLATE.contains("[백엔드]"));
+        assert!(AGENTS_MD_TEMPLATE.contains("[프론트엔드]"));
+        assert!(!AGENTS_MD_TEMPLATE.contains("Mockly-Company"));
+    }
+
+    #[test]
+    fn terminal_rules_reflect_selected_project_and_linked_repositories_dynamically() {
+        use crate::project_board::model::ProjectOwnerScope;
+        use crate::settings::model::{DocsRepository, KnowledgeRepository, LinkedProject};
+
+        let docs_a = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(docs_a.path().join(".okf")).unwrap();
+        std::fs::create_dir_all(docs_a.path().join("docs")).unwrap();
+        std::fs::write(
+            docs_a.path().join(".okf/workspace.yml"),
+            format!(
+                "schema_version: 1\nworkspace:\n  id: {}\n  name: Alpha Hub\ndocuments:\n  roots:\n    - path: docs\nrepositories:\n  - key: web\n    label: Alpha Web\n    github:\n      id: R_web\n      full_name: acme/alpha-web\n",
+                uuid::Uuid::new_v4()
+            ),
+        )
+        .unwrap();
+
+        let docs_b = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(docs_b.path().join(".okf")).unwrap();
+        std::fs::create_dir_all(docs_b.path().join("docs")).unwrap();
+        std::fs::write(
+            docs_b.path().join(".okf/workspace.yml"),
+            format!(
+                "schema_version: 1\nworkspace:\n  id: {}\n  name: Beta Hub\ndocuments:\n  roots:\n    - path: docs\nrepositories:\n  - key: api\n    label: Beta API\n    github:\n      id: R_api\n      full_name: globex/beta-api\n",
+                uuid::Uuid::new_v4()
+            ),
+        )
+        .unwrap();
+
+        let app_data = tempfile::tempdir().unwrap();
+        let settings = LocalSettingsService::new(MemoryStore::default());
+        settings
+            .link_project(LinkedProject {
+                id: "PVT_alpha".into(),
+                owner: "acme".into(),
+                number: 12,
+                title: "Alpha Roadmap".into(),
+                scope: ProjectOwnerScope::Organization,
+            })
+            .unwrap();
+        settings
+            .set_docs_repository(
+                "PVT_alpha",
+                DocsRepository {
+                    repository_id: "R_docs_a".into(),
+                    full_name: "acme/alpha-docs".into(),
+                },
+            )
+            .unwrap();
+        settings
+            .set_current_for_repository(
+                docs_a.path(),
+                KnowledgeRepository {
+                    id: "R_docs_a".into(),
+                    full_name: "acme/alpha-docs".into(),
+                },
+            )
+            .unwrap();
+
+        let services = AppServices::new(settings.clone());
+        let (_, dir_a) = prepare_ai_terminal(&services, AiTool::Claude, app_data.path()).unwrap();
+        let rules_a =
+            std::fs::read_to_string(app_data.path().join("okhub").join(rules_file_name(&dir_a)))
+                .unwrap();
+        assert!(rules_a.contains("Alpha Roadmap"), "{rules_a}");
+        assert!(rules_a.contains("acme"), "{rules_a}");
+        assert!(rules_a.contains("#12"), "{rules_a}");
+        assert!(rules_a.contains("acme/alpha-docs"), "{rules_a}");
+        assert!(rules_a.contains("acme/alpha-web"), "{rules_a}");
+
+        // Now switch active project & repository to Beta -> generated rules must dynamically follow Beta!
+        settings
+            .link_project(LinkedProject {
+                id: "PVT_beta".into(),
+                owner: "globex".into(),
+                number: 77,
+                title: "Beta Board".into(),
+                scope: ProjectOwnerScope::Organization,
+            })
+            .unwrap();
+        settings.set_active_project("PVT_beta").unwrap();
+        settings
+            .set_docs_repository(
+                "PVT_beta",
+                DocsRepository {
+                    repository_id: "R_docs_b".into(),
+                    full_name: "globex/beta-docs".into(),
+                },
+            )
+            .unwrap();
+        settings
+            .set_current_for_repository(
+                docs_b.path(),
+                KnowledgeRepository {
+                    id: "R_docs_b".into(),
+                    full_name: "globex/beta-docs".into(),
+                },
+            )
+            .unwrap();
+
+        let (_, dir_b) = prepare_ai_terminal(&services, AiTool::Claude, app_data.path()).unwrap();
+        let rules_b =
+            std::fs::read_to_string(app_data.path().join("okhub").join(rules_file_name(&dir_b)))
+                .unwrap();
+        assert!(rules_b.contains("Beta Board"), "{rules_b}");
+        assert!(rules_b.contains("#77"), "{rules_b}");
+        assert!(rules_b.contains("globex/beta-docs"), "{rules_b}");
+        assert!(rules_b.contains("globex/beta-api"), "{rules_b}");
+        assert!(!rules_b.contains("acme/alpha-web"), "{rules_b}");
     }
 }

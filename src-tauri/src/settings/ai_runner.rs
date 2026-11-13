@@ -69,6 +69,89 @@ pub fn shell_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveProjectRuleInfo {
+    pub id: String,
+    pub owner: String,
+    pub number: u64,
+    pub title: String,
+    pub scope: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkedCodeRepoRuleInfo {
+    pub key: String,
+    pub label: String,
+    pub full_name: String,
+    pub local_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ActiveWorkspaceAiContext {
+    pub workspace_title: Option<String>,
+    pub docs_repository_full_name: Option<String>,
+    pub project: Option<ActiveProjectRuleInfo>,
+    pub code_repositories: Vec<LinkedCodeRepoRuleInfo>,
+}
+
+pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
+    let mut lines = vec![
+        "# 현재 선택된 프로젝트 · 저장소 컨텍스트 (앱 자동 반영)".to_owned(),
+        String::new(),
+        "모든 문서 작성, 기획 PR, 백로그 등록, 코드 구현 PR은 아래 **현재 선택된 대상**에만 반영한다."
+            .to_owned(),
+        String::new(),
+    ];
+    if let Some(title) = context.workspace_title.as_deref() {
+        lines.push(format!("- 활성 워크스페이스: `{title}`"));
+    }
+    match &context.project {
+        Some(project) => {
+            lines.push(format!(
+                "- 선택된 GitHub Project: `{}` (`{}` #{} · id: `{}` · scope: `{}`)",
+                project.title, project.owner, project.number, project.id, project.scope
+            ));
+        }
+        None => {
+            lines.push(
+                "- 선택된 GitHub Project: 없음 (문서 저장소 단독 모드 — 보드 작업 전 프로젝트 연결 필요)"
+                    .to_owned(),
+            );
+        }
+    }
+    match context.docs_repository_full_name.as_deref() {
+        Some(full_name) => {
+            lines.push(format!(
+                "- 연결된 문서 저장소 (기획 PR 대상): `{full_name}`"
+            ));
+        }
+        None => {
+            lines.push("- 연결된 문서 저장소: 로컬 폴더 워크스페이스".to_owned());
+        }
+    }
+    if context.code_repositories.is_empty() {
+        lines.push(
+            "- 연결된 코드 저장소 (`.okf/workspace.yml`): 선언된 코드 저장소 없음".to_owned(),
+        );
+    } else {
+        lines.push("- 연결된 코드 저장소 (구현 PR · 코드 Worktree 대상):".to_owned());
+        for repo in &context.code_repositories {
+            match repo.local_path.as_deref() {
+                Some(path) => lines.push(format!(
+                    "  - `{}` ({}): `{}` — 로컬 경로: `{}`",
+                    repo.key, repo.label, repo.full_name, path
+                )),
+                None => lines.push(format!(
+                    "  - `{}` ({}): `{}`",
+                    repo.key, repo.label, repo.full_name
+                )),
+            }
+        }
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
 pub fn compose_rules(app_rules: &str, fixed_rules: &str, project_rules: Option<&str>) -> String {
     let app_rules = app_rules.trim();
     let fixed_rules = fixed_rules.trim();

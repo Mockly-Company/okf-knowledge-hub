@@ -10,7 +10,10 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::error::{AppError, ErrorCode};
 
-use super::contract::{DocumentAsset, DocumentContent, DocumentSummary, TableOfContentsItem};
+use super::contract::{
+    CompanionHtml, DocumentAsset, DocumentContent, DocumentSummary, HtmlSyncStatus,
+    TableOfContentsItem,
+};
 use super::frontmatter::parse_document;
 
 const MAX_ASSET_BYTES: u64 = 10 * 1024 * 1024;
@@ -81,11 +84,19 @@ impl DocumentReader {
 
         let bytes = fs::read(&path).map_err(|error| path_error(&path, error.to_string()))?;
         let metadata = fs::metadata(&path).map_err(|error| path_error(&path, error.to_string()))?;
-        document_content_from_bytes(
+        let mut content = document_content_from_bytes(
             &portable_path(&self.repository_root, &path),
             bytes,
             modified_at_unix_ms(&metadata),
-        )
+        )?;
+        let (companion_html, html_sync_status) = self.load_companion_html(
+            &path,
+            &content.summary.file_name,
+            content.summary.modified_at_unix_ms,
+        );
+        content.companion_html = companion_html;
+        content.html_sync_status = html_sync_status;
+        Ok(content)
     }
 
     pub fn read_asset(&self, repository_relative_path: &str) -> Result<DocumentAsset, AppError> {
@@ -159,6 +170,133 @@ impl DocumentReader {
         }
         Ok(canonical)
     }
+
+    fn load_companion_html(
+        &self,
+        markdown_path: &Path,
+        file_name: &str,
+        markdown_modified_ms: i64,
+    ) -> (Option<CompanionHtml>, HtmlSyncStatus) {
+        if is_reserved_markdown_file(file_name) {
+            return (None, HtmlSyncStatus::NotApplicable);
+        }
+        let candidate = markdown_path.with_extension("html");
+        let Ok(canonical) = candidate.canonicalize() else {
+            return (None, HtmlSyncStatus::Missing);
+        };
+        let Ok(metadata) = fs::metadata(&canonical) else {
+            return (None, HtmlSyncStatus::Missing);
+        };
+        if !canonical.starts_with(&self.repository_root)
+            || is_git_path(&self.repository_root, &canonical)
+            || !metadata.is_file()
+            || metadata.len() > MAX_ASSET_BYTES
+        {
+            return (None, HtmlSyncStatus::Missing);
+        }
+        let Ok(bytes) = fs::read(&canonical) else {
+            return (None, HtmlSyncStatus::Missing);
+        };
+        let Ok(raw_html) = String::from_utf8(bytes) else {
+            return (None, HtmlSyncStatus::Missing);
+        };
+        let html_modified_ms = modified_at_unix_ms(&metadata);
+        let html = self.inline_local_stylesheets(&canonical, &raw_html);
+        // Allow 5s tolerance for git checkout/fast-forward mtime jitter.
+        let sync_status = if html_modified_ms.saturating_add(5_000) >= markdown_modified_ms {
+            HtmlSyncStatus::InSync
+        } else {
+            HtmlSyncStatus::Outdated
+        };
+        (
+            Some(CompanionHtml {
+                path: portable_path(&self.repository_root, &canonical),
+                html,
+                modified_at_unix_ms: html_modified_ms,
+            }),
+            sync_status,
+        )
+    }
+
+    fn inline_local_stylesheets(&self, html_path: &Path, raw_html: &str) -> String {
+        let Some(parent_dir) = html_path.parent() else {
+            return raw_html.to_owned();
+        };
+        let mut output = String::with_capacity(raw_html.len());
+        let mut cursor = 0;
+        while let Some(rel_idx) = raw_html[cursor..].find("<link") {
+            let tag_start = cursor + rel_idx;
+            output.push_str(&raw_html[cursor..tag_start]);
+            let Some(end_offset) = raw_html[tag_start..].find('>') else {
+                output.push_str(&raw_html[tag_start..]);
+                return output;
+            };
+            let tag_end = tag_start + end_offset + 1;
+            let tag = &raw_html[tag_start..tag_end];
+            if let Some(inlined) = self.try_inline_stylesheet_tag(parent_dir, tag) {
+                output.push_str(&inlined);
+            } else {
+                output.push_str(tag);
+            }
+            cursor = tag_end;
+        }
+        output.push_str(&raw_html[cursor..]);
+        output
+    }
+
+    fn try_inline_stylesheet_tag(&self, html_dir: &Path, tag: &str) -> Option<String> {
+        let lower = tag.to_ascii_lowercase();
+        if !lower.contains("stylesheet") {
+            return None;
+        }
+        let href = extract_html_attr(tag, "href")?;
+        let trimmed = href.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("http://")
+            || trimmed.starts_with("https://")
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("data:")
+        {
+            return None;
+        }
+        let clean_href = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+        let css_candidate = html_dir.join(clean_href);
+        let canonical_css = css_candidate.canonicalize().ok()?;
+        let metadata = fs::metadata(&canonical_css).ok()?;
+        if !canonical_css.starts_with(&self.repository_root)
+            || is_git_path(&self.repository_root, &canonical_css)
+            || !metadata.is_file()
+            || !is_extension(&canonical_css, "css")
+            || metadata.len() > MAX_ASSET_BYTES
+        {
+            return None;
+        }
+        let css = fs::read_to_string(&canonical_css).ok()?;
+        let safe_css = css.replace("</style", "<\\/style");
+        Some(format!("<style>{safe_css}</style>"))
+    }
+}
+
+fn is_reserved_markdown_file(file_name: &str) -> bool {
+    file_name == "index.md" || file_name == "log.md" || file_name.eq_ignore_ascii_case("README.md")
+}
+
+fn extract_html_attr<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
+    let lower = tag.to_ascii_lowercase();
+    let needle = format!("{attr_name}=");
+    let pos = lower.find(&needle)?;
+    let after = &tag[pos + needle.len()..].trim_start();
+    let quote = after.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        let rest = &after[quote.len_utf8()..];
+        let end = rest.find(quote)?;
+        Some(&rest[..end])
+    } else {
+        let end = after
+            .find(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/')
+            .unwrap_or(after.len());
+        Some(&after[..end])
+    }
 }
 
 pub(crate) fn document_content_from_bytes(
@@ -195,6 +333,8 @@ pub(crate) fn document_content_from_bytes(
         table_of_contents: table_of_contents(&markdown),
         markdown,
         last_commit: None,
+        companion_html: None,
+        html_sync_status: HtmlSyncStatus::NotApplicable,
     })
 }
 
@@ -599,6 +739,65 @@ mod tests {
                 DocumentAsset::Raster { mime_type, .. } if mime_type == expected_mime
             ));
         }
+    }
+
+    #[test]
+    fn reads_companion_html_inlines_local_css_and_reports_sync_status() {
+        use super::super::contract::HtmlSyncStatus;
+
+        let repo = fixture_repo(&[
+            ("docs/_assets/okf-doc.css", "body { color: #171923; }"),
+            ("docs/product/spec.md", "# Spec\n\nBody"),
+            (
+                "docs/product/spec.html",
+                r#"<!doctype html><html><head><link rel="stylesheet" href="../_assets/okf-doc.css" /><link rel="stylesheet" href="https://example.com/ext.css" /></head><body><h1>Spec</h1></body></html>"#,
+            ),
+            ("docs/product/only-md.md", "# Only Md"),
+            ("docs/product/index.md", "# Index"),
+            ("docs/log.md", "# Log"),
+            ("docs/README.md", "# Readme"),
+        ]);
+        let reader = reader(&repo);
+
+        let paired = reader.read_document("docs/product/spec.md").unwrap();
+        assert_eq!(paired.html_sync_status, HtmlSyncStatus::InSync);
+        let companion = paired.companion_html.expect("companion html present");
+        assert_eq!(companion.path, "docs/product/spec.html");
+        assert!(companion.html.contains("body { color: #171923; }"));
+        assert!(companion.html.contains("https://example.com/ext.css"));
+
+        let missing = reader.read_document("docs/product/only-md.md").unwrap();
+        assert_eq!(missing.html_sync_status, HtmlSyncStatus::Missing);
+        assert!(missing.companion_html.is_none());
+
+        for reserved in ["docs/product/index.md", "docs/log.md", "docs/README.md"] {
+            let doc = reader.read_document(reserved).unwrap();
+            assert_eq!(doc.html_sync_status, HtmlSyncStatus::NotApplicable);
+            assert!(doc.companion_html.is_none());
+        }
+    }
+
+    #[test]
+    fn reports_outdated_when_companion_html_is_older_than_markdown() {
+        use super::super::contract::HtmlSyncStatus;
+        use std::time::Duration;
+
+        let repo = fixture_repo(&[
+            ("docs/guide.md", "# Guide"),
+            ("docs/guide.html", "<html><body>Guide</body></html>"),
+        ]);
+        let html_file = fs::File::options()
+            .write(true)
+            .open(repo.path().join("docs/guide.html"))
+            .unwrap();
+        let older = std::time::SystemTime::now() - Duration::from_secs(30);
+        html_file.set_modified(older).unwrap();
+        drop(html_file);
+
+        let reader = reader(&repo);
+        let doc = reader.read_document("docs/guide.md").unwrap();
+        assert_eq!(doc.html_sync_status, HtmlSyncStatus::Outdated);
+        assert!(doc.companion_html.is_some());
     }
 
     fn fixture_repo(files: &[(&str, &str)]) -> TempDir {

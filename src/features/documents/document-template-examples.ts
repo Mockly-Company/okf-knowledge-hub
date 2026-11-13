@@ -163,9 +163,44 @@ const examples: Record<string, { title: string; lines: string[] }> = {
       "> [!NOTE]", "> 담당자·기한·추적 작업 링크는 실제 회고에서 지정합니다. 이 문서는 가상 작성 예시입니다.",
     ],
   },
+  "team:product-spec": {
+    title: "기획 PR 승인 워크플로우",
+    lines: [
+      "# 기획 PR 승인 워크플로우", "", "## 이번 변경 요약", "",
+      "- [NEW] 바뀐 문서의 사람용 `.html` 뷰 확인 후 원클릭 `승인 및 머지` 흐름을 정의합니다.", "",
+      "## 요약", "", "기획 변경 PR의 문서들을 인앱에서 빠르게 확인하고 머지합니다.", "",
+      "## 범위", "", "- **포함**: 변경 문서 목록, `.html` 뷰어, 원클릭 Squash 머지",
+      "- **제외**: 코드 저장소 디버깅", "",
+      "## 사용자 흐름", "", "1. 작성자가 작업 브랜치에서 `.md` + `.html`을 갱신해 PR을 올립니다.",
+      "2. 검토자가 변경 문서의 `이번 PR에서 달라진 점` 배너를 확인합니다.",
+      "3. `승인 및 머지` 클릭 시 기본 브랜치에 반영됩니다.", "",
+      "## 완료 조건", "", "- [ ] 변경 문서 전환 확인 가능", "- [ ] 머지 직후 로컬 문서 트리 자동 동기화",
+    ],
+  },
+  "team:design-doc": {
+    title: "프로젝트별 세션 격리 구조",
+    lines: [
+      "# 프로젝트별 세션 격리 구조", "", "## 이번 변경 요약", "",
+      "- [NEW] 선택된 프로젝트 전환 시 문서·보드·AI 세션을 독립 보존하는 설계안입니다.", "",
+      "## 해결하려는 문제", "", "프로젝트를 바꿀 때 진행 중이던 초안과 터미널 컨텍스트가 섞이는 문제를 막습니다.", "",
+      "## 확정 구조 및 흐름", "", "선택된 `HubWorkspace` ID별로 상태를 분리해 보존합니다.",
+    ],
+  },
+  "team:decision-record": {
+    title: "AI용 .md와 사람용 .html 2벌 유지 결정",
+    lines: [
+      "# AI용 .md와 사람용 .html 2벌 유지 결정", "", "## 이번 변경 요약", "",
+      "- [NEW] `.md` 단일 원본과 사람용 동반 `.html` 뷰 2벌 체계를 채택합니다.", "",
+      "## 결정 결과", "", "AI는 `.md`만 읽고 쓰며, 사람 열람 편의를 위해 동명 `.html`을 함께 생성합니다.",
+    ],
+  },
 };
 
 export function getDocumentTemplateExample(templateId: string): DocumentTemplateExample | null {
+  if (examples[templateId]) {
+    const teamExample = examples[templateId];
+    return { title: teamExample.title, markdown: teamExample.lines.join("\n") };
+  }
   if (!templateId.startsWith("builtin:")) return null;
   const example = examples[templateId.slice("builtin:".length)];
   return example ? { title: example.title, markdown: example.lines.join("\n") } : null;
