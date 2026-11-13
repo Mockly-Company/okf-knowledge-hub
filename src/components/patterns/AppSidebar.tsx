@@ -15,7 +15,7 @@ import {
   useSyncExternalStore,
   type RefObject,
 } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button, IconButton } from "@/components/ui/button";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
@@ -271,7 +271,7 @@ export function AppSidebar({
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={() => setConnectDialogOpen(true)}>
                     <Plus aria-hidden="true" strokeWidth={1.75} />
-                    <span>새 워크스페이스 연결</span>
+                    <span>새 워크스페이스 추가</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => setManageDialogOpen(true)}>
                     <SlidersHorizontal aria-hidden="true" strokeWidth={1.75} />
@@ -279,18 +279,28 @@ export function AppSidebar({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+            ) : activeProject.isListing ? (
+              <div
+                role="status"
+                className="flex min-h-[var(--control-height)] w-full items-center gap-[var(--space-2)] rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
+              >
+                워크스페이스 불러오는 중…
+              </div>
+            ) : activeProject.isListError ? null : isRootDocumentsAlias ||
+              location.pathname === "/documents" ? (
+              <div className="flex min-h-[var(--control-height)] w-full items-center gap-[var(--space-2)] rounded-[var(--radius-md)] border border-dashed border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+                연결된 워크스페이스 없음
+              </div>
             ) : (
               <Button
-                type="button"
+                asChild
                 variant="secondary"
-                onClick={() => setConnectDialogOpen(true)}
-                disabled={activeProject.isListing}
                 className="w-full justify-start"
               >
-                <Plus aria-hidden="true" strokeWidth={1.75} />
-                {activeProject.isListing
-                  ? "워크스페이스 불러오는 중"
-                  : "워크스페이스 연결"}
+                <Link to="/documents">
+                  <Plus aria-hidden="true" strokeWidth={1.75} />
+                  워크스페이스 시작하기
+                </Link>
               </Button>
             )}
 

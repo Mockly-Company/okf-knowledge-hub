@@ -1,5 +1,5 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -75,15 +75,6 @@ export function DocumentsPage({
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
   const docsMissing = activeProject?.docsMissing ?? false;
   const activeProjectId = activeProject?.activeProjectId ?? null;
-  const hasWorkspaceModel = Boolean(
-    activeProject && Array.isArray(activeProject.workspaces),
-  );
-  const pickerResetKey = activeWorkspace?.id ?? activeProjectId;
-  const [pickerOpen, setPickerOpen] = useState(false);
-  // 워크스페이스를 바꾸면 열어 둔 저장소 선택을 닫는다.
-  useEffect(() => {
-    setPickerOpen(false);
-  }, [pickerResetKey]);
   const picker =
     activeWorkspace !== null ? (
       <WorkspaceDocsRepositoryPicker
@@ -92,7 +83,6 @@ export function DocumentsPage({
         preferredOwner={activeWorkspace.project?.owner ?? null}
         gateway={docsRepositoryGateway}
         repositoryGateway={repositoryGateway}
-        onDone={() => setPickerOpen(false)}
       />
     ) : activeProjectId !== null ? (
       <ProjectDocsRepositoryPicker
@@ -100,7 +90,6 @@ export function DocumentsPage({
         projectId={activeProjectId}
         gateway={docsRepositoryGateway}
         repositoryGateway={repositoryGateway}
-        onDone={() => setPickerOpen(false)}
       />
     ) : null;
   const currentDocsQuery = useCurrentDocsRepositoryQuery(repositoryGateway);
@@ -115,13 +104,14 @@ export function DocumentsPage({
     "document_path_invalid",
   ].includes(state.recoverableError?.code ?? "");
   const needsWorkspaceOnboarding =
-    hasWorkspaceModel &&
-    activeProject!.workspaces.length === 0 &&
+    activeProject != null &&
+    Array.isArray(activeProject.workspaces) &&
+    activeProject.workspaces.length === 0 &&
     !connectedWorkspace &&
     !currentDocsQuery.isPending &&
     !currentDocsQuery.isError &&
-    !activeProject!.isListing &&
-    !activeProject!.isListError &&
+    !activeProject.isListing &&
+    !activeProject.isListError &&
     (state.status !== "error" || invalidRoot);
   const creationDialog = (
     <NewDocumentDialog
@@ -303,36 +293,8 @@ export function DocumentsPage({
           className="mb-[var(--space-4)]"
           docsRepositoryGateway={docsRepositoryGateway}
           repositoryGateway={repositoryGateway}
-          extraActions={
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setPickerOpen((open) => !open)}
-            >
-              다른 저장소 연결
-            </Button>
-          }
         />
-      ) : connectedWorkspace && !docsMissing ? (
-        <p
-          role="status"
-          className="documents-page__notice flex flex-wrap items-center gap-x-[var(--space-2)] gap-y-[var(--space-1)] text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]"
-        >
-          <span className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-            {connectedWorkspace.repository?.fullName ?? "저장소 정보 없음"}
-          </span>
-          {picker !== null ? (
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => setPickerOpen((open) => !open)}
-            >
-              다른 저장소 연결
-            </Button>
-          ) : null}
-        </p>
       ) : null}
-      {pickerOpen ? picker : null}
       <NotOkfNotice gateway={repositoryGateway} />
       <DocsPullNotice />
 

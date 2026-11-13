@@ -544,7 +544,7 @@ describe("DocumentsPage", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("shows project ownership context when linked to a Project and standalone badge when docs-only", async () => {
+  it("shows read-only workspace context without duplicate management buttons and prompts inline only when docs are missing", async () => {
     const gateway = new FakeDocumentsGateway();
     gateway.sessionSnapshot.lastOpenedPath = null;
     const connectionGateway = FakeWorkspaceConnectionGateway.connected();
@@ -575,18 +575,38 @@ describe("DocumentsPage", () => {
           fullName: "Mockly-Company/handbook",
         },
       },
+      {
+        id: "project:PVT_2",
+        title: "문서 미연결 보드",
+        project: {
+          id: "PVT_2",
+          owner: "Mockly-Company",
+          number: 2,
+          title: "문서 미연결 보드",
+          scope: "organization",
+        },
+        docsRepository: null,
+      },
     ];
     docsRepoGateway.activeWorkspaceId = "project:PVT_1";
 
-    function SwitchStandaloneButton() {
+    function WorkspaceSwitcherButtons() {
       const { selectWorkspace } = ActiveProjectModule.useActiveProject();
       return (
-        <button
-          type="button"
-          onClick={() => void selectWorkspace("docs:Mockly-Company/handbook")}
-        >
-          switch-standalone
-        </button>
+        <div>
+          <button
+            type="button"
+            onClick={() => void selectWorkspace("docs:Mockly-Company/handbook")}
+          >
+            switch-standalone
+          </button>
+          <button
+            type="button"
+            onClick={() => void selectWorkspace("project:PVT_2")}
+          >
+            switch-missing-docs
+          </button>
+        </div>
       );
     }
 
@@ -599,7 +619,7 @@ describe("DocumentsPage", () => {
             docsRepositoryGateway={docsRepoGateway}
           >
             <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
-              <SwitchStandaloneButton />
+              <WorkspaceSwitcherButtons />
               <main aria-label="OkHub">
                 <DocumentsPage
                   docsRepositoryGateway={docsRepoGateway}
@@ -613,19 +633,40 @@ describe("DocumentsPage", () => {
     );
 
     expect(
-      await screen.findByText("Project · Mockly-Company #1"),
+      await screen.findByRole("searchbox", { name: "문서 검색" }),
     ).toBeVisible();
+    expect(
+      await screen.findByRole("region", { name: "현재 작업 공간" }),
+    ).toBeVisible();
+    expect(screen.getByText("Project · Mockly-Company #1")).toBeVisible();
     expect(screen.getByText("Mockly 기획 보드")).toBeVisible();
     expect(screen.getByText(/Mockly-Company\/Mockly/)).toBeVisible();
     expect(
-      screen.getByRole("region", { name: "현재 작업 공간" }),
-    ).toBeVisible();
+      screen.queryByRole("button", { name: "워크스페이스 설정" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "다른 저장소 연결" }),
+    ).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "switch-standalone" }));
 
     expect(await screen.findByText("문서 저장소 단독")).toBeVisible();
     expect(
-      screen.getByRole("button", { name: "Project 보드 연결" }),
+      screen.queryByRole("button", { name: "Project 보드 연결" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "워크스페이스 설정" }),
+    ).toBeNull();
+
+    await user.click(
+      screen.getByRole("button", { name: "switch-missing-docs" }),
+    );
+
+    expect(
+      await screen.findByText("Project · Mockly-Company #2"),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/문서 미연결 보드.*소속 문서 저장소를 선택하세요/),
     ).toBeVisible();
   });
 });

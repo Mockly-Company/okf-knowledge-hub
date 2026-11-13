@@ -75,6 +75,12 @@ describe("App", () => {
     expect(
       screen.getByRole("button", { name: "GitHub로 로그인" }),
     ).toBeVisible();
+    expect(
+      screen.queryByRole("link", { name: "Settings에서 로그인" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "워크스페이스 연결" }),
+    ).toBeNull();
   });
 
   it("closes the document session and keeps the app shell after logout", async () => {
@@ -287,10 +293,10 @@ describe("App", () => {
     // 2. 사이드바에서 단독 문서 저장소 워크스페이스 추가
     await user.click(switcher);
     await user.click(
-      await screen.findByRole("menuitem", { name: "새 워크스페이스 연결" }),
+      await screen.findByRole("menuitem", { name: "새 워크스페이스 추가" }),
     );
     const dialog = await screen.findByRole("dialog", {
-      name: "새 워크스페이스 연결",
+      name: "새 워크스페이스 추가",
     });
     await user.click(
       within(dialog).getByRole("tab", { name: /문서 저장소만 관리/ }),

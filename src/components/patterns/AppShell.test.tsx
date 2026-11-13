@@ -138,4 +138,58 @@ describe("AppShell", () => {
       expect(screen.queryByRole("link", { name: "Settings에서 로그인" })).toBeNull(),
     );
   });
+
+  it("hides the duplicate top sign-in banner on /documents while 0-workspace inline onboarding is active", async () => {
+    const { ActiveProjectProvider } = await import(
+      "@/features/active-project/ActiveProjectProvider"
+    );
+    const { FakeDocsRepositoryGateway } = await import(
+      "@/test/FakeDocsRepositoryGateway"
+    );
+    const { FakeProjectBoardGateway } = await import(
+      "@/test/FakeProjectBoardGateway"
+    );
+    const gateway = FakeWorkspaceConnectionGateway.disconnected();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    const projectGateway = new FakeProjectBoardGateway();
+
+    render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={gateway}>
+          <ActiveProjectProvider
+            projectGateway={projectGateway}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <DocumentsProvider gateway={new FakeDocumentsGateway()}>
+              <MemoryRouter initialEntries={["/documents"]}>
+                <Routes>
+                  <Route
+                    element={
+                      <AppShell
+                        docsRepositoryGateway={docsRepoGateway}
+                        repositoryGateway={gateway}
+                      />
+                    }
+                  >
+                    <Route path="documents" element={<h1>Documents</h1>} />
+                    <Route path="project" element={<h1>Project</h1>} />
+                  </Route>
+                </Routes>
+              </MemoryRouter>
+            </DocumentsProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    await screen.findByText("연결된 워크스페이스 없음");
+    expect(
+      screen.queryByRole("link", { name: "Settings에서 로그인" }),
+    ).toBeNull();
+
+    await userEvent.click(screen.getByRole("link", { name: "Board" }));
+    expect(
+      await screen.findByRole("link", { name: "Settings에서 로그인" }),
+    ).toHaveAttribute("href", "/settings");
+  });
 });

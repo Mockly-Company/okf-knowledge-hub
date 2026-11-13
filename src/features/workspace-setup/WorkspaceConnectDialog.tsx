@@ -33,10 +33,10 @@ export function WorkspaceConnectDialog({
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent size="wide" aria-label="새 워크스페이스 연결">
+      <DialogContent size="wide" aria-label="새 워크스페이스 추가">
         <DialogHeader>
           <div className="grid gap-[var(--space-1)]">
-            <DialogTitle>새 워크스페이스 연결</DialogTitle>
+            <DialogTitle>새 워크스페이스 추가</DialogTitle>
             <DialogDescription>
               새 GitHub Project + 문서 저장소 묶음이나 단독 문서 저장소를 추가합니다.
             </DialogDescription>

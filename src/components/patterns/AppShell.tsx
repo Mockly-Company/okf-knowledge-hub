@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { PanelLeftOpen } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/button";
 import {
@@ -7,10 +7,15 @@ import {
   StatusFeedbackDescription,
   StatusFeedbackTitle,
 } from "@/components/ui/status-feedback";
+import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import { useWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { AiGateway } from "@/features/ai/AiGateway";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
-import type { ProjectRepositoryGateway } from "@/features/docs-repository/ProjectDocsRepository";
+import {
+  sharedRepositoryGateway,
+  useCurrentDocsRepositoryQuery,
+  type ProjectRepositoryGateway,
+} from "@/features/docs-repository/ProjectDocsRepository";
 import { AppSidebar } from "./AppSidebar";
 
 export function AppShell({
@@ -22,7 +27,29 @@ export function AppShell({
   repositoryGateway?: ProjectRepositoryGateway;
   aiGateway?: AiGateway;
 }) {
+  const location = useLocation();
   const { account } = useWorkspaceConnection();
+  const activeProject = useOptionalActiveProject();
+  const currentDocsQuery = useCurrentDocsRepositoryQuery(
+    repositoryGateway ?? sharedRepositoryGateway,
+  );
+  const connectedWorkspace =
+    currentDocsQuery.data?.status === "connected"
+      ? currentDocsQuery.data
+      : null;
+  const isDocumentsLanding =
+    location.pathname === "/" || location.pathname === "/documents";
+  const inlineOnboardingActive = Boolean(
+    isDocumentsLanding &&
+      activeProject &&
+      Array.isArray(activeProject.workspaces) &&
+      activeProject.workspaces.length === 0 &&
+      !activeProject.isListing &&
+      !activeProject.isListError &&
+      !connectedWorkspace &&
+      !currentDocsQuery.isPending &&
+      !currentDocsQuery.isError,
+  );
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const collapseButtonRef = useRef<HTMLButtonElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
@@ -79,7 +106,8 @@ export function AppShell({
           isSidebarOpen ? "" : " app-shell__main--sidebar-collapsed"
         }`}
       >
-        {account.status === "reauthentication_required" ? (
+        {!inlineOnboardingActive &&
+        account.status === "reauthentication_required" ? (
           <StatusFeedback
             variant="banner"
             tone="warning"
@@ -96,7 +124,7 @@ export function AppShell({
               GitHub 인증이 만료되었습니다. 다시 로그인해 주세요.
             </StatusFeedbackDescription>
           </StatusFeedback>
-        ) : account.status === "signed_out" ? (
+        ) : !inlineOnboardingActive && account.status === "signed_out" ? (
           <StatusFeedback
             variant="banner"
             tone="info"
