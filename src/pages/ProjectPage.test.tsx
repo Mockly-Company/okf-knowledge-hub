@@ -1246,4 +1246,42 @@ describe("ProjectPage project switching", () => {
       screen.getByRole("article", { name: "Issue #20 Beta 백엔드 이슈" }),
     ).toBeInTheDocument();
   });
+
+  it("guides users to Documents onboarding instead of opening a duplicate connect modal when no workspace exists", async () => {
+    const { MemoryRouter } = await import("react-router-dom");
+    const projectGateway = FakeProjectBoardGateway.empty();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [];
+    docsRepoGateway.activeWorkspaceId = null;
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+
+    render(
+      <MemoryRouter initialEntries={["/project"]}>
+        <WorkspaceConnectionProvider gateway={workspaceGateway}>
+          <ActiveProjectProvider
+            projectGateway={projectGateway}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <ProjectPage
+              gateway={projectGateway}
+              docsRepositoryGateway={docsRepoGateway}
+              repositoryGateway={workspaceGateway}
+            />
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByText(
+        "아직 연결된 워크스페이스가 없습니다. 먼저 워크스페이스를 시작해 GitHub Project 보드를 연결하세요.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "워크스페이스 시작하기" }),
+    ).toHaveAttribute("href", "/documents");
+    expect(
+      screen.queryByRole("button", { name: "워크스페이스 연결" }),
+    ).toBeNull();
+  });
 });

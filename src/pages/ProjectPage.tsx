@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link, useInRouterContext } from "react-router-dom";
 import { Plus, RefreshCw } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormField } from "@/components/patterns/FormField";
@@ -34,7 +35,6 @@ import {
   sharedRepositoryGateway,
   type ProjectRepositoryGateway,
 } from "@/features/docs-repository/ProjectDocsRepository";
-import { WorkspaceConnectDialog } from "@/features/workspace-setup/WorkspaceConnectDialog";
 import { WorkspaceContextBar } from "@/features/workspace-setup/WorkspaceContextBar";
 import { WorkspaceManageDialog } from "@/features/workspace-setup/WorkspaceManageDialog";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
@@ -325,6 +325,7 @@ export function ProjectPage({
   docsRepositoryGateway?: DocsRepositoryGateway;
   repositoryGateway?: ProjectRepositoryGateway;
 }) {
+  const inRouterContext = useInRouterContext();
   const activeProject = useOptionalActiveProject();
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
   const isStandaloneDocsWorkspace =
@@ -389,15 +390,13 @@ export function ProjectPage({
   const [view, setView] = useState<BoardView>("tree");
   const [hideDone, setHideDone] = useState(true);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [connectDialogOpen, setConnectDialogOpen] = useState(false);
 
-  const workspaceResetKey = activeWorkspace?.id ?? queryProjectId ?? "none";
+  const workspaceResetKey = `${activeWorkspace?.id ?? "none"}::${queryProjectId ?? "none"}`;
   useEffect(() => {
     setFilter("all");
     setView("tree");
     setHideDone(true);
     setManageDialogOpen(false);
-    setConnectDialogOpen(false);
   }, [workspaceResetKey]);
 
   // 전환 중 로딩 문구에 쓸 프로젝트 명. 목록에 없으면 일반 문구로 폴백.
@@ -539,28 +538,28 @@ export function ProjectPage({
         </section>
       ) : isUnlinked ? (
         <div className="mt-[var(--space-4)] grid justify-items-start gap-[var(--space-3)]">
-          <p role="status" className="m-0 text-[var(--color-text-muted)]">
-            선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.
-          </p>
           {activeProject &&
           Array.isArray(activeProject.workspaces) &&
-          activeProject.workspaces.length === 0 ? (
+          activeProject.workspaces.length === 0 &&
+          !activeProject.isListing &&
+          !activeProject.isListError ? (
             <>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setConnectDialogOpen(true)}
-              >
-                워크스페이스 연결
+              <p role="status" className="m-0 text-[var(--color-text-muted)]">
+                아직 연결된 워크스페이스가 없습니다. 먼저 워크스페이스를 시작해 GitHub Project 보드를 연결하세요.
+              </p>
+              <Button asChild variant="secondary">
+                {inRouterContext ? (
+                  <Link to="/documents">워크스페이스 시작하기</Link>
+                ) : (
+                  <a href="#/documents">워크스페이스 시작하기</a>
+                )}
               </Button>
-              <WorkspaceConnectDialog
-                open={connectDialogOpen}
-                onOpenChange={setConnectDialogOpen}
-                docsRepositoryGateway={docsRepositoryGateway}
-                repositoryGateway={repositoryGateway}
-              />
             </>
-          ) : null}
+          ) : (
+            <p role="status" className="m-0 text-[var(--color-text-muted)]">
+              선택된 프로젝트가 없습니다. 사이드바에서 프로젝트를 추가하면 이슈를 볼 수 있습니다.
+            </p>
+          )}
         </div>
       ) : null}
 

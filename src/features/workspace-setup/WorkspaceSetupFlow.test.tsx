@@ -288,7 +288,8 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
     expect(docsTab).toHaveAttribute("aria-selected", "true");
   });
 
-  it("renders nested Project > 소속 문서 저장소 hierarchy in WorkspaceManageDialog and WorkspaceContextBar", async () => {
+  it("renders nested Project > 소속 문서 저장소 hierarchy in WorkspaceManageDialog and read-only WorkspaceContextBar", async () => {
+    const { useState } = await import("react");
     const user = userEvent.setup();
     const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
     const projectGateway = FakeProjectBoardGateway.empty();
@@ -308,6 +309,27 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
     );
     const documentsGateway = new FakeDocumentsGateway();
 
+    function ManageHarness() {
+      const [manageOpen, setManageOpen] = useState(false);
+      return (
+        <>
+          <WorkspaceContextBar
+            docsRepositoryGateway={docsGateway}
+            repositoryGateway={workspaceGateway}
+          />
+          <button type="button" onClick={() => setManageOpen(true)}>
+            open-sidebar-manage
+          </button>
+          <WorkspaceManageDialog
+            open={manageOpen}
+            onOpenChange={setManageOpen}
+            docsRepositoryGateway={docsGateway}
+            repositoryGateway={workspaceGateway}
+          />
+        </>
+      );
+    }
+
     render(
       <TestQueryProvider>
         <WorkspaceConnectionProvider gateway={workspaceGateway}>
@@ -316,17 +338,14 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
             docsRepositoryGateway={docsGateway}
           >
             <DocumentsProvider gateway={documentsGateway} searchDebounceMs={0}>
-              <WorkspaceContextBar
-                docsRepositoryGateway={docsGateway}
-                repositoryGateway={workspaceGateway}
-              />
+              <ManageHarness />
             </DocumentsProvider>
           </ActiveProjectProvider>
         </WorkspaceConnectionProvider>
       </TestQueryProvider>,
     );
 
-    // 1. 단독 문서 모드: WorkspaceContextBar에서 단독 상태 확인 후 설정 다이얼로그 열기
+    // 1. 단독 문서 모드: WorkspaceContextBar는 읽기 전용 컨텍스트만 표시하고 중복 설정 버튼은 두지 않는다
     const contextBar = await screen.findByRole("region", {
       name: "현재 작업 공간",
     });
@@ -335,10 +354,14 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
       within(contextBar).getByText("Mockly-Company/mockly-knowledge"),
     ).toBeInTheDocument();
     expect(within(contextBar).getByText("상위 Project 없음")).toBeInTheDocument();
+    expect(
+      within(contextBar).queryByRole("button", { name: "워크스페이스 설정" }),
+    ).toBeNull();
+    expect(
+      within(contextBar).queryByRole("button", { name: "Project 보드 연결" }),
+    ).toBeNull();
 
-    await user.click(
-      within(contextBar).getByRole("button", { name: "워크스페이스 설정" }),
-    );
+    await user.click(screen.getByRole("button", { name: "open-sidebar-manage" }));
     const dialog = await screen.findByRole("dialog", {
       name: /워크스페이스 설정/,
     });

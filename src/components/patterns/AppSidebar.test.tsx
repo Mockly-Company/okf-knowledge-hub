@@ -374,19 +374,60 @@ describe("AppSidebar workspace switcher", () => {
     );
   });
 
-  it("opens the unified workspace connect and manage dialogs", async () => {
+  it("avoids duplicate connect modals when empty and opens add/manage dialogs from the switcher once connected", async () => {
     const user = userEvent.setup();
-    const emptyView = renderSidebarWithWorkspaces([]);
+    const emptyOnDocs = renderSidebarWithWorkspaces([]);
 
-    await user.click(
-      await screen.findByRole("button", { name: "워크스페이스 연결" }),
-    );
     expect(
-      await screen.findByRole("dialog", { name: "새 워크스페이스 연결" }),
+      await screen.findByText("연결된 워크스페이스 없음"),
     ).toBeVisible();
-    emptyView.view.unmount();
+    expect(
+      screen.queryByRole("button", { name: "워크스페이스 연결" }),
+    ).toBeNull();
+    emptyOnDocs.view.unmount();
+
+    const projectGateway = new FakeProjectBoardGateway();
+    const emptyDocsRepoGateway = new FakeDocsRepositoryGateway();
+    const emptyWorkspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    const emptyOnBoard = render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={emptyWorkspaceGateway}>
+          <DocumentsProvider gateway={new FakeDocumentsGateway()}>
+            <ActiveProjectProvider
+              projectGateway={projectGateway}
+              docsRepositoryGateway={emptyDocsRepoGateway}
+            >
+              <MemoryRouter initialEntries={["/project"]}>
+                <AppSidebar
+                  collapseButtonRef={createRef()}
+                  onCollapse={() => {}}
+                  docsRepositoryGateway={emptyDocsRepoGateway}
+                  repositoryGateway={emptyWorkspaceGateway}
+                />
+              </MemoryRouter>
+            </ActiveProjectProvider>
+          </DocumentsProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    expect(
+      await screen.findByRole("link", { name: "워크스페이스 시작하기" }),
+    ).toHaveAttribute("href", "/documents");
+    emptyOnBoard.unmount();
 
     renderSidebarWithWorkspaces([projectWorkspace]);
+    await user.click(
+      await screen.findByRole("button", { name: /^워크스페이스 전환/ }),
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "새 워크스페이스 추가" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "새 워크스페이스 추가" }),
+    ).toBeVisible();
+    await user.keyboard("{Escape}");
+
     await user.click(
       await screen.findByRole("button", { name: /^워크스페이스 전환/ }),
     );
