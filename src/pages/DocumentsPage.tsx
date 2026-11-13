@@ -1,5 +1,5 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense, type ReactNode } from "react";
+import { lazy, Suspense, useState, type ReactNode } from "react";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { DocumentDraftSwitcher } from "@/features/documents/components/DocumentD
 import { NewDocumentDialog } from "@/features/documents/components/NewDocumentDialog";
 import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
+import { PlanningPrReviewSection } from "@/features/documents/components/PlanningPrReviewPanel";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
@@ -69,7 +70,14 @@ export function DocumentsPage({
     switchDraft,
     readAsset,
     copyText,
+    openExternal,
+    editorBaselineMarkdown,
+    publishDocumentDraft,
   } = useDocuments();
+  const [publishedPrNotice, setPublishedPrNotice] = useState<{
+    pullRequestNumber: number;
+    pullRequestUrl: string;
+  } | null>(null);
   // provider 밖(단위 테스트·스토리)에서는 null이므로 배너를 숨긴다.
   const activeProject = useOptionalActiveProject();
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
@@ -202,15 +210,60 @@ export function DocumentsPage({
             editor={authoringState.editor}
             readAsset={readAsset}
             copyText={copyText}
+            headerNavigation={
+              publishedPrNotice ? (
+                <StatusFeedback
+                  variant="banner"
+                  tone="info"
+                  actionPlacement="end"
+                  className="document-draft-editor__warning"
+                  action={
+                    <Button
+                      variant="secondary"
+                      onClick={() => void openExternal(publishedPrNotice.pullRequestUrl)}
+                    >
+                      GitHub에서 열기
+                    </Button>
+                  }
+                >
+                  <span>
+                    {`검토 요청 PR #${publishedPrNotice.pullRequestNumber}을 생성했습니다.`}
+                  </span>
+                </StatusFeedback>
+              ) : undefined
+            }
             headerSecondary={
               <DocumentDraftSwitcher state={authoringState} onSwitch={switchDraft} />
             }
+            publication={{
+              baselineMarkdown: editorBaselineMarkdown,
+              reviewNotice:
+                "현재 초안 브랜치를 문서 저장소에 푸시하고 기획 검토 PR을 생성합니다.",
+              onSubmit: async (request) => {
+                const response = await publishDocumentDraft({
+                  intent: request.intent,
+                  message: request.message,
+                  reviewNote: request.reviewNote,
+                });
+                if (!response.merged) {
+                  setPublishedPrNotice({
+                    pullRequestNumber: response.pullRequest.number,
+                    pullRequestUrl: response.pullRequest.htmlUrl,
+                  });
+                } else {
+                  setPublishedPrNotice(null);
+                }
+              },
+            }}
             onMarkdownChange={updateDraftMarkdown}
             onModeChange={setDraftEditorMode}
             onAcceptDisk={acceptDiskConflict}
             onAcceptHub={acceptHubConflict}
             onStartMerge={startConflictMerge}
-            onClose={closeDraftEditor}
+            onClose={() => {
+              setPublishedPrNotice(null);
+              closeDraftEditor();
+            }}
           />
         </Suspense>
         {creationDialog}
@@ -297,6 +350,7 @@ export function DocumentsPage({
       ) : null}
       <NotOkfNotice gateway={repositoryGateway} />
       <DocsPullNotice />
+      <PlanningPrReviewSection />
 
       {state.documentNotice ? (
         <StatusFeedback

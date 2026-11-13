@@ -220,61 +220,109 @@ impl DocumentReader {
 
     fn inline_local_stylesheets(&self, html_path: &Path, raw_html: &str) -> String {
         let Some(parent_dir) = html_path.parent() else {
-            return raw_html.to_owned();
+            return inject_csp_meta(raw_html);
         };
-        let mut output = String::with_capacity(raw_html.len());
-        let mut cursor = 0;
-        while let Some(rel_idx) = raw_html[cursor..].find("<link") {
-            let tag_start = cursor + rel_idx;
-            output.push_str(&raw_html[cursor..tag_start]);
-            let Some(end_offset) = raw_html[tag_start..].find('>') else {
-                output.push_str(&raw_html[tag_start..]);
-                return output;
-            };
-            let tag_end = tag_start + end_offset + 1;
-            let tag = &raw_html[tag_start..tag_end];
-            if let Some(inlined) = self.try_inline_stylesheet_tag(parent_dir, tag) {
-                output.push_str(&inlined);
-            } else {
-                output.push_str(tag);
+        sanitize_and_inline_html(raw_html, |clean_href| {
+            let css_candidate = parent_dir.join(clean_href);
+            let canonical_css = css_candidate.canonicalize().ok()?;
+            let metadata = fs::metadata(&canonical_css).ok()?;
+            if !canonical_css.starts_with(&self.repository_root)
+                || is_git_path(&self.repository_root, &canonical_css)
+                || !metadata.is_file()
+                || !is_extension(&canonical_css, "css")
+                || metadata.len() > MAX_ASSET_BYTES
+            {
+                return None;
             }
-            cursor = tag_end;
-        }
-        output.push_str(&raw_html[cursor..]);
-        output
+            fs::read_to_string(&canonical_css).ok()
+        })
     }
+}
 
-    fn try_inline_stylesheet_tag(&self, html_dir: &Path, tag: &str) -> Option<String> {
-        let lower = tag.to_ascii_lowercase();
-        if !lower.contains("stylesheet") {
-            return None;
+const MAX_INLINED_STYLESHEETS: usize = 10;
+const MAX_TOTAL_INLINED_CSS_BYTES: usize = 2 * 1024 * 1024;
+const SANDBOX_CSP_META: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:;\" />";
+
+pub(crate) fn sanitize_and_inline_html<F>(raw_html: &str, mut load_css: F) -> String
+where
+    F: FnMut(&str) -> Option<String>,
+{
+    let lower_html = raw_html.to_ascii_lowercase();
+    let mut output = String::with_capacity(raw_html.len() + SANDBOX_CSP_META.len());
+    let mut cursor = 0;
+    let mut inlined_count = 0usize;
+    let mut inlined_bytes = 0usize;
+
+    while let Some(rel_idx) = lower_html[cursor..].find("<link") {
+        let tag_start = cursor + rel_idx;
+        output.push_str(&raw_html[cursor..tag_start]);
+        let Some(end_offset) = raw_html[tag_start..].find('>') else {
+            output.push_str(&raw_html[tag_start..]);
+            return inject_csp_meta(&output);
+        };
+        let tag_end = tag_start + end_offset + 1;
+        let tag = &raw_html[tag_start..tag_end];
+        let mut replaced = None;
+        if inlined_count < MAX_INLINED_STYLESHEETS {
+            if let Some(clean_href) = extract_local_stylesheet_href(tag) {
+                if let Some(css) = load_css(clean_href) {
+                    if inlined_bytes.saturating_add(css.len()) <= MAX_TOTAL_INLINED_CSS_BYTES {
+                        inlined_count += 1;
+                        inlined_bytes += css.len();
+                        let safe_css = css.replace("</style", "<\\/style");
+                        replaced = Some(format!("<style>{safe_css}</style>"));
+                    }
+                }
+            }
         }
-        let href = extract_html_attr(tag, "href")?;
-        let trimmed = href.trim();
-        if trimmed.is_empty()
-            || trimmed.starts_with("http://")
-            || trimmed.starts_with("https://")
-            || trimmed.starts_with("//")
-            || trimmed.starts_with("data:")
-        {
-            return None;
+        if let Some(inlined) = replaced {
+            output.push_str(&inlined);
+        } else {
+            output.push_str(tag);
         }
-        let clean_href = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
-        let css_candidate = html_dir.join(clean_href);
-        let canonical_css = css_candidate.canonicalize().ok()?;
-        let metadata = fs::metadata(&canonical_css).ok()?;
-        if !canonical_css.starts_with(&self.repository_root)
-            || is_git_path(&self.repository_root, &canonical_css)
-            || !metadata.is_file()
-            || !is_extension(&canonical_css, "css")
-            || metadata.len() > MAX_ASSET_BYTES
-        {
-            return None;
-        }
-        let css = fs::read_to_string(&canonical_css).ok()?;
-        let safe_css = css.replace("</style", "<\\/style");
-        Some(format!("<style>{safe_css}</style>"))
+        cursor = tag_end;
     }
+    output.push_str(&raw_html[cursor..]);
+    inject_csp_meta(&output)
+}
+
+fn extract_local_stylesheet_href(tag: &str) -> Option<&str> {
+    let rel = extract_html_attr(tag, "rel")?;
+    if !rel
+        .split_whitespace()
+        .any(|token| token.eq_ignore_ascii_case("stylesheet"))
+    {
+        return None;
+    }
+    let href = extract_html_attr(tag, "href")?;
+    let trimmed = href.trim();
+    if trimmed.is_empty()
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("//")
+        || trimmed.starts_with("data:")
+    {
+        return None;
+    }
+    Some(trimmed.split(['?', '#']).next().unwrap_or(trimmed))
+}
+
+fn inject_csp_meta(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    if lower.contains("content-security-policy") {
+        return html.to_owned();
+    }
+    if let Some(head_idx) = lower.find("<head") {
+        if let Some(close_offset) = html[head_idx..].find('>') {
+            let insert_at = head_idx + close_offset + 1;
+            let mut out = String::with_capacity(html.len() + SANDBOX_CSP_META.len());
+            out.push_str(&html[..insert_at]);
+            out.push_str(SANDBOX_CSP_META);
+            out.push_str(&html[insert_at..]);
+            return out;
+        }
+    }
+    format!("{SANDBOX_CSP_META}{html}")
 }
 
 fn is_reserved_markdown_file(file_name: &str) -> bool {
@@ -798,6 +846,25 @@ mod tests {
         let doc = reader.read_document("docs/guide.md").unwrap();
         assert_eq!(doc.html_sync_status, HtmlSyncStatus::Outdated);
         assert!(doc.companion_html.is_some());
+    }
+
+    #[test]
+    fn stylesheet_inliner_checks_rel_token_case_insensitively_and_adds_csp_meta() {
+        let repo = fixture_repo(&[
+            ("docs/_assets/theme.css", ".ok { font-weight: 700; }"),
+            ("docs/_assets/icon-stylesheet.css", "should-not-inline {}"),
+            ("docs/product/spec.md", "# Spec"),
+            (
+                "docs/product/spec.html",
+                "<!doctype html><html><head><LINK REL='Alternate Stylesheet' HREF='../_assets/theme.css'><link rel='icon' href='../_assets/icon-stylesheet.css'></head><body>Spec</body></html>",
+            ),
+        ]);
+        let reader = reader(&repo);
+        let doc = reader.read_document("docs/product/spec.md").unwrap();
+        let html = doc.companion_html.unwrap().html;
+        assert!(html.contains(".ok { font-weight: 700; }"));
+        assert!(!html.contains("should-not-inline"));
+        assert!(html.contains("http-equiv=\"Content-Security-Policy\""));
     }
 
     fn fixture_repo(files: &[(&str, &str)]) -> TempDir {

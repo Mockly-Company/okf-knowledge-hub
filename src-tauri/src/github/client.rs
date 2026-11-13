@@ -12,9 +12,9 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    parse_depends_on, DraftPullRequest, DraftPullRequestRequest, GithubProjectItem,
-    GithubProjectListItem, GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary,
-    GithubSubIssue, Page,
+    parse_depends_on, CreatePullRequestInput, DocsPullRequestSummary, DraftPullRequest,
+    DraftPullRequestRequest, GithubProjectItem, GithubProjectListItem, GithubProjectSummary,
+    GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page, PullRequestChangedFile,
 };
 use crate::project_board::model::ProjectOwnerScope;
 
@@ -374,6 +374,89 @@ impl DraftPullRequestResponse {
     }
 }
 
+#[derive(Deserialize)]
+struct GithubPullRequestRefResponse {
+    #[serde(rename = "ref")]
+    git_ref: String,
+    sha: String,
+}
+
+#[derive(Deserialize)]
+struct GithubPullRequestAuthorResponse {
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct GithubPullRequestResponse {
+    number: u64,
+    title: String,
+    #[serde(default)]
+    body: Option<String>,
+    html_url: String,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    mergeable: Option<bool>,
+    #[serde(default)]
+    updated_at: String,
+    user: GithubPullRequestAuthorResponse,
+    head: GithubPullRequestRefResponse,
+    base: GithubPullRequestRefResponse,
+}
+
+impl GithubPullRequestResponse {
+    fn into_public(self) -> DocsPullRequestSummary {
+        DocsPullRequestSummary {
+            number: self.number,
+            title: self.title,
+            body: self.body.unwrap_or_default(),
+            html_url: self.html_url,
+            author_login: self.user.login,
+            head_ref: self.head.git_ref,
+            head_sha: self.head.sha,
+            base_ref: self.base.git_ref,
+            base_sha: self.base.sha,
+            is_draft: self.draft,
+            mergeable: self.mergeable,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GithubPullRequestFileResponse {
+    filename: String,
+    status: String,
+    #[serde(default)]
+    previous_filename: Option<String>,
+}
+
+impl GithubPullRequestFileResponse {
+    fn into_public(self) -> PullRequestChangedFile {
+        PullRequestChangedFile {
+            filename: self.filename,
+            status: self.status,
+            previous_filename: self.previous_filename,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GithubFileContentResponse {
+    #[serde(default)]
+    encoding: String,
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct GithubMergeResponse {
+    #[serde(default)]
+    merged: bool,
+    #[serde(default)]
+    sha: Option<String>,
+}
+
 impl DraftPullRequestRequest {
     pub fn initialize_workspace(
         repository_full_name: impl Into<String>,
@@ -629,6 +712,7 @@ impl AccessTokenProvider for AuthService {
 enum HttpMethod {
     Get,
     Post,
+    Put,
 }
 
 struct HttpRequest {
@@ -730,6 +814,7 @@ impl HttpTransport for ReqwestHttpTransport {
         let method = match request.method {
             HttpMethod::Get => reqwest::Method::GET,
             HttpMethod::Post => reqwest::Method::POST,
+            HttpMethod::Put => reqwest::Method::PUT,
         };
         let mut builder = self
             .client
@@ -1385,6 +1470,240 @@ impl GithubHttpClient {
             .into_iter()
             .map(DraftPullRequestResponse::into_public)
             .next())
+    }
+
+    pub async fn list_open_pull_requests(
+        &self,
+        repository_full_name: &str,
+    ) -> Result<Vec<DocsPullRequestSummary>, AppError> {
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let items: Vec<GithubPullRequestResponse> = self
+            .get_json(
+                &["repos", owner, name, "pulls"],
+                &[("state", "open".to_owned()), ("per_page", "30".to_owned())],
+                HttpFailureContext::Repository,
+            )
+            .await?;
+        Ok(items
+            .into_iter()
+            .map(GithubPullRequestResponse::into_public)
+            .collect())
+    }
+
+    pub async fn get_pull_request(
+        &self,
+        repository_full_name: &str,
+        number: u64,
+    ) -> Result<DocsPullRequestSummary, AppError> {
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let number_str = number.to_string();
+        let response: GithubPullRequestResponse = self
+            .get_json(
+                &["repos", owner, name, "pulls", &number_str],
+                &[],
+                HttpFailureContext::Repository,
+            )
+            .await?;
+        Ok(response.into_public())
+    }
+
+    pub async fn list_pull_request_files(
+        &self,
+        repository_full_name: &str,
+        number: u64,
+    ) -> Result<Vec<PullRequestChangedFile>, AppError> {
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let number_str = number.to_string();
+        let files: Vec<GithubPullRequestFileResponse> = self
+            .get_json(
+                &["repos", owner, name, "pulls", &number_str, "files"],
+                &[("per_page", "100".to_owned())],
+                HttpFailureContext::Repository,
+            )
+            .await?;
+        Ok(files
+            .into_iter()
+            .map(GithubPullRequestFileResponse::into_public)
+            .collect())
+    }
+
+    pub async fn read_repository_text_file_at_ref(
+        &self,
+        repository_full_name: &str,
+        path: &str,
+        git_ref: &str,
+    ) -> Result<Option<String>, AppError> {
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let clean_parts: Vec<&str> = path
+            .split('/')
+            .filter(|part| !part.is_empty() && *part != "." && *part != "..")
+            .collect();
+        if clean_parts.is_empty() {
+            return Ok(None);
+        }
+        let mut segments = Vec::with_capacity(4 + clean_parts.len());
+        segments.extend(["repos", owner, name, "contents"]);
+        segments.extend(clean_parts);
+
+        let response = self
+            .send(
+                HttpMethod::Get,
+                &segments,
+                &[("ref", git_ref.to_owned())],
+                None,
+            )
+            .await?;
+        if response.status == 404 {
+            return Ok(None);
+        }
+        if !(200..300).contains(&response.status) {
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        let Ok(file): Result<GithubFileContentResponse, _> = deserialize_response(response) else {
+            return Ok(None);
+        };
+        if !file.encoding.eq_ignore_ascii_case("base64") {
+            return Ok(None);
+        }
+        use base64::Engine as _;
+        let compact: String = file
+            .content
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .collect();
+        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(compact) else {
+            return Ok(None);
+        };
+        Ok(String::from_utf8(bytes).ok())
+    }
+
+    pub async fn create_pull_request(
+        &self,
+        input: &CreatePullRequestInput,
+    ) -> Result<DocsPullRequestSummary, AppError> {
+        let (owner, name) = split_repository_full_name(&input.repository_full_name)?;
+        let existing: Vec<GithubPullRequestResponse> = self
+            .get_json(
+                &["repos", owner, name, "pulls"],
+                &[
+                    ("state", "open".to_owned()),
+                    ("head", format!("{owner}:{}", input.head)),
+                    ("base", input.base.clone()),
+                ],
+                HttpFailureContext::Repository,
+            )
+            .await?;
+        if let Some(found) = existing.into_iter().next() {
+            return Ok(found.into_public());
+        }
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["repos", owner, name, "pulls"],
+                &[],
+                Some(json!({
+                    "title": input.title,
+                    "body": input.body,
+                    "head": input.head,
+                    "base": input.base,
+                    "draft": input.draft,
+                })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_draft_pull_request_error(
+                response.status,
+                &response.headers,
+                &input.head,
+            ));
+        }
+        deserialize_response(response)
+            .map(GithubPullRequestResponse::into_public)
+            .map_err(|_| draft_pull_request_invalid_response(&input.head))
+    }
+
+    pub async fn approve_pull_request(
+        &self,
+        repository_full_name: &str,
+        number: u64,
+        body: Option<&str>,
+    ) -> Result<(), AppError> {
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let number_str = number.to_string();
+        let mut payload = json!({ "event": "APPROVE" });
+        if let Some(text) = body.map(str::trim).filter(|text| !text.is_empty()) {
+            payload["body"] = json!(text);
+        }
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["repos", owner, name, "pulls", &number_str, "reviews"],
+                &[],
+                Some(payload),
+            )
+            .await?;
+        if (200..300).contains(&response.status) {
+            return Ok(());
+        }
+        Err(map_http_error(
+            HttpFailureContext::Repository,
+            response.status,
+            &response.headers,
+        ))
+    }
+
+    pub async fn squash_merge_pull_request(
+        &self,
+        repository_full_name: &str,
+        number: u64,
+        commit_title: Option<&str>,
+        head_sha: Option<&str>,
+    ) -> Result<Option<String>, AppError> {
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let number_str = number.to_string();
+        let mut payload = json!({ "merge_method": "squash" });
+        if let Some(title) = commit_title.map(str::trim).filter(|t| !t.is_empty()) {
+            payload["commit_title"] = json!(title);
+        }
+        if let Some(sha) = head_sha.map(str::trim).filter(|s| !s.is_empty()) {
+            payload["sha"] = json!(sha);
+        }
+        let response = self
+            .send(
+                HttpMethod::Put,
+                &["repos", owner, name, "pulls", &number_str, "merge"],
+                &[],
+                Some(payload),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            if response.status == 405 || response.status == 409 {
+                return Err(AppError::new(
+                    ErrorCode::DraftPullRequestFailed,
+                    "기획 PR을 머지할 수 없는 상태입니다(충돌 또는 보호 규칙 확인 필요).",
+                )
+                .with_recovery(RecoveryAction::Retry));
+            }
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        let merged: GithubMergeResponse =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        if !merged.merged {
+            return Err(AppError::new(
+                ErrorCode::DraftPullRequestFailed,
+                "기획 PR 머지가 완료되지 않았습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry));
+        }
+        Ok(merged.sha)
     }
 
     async fn list_installations(&self) -> Result<Vec<u64>, AppError> {
@@ -2605,5 +2924,105 @@ mod tests {
         assert_eq!(error.code, ErrorCode::GithubUnavailable);
         assert_eq!(error.recovery, Some(RecoveryAction::Retry));
         assert!(error.details.is_empty());
+    }
+
+    #[tokio::test]
+    async fn planning_pull_request_operations_target_selected_docs_repository() {
+        use base64::Engine as _;
+        let encoded_md = base64::engine::general_purpose::STANDARD.encode("# 기획안\n\n본문\n");
+        let transport = RecordingTransport::with_responses(vec![
+            // 1. list_open_pull_requests
+            response(
+                200,
+                r#"[{"number":12,"title":"docs: 기획안 제안","body":"변경 요약","html_url":"https://github.com/Acme-Org/acme-docs/pull/12","draft":false,"updated_at":"2026-11-14T00:00:00Z","user":{"login":"alice"},"head":{"ref":"draft/alice/plan","sha":"headsha123"},"base":{"ref":"main","sha":"basesha000"}}]"#,
+            ),
+            // 2. get_pull_request
+            response(
+                200,
+                r#"{"number":12,"title":"docs: 기획안 제안","body":"변경 요약","html_url":"https://github.com/Acme-Org/acme-docs/pull/12","draft":false,"mergeable":true,"updated_at":"2026-11-14T00:00:00Z","user":{"login":"alice"},"head":{"ref":"draft/alice/plan","sha":"headsha123"},"base":{"ref":"main","sha":"basesha000"}}"#,
+            ),
+            // 3. list_pull_request_files
+            response(
+                200,
+                r#"[{"filename":"docs/product/spec.md","status":"modified"},{"filename":"docs/product/spec.html","status":"added"}]"#,
+            ),
+            // 4. read_repository_text_file_at_ref
+            response(
+                200,
+                &format!(r#"{{"encoding":"base64","content":"{encoded_md}\n"}}"#),
+            ),
+            // 5. approve_pull_request
+            response(200, r#"{"id":99,"state":"APPROVED"}"#),
+            // 6. squash_merge_pull_request
+            response(200, r#"{"merged":true,"sha":"mergedsha999"}"#),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let prs = service
+            .list_open_pull_requests("Acme-Org/acme-docs")
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].number, 12);
+        assert_eq!(prs[0].author_login, "alice");
+
+        let pr = service
+            .get_pull_request("Acme-Org/acme-docs", 12)
+            .await
+            .unwrap();
+        assert_eq!(pr.mergeable, Some(true));
+        assert_eq!(pr.head_sha, "headsha123");
+
+        let files = service
+            .list_pull_request_files("Acme-Org/acme-docs", 12)
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].filename, "docs/product/spec.md");
+
+        let md = service
+            .read_repository_text_file_at_ref(
+                "Acme-Org/acme-docs",
+                "docs/product/spec.md",
+                "headsha123",
+            )
+            .await
+            .unwrap();
+        assert_eq!(md.as_deref(), Some("# 기획안\n\n본문\n"));
+
+        service
+            .approve_pull_request("Acme-Org/acme-docs", 12, Some("LGTM"))
+            .await
+            .unwrap();
+        let merged_sha = service
+            .squash_merge_pull_request(
+                "Acme-Org/acme-docs",
+                12,
+                Some("docs: 기획안 제안 (#12)"),
+                Some("headsha123"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(merged_sha.as_deref(), Some("mergedsha999"));
+
+        let urls: Vec<_> = transport
+            .requests()
+            .into_iter()
+            .map(|r| (r.method, r.url))
+            .collect();
+        assert_eq!(
+            urls[0].1,
+            "https://api.example.test/repos/Acme-Org/acme-docs/pulls?state=open&per_page=30"
+        );
+        assert_eq!(urls[4].0, HttpMethod::Post);
+        assert_eq!(
+            urls[4].1,
+            "https://api.example.test/repos/Acme-Org/acme-docs/pulls/12/reviews"
+        );
+        assert_eq!(urls[5].0, HttpMethod::Put);
+        assert_eq!(
+            urls[5].1,
+            "https://api.example.test/repos/Acme-Org/acme-docs/pulls/12/merge"
+        );
     }
 }

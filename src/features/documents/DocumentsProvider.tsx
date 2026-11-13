@@ -22,9 +22,13 @@ import {
 } from "./documents-reducer";
 import type {
   AppError,
+  ApproveAndMergeDocsPrResponse,
+  DocsPullRequestDetail,
+  DocsPullRequestSummary,
   DocumentAsset,
   DocumentEventEnvelope,
   HistoryItem,
+  PublishDocumentDraftResponse,
   SearchResult,
 } from "./model";
 import {
@@ -145,6 +149,18 @@ export interface DocumentsContextValue {
   closeDraftEditor(): void;
   duplicateTeamTemplate(input: TeamTemplateCopyInput): void;
   switchDraft(changeId: string | null): void;
+  listDocsPullRequests(): Promise<DocsPullRequestSummary[]>;
+  getDocsPullRequestDetail(number: number): Promise<DocsPullRequestDetail>;
+  editorBaselineMarkdown: string | null | undefined;
+  publishDocumentDraft(input: {
+    intent: "review" | "publish";
+    message: string;
+    reviewNote: string;
+  }): Promise<PublishDocumentDraftResponse>;
+  approveAndMergeDocsPullRequest(
+    number: number,
+    comment?: string,
+  ): Promise<ApproveAndMergeDocsPrResponse>;
 }
 
 const DocumentsContext = createContext<DocumentsContextValue | null>(null);
@@ -174,6 +190,9 @@ export function DocumentsProvider({
     }),
   );
   const [sessionAttempt, setSessionAttempt] = useState(0);
+  const [editorBaselines, setEditorBaselines] = useState<
+    Record<string, string | null>
+  >({});
   const [authoringState, authoringDispatch] = useReducer(
     documentAuthoringReducer,
     undefined,
@@ -382,6 +401,10 @@ export function DocumentsProvider({
       })
       .then(
         (response) => {
+          setEditorBaselines((prev) => ({
+            ...prev,
+            [response.document.path]: null,
+          }));
           if (
             dispatchAuthoringAccepted({
               type: "creationSucceeded",
@@ -1099,10 +1122,13 @@ export function DocumentsProvider({
     if (current.selectedDocument === null || current.selectedVersion !== null) {
       return;
     }
+    const docPath = current.selectedDocument.summary.path;
+    const baseline = current.selectedDocument.markdown;
+    setEditorBaselines((prev) => ({ ...prev, [docPath]: baseline }));
     dispatchAuthoringAccepted({
       type: "existingEditRequested",
       requestId: createId(),
-      path: current.selectedDocument.summary.path,
+      path: docPath,
       title: current.selectedDocument.summary.title,
     });
   }, [createId, dispatchAuthoringAccepted]);
@@ -1192,6 +1218,83 @@ export function DocumentsProvider({
     [createId, dispatchAuthoringAccepted, flushCurrentEditor],
   );
 
+  const listDocsPullRequests = useCallback(async () => {
+    const sessionId = stateRef.current.activeSessionId;
+    if (!sessionId || !gateway.listDocsPullRequests) return [];
+    return gateway.listDocsPullRequests(sessionId);
+  }, [gateway]);
+
+  const getDocsPullRequestDetail = useCallback(
+    async (number: number) => {
+      const sessionId = stateRef.current.activeSessionId;
+      if (!sessionId || !gateway.getDocsPullRequestDetail) {
+        throw fallbackDocumentError();
+      }
+      return gateway.getDocsPullRequestDetail(sessionId, number);
+    },
+    [gateway],
+  );
+
+  const publishDocumentDraft = useCallback(
+    async (input: {
+      intent: "review" | "publish";
+      message: string;
+      reviewNote: string;
+    }) => {
+      const sessionId = stateRef.current.activeSessionId;
+      if (!sessionId || !gateway.publishDocumentDraft) {
+        throw fallbackDocumentError();
+      }
+      if (!(await flushCurrentEditor())) {
+        throw fallbackDocumentError();
+      }
+      const response = await gateway.publishDocumentDraft({
+        sessionId,
+        intent: input.intent,
+        message: input.message,
+        reviewNote: input.reviewNote,
+      });
+      await queryClient.invalidateQueries({
+        queryKey: documentsKeys.pullRequests(sessionId),
+      });
+      if (response.merged) {
+        dispatchAuthoringAccepted({ type: "editorCloseRequested" });
+        setSessionAttempt((attempt) => attempt + 1);
+      }
+      return response;
+    },
+    [dispatchAuthoringAccepted, flushCurrentEditor, gateway, queryClient],
+  );
+
+  const approveAndMergeDocsPullRequest = useCallback(
+    async (number: number, comment?: string) => {
+      const sessionId = stateRef.current.activeSessionId;
+      if (!sessionId || !gateway.approveAndMergeDocsPullRequest) {
+        throw fallbackDocumentError();
+      }
+      const response = await gateway.approveAndMergeDocsPullRequest(
+        sessionId,
+        number,
+        comment,
+      );
+      await queryClient.invalidateQueries({
+        queryKey: documentsKeys.pullRequests(sessionId),
+      });
+      await refresh();
+      return response;
+    },
+    [gateway, queryClient, refresh],
+  );
+
+  const editorBaselineMarkdown = useMemo(() => {
+    const activePath = authoringState.editor?.document.path;
+    if (!activePath) return undefined;
+    if (Object.prototype.hasOwnProperty.call(editorBaselines, activePath)) {
+      return editorBaselines[activePath];
+    }
+    return null;
+  }, [authoringState.editor?.document.path, editorBaselines]);
+
   const value = useMemo<DocumentsContextValue>(
     () => ({
       state,
@@ -1224,21 +1327,31 @@ export function DocumentsProvider({
       closeDraftEditor,
       duplicateTeamTemplate,
       switchDraft,
+      listDocsPullRequests,
+      getDocsPullRequestDetail,
+      editorBaselineMarkdown,
+      publishDocumentDraft,
+      approveAndMergeDocsPullRequest,
     }),
     [
       acceptDiskConflict,
       acceptHubConflict,
+      approveAndMergeDocsPullRequest,
       authoringState,
       clearRecoverableError,
       closeDraftEditor,
       closeNewDocument,
       createNewDocument,
       editSelectedDocument,
+      editorBaselineMarkdown,
       copyText,
       duplicateTeamTemplate,
+      getDocsPullRequestDetail,
+      listDocsPullRequests,
       loadHistory,
       loadMoreHistory,
       openExternal,
+      publishDocumentDraft,
       readAsset,
       refresh,
       selectCurrentVersion,

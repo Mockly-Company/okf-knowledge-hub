@@ -22,6 +22,11 @@ import type {
   SaveDocumentDraftResponse,
   SwitchLocalDocumentDraftResponse,
   RecoveredDocument,
+  DocsPullRequestSummary,
+  DocsPullRequestDetail,
+  PublishDocumentDraftRequest,
+  PublishDocumentDraftResponse,
+  ApproveAndMergeDocsPrResponse,
 } from "@/features/documents/model";
 
 const guideSummary = {
@@ -131,6 +136,10 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   readonly copiedValues: string[] = [];
   readonly openedUrls: string[] = [];
+  openPullRequests: DocsPullRequestSummary[] = [];
+  readonly pullRequestDetails = new Map<number, DocsPullRequestDetail>();
+  readonly approvedPullRequests: Array<{ number: number; comment?: string }> = [];
+  readonly publishedDrafts: PublishDocumentDraftRequest[] = [];
   unlistenCount = 0;
 
   private readonly listeners = new Set<
@@ -536,5 +545,71 @@ export class FakeDocumentsGateway implements DocumentsGateway {
 
   private record(method: string, ...args: unknown[]): void {
     this.calls.push({ method, args });
+  }
+
+  async listDocsPullRequests(
+    sessionId: string,
+  ): Promise<DocsPullRequestSummary[]> {
+    this.record("listDocsPullRequests", sessionId);
+    return [...this.openPullRequests];
+  }
+
+  async getDocsPullRequestDetail(
+    sessionId: string,
+    number: number,
+  ): Promise<DocsPullRequestDetail> {
+    this.record("getDocsPullRequestDetail", sessionId, number);
+    const detail = this.pullRequestDetails.get(number);
+    if (!detail) {
+      throw new Error(`Unknown PR #${number}`);
+    }
+    return detail;
+  }
+
+  async publishDocumentDraft(
+    request: PublishDocumentDraftRequest,
+  ): Promise<PublishDocumentDraftResponse> {
+    this.record("publishDocumentDraft", request);
+    this.publishedDrafts.push(request);
+    const pr: DocsPullRequestSummary = {
+      number: (this.openPullRequests.at(-1)?.number ?? 10) + 1,
+      title: request.message,
+      body: request.reviewNote,
+      htmlUrl: `https://github.com/${this.sessionSnapshot.repositoryFullName}/pull/11`,
+      authorLogin: "tester",
+      headRef: "draft/tester/change",
+      headSha: "headsha",
+      baseRef: "main",
+      baseSha: "basesha",
+      isDraft: false,
+      mergeable: true,
+      updatedAt: "2026-11-14T00:00:00Z",
+    };
+    if (request.intent === "review") {
+      this.openPullRequests = [...this.openPullRequests, pr];
+    }
+    return {
+      intent: request.intent,
+      pullRequest: pr,
+      merged: request.intent === "publish",
+    };
+  }
+
+  async approveAndMergeDocsPullRequest(
+    sessionId: string,
+    number: number,
+    comment?: string,
+  ): Promise<ApproveAndMergeDocsPrResponse> {
+    this.record("approveAndMergeDocsPullRequest", sessionId, number, comment);
+    this.approvedPullRequests.push({ number, comment });
+    this.openPullRequests = this.openPullRequests.filter(
+      (pr) => pr.number !== number,
+    );
+    return {
+      number,
+      merged: true,
+      mergeSha: "mergedsha",
+      reviewSubmitted: true,
+    };
   }
 }

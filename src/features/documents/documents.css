@@ -1860,6 +1860,283 @@
   background: var(--color-surface);
 }
 
+.planning-pr-section {
+  margin-top: var(--documents-space-group);
+}
+
+.planning-pr-banner {
+  display: grid;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: var(--space-4);
+}
+
+.planning-pr-banner__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.planning-pr-banner__title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-strong);
+  font-size: var(--font-ui-size);
+}
+
+.planning-pr-banner__hint {
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+  line-height: var(--font-meta-line);
+}
+
+.planning-pr-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planning-pr-list__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+  padding: var(--space-3);
+}
+
+.planning-pr-list__copy {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.planning-pr-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+  line-height: var(--font-meta-line);
+}
+
+.planning-pr-list__title {
+  color: var(--color-text-strong);
+  font-size: var(--font-ui-size);
+  font-weight: var(--font-weight-control);
+  overflow-wrap: anywhere;
+}
+
+.planning-pr-list__actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.planning-pr-panel {
+  display: grid;
+  gap: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: var(--space-4);
+}
+
+.planning-pr-panel__topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-3);
+}
+
+.planning-pr-panel__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.planning-pr-panel__identity {
+  display: grid;
+  flex: 1 1 320px;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.planning-pr-panel__identity h2 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: var(--font-section-size);
+  font-weight: var(--font-weight-section-title);
+  line-height: var(--font-section-line);
+}
+
+.planning-pr-panel__body {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-size);
+  line-height: var(--font-ui-line);
+  white-space: pre-wrap;
+}
+
+.planning-pr-panel__approve-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.planning-pr-panel__approve-box input {
+  width: min(260px, 100%);
+}
+
+.planning-pr-panel__status {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-ui-size);
+}
+
+.planning-pr-panel__workspace {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.planning-pr-panel__sidebar {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.planning-pr-panel__sidebar h3 {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+  font-weight: var(--font-weight-section-title);
+}
+
+.planning-pr-panel__sidebar ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planning-pr-doc-item {
+  display: grid;
+  width: 100%;
+  gap: var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+  padding: var(--space-3);
+  color: var(--color-text-default);
+  cursor: pointer;
+  text-align: left;
+}
+
+.planning-pr-doc-item:hover {
+  background: var(--color-surface);
+}
+
+.planning-pr-doc-item.is-selected {
+  border-color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+
+.planning-pr-doc-item.is-selected small {
+  color: var(--color-text-default);
+}
+
+.planning-pr-doc-item__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.planning-pr-doc-item__html-tag {
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: 0 var(--space-2);
+  color: var(--color-primary-text);
+  font-size: var(--font-meta-size);
+  font-weight: var(--font-weight-control);
+}
+
+.planning-pr-doc-item strong {
+  color: var(--color-text-strong);
+  font-size: var(--font-ui-size);
+  font-weight: var(--font-weight-control);
+  overflow-wrap: anywhere;
+}
+
+.planning-pr-doc-item small {
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+  overflow-wrap: anywhere;
+}
+
+.planning-pr-panel__viewer {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-3);
+}
+
+.planning-pr-panel__viewer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.planning-pr-panel__viewer-bar > div:first-child {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.planning-pr-panel__viewer-bar strong {
+  color: var(--color-text-strong);
+  font-size: var(--font-ui-size);
+}
+
+.planning-pr-panel__viewer-bar span {
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+}
+
+.planning-pr-panel__markdown {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: var(--space-5);
+}
+
+@media (max-width: 900px) {
+  .planning-pr-panel__workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 760px) {
   .documents-page {
     padding-block-end: var(--documents-space-group);

@@ -23,6 +23,11 @@ import type {
   SaveDocumentDraftRequest,
   SaveDocumentDraftResponse,
   RecoveredDocument,
+  DocsPullRequestSummary,
+  DocsPullRequestDetail,
+  PublishDocumentDraftRequest,
+  PublishDocumentDraftResponse,
+  ApproveAndMergeDocsPrResponse,
   Unlisten,
 } from "@/features/documents/model";
 
@@ -201,5 +206,37 @@ export class TauriDocumentsGateway implements DocumentsGateway {
 
   openExternal(url: string): Promise<void> {
     return this.launchExternal(url);
+  }
+
+  listDocsPullRequests(sessionId: string): Promise<DocsPullRequestSummary[]> {
+    return this.invokeCommand("list_docs_pull_requests", { sessionId });
+  }
+
+  getDocsPullRequestDetail(
+    sessionId: string,
+    number: number,
+  ): Promise<DocsPullRequestDetail> {
+    return this.invokeCommand("get_docs_pull_request_detail", {
+      sessionId,
+      number,
+    });
+  }
+
+  publishDocumentDraft(
+    request: PublishDocumentDraftRequest,
+  ): Promise<PublishDocumentDraftResponse> {
+    return this.invokeCommand("publish_document_draft", { request });
+  }
+
+  approveAndMergeDocsPullRequest(
+    sessionId: string,
+    number: number,
+    comment?: string,
+  ): Promise<ApproveAndMergeDocsPrResponse> {
+    return this.invokeCommand("approve_and_merge_docs_pull_request", {
+      sessionId,
+      number,
+      comment: comment ?? null,
+    });
   }
 }
