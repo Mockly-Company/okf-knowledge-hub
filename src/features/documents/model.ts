@@ -328,3 +328,54 @@ export type DocumentEvent =
 export type DocumentEventEnvelope = DocumentEvent & { revision: number };
 
 export type Unlisten = () => void;
+
+export interface DocsPullRequestSummary {
+  number: number;
+  title: string;
+  body: string;
+  htmlUrl: string;
+  authorLogin: string;
+  headRef: string;
+  headSha: string;
+  baseRef: string;
+  baseSha: string;
+  isDraft: boolean;
+  mergeable: boolean | null;
+  updatedAt: string;
+}
+
+export interface PlanningPrDocumentChange {
+  path: string;
+  title: string;
+  status: string;
+  baseMarkdown: string | null;
+  headMarkdown: string | null;
+  companionHtml: string | null;
+  hasCompanionHtml: boolean;
+}
+
+export interface DocsPullRequestDetail {
+  pullRequest: DocsPullRequestSummary;
+  viewerLogin: string;
+  documents: PlanningPrDocumentChange[];
+}
+
+export interface PublishDocumentDraftRequest {
+  sessionId: string;
+  intent: "review" | "publish";
+  message: string;
+  reviewNote: string;
+}
+
+export interface PublishDocumentDraftResponse {
+  intent: "review" | "publish";
+  pullRequest: DocsPullRequestSummary;
+  merged: boolean;
+}
+
+export interface ApproveAndMergeDocsPrResponse {
+  number: number;
+  merged: boolean;
+  mergeSha: string | null;
+  reviewSubmitted: boolean;
+}

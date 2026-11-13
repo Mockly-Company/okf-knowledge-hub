@@ -27,4 +27,8 @@ export const documentsKeys = {
     [...documentsKeys.session(sessionId), "drafts"] as const,
   recovery: (sessionId: string) =>
     [...documentsKeys.session(sessionId), "recovery"] as const,
+  pullRequests: (sessionId: string) =>
+    [...documentsKeys.session(sessionId), "pullRequests"] as const,
+  pullRequestDetail: (sessionId: string, number: number) =>
+    [...documentsKeys.session(sessionId), "pullRequestDetail", number] as const,
 };

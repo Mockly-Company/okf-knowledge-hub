@@ -77,8 +77,10 @@ export function DocumentReader({
   const navigationTargetRef = useRef<string | null>(null);
   useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
   useEffect(() => {
-    setViewMode(document.companionHtml ? "html" : "markdown");
-  }, [document.summary.path, Boolean(document.companionHtml)]);
+    if (state.selectedVersion === null) {
+      setViewMode(document.companionHtml ? "html" : "markdown");
+    }
+  }, [document.summary.path, document.companionHtml, state.selectedVersion]);
   const hasCompanionHtml = Boolean(document.companionHtml) && state.selectedVersion === null;
   const effectiveView = hasCompanionHtml ? viewMode : "markdown";
   const headerRef = useRef<HTMLElement>(null);
@@ -254,6 +256,7 @@ export function DocumentReader({
             <iframe
               className="document-reader__html-frame"
               sandbox=""
+              referrerPolicy="no-referrer"
               srcDoc={document.companionHtml.html}
               title={`${document.summary.title} 사람용 보기`}
             />

@@ -68,6 +68,41 @@ pub struct DraftPullRequest {
     pub is_draft: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocsPullRequestSummary {
+    pub number: u64,
+    pub title: String,
+    pub body: String,
+    pub html_url: String,
+    pub author_login: String,
+    pub head_ref: String,
+    pub head_sha: String,
+    pub base_ref: String,
+    pub base_sha: String,
+    pub is_draft: bool,
+    pub mergeable: Option<bool>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestChangedFile {
+    pub filename: String,
+    pub status: String,
+    pub previous_filename: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatePullRequestInput {
+    pub repository_full_name: String,
+    pub head: String,
+    pub base: String,
+    pub title: String,
+    pub body: String,
+    pub draft: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubProjectItem {
     pub number: u64,

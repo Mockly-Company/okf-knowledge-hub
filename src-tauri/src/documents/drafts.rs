@@ -714,6 +714,103 @@ impl DraftManager {
         }
     }
 
+    pub fn commit_active_change(
+        &self,
+        workspace_id: Uuid,
+        author_login: &str,
+        author_id: u64,
+        message: &str,
+    ) -> Result<(DraftSummary, PathBuf, String), AppError> {
+        let _mutation = self.mutations.lock().map_err(|_| draft_storage_error())?;
+        let change_id = self
+            .active_change_id(workspace_id)?
+            .ok_or_else(draft_storage_error)?;
+        let record = self.load_record(workspace_id, change_id)?;
+        if !record.worktree_path.is_dir() {
+            return Err(draft_storage_error());
+        }
+        let message = message.trim();
+        if message.is_empty() {
+            return Err(invalid_document_error());
+        }
+        let worktree_repo =
+            Repository::open(&record.worktree_path).map_err(|_| draft_git_error())?;
+        let mut index = worktree_repo.index().map_err(|_| draft_git_error())?;
+        index
+            .add_all(["*"].iter(), git2::IndexAddOption::DEFAULT, None)
+            .map_err(|_| draft_git_error())?;
+        index
+            .update_all(["*"].iter(), None)
+            .map_err(|_| draft_git_error())?;
+        index.write().map_err(|_| draft_git_error())?;
+        let tree_id = index.write_tree().map_err(|_| draft_git_error())?;
+        let tree = worktree_repo
+            .find_tree(tree_id)
+            .map_err(|_| draft_git_error())?;
+        let head_commit = worktree_repo
+            .head()
+            .and_then(|head| head.peel_to_commit())
+            .map_err(|_| draft_git_error())?;
+        if head_commit.tree_id() == tree_id {
+            return Ok((
+                record.summary,
+                record.source_repository_root,
+                head_commit.id().to_string(),
+            ));
+        }
+        let email = format!("{author_id}+{author_login}@users.noreply.github.com");
+        let signature =
+            git2::Signature::now(author_login, &email).map_err(|_| draft_git_error())?;
+        let commit_oid = worktree_repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &[&head_commit],
+            )
+            .map_err(|_| draft_git_error())?;
+        Ok((
+            record.summary,
+            record.source_repository_root,
+            commit_oid.to_string(),
+        ))
+    }
+
+    pub fn discard_change(&self, workspace_id: Uuid, change_id: Uuid) -> Result<(), AppError> {
+        let _mutation = self.mutations.lock().map_err(|_| draft_storage_error())?;
+        let record = self.load_record(workspace_id, change_id)?;
+        if let Ok(repository) = Repository::open(&record.source_repository_root) {
+            let worktree_name = format!("okhub-{}", change_id.simple());
+            let metadata_path = self.metadata_path(workspace_id, change_id);
+            rollback_created_change(
+                &repository,
+                &worktree_name,
+                &record.worktree_path,
+                &record.summary.branch,
+                &metadata_path,
+            );
+        } else {
+            let _ = fs::remove_dir_all(&record.worktree_path);
+            let _ = fs::remove_file(self.metadata_path(workspace_id, change_id));
+        }
+        let journal_root = self
+            .workspace_root(workspace_id)
+            .join("journals")
+            .join(change_id.to_string());
+        if journal_root.exists() {
+            let _ = fs::remove_dir_all(journal_root);
+        }
+        if self.active_change_id(workspace_id)? == Some(change_id) {
+            let active = self.workspace_root(workspace_id).join("active.json");
+            if active.exists() {
+                let _ = fs::remove_file(active);
+            }
+        }
+        Ok(())
+    }
+
     pub fn recovery_journal_exists(&self, change_id: Uuid, document_id: Uuid) -> bool {
         self.find_record(change_id)
             .map(|record| self.journal_path(&record, document_id).exists())
@@ -2054,5 +2151,74 @@ mod tests {
             fs::read_to_string(worktree.path().join("docs/existing.md")).unwrap(),
             "external edit\n"
         );
+    }
+
+    #[test]
+    fn commit_active_change_commits_worktree_edits_and_discard_change_cleans_up() {
+        let fixture = Fixture::new();
+        let manager = fixture.manager();
+        let change_id = Uuid::new_v4();
+        let draft = manager
+            .create_change(
+                fixture.repository.path(),
+                fixture.workspace_id,
+                "hyeeun",
+                "기획안 추가",
+                change_id,
+                vec!["docs".to_owned()],
+            )
+            .unwrap();
+        let template = &built_in_templates()[0];
+        let created = manager
+            .add_document(
+                fixture.workspace_id,
+                change_id,
+                "docs/api",
+                "plan.md",
+                "기획안",
+                template,
+                Uuid::new_v4(),
+            )
+            .unwrap();
+        let _ = manager
+            .save_document(
+                fixture.workspace_id,
+                change_id,
+                created.document_id,
+                &created.path,
+                &created.content_hash,
+                "# 기획안\n\n업데이트된 본문\n",
+            )
+            .unwrap();
+
+        let (committed_draft, source_root, commit_oid) = manager
+            .commit_active_change(fixture.workspace_id, "hyeeun", 42, "docs: 기획안 작성")
+            .unwrap();
+        assert_eq!(committed_draft.branch, draft.branch);
+        assert_eq!(source_root, fixture.repository.path());
+        assert_ne!(commit_oid, draft.base_commit);
+
+        let repo = Repository::open(fixture.repository.path()).unwrap();
+        let branch_commit = repo
+            .find_reference(&format!("refs/heads/{}", draft.branch))
+            .unwrap()
+            .peel_to_commit()
+            .unwrap();
+        assert_eq!(branch_commit.id().to_string(), commit_oid);
+        assert_eq!(branch_commit.summary(), Some("docs: 기획안 작성"));
+        drop(branch_commit);
+        drop(repo);
+
+        manager
+            .discard_change(fixture.workspace_id, change_id)
+            .unwrap();
+        assert!(manager
+            .active_change(fixture.workspace_id)
+            .unwrap()
+            .is_none());
+        assert!(manager
+            .list_changes(fixture.workspace_id)
+            .unwrap()
+            .is_empty());
     }
 }

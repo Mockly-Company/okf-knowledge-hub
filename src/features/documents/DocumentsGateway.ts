@@ -18,6 +18,11 @@ import type {
   SaveDocumentDraftRequest,
   SaveDocumentDraftResponse,
   RecoveredDocument,
+  DocsPullRequestSummary,
+  DocsPullRequestDetail,
+  PublishDocumentDraftRequest,
+  PublishDocumentDraftResponse,
+  ApproveAndMergeDocsPrResponse,
   Unlisten,
 } from "./model";
 
@@ -83,4 +88,17 @@ export interface DocumentsGateway {
   ): Promise<Unlisten>;
   copyText(value: string): Promise<void>;
   openExternal(url: string): Promise<void>;
+  listDocsPullRequests?(sessionId: string): Promise<DocsPullRequestSummary[]>;
+  getDocsPullRequestDetail?(
+    sessionId: string,
+    number: number,
+  ): Promise<DocsPullRequestDetail>;
+  publishDocumentDraft?(
+    request: PublishDocumentDraftRequest,
+  ): Promise<PublishDocumentDraftResponse>;
+  approveAndMergeDocsPullRequest?(
+    sessionId: string,
+    number: number,
+    comment?: string,
+  ): Promise<ApproveAndMergeDocsPrResponse>;
 }

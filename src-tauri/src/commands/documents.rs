@@ -20,9 +20,12 @@ use crate::documents::drafts::{
     CreatedDocument, DraftSummary, RecoveredDocument, SaveDocumentResult,
 };
 use crate::documents::history::{DocumentHistory, DEFAULT_HISTORY_PAGE_LIMIT};
-use crate::documents::reader::DocumentReader;
+use crate::documents::reader::{sanitize_and_inline_html, DocumentReader};
 use crate::documents::runtime::{DocumentRuntime, DocumentRuntimeGeneration, DocumentWorkspace};
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
+use crate::github::model::{
+    CreatePullRequestInput, DocsPullRequestSummary, PullRequestChangedFile,
+};
 use crate::settings::service::ConnectedDocumentWorkspace;
 use crate::state::{
     AppServices, DocumentCommandSessionContext, DocumentCommandSessionRegistry,
@@ -1255,6 +1258,439 @@ pub async fn read_document_version(
 ) -> CommandResult<DocumentContent> {
     let _access = state.acquire_authenticated_command().await?;
     read_document_version_inner(&state, session_id, request_id, commit_oid, path_at_commit).await
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanningPrDocumentChange {
+    pub path: String,
+    pub title: String,
+    pub status: String,
+    pub base_markdown: Option<String>,
+    pub head_markdown: Option<String>,
+    pub companion_html: Option<String>,
+    pub has_companion_html: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocsPullRequestDetail {
+    pub pull_request: DocsPullRequestSummary,
+    pub viewer_login: String,
+    pub documents: Vec<PlanningPrDocumentChange>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishDocumentDraftRequest {
+    pub session_id: Uuid,
+    pub intent: String,
+    pub message: String,
+    #[serde(default)]
+    pub review_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishDocumentDraftResponse {
+    pub intent: String,
+    pub pull_request: DocsPullRequestSummary,
+    pub merged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveAndMergeDocsPrResponse {
+    pub number: u64,
+    pub merged: bool,
+    pub merge_sha: Option<String>,
+    pub review_submitted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GroupedPrDocTarget {
+    pub md_path: String,
+    pub html_path: Option<String>,
+    pub status: String,
+}
+
+pub(crate) fn group_planning_pr_document_targets(
+    files: &[PullRequestChangedFile],
+) -> Vec<GroupedPrDocTarget> {
+    let mut targets: Vec<GroupedPrDocTarget> = Vec::new();
+    for file in files {
+        let path = file.filename.trim();
+        if let Some(stem) = path.strip_suffix(".md") {
+            let companion = format!("{stem}.html");
+            if let Some(existing) = targets.iter_mut().find(|t| t.md_path == path) {
+                existing.status = file.status.clone();
+                existing.html_path = Some(companion);
+            } else {
+                targets.push(GroupedPrDocTarget {
+                    md_path: path.to_owned(),
+                    html_path: Some(companion),
+                    status: file.status.clone(),
+                });
+            }
+        } else if let Some(stem) = path.strip_suffix(".html") {
+            if !path.starts_with(".okf/templates/") {
+                let paired_md = format!("{stem}.md");
+                if let Some(existing) = targets.iter_mut().find(|t| t.md_path == paired_md) {
+                    existing.html_path = Some(path.to_owned());
+                } else {
+                    targets.push(GroupedPrDocTarget {
+                        md_path: paired_md,
+                        html_path: Some(path.to_owned()),
+                        status: file.status.clone(),
+                    });
+                }
+            }
+        }
+    }
+    targets
+}
+
+fn extract_markdown_title(markdown: Option<&str>, fallback_path: &str) -> String {
+    if let Some(md) = markdown {
+        let parsed = crate::documents::frontmatter::parse_document(
+            md,
+            Path::new(fallback_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(fallback_path),
+        );
+        if !parsed.title.trim().is_empty() {
+            return parsed.title;
+        }
+    }
+    Path::new(fallback_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(fallback_path)
+        .to_owned()
+}
+
+fn extract_stylesheet_hrefs(raw_html: &str) -> Vec<String> {
+    let lower = raw_html.to_ascii_lowercase();
+    let mut hrefs = Vec::new();
+    let mut cursor = 0;
+    while let Some(rel_idx) = lower[cursor..].find("<link") {
+        let start = cursor + rel_idx;
+        let Some(end_off) = raw_html[start..].find('>') else {
+            break;
+        };
+        let end = start + end_off + 1;
+        let tag = &raw_html[start..end];
+        let tag_lower = tag.to_ascii_lowercase();
+        if tag_lower.contains("stylesheet") {
+            if let Some(pos) = tag_lower.find("href=") {
+                let after = tag[pos + 5..].trim_start();
+                if let Some(quote) = after.chars().next() {
+                    if quote == '"' || quote == '\'' {
+                        let rest = &after[quote.len_utf8()..];
+                        if let Some(q_end) = rest.find(quote) {
+                            let href = rest[..q_end].trim();
+                            let clean = href.split(['?', '#']).next().unwrap_or(href);
+                            if !clean.is_empty()
+                                && !clean.starts_with("http://")
+                                && !clean.starts_with("https://")
+                                && !clean.starts_with("//")
+                                && !clean.starts_with("data:")
+                            {
+                                hrefs.push(clean.to_owned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cursor = end;
+    }
+    hrefs
+}
+
+#[tauri::command]
+pub async fn list_docs_pull_requests(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+) -> CommandResult<Vec<DocsPullRequestSummary>> {
+    let _access = state.acquire_authenticated_command().await?;
+    validate_client_id(session_id, "문서 세션")?;
+    let context = active_context(&state, session_id)?;
+    let repository_full_name = context.workspace().repository_full_name.clone();
+    let github = state.github.as_ref().ok_or_else(github_unavailable)?;
+    github.list_open_pull_requests(&repository_full_name).await
+}
+
+#[tauri::command]
+pub async fn get_docs_pull_request_detail(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+    number: u64,
+) -> CommandResult<DocsPullRequestDetail> {
+    let _access = state.acquire_authenticated_command().await?;
+    validate_client_id(session_id, "문서 세션")?;
+    let context = active_context(&state, session_id)?;
+    let repository_full_name = context.workspace().repository_full_name.clone();
+    let github = state.github.as_ref().ok_or_else(github_unavailable)?;
+    let viewer_login = state
+        .auth
+        .as_ref()
+        .ok_or_else(github_unavailable)?
+        .authenticated_principal()
+        .await?
+        .login;
+    let pull_request = github
+        .get_pull_request(&repository_full_name, number)
+        .await?;
+    let files = github
+        .list_pull_request_files(&repository_full_name, number)
+        .await?;
+    let targets = group_planning_pr_document_targets(&files);
+
+    let mut css_cache: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    let mut documents = Vec::with_capacity(targets.len());
+
+    for target in targets {
+        let base_markdown = if target.status == "added" {
+            None
+        } else {
+            github
+                .read_repository_text_file_at_ref(
+                    &repository_full_name,
+                    &target.md_path,
+                    &pull_request.base_sha,
+                )
+                .await?
+        };
+        let head_markdown = if target.status == "removed" {
+            None
+        } else {
+            github
+                .read_repository_text_file_at_ref(
+                    &repository_full_name,
+                    &target.md_path,
+                    &pull_request.head_sha,
+                )
+                .await?
+        };
+        let companion_html = if target.status == "removed" {
+            None
+        } else if let Some(html_path) = &target.html_path {
+            let raw_html = github
+                .read_repository_text_file_at_ref(
+                    &repository_full_name,
+                    html_path,
+                    &pull_request.head_sha,
+                )
+                .await?;
+            if let Some(raw_html) = raw_html {
+                for href in extract_stylesheet_hrefs(&raw_html) {
+                    if let Ok(resolved_css) = resolve_asset_path(html_path, &href) {
+                        if let std::collections::hash_map::Entry::Vacant(entry) =
+                            css_cache.entry(resolved_css)
+                        {
+                            let css = github
+                                .read_repository_text_file_at_ref(
+                                    &repository_full_name,
+                                    entry.key(),
+                                    &pull_request.head_sha,
+                                )
+                                .await
+                                .ok()
+                                .flatten();
+                            entry.insert(css);
+                        }
+                    }
+                }
+                Some(sanitize_and_inline_html(&raw_html, |clean_href| {
+                    let resolved = resolve_asset_path(html_path, clean_href).ok()?;
+                    css_cache.get(&resolved).and_then(|v| v.clone())
+                }))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let title = extract_markdown_title(
+            head_markdown.as_deref().or(base_markdown.as_deref()),
+            &target.md_path,
+        );
+        let has_companion_html = companion_html.is_some();
+        documents.push(PlanningPrDocumentChange {
+            path: target.md_path,
+            title,
+            status: target.status,
+            base_markdown,
+            head_markdown,
+            companion_html,
+            has_companion_html,
+        });
+    }
+
+    Ok(DocsPullRequestDetail {
+        pull_request,
+        viewer_login,
+        documents,
+    })
+}
+
+#[tauri::command]
+pub async fn publish_document_draft(
+    state: State<'_, AppServices>,
+    request: PublishDocumentDraftRequest,
+) -> CommandResult<PublishDocumentDraftResponse> {
+    let _access = state.acquire_authenticated_command().await?;
+    validate_client_id(request.session_id, "문서 세션")?;
+    let context = active_context(&state, request.session_id)?;
+    let workspace_id = context.workspace().workspace_id;
+    let repository_full_name = context.workspace().repository_full_name.clone();
+    let auth = state.auth.clone().ok_or_else(github_unavailable)?;
+    let github = state.github.clone().ok_or_else(github_unavailable)?;
+    let principal = auth.authenticated_principal().await?;
+    let push_token = auth.valid_access_token().await?;
+
+    let manager = state.document_drafts.clone();
+    let repository_git = state.repository_git.clone();
+    let message = request.message.trim().to_owned();
+    let remote_url = format!("https://github.com/{repository_full_name}.git");
+    let login = principal.login.clone();
+    let user_id = principal.id;
+
+    let (draft, source_root, base_branch) = run_blocking(move || {
+        let (draft, source_root, _commit_oid) =
+            manager.commit_active_change(workspace_id, &login, user_id, &message)?;
+        let snapshot = repository_git.inspect(&source_root)?;
+        let base_branch = snapshot
+            .default_branch
+            .filter(|b| !b.trim().is_empty())
+            .unwrap_or_else(|| "main".to_owned());
+        repository_git.push_branch(&source_root, &draft.branch, &remote_url, push_token)?;
+        Ok((draft, source_root, base_branch))
+    })
+    .await?;
+
+    let pr_body = if request.review_note.trim().is_empty() {
+        format!("OkHub 문서 변경 요청 (`{}`)", draft.branch)
+    } else {
+        request.review_note.trim().to_owned()
+    };
+
+    let pull_request = github
+        .create_pull_request(&CreatePullRequestInput {
+            repository_full_name: repository_full_name.clone(),
+            head: draft.branch.clone(),
+            base: base_branch,
+            title: request.message.trim().to_owned(),
+            body: pr_body,
+            draft: false,
+        })
+        .await?;
+
+    if request.intent == "publish" {
+        let _ = github
+            .squash_merge_pull_request(
+                &repository_full_name,
+                pull_request.number,
+                Some(&format!(
+                    "{} (#{})",
+                    pull_request.title, pull_request.number
+                )),
+                Some(&pull_request.head_sha),
+            )
+            .await?;
+
+        let pull_token = auth.valid_access_token().await?;
+        let manager_cleanup = state.document_drafts.clone();
+        let git_pull = state.repository_git.clone();
+        let remote_for_pull = format!("https://github.com/{repository_full_name}.git");
+        let change_id = draft.change_id;
+        let _ = run_blocking(move || {
+            let _ = manager_cleanup.discard_change(workspace_id, change_id);
+            let _ =
+                git_pull.fast_forward_default_branch(&source_root, &remote_for_pull, pull_token);
+            Ok(())
+        })
+        .await;
+
+        return Ok(PublishDocumentDraftResponse {
+            intent: "publish".to_owned(),
+            pull_request,
+            merged: true,
+        });
+    }
+
+    Ok(PublishDocumentDraftResponse {
+        intent: "review".to_owned(),
+        pull_request,
+        merged: false,
+    })
+}
+
+#[tauri::command]
+pub async fn approve_and_merge_docs_pull_request(
+    state: State<'_, AppServices>,
+    session_id: Uuid,
+    number: u64,
+    comment: Option<String>,
+) -> CommandResult<ApproveAndMergeDocsPrResponse> {
+    let _access = state.acquire_authenticated_command().await?;
+    validate_client_id(session_id, "문서 세션")?;
+    let context = active_context(&state, session_id)?;
+    let repository_full_name = context.workspace().repository_full_name.clone();
+    let auth = state.auth.clone().ok_or_else(github_unavailable)?;
+    let github = state.github.clone().ok_or_else(github_unavailable)?;
+
+    let principal = auth.authenticated_principal().await?;
+    let pr = github
+        .get_pull_request(&repository_full_name, number)
+        .await?;
+
+    let review_submitted = if !pr.author_login.eq_ignore_ascii_case(&principal.login) {
+        github
+            .approve_pull_request(&repository_full_name, number, comment.as_deref())
+            .await?;
+        true
+    } else {
+        false
+    };
+
+    let merge_sha = github
+        .squash_merge_pull_request(
+            &repository_full_name,
+            number,
+            Some(&format!("{} (#{})", pr.title, pr.number)),
+            Some(&pr.head_sha),
+        )
+        .await?;
+
+    if let Ok(pull_token) = auth.valid_access_token().await {
+        let settings = state.local_settings.clone();
+        let git_pull = state.repository_git.clone();
+        let remote_url = format!("https://github.com/{repository_full_name}.git");
+        let _ = run_blocking(move || {
+            if let Ok(connected) = settings.load_connected_document_workspace() {
+                let _ = git_pull.fast_forward_default_branch(
+                    &connected.repository_root,
+                    &remote_url,
+                    pull_token,
+                );
+            }
+            Ok(())
+        })
+        .await;
+    }
+
+    let _ = state.document_runtime.refresh(session_id).await;
+
+    Ok(ApproveAndMergeDocsPrResponse {
+        number,
+        merged: true,
+        merge_sha,
+        review_submitted,
+    })
 }
 
 async fn load_document_workspace(
@@ -3369,5 +3805,41 @@ mod tests {
         stop_document_session_inner(&fixture.services, session_id)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn groups_paired_markdown_and_html_files_in_planning_pull_requests() {
+        use crate::github::model::PullRequestChangedFile;
+        let files = vec![
+            PullRequestChangedFile {
+                filename: "docs/product/roadmap-v2.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/product/roadmap-v2.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/_assets/okf-doc.css".into(),
+                status: "added".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: ".okf/templates/human-view.html".into(),
+                status: "added".into(),
+                previous_filename: None,
+            },
+        ];
+
+        let grouped = super::group_planning_pr_document_targets(&files);
+        assert_eq!(grouped.len(), 1);
+        assert_eq!(grouped[0].md_path, "docs/product/roadmap-v2.md");
+        assert_eq!(
+            grouped[0].html_path.as_deref(),
+            Some("docs/product/roadmap-v2.html")
+        );
+        assert_eq!(grouped[0].status, "modified");
     }
 }
