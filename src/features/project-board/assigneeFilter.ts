@@ -116,8 +116,9 @@ export function filterTreeByAssignee(
     if (depth > MAX_WALK_DEPTH) return [];
     const kept: BoardIssue[] = [];
     for (const node of nodes) {
+      const kids = Array.isArray(node.children) ? node.children : [];
       const filteredChildren =
-        node.children.length > 0 ? filterNodes(node.children, depth + 1) : [];
+        kids.length > 0 ? filterNodes(kids, depth + 1) : [];
       if (matchesAssigneeFilter(node, filter) || filteredChildren.length > 0) {
         kept.push({
           ...node,

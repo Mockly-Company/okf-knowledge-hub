@@ -57,6 +57,15 @@ describe("assigneeFilter", () => {
     expect(filtered).toHaveLength(1);
     expect(filtered[0].number).toBe(1);
     expect(filtered[0].children.map((c) => c.number)).toEqual([2]);
+
+    // 런타임에 children이 누락된 노드도 예외 없이 안전하게 필터링된다.
+    const malformed = {
+      ...issue(6, ["alice"]),
+      children: undefined,
+    } as unknown as BoardIssue;
+    const safeFiltered = filterTreeByAssignee([malformed], "alice");
+    expect(safeFiltered).toHaveLength(1);
+    expect(safeFiltered[0].children).toEqual([]);
   });
 
   it("formats compact assignee badge summary without duplicating UI strings", () => {

@@ -46,6 +46,12 @@ function asNonEmptyString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function asNonNegativeInt(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : fallback;
+}
+
 function normalizeTasks(raw: unknown): DashboardTaskItem[] {
   if (!Array.isArray(raw)) return [];
   const tasks: DashboardTaskItem[] = [];
@@ -210,14 +216,14 @@ export class TauriPersonalDashboardGateway implements PersonalDashboardGateway {
     const tasks = normalizeTasks(raw?.tasks);
     const notifications = normalizeNotifications(raw?.notifications);
     const failures = normalizeFailures(raw?.failures);
-    const unreadNewCount =
-      typeof raw?.unreadNewCount === "number"
-        ? raw.unreadNewCount
-        : tasks.filter((t) => t.isNew).length;
-    const unreadNotificationCount =
-      typeof raw?.unreadNotificationCount === "number"
-        ? raw.unreadNotificationCount
-        : notifications.filter((n) => n.isNew).length;
+    const unreadNewCount = asNonNegativeInt(
+      raw?.unreadNewCount,
+      tasks.filter((t) => t.isNew).length,
+    );
+    const unreadNotificationCount = asNonNegativeInt(
+      raw?.unreadNotificationCount,
+      notifications.filter((n) => n.isNew).length,
+    );
     return {
       viewerLogin: asNonEmptyString(raw?.viewerLogin),
       fetchedAt: asNonEmptyString(raw?.fetchedAt) ?? new Date().toISOString(),
@@ -225,16 +231,16 @@ export class TauriPersonalDashboardGateway implements PersonalDashboardGateway {
       assigneeOptions: normalizeBoardAssignees(raw?.assigneeOptions),
       tasks,
       unreadNewCount,
-      readyTaskCount:
-        typeof raw?.readyTaskCount === "number"
-          ? raw.readyTaskCount
-          : tasks.filter((t) => t.readyToStart).length,
+      readyTaskCount: asNonNegativeInt(
+        raw?.readyTaskCount,
+        tasks.filter((t) => t.readyToStart).length,
+      ),
       notifications,
       unreadNotificationCount,
-      totalUnreadCount:
-        typeof raw?.totalUnreadCount === "number"
-          ? raw.totalUnreadCount
-          : unreadNewCount + unreadNotificationCount,
+      totalUnreadCount: asNonNegativeInt(
+        raw?.totalUnreadCount,
+        unreadNewCount + unreadNotificationCount,
+      ),
       failures,
     };
   }

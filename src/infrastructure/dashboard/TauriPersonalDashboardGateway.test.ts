@@ -177,4 +177,48 @@ describe("TauriPersonalDashboardGateway", () => {
     expect(trimmedResult.viewerLogin).toBe("YoonDongGeun");
     expect(trimmedResult.lastSeenAt).toBe("2026-11-14T11:00:00Z");
   });
+
+  it("falls back to derived counts when count fields are negative, fractional, NaN, or Infinity", async () => {
+    const gateway = new TauriPersonalDashboardGateway(
+      vi.fn().mockResolvedValue({
+        tasks: [
+          {
+            workspaceId: "project:1",
+            title: "새 작업",
+            url: "https://github.com/Acme/app/issues/1",
+            issueNumber: 1,
+            projectNumber: 1,
+            status: "ready",
+            layer: "frontend",
+            isNew: true,
+            readyToStart: true,
+            predecessorDone: true,
+          },
+        ],
+        notifications: [
+          {
+            id: "pr:2",
+            workspaceId: "project:1",
+            kind: "open_pr",
+            prNumber: 2,
+            title: "문서 PR",
+            url: "https://github.com/Acme/docs/pull/2",
+            timestamp: "2026-11-14T10:00:00Z",
+            isNew: true,
+          },
+        ],
+        failures: [],
+        unreadNewCount: -3,
+        readyTaskCount: 1.5,
+        unreadNotificationCount: Number.NaN,
+        totalUnreadCount: Number.POSITIVE_INFINITY,
+      }),
+    );
+
+    const result = await gateway.getPersonalDashboard();
+    expect(result.unreadNewCount).toBe(1);
+    expect(result.readyTaskCount).toBe(1);
+    expect(result.unreadNotificationCount).toBe(1);
+    expect(result.totalUnreadCount).toBe(2);
+  });
 });
