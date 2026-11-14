@@ -1,5 +1,5 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -49,6 +49,7 @@ function DocumentsDeepLinkSync({
   const [searchParams, setSearchParams] = useSearchParams();
   const prParam = searchParams.get("pr");
   const docParam = searchParams.get("doc");
+  const lastConsumedDocRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (prParam && selectedPath !== null) {
@@ -57,7 +58,12 @@ function DocumentsDeepLinkSync({
   }, [prParam, selectedPath, showDocumentsHome]);
 
   useEffect(() => {
-    if (prParam || !ready || !docParam) return;
+    if (!docParam) {
+      lastConsumedDocRef.current = null;
+      return;
+    }
+    if (prParam || !ready || lastConsumedDocRef.current === docParam) return;
+    lastConsumedDocRef.current = docParam;
     selectDocument(docParam);
     const next = new URLSearchParams(searchParams);
     next.delete("doc");

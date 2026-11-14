@@ -54,10 +54,9 @@ export function PersonalDashboardProvider({
   const activeProject = useOptionalActiveProject();
   const connection = useOptionalWorkspaceConnection();
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
-  const nextSyncOptionsRef = useRef<{
-    forceSync?: boolean;
-    retryWorkspaceId?: string | null;
-  } | null>(null);
+  const pendingSyncByKeyRef = useRef<
+    Map<string, { forceSync: boolean; retryWorkspaceId: string | null }>
+  >(new Map());
 
   const workspacesKey = useMemo(() => {
     const workspaces = activeProject?.workspaces ?? [];
@@ -81,7 +80,7 @@ export function PersonalDashboardProvider({
     [assigneeFilter, viewerLogin, workspacesKey],
   );
 
-  const query = useQuery({
+  const query = useQuery<PersonalDashboardResult>({
     queryKey,
     enabled,
     staleTime: 30_000,
@@ -95,9 +94,12 @@ export function PersonalDashboardProvider({
       )
         ? previousData
         : undefined,
-    queryFn: async () => {
-      const pending = nextSyncOptionsRef.current;
-      nextSyncOptionsRef.current = null;
+    queryFn: async ({ queryKey: currentKey }) => {
+      const serialized = JSON.stringify(currentKey);
+      const pending = pendingSyncByKeyRef.current.get(serialized);
+      if (pending) {
+        pendingSyncByKeyRef.current.delete(serialized);
+      }
       return gateway.getPersonalDashboard({
         assigneeFilter,
         forceSync: pending?.forceSync ?? false,
@@ -107,7 +109,10 @@ export function PersonalDashboardProvider({
   });
 
   const refresh = useCallback(async () => {
-    nextSyncOptionsRef.current = { forceSync: true, retryWorkspaceId: null };
+    pendingSyncByKeyRef.current.set(JSON.stringify(queryKey), {
+      forceSync: true,
+      retryWorkspaceId: null,
+    });
     queryClient.removeQueries({
       queryKey: personalDashboardKeys.all,
       type: "inactive",
@@ -117,10 +122,10 @@ export function PersonalDashboardProvider({
 
   const retryWorkspace = useCallback(
     async (workspaceId: string) => {
-      nextSyncOptionsRef.current = {
+      pendingSyncByKeyRef.current.set(JSON.stringify(queryKey), {
         forceSync: false,
         retryWorkspaceId: workspaceId,
-      };
+      });
       queryClient.removeQueries({
         queryKey: personalDashboardKeys.all,
         type: "inactive",

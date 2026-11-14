@@ -697,7 +697,9 @@ async fn fetch_workspace_dashboard(
     should_sync: bool,
     ctx: Arc<WorkspaceFetchContext>,
 ) -> WorkspaceFetchOutcome {
-    let _permit = ctx.semaphore.clone().acquire_owned().await;
+    let Ok(_permit) = ctx.semaphore.clone().acquire_owned().await else {
+        return join_error_outcome(idx, workspace);
+    };
 
     let board_fut = async {
         let project = workspace.project.as_ref()?;
