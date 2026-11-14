@@ -107,15 +107,19 @@ function RouterPrDeepLinkSync({
     if (!ready) return;
     if (!prParam) return;
     const prNumber = Number(prParam);
-    if (Number.isInteger(prNumber) && prNumber > 0 && canOpenPrNumber(prNumber)) {
+    const matchedPr =
+      Number.isInteger(prNumber) && prNumber > 0 && canOpenPrNumber(prNumber);
+    if (matchedPr) {
       onOpenPr(prNumber);
     }
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("pr");
-        // 같은 커밋에서 DocumentsDeepLinkSync와 setSearchParams가 경쟁해도 잔류 ?doc=이 남지 않도록 함께 비운다.
-        next.delete("doc");
+        // 유효한 PR을 실제로 여는 경우에만 같은 커밋의 ?doc= 정리를 함께 보장한다(S21, S37).
+        if (matchedPr) {
+          next.delete("doc");
+        }
         return next;
       },
       { replace: true },

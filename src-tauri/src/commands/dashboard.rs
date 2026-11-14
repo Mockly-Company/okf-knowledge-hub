@@ -121,12 +121,22 @@ fn service_unavailable() -> AppError {
     .with_recovery(RecoveryAction::Retry)
 }
 
-fn now_utc_pair() -> (i64, String) {
-    let now = time::OffsetDateTime::now_utc();
+fn format_utc_pair(now: time::OffsetDateTime) -> Result<(i64, String), AppError> {
     let iso = now
         .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default();
-    (now.unix_timestamp(), iso)
+        .map_err(|err| {
+            eprintln!("[dashboard] failed to format UTC timestamp as RFC3339: {err}");
+            AppError::new(
+                ErrorCode::CacheUnavailable,
+                "현재 시각을 RFC3339 형식으로 직렬화할 수 없습니다.",
+            )
+            .with_recovery(RecoveryAction::Retry)
+        })?;
+    Ok((now.unix_timestamp(), iso))
+}
+
+fn now_utc_pair() -> Result<(i64, String), AppError> {
+    format_utc_pair(time::OffsetDateTime::now_utc())
 }
 
 pub(crate) fn parse_rfc3339_unix(raw: Option<&str>) -> Option<i64> {
@@ -824,7 +834,7 @@ async fn fetch_workspace_dashboard(
     }
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "camelCase")]
 pub async fn get_personal_dashboard(
     app: AppHandle,
     state: State<'_, AppServices>,
@@ -845,7 +855,7 @@ pub async fn get_personal_dashboard(
     let viewer_login = viewer.login.trim().to_owned();
     let viewer_avatar = viewer.avatar_url.trim().to_owned();
 
-    let (now_unix, fetched_at) = now_utc_pair();
+    let (now_unix, fetched_at) = now_utc_pair()?;
     let force_all = force_sync.unwrap_or(false);
     let retry_target = retry_workspace_id
         .as_deref()
@@ -1482,5 +1492,22 @@ mod tests {
         super::order_prs_for_file_fetch(&mut list);
         let nums: Vec<u64> = list.iter().map(|(_, pr)| pr.number).collect();
         assert_eq!(nums, vec![22, 15, 10]);
+    }
+
+    #[test]
+    fn format_utc_pair_propagates_rfc3339_format_errors() {
+        let valid = time::OffsetDateTime::from_unix_timestamp(1_763_121_600).unwrap();
+        let (unix, iso) = super::format_utc_pair(valid).expect("valid UTC timestamp must format");
+        assert_eq!(unix, 1_763_121_600);
+        assert_eq!(iso, "2025-11-14T12:00:00Z");
+
+        // time::format_description::well_known::Rfc3339 rejects years outside 0000..=9999.
+        let negative_year = time::Date::from_ordinal_date(-1, 1)
+            .unwrap()
+            .midnight()
+            .assume_utc();
+        let err = super::format_utc_pair(negative_year)
+            .expect_err("out-of-range RFC3339 year must return AppError instead of empty string");
+        assert_eq!(err.code, crate::error::ErrorCode::CacheUnavailable);
     }
 }

@@ -66,16 +66,21 @@ function DocumentsDeepLinkSync({
     staleTime: 15_000,
   });
 
+  const prListSettled =
+    pullRequestsQuery.status === "success" && !pullRequestsQuery.isFetching;
   const prExists =
     hasPositivePrNumber &&
-    pullRequestsQuery.status === "success" &&
+    prListSettled &&
     (pullRequestsQuery.data ?? []).some(
       (pr) => pr.number === parsedPrNumber,
     );
+  const prConfirmedMissing = hasPositivePrNumber && prListSettled && !prExists;
+  const prConfirmedValid = hasPositivePrNumber && prListSettled && prExists;
 
   useEffect(() => {
     if (!ready || sessionId === null || !prParam) return;
-    if (!hasPositivePrNumber) {
+    if (!hasPositivePrNumber || prConfirmedMissing) {
+      // 잘못되었거나 존재하지 않는 ?pr=은 열려 있던 문서나 동반 ?doc=을 지우지 않고 ?pr=만 비운다(M9, M10, S37).
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
@@ -86,20 +91,7 @@ function DocumentsDeepLinkSync({
       );
       return;
     }
-    // PR 목록이 에러 없이 최신 상태로 로드된 뒤에만 미존재 판단 및 ?pr= 정리를 수행한다(M10).
-    if (pullRequestsQuery.status !== "success" || pullRequestsQuery.isFetching) {
-      return;
-    }
-    if (!prExists) {
-      // 존재하지 않는 ?pr=는 현재 열려 있던 문서를 닫지 않고 파라미터만 비운다(M9).
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("pr");
-          return next;
-        },
-        { replace: true },
-      );
+    if (!prListSettled) {
       return;
     }
     if (selectedPath !== null) {
@@ -110,9 +102,8 @@ function DocumentsDeepLinkSync({
     sessionId,
     prParam,
     hasPositivePrNumber,
-    pullRequestsQuery.status,
-    pullRequestsQuery.isFetching,
-    prExists,
+    prListSettled,
+    prConfirmedMissing,
     selectedPath,
     showDocumentsHome,
     setSearchParams,
@@ -125,16 +116,18 @@ function DocumentsDeepLinkSync({
     }
     if (!ready) return;
     if (prParam) {
-      // `?pr=`와 `?doc=`가 동시에 오면 PR 보기가 우선이므로 잔류 `?doc=`을 함께 비운다(S21).
-      lastConsumedDocRef.current = null;
-      setSearchParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete("doc");
-          return next;
-        },
-        { replace: true },
-      );
+      // 유효한 PR 딥링크가 확정된 경우에만 ?doc=을 비우고, 미확정·무효 ?pr= 동안에는 보존한다(S21, S37).
+      if (prConfirmedValid) {
+        lastConsumedDocRef.current = null;
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.delete("doc");
+            return next;
+          },
+          { replace: true },
+        );
+      }
       return;
     }
     if (lastConsumedDocRef.current === docParam) return;
@@ -148,7 +141,14 @@ function DocumentsDeepLinkSync({
       },
       { replace: true },
     );
-  }, [prParam, docParam, ready, setSearchParams, selectDocument]);
+  }, [
+    prParam,
+    docParam,
+    ready,
+    prConfirmedValid,
+    setSearchParams,
+    selectDocument,
+  ]);
 
   return null;
 }

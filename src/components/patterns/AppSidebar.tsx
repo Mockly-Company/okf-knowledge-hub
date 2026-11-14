@@ -201,7 +201,11 @@ export function AppSidebar({
                 >
                   {unreadDashboardCount > 99 ? "99+" : unreadDashboardCount}
                 </span>
-                <span className="sr-only">{`, 새 알림 ${unreadDashboardCount}개`}</span>
+                <span className="sr-only">
+                  {unreadDashboardCount > 99
+                    ? ", 새 알림 99개 이상"
+                    : `, 새 알림 ${unreadDashboardCount}개`}
+                </span>
               </>
             ) : null}
           </NavLink>
