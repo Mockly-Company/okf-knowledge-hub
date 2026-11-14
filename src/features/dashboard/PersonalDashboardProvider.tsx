@@ -108,8 +108,12 @@ export function PersonalDashboardProvider({
 
   const refresh = useCallback(async () => {
     nextSyncOptionsRef.current = { forceSync: true, retryWorkspaceId: null };
-    await queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
-  }, [queryClient]);
+    queryClient.removeQueries({
+      queryKey: personalDashboardKeys.all,
+      type: "inactive",
+    });
+    await queryClient.refetchQueries({ queryKey, exact: true });
+  }, [queryClient, queryKey]);
 
   const retryWorkspace = useCallback(
     async (workspaceId: string) => {
@@ -117,9 +121,13 @@ export function PersonalDashboardProvider({
         forceSync: false,
         retryWorkspaceId: workspaceId,
       };
-      await queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
+      queryClient.removeQueries({
+        queryKey: personalDashboardKeys.all,
+        type: "inactive",
+      });
+      await queryClient.refetchQueries({ queryKey, exact: true });
     },
-    [queryClient],
+    [queryClient, queryKey],
   );
 
   const markSeenMutation = useMutation({

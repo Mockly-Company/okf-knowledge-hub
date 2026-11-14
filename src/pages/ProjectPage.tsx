@@ -290,15 +290,18 @@ function RouterRedirect({
 }
 
 function RouterIssueDeepLinkSync({
+  ready,
   issues,
   onSelectIssueNumber,
 }: {
+  ready: boolean;
   issues: ReadonlyArray<BoardIssue>;
   onSelectIssueNumber: (issueNumber: number, fallback: BoardIssue | null) => void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   useEffect(() => {
+    if (!ready) return;
     const raw = searchParams.get("issue");
     if (!raw) return;
     const issueNumber = Number(raw);
@@ -311,7 +314,7 @@ function RouterIssueDeepLinkSync({
     const next = new URLSearchParams(searchParams);
     next.delete("issue");
     setSearchParams(next, { replace: true });
-  }, [issues, searchParams, setSearchParams, onSelectIssueNumber]);
+  }, [ready, issues, searchParams, setSearchParams, onSelectIssueNumber]);
 
   return null;
 }
@@ -1223,9 +1226,10 @@ export function ProjectPage({
         onStartWithAi={handleStartWithAi}
       />
 
-      {inRouterContext && board ? (
+      {inRouterContext ? (
         <RouterIssueDeepLinkSync
-          issues={board.issues}
+          ready={!isUnlinked && board !== null && !boardLoading && !isFetchingBoard && !isSyncingBoard}
+          issues={board?.issues ?? EMPTY_ISSUES}
           onSelectIssueNumber={handleDeepLinkIssueSelect}
         />
       ) : null}

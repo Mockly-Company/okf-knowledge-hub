@@ -1701,4 +1701,50 @@ describe("ProjectPage project switching", () => {
     await screen.findByText(/#70 존재하는 백로그/);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+
+  it("preserves ?issue= deep link while board is loading and opens drawer once ready", async () => {
+    const { MemoryRouter } = await import("react-router-dom");
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 77,
+        title: "지연 로드 딥링크 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/77",
+        status: "ready",
+        layer: "frontend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "YoonDongGeun" }],
+        children: [],
+      },
+    ]);
+    let resolveSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => {
+      resolveSync = resolve;
+    });
+    const origGet = gateway.getProjectBoard.bind(gateway);
+    const origSync = gateway.syncProjectBoard.bind(gateway);
+    // 첫 get은 캐시 없음(issues=[], fetchedAt=null) -> sync 완료까지 보드 로딩 유지
+    vi.spyOn(gateway, "getProjectBoard").mockResolvedValueOnce({
+      issues: [],
+      fetchedAt: null,
+      skipped: 0,
+      truncated: false,
+    });
+    vi.spyOn(gateway, "syncProjectBoard").mockImplementationOnce(async () => {
+      await syncGate;
+      return origSync();
+    });
+    void origGet;
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=77"]}>
+        <ProjectPage gateway={gateway} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    resolveSync();
+    const drawer = await screen.findByRole("dialog", { name: "지연 로드 딥링크 백로그" });
+    expect(drawer).toBeVisible();
+  });
 });

@@ -581,4 +581,54 @@ describe("HomePage (내 대시보드)", () => {
       expect(screen.getByTestId("sidebar-unread-count")).toHaveTextContent("0");
     });
   });
+
+  it("drops stale inactive filter cache on retryWorkspace so switching views reflects fresh state", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      assigneeOptions: [
+        { login: "YoonDongGeun", name: "윤동근" },
+        { login: "alice", name: "앨리스" },
+      ],
+      tasks: [
+        makeTask({ issueNumber: 74, title: "내 작업", assignees: [{ login: "YoonDongGeun" }] }),
+        makeTask({ issueNumber: 90, title: "앨리스 작업", assignees: [{ login: "alice" }] }),
+      ],
+      failures: [
+        {
+          workspaceId: "PVT_gamma",
+          workspaceTitle: "Gamma Project",
+          scope: "board",
+          message: "temporary error",
+        },
+      ],
+    });
+    gateway.onRetryWorkspace = () => {
+      gateway.failures = [];
+    };
+
+    renderDashboard({
+      dashboardGateway: gateway,
+      docsRepoGateway: await createDefaultDocsRepoGateway(),
+    });
+
+    await screen.findByText("#74 내 작업");
+    expect(screen.getByText(/Gamma Project/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: "담당자 보기" }));
+    await user.click(await screen.findByRole("option", { name: "@alice (앨리스)" }));
+    await screen.findByText("#90 앨리스 작업");
+
+    const warning = screen.getByText(/Gamma Project/).closest('[role="status"]');
+    expect(warning).not.toBeNull();
+    await user.click(within(warning as HTMLElement).getByRole("button", { name: "다시 시도" }));
+    await waitFor(() => {
+      expect(screen.queryByText(/Gamma Project/)).toBeNull();
+    });
+
+    await user.click(screen.getByRole("combobox", { name: "담당자 보기" }));
+    await user.click(await screen.findByRole("option", { name: /내 작업/ }));
+    await screen.findByText("#74 내 작업");
+    expect(screen.queryByText(/Gamma Project/)).toBeNull();
+  });
 });
