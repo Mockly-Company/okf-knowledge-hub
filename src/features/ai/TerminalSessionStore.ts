@@ -1,5 +1,6 @@
 import type {
   AiGateway,
+  AiTaskLaunchRequest,
   AiTerminalEvent,
   AiToolId,
 } from "@/features/ai/AiGateway";
@@ -104,7 +105,7 @@ export class TerminalSessionStore {
     return true;
   }
 
-  async open(tool: AiToolId): Promise<void> {
+  async open(tool: AiToolId, taskContext?: AiTaskLaunchRequest): Promise<void> {
     const initialKey = String(this.nextKey++);
     const renderer = this.createRenderer();
     const route: SessionRoute = { store: this, key: initialKey };
@@ -130,9 +131,16 @@ export class TerminalSessionStore {
     this.focusKey = initialKey;
     this.notify();
 
-    const started = this.gateway.startTerminal(tool, INITIAL_SIZE, (event) =>
-      route.store.handleEvent(route.key, event),
-    );
+    const started = taskContext
+      ? this.gateway.startTerminal(
+          tool,
+          INITIAL_SIZE,
+          (event) => route.store.handleEvent(route.key, event),
+          taskContext,
+        )
+      : this.gateway.startTerminal(tool, INITIAL_SIZE, (event) =>
+          route.store.handleEvent(route.key, event),
+        );
     link.queue = started.then(
       (id) => {
         link.backendId = id;

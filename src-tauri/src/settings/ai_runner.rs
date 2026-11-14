@@ -98,7 +98,9 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
     let mut lines = vec![
         "# 현재 선택된 프로젝트 · 저장소 컨텍스트 (앱 자동 반영)".to_owned(),
         String::new(),
-        "모든 문서 작성, 기획 PR, 백로그 등록, 코드 구현 PR은 아래 **현재 선택된 대상**에만 반영한다."
+        "모든 기획서·PRD·화면명세서 작성, 문서 PR, 직군별 백로그(`[기획]`·`[디자인]`·`[백엔드]`·`[프론트엔드]`) 등록은 아래 **현재 선택된 대상**에만 반영한다."
+            .to_owned(),
+        "**절대 원칙 (코드 구현 금지)**: OkHub AI 세션에서는 아이디어 구체화, PRD·화면명세서 문서(`.md`+`.html` 2벌) 작성, 전 직군 백로그 등록, 그리고 **`[기획]`·`[디자인]` 백로그 문서 완수까지만** 수행한다. **`[백엔드]`·`[프론트엔드]` 애플리케이션 코드 직접 구현 및 코드 저장소 구현 PR 생성은 절대 하지 않는다.**"
             .to_owned(),
         String::new(),
     ];
@@ -122,7 +124,7 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
     match context.docs_repository_full_name.as_deref() {
         Some(full_name) => {
             lines.push(format!(
-                "- 연결된 문서 저장소 (기획 PR 대상): `{full_name}`"
+                "- 연결된 문서 저장소 (`[기획]` PRD · `[디자인]` 화면명세서 작성 및 PR 대상): `{full_name}`"
             ));
         }
         None => {
@@ -134,11 +136,14 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
             "- 연결된 코드 저장소 (`.okf/workspace.yml`): 선언된 코드 저장소 없음".to_owned(),
         );
     } else {
-        lines.push("- 연결된 코드 저장소 (구현 PR · 코드 Worktree 대상):".to_owned());
+        lines.push(
+            "- 연결된 코드 저장소 (읽기 전용 코드 참조 및 `[백엔드]`·`[프론트엔드]` 개발 백로그 등록 대상 — 직접 코딩 금지):"
+                .to_owned(),
+        );
         for repo in &context.code_repositories {
             match repo.local_path.as_deref() {
                 Some(path) => lines.push(format!(
-                    "  - `{}` ({}): `{}` — 로컬 경로: `{}`",
+                    "  - `{}` ({}): `{}` — 로컬 읽기 참조 경로: `{}`",
                     repo.key, repo.label, repo.full_name, path
                 )),
                 None => lines.push(format!(
@@ -149,7 +154,7 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
         }
     }
     lines.push(
-        "- 로컬 자동화 도구: `okhub-cli` (`doc validate`, `pr list|create|approve-merge`, `board list|ready|create-issue|update-status`, `context issue <번호>`, STDIO MCP `okhub-cli mcp`)"
+        "- 로컬 자동화 도구: `okhub-cli` (`doc validate`, `pr list|create|approve-merge`, `board list|ready|create-issue|derive-backlog|update-status`, `context issue <번호>`, STDIO MCP `okhub-cli mcp`)"
             .to_owned(),
     );
     lines.push(String::new());

@@ -106,9 +106,11 @@ export function DocumentOverview({
   const entries = propertyEntries(document.properties);
   const codeReferences = extractCodeReferences(document.properties);
   const [selectedCodeRef, setSelectedCodeRef] = useState<string | null>(null);
+  const [loadingCodeRef, setLoadingCodeRef] = useState<string | null>(null);
   const [codePreview, setCodePreview] =
     useState<CodeRepositoryFilePreview | null>(null);
   const [codePreviewError, setCodePreviewError] = useState<string | null>(null);
+  const codeRequestSeqRef = useRef(0);
   const navRef = useRef<HTMLElement>(null);
   const requestedLocation = useRef<{id: string; scrollTop: number} | null>(null);
   const [activeId, setActiveId] = useState(document.tableOfContents[0]?.id);
@@ -179,13 +181,16 @@ export function DocumentOverview({
   };
 
   const toggleCodeReference = async (ref: ParsedCodeReference) => {
+    const nextSeq = ++codeRequestSeqRef.current;
     if (selectedCodeRef === ref.raw) {
       setSelectedCodeRef(null);
+      setLoadingCodeRef(null);
       setCodePreview(null);
       setCodePreviewError(null);
       return;
     }
     setSelectedCodeRef(ref.raw);
+    setLoadingCodeRef(ref.raw);
     setCodePreview(null);
     setCodePreviewError(null);
     try {
@@ -195,13 +200,19 @@ export function DocumentOverview({
         ref.startLine,
         ref.endLine,
       );
+      if (codeRequestSeqRef.current !== nextSeq) return;
       setCodePreview(loaded);
     } catch (err) {
+      if (codeRequestSeqRef.current !== nextSeq) return;
       setCodePreviewError(
         err instanceof Error
           ? err.message
           : "연결된 코드 저장소에서 파일을 읽지 못했습니다.",
       );
+    } finally {
+      if (codeRequestSeqRef.current === nextSeq) {
+        setLoadingCodeRef(null);
+      }
     }
   };
 
@@ -236,6 +247,7 @@ export function DocumentOverview({
                 key={ref.raw}
                 type="button"
                 variant="secondary"
+                loading={loadingCodeRef === ref.raw}
                 onClick={() => void toggleCodeReference(ref)}
                 className="justify-start font-mono text-[length:var(--text-xs)]"
               >
@@ -243,6 +255,15 @@ export function DocumentOverview({
               </Button>
             ))}
           </div>
+          {loadingCodeRef && (
+            <p
+              role="status"
+              aria-live="polite"
+              className="m-0 text-[length:var(--text-xs)] text-[var(--color-text-muted)]"
+            >
+              코드 스니펫을 불러오는 중…
+            </p>
+          )}
           {codePreviewError && (
             <p
               role="alert"

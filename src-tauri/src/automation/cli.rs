@@ -290,8 +290,8 @@ async fn run_command(
         }
         ("board", "list") => {
             let rest = &args[2..];
-            let layer = find_flag_value(rest, "--layer").and_then(|s| parse_board_layer_arg(&s));
-            let status = find_flag_value(rest, "--status").and_then(|s| parse_board_status_arg(&s));
+            let layer = parse_optional_layer_flag(rest, "--layer")?;
+            let status = parse_optional_status_flag(rest, "--status")?;
             let items = runtime.list_board_items(layer, status).await?;
             if json_output {
                 emit_json(&items);
@@ -310,7 +310,7 @@ async fn run_command(
         }
         ("board", "ready") => {
             let rest = &args[2..];
-            let layer = find_flag_value(rest, "--layer").and_then(|s| parse_board_layer_arg(&s));
+            let layer = parse_optional_layer_flag(rest, "--layer")?;
             let ready = runtime.list_ready_items(layer).await?;
             if json_output {
                 emit_json(&ready);
@@ -337,12 +337,12 @@ async fn run_command(
                 )
             })?;
             let body = find_flag_value(rest, "--body").unwrap_or_default();
-            let layer = find_flag_value(rest, "--layer").and_then(|s| parse_board_layer_arg(&s));
-            let status = find_flag_value(rest, "--status").and_then(|s| parse_board_status_arg(&s));
+            let layer = parse_optional_layer_flag(rest, "--layer")?;
+            let status = parse_optional_status_flag(rest, "--status")?;
             let kind = find_flag_value(rest, "--kind");
-            let parent = find_flag_value(rest, "--parent").and_then(|s| s.parse::<u64>().ok());
-            let depends_on =
-                find_flag_value(rest, "--depends-on").and_then(|s| s.parse::<u64>().ok());
+            let priority = find_flag_value(rest, "--priority");
+            let parent = parse_optional_u64_flag(rest, "--parent")?;
+            let depends_on = parse_optional_u64_flag(rest, "--depends-on")?;
             let created = runtime
                 .create_board_issue(
                     repo.as_deref(),
@@ -351,6 +351,7 @@ async fn run_command(
                     layer,
                     status,
                     kind,
+                    priority,
                     parent,
                     depends_on,
                 )
@@ -362,6 +363,26 @@ async fn run_command(
                     "이슈 #{} 생성 및 프로젝트 등록 완료: {}",
                     created.number, created.url
                 );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        ("board", "derive-backlog") => {
+            let number = parse_u64_arg(args.get(2), "상위 이슈 번호")?;
+            let rest = if args.len() > 3 { &args[3..] } else { &[] };
+            let repo = find_flag_value(rest, "--repo");
+            let doc_path = find_flag_value(rest, "--doc");
+            let created = runtime
+                .derive_backlog_from_issue(number, repo.as_deref(), doc_path.as_deref())
+                .await?;
+            if json_output {
+                emit_json(&created);
+            } else {
+                for item in &created {
+                    println!(
+                        "파생 백로그 이슈 #{} 생성 완료: {} ({})",
+                        item.number, item.title, item.url
+                    );
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -380,11 +401,19 @@ async fn run_command(
                 )
             })?;
             let rest = if args.len() > 4 { &args[4..] } else { &[] };
-            let layer = find_flag_value(rest, "--layer").and_then(|s| parse_board_layer_arg(&s));
+            let layer = parse_optional_layer_flag(rest, "--layer")?;
             let kind = find_flag_value(rest, "--kind");
+            let priority = find_flag_value(rest, "--priority");
             let repo = find_flag_value(rest, "--repo");
             let updated = runtime
-                .update_board_item_status(number, Some(status), layer, kind, repo.as_deref())
+                .update_board_item_status(
+                    number,
+                    Some(status),
+                    layer,
+                    kind,
+                    priority,
+                    repo.as_deref(),
+                )
                 .await?;
             if json_output {
                 emit_json(&updated);
@@ -426,6 +455,59 @@ fn parse_u64_arg(raw: Option<&String>, label: &str) -> Result<u64, AppError> {
                 format!("유효한 {label} 숫자를 입력해 주세요."),
             )
         })
+}
+
+fn parse_optional_u64_flag(args: &[String], flag: &str) -> Result<Option<u64>, AppError> {
+    let Some(raw) = find_flag_value(args, flag) else {
+        return Ok(None);
+    };
+    let parsed = raw
+        .trim()
+        .trim_start_matches('#')
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                format!("`{flag}` 값에는 양의 정수를 지정해 주세요: {raw}"),
+            )
+        })?;
+    Ok(Some(parsed))
+}
+
+fn parse_optional_layer_flag(
+    args: &[String],
+    flag: &str,
+) -> Result<Option<crate::project_board::model::BoardLayer>, AppError> {
+    let Some(raw) = find_flag_value(args, flag) else {
+        return Ok(None);
+    };
+    let parsed = parse_board_layer_arg(&raw).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            format!("지원하지 않는 `{flag}` 값입니다(planning|design|frontend|backend): {raw}"),
+        )
+    })?;
+    Ok(Some(parsed))
+}
+
+fn parse_optional_status_flag(
+    args: &[String],
+    flag: &str,
+) -> Result<Option<crate::project_board::model::BoardStatus>, AppError> {
+    let Some(raw) = find_flag_value(args, flag) else {
+        return Ok(None);
+    };
+    let parsed = parse_board_status_arg(&raw).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            format!(
+                "지원하지 않는 `{flag}` 값입니다(backlog|ready|in_progress|in_review|done): {raw}"
+            ),
+        )
+    })?;
+    Ok(Some(parsed))
 }
 
 fn emit_json<T: Serialize>(value: &T) {
@@ -471,6 +553,7 @@ okhub-cli — OkHub 동적 프로젝트·저장소 자동화 CLI 및 STDIO MCP �
   board list [--layer <...>] [--status <...>]    선택된 GitHub Project 보드 항목 조회
   board ready [--layer <...>]                    선행 단계가 완료된 시작 가능(Ready) 백로그 조회
   board create-issue --title <제목> [...]         선택된 GitHub Project에 이슈/하위 이슈 동적 생성
+  board derive-backlog <상위번호> [--repo <...>]   완료된 기획/디자인 이슈에서 백엔드·프론트 백로그 일괄 파생
   board update-status <번호> <상태> [...]          선택된 GitHub Project 이슈 상태/영역/타입 변경
   mcp                                            STDIO 기반 MCP(Model Context Protocol) 서버 실행"
     );

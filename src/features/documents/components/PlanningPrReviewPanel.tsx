@@ -54,15 +54,6 @@ function changeStatusMeta(status: string): {
   }
 }
 
-function defaultTabForDocument(
-  doc: PlanningPrDocumentChange | null,
-): ReviewTab {
-  if (!doc) return "markdown";
-  if (doc.hasCompanionHtml && doc.companionHtml) return "html";
-  if (doc.headMarkdown === null) return "diff";
-  return "markdown";
-}
-
 function DiffCell({
   line,
   side,
@@ -150,10 +141,19 @@ export function PlanningPrReviewSection() {
     );
   }, [detail, selectedDocPath]);
 
+  const activeDocPath = activeDoc?.path ?? null;
+  const activeDocDefaultTab: ReviewTab = !activeDoc
+    ? "markdown"
+    : activeDoc.hasCompanionHtml && activeDoc.companionHtml
+      ? "html"
+      : activeDoc.headMarkdown === null
+        ? "diff"
+        : "markdown";
+
   useEffect(() => {
-    if (!activeDoc) return;
-    setViewTab(defaultTabForDocument(activeDoc));
-  }, [selectedPrNumber, activeDoc]);
+    if (!activeDocPath) return;
+    setViewTab(activeDocDefaultTab);
+  }, [selectedPrNumber, activeDocPath, activeDocDefaultTab]);
 
   const diffRows = useMemo(() => {
     if (!activeDoc) return [];

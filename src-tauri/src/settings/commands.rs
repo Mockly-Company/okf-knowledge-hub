@@ -95,7 +95,16 @@ pub struct AiTerminalSession {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTaskLaunchRequest {
+    pub issue_number: Option<u64>,
+    pub repository_full_name: Option<String>,
+    pub document_path: Option<String>,
+}
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn start_ai_terminal(
     app: tauri::AppHandle,
     state: State<'_, AppServices>,
@@ -103,9 +112,12 @@ pub async fn start_ai_terminal(
     tool: AiTool,
     cols: u16,
     rows: u16,
+    task_context: Option<AiTaskLaunchRequest>,
     on_event: tauri::ipc::Channel<TerminalEvent>,
 ) -> CommandResult<AiTerminalSession> {
-    let (command_line, workspace_dir) = prepare_ai_terminal(&state, tool, &app_data_dir(&app)?)?;
+    let app_data = app_data_dir(&app)?;
+    let (command_line, launch_dir) =
+        prepare_ai_terminal_async(&state, tool, &app_data, task_context.as_ref()).await?;
     // 로그인하지 않았거나 토큰을 받지 못해도 터미널은 연다. 푸시만 안 될 뿐이다.
     let access_token = match state.auth.clone() {
         Some(auth) => auth.valid_access_token().await.ok(),
@@ -117,16 +129,9 @@ pub async fn start_ai_terminal(
             .map(crate::auth::model::AccessToken::expose_secret),
     );
     let session_id = terminals
-        .start(
-            &command_line,
-            &workspace_dir,
-            cols,
-            rows,
-            &env,
-            move |event| {
-                let _ = on_event.send(event);
-            },
-        )
+        .start(&command_line, &launch_dir, cols, rows, &env, move |event| {
+            let _ = on_event.send(event);
+        })
         .map_err(|reason| {
             AppError::new(
                 ErrorCode::LocalSettingsUnavailable,
@@ -168,6 +173,177 @@ fn prepare_ai_terminal(
     tool: AiTool,
     app_data_dir: &Path,
 ) -> CommandResult<(String, PathBuf)> {
+    prepare_ai_terminal_with_task_pack(services, tool, app_data_dir, None, None, None)
+}
+
+struct PreparedTaskPack {
+    slug: String,
+    branch_name: String,
+    target_repo_dir: PathBuf,
+    markdown: String,
+}
+
+async fn prepare_ai_terminal_async(
+    services: &AppServices,
+    tool: AiTool,
+    app_data_dir: &Path,
+    task_context: Option<&AiTaskLaunchRequest>,
+) -> CommandResult<(String, PathBuf)> {
+    let Some(req) = task_context else {
+        return prepare_ai_terminal(services, tool, app_data_dir);
+    };
+    let workspace_dir = connected_workspace_dir(&services.local_settings)?;
+    let active_context = resolve_active_ai_context(services, &workspace_dir);
+
+    if let Some(issue_number) = req.issue_number.filter(|n| *n > 0) {
+        if let (Some(github), Ok(Some(project))) = (
+            services.github.clone(),
+            services.local_settings.load_active_project(),
+        ) {
+            if let Ok((items, _, _, resolved_scope)) = github
+                .list_project_items_with_fallback(project.scope, &project.owner, project.number)
+                .await
+            {
+                let wanted_repo = req
+                    .repository_full_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                if let Some(target_item) = items.iter().find(|item| {
+                    item.number == issue_number
+                        && match wanted_repo {
+                            Some(want) => item
+                                .infer_repository_full_name()
+                                .as_deref()
+                                .is_some_and(|actual| actual.eq_ignore_ascii_case(want)),
+                            None => true,
+                        }
+                }) {
+                    let pack = crate::automation::context_pack::assemble_issue_context_pack(
+                        target_item,
+                        &items,
+                        Some(&workspace_dir),
+                        &active_context,
+                    );
+                    if matches!(
+                        pack.layer,
+                        crate::project_board::model::BoardLayer::Backend
+                            | crate::project_board::model::BoardLayer::Frontend
+                    ) {
+                        return Err(AppError::new(
+                            ErrorCode::WorkspaceInvalid,
+                            "OkHub는 기획서·PRD·화면명세서 작성 및 [기획]·[디자인] 백로그 처리 전용입니다. [백엔드]·[프론트엔드] 개발 백로그는 코드 구현 환경에서 진행해 주세요.",
+                        )
+                        .with_recovery(RecoveryAction::Retry));
+                    }
+                    if matches!(
+                        pack.status,
+                        Some(
+                            crate::project_board::model::BoardStatus::Backlog
+                                | crate::project_board::model::BoardStatus::Ready
+                        )
+                    ) {
+                        let _ = github
+                            .update_project_item_fields(
+                                &crate::github::model::UpdateProjectItemInput {
+                                    project_scope: resolved_scope,
+                                    project_owner: project.owner.clone(),
+                                    project_number: project.number,
+                                    issue_number,
+                                    repository_full_name: target_item.infer_repository_full_name(),
+                                    status: Some(
+                                        crate::project_board::model::BoardStatus::InProgress,
+                                    ),
+                                    layer: None,
+                                    kind: None,
+                                    priority: None,
+                                },
+                            )
+                            .await;
+                    }
+                    let prepared = PreparedTaskPack {
+                        slug: format!("issue-{issue_number}"),
+                        branch_name: format!("docs/issue-{issue_number}"),
+                        target_repo_dir: workspace_dir.clone(),
+                        markdown: pack.markdown_summary,
+                    };
+                    return prepare_ai_terminal_with_task_pack(
+                        services,
+                        tool,
+                        app_data_dir,
+                        Some(&workspace_dir),
+                        Some(&active_context),
+                        Some(&prepared),
+                    );
+                }
+            }
+        }
+    }
+
+    if let Some(doc_rel) = req
+        .document_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.contains(".."))
+    {
+        if let (Ok(canon_root), Ok(canon_doc)) = (
+            workspace_dir.canonicalize(),
+            workspace_dir.join(doc_rel).canonicalize(),
+        ) {
+            if canon_doc.starts_with(&canon_root) {
+                if let Ok(doc_content) = std::fs::read_to_string(&canon_doc) {
+                    let safe_slug: String = doc_rel
+                        .trim_end_matches(".md")
+                        .chars()
+                        .map(|ch| {
+                            if ch.is_ascii_alphanumeric() {
+                                ch.to_ascii_lowercase()
+                            } else {
+                                '-'
+                            }
+                        })
+                        .collect::<String>()
+                        .trim_matches('-')
+                        .chars()
+                        .take(36)
+                        .collect();
+                    let slug = if safe_slug.is_empty() {
+                        "doc-task".to_owned()
+                    } else {
+                        format!("doc-{safe_slug}")
+                    };
+                    let prepared = PreparedTaskPack {
+                        branch_name: format!("docs/{slug}"),
+                        slug,
+                        target_repo_dir: workspace_dir.clone(),
+                        markdown: format!(
+                            "# 문서 기반 AI 작업 컨텍스트 — `{doc_rel}`\n\n- 대상 문서 경로: `{doc_rel}`\n- 작업 지침: `.okf/AGENTS.md` 규칙(2벌 `.md`+`.html` 동기화 및 `[NEW]`/`[CHANGED]` 변경 마커 포함)을 준수하세요.\n\n## 기준 문서 원문 (`.md`)\n\n{doc_content}"
+                        ),
+                    };
+                    return prepare_ai_terminal_with_task_pack(
+                        services,
+                        tool,
+                        app_data_dir,
+                        Some(&workspace_dir),
+                        Some(&active_context),
+                        Some(&prepared),
+                    );
+                }
+            }
+        }
+    }
+
+    prepare_ai_terminal(services, tool, app_data_dir)
+}
+
+fn prepare_ai_terminal_with_task_pack(
+    services: &AppServices,
+    tool: AiTool,
+    app_data_dir: &Path,
+    preloaded_workspace_dir: Option<&Path>,
+    preloaded_context: Option<&ai_runner::ActiveWorkspaceAiContext>,
+    task_pack: Option<&PreparedTaskPack>,
+) -> CommandResult<(String, PathBuf)> {
     let custom_command = services.local_settings.load_ai_cli_command()?;
     if tool == AiTool::Custom && custom_command.trim().is_empty() {
         return Err(AppError::new(
@@ -175,19 +351,76 @@ fn prepare_ai_terminal(
             "AI CLI가 설정되지 않았습니다. 설정 → AI 연동에서 등록해 주세요.",
         ));
     }
-    let workspace_dir = connected_workspace_dir(&services.local_settings)?;
+    let workspace_dir = match preloaded_workspace_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => connected_workspace_dir(&services.local_settings)?,
+    };
     let worktrees_dir = worktrees_dir_for(services, app_data_dir, &workspace_dir)?;
-    let active_context = resolve_active_ai_context(services, &workspace_dir);
-    let rules_file = write_rules_file_with_context(
+    let owned_context;
+    let active_context = match preloaded_context {
+        Some(ctx) => ctx,
+        None => {
+            owned_context = resolve_active_ai_context(services, &workspace_dir);
+            &owned_context
+        }
+    };
+
+    let launch_dir = match task_pack {
+        Some(pack) => ensure_isolated_worktree(
+            &pack.target_repo_dir,
+            &worktrees_dir,
+            &pack.slug,
+            &pack.branch_name,
+        ),
+        None => workspace_dir.clone(),
+    };
+
+    let rules_file = write_rules_file_with_context_and_task(
         app_data_dir,
         &workspace_dir,
+        &launch_dir,
         &worktrees_dir,
-        Some(&active_context),
+        Some(active_context),
+        task_pack,
     )?;
     Ok((
         tool.terminal_command(&custom_command, &rules_file),
-        workspace_dir,
+        launch_dir,
     ))
+}
+
+fn ensure_isolated_worktree(
+    base_repo_dir: &Path,
+    worktrees_base_dir: &Path,
+    slug: &str,
+    branch_name: &str,
+) -> PathBuf {
+    let wt_dir = worktrees_base_dir.join(slug);
+    if wt_dir.join(".git").exists() {
+        return ai_runner::shell_path(&wt_dir);
+    }
+    if base_repo_dir.join(".git").exists() && std::fs::create_dir_all(worktrees_base_dir).is_ok() {
+        let base_str = base_repo_dir.display().to_string();
+        let wt_str = wt_dir.display().to_string();
+        if let Ok(output) = std::process::Command::new("git")
+            .args([
+                "-C",
+                &base_str,
+                "worktree",
+                "add",
+                "-B",
+                branch_name,
+                &wt_str,
+                "HEAD",
+            ])
+            .output()
+        {
+            if output.status.success() && wt_dir.exists() {
+                return ai_runner::shell_path(&wt_dir);
+            }
+        }
+    }
+    ai_runner::shell_path(base_repo_dir)
 }
 
 fn app_data_dir(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
@@ -236,23 +469,30 @@ fn worktrees_dir_for(
     }
 }
 
-/// 허브 공통 규칙, 고정 작업 규칙, 선택된 프로젝트·저장소 컨텍스트, 프로젝트 AGENTS.md를 합친 내용.
+/// 허브 공통 규칙, 고정 작업 규칙, 선택된 프로젝트·저장소 컨텍스트, 작업 Context Pack, 프로젝트 AGENTS.md를 합친 내용.
 fn load_ai_rules(
     app_data_dir: &Path,
     workspace_dir: &Path,
+    launch_dir: &Path,
     worktrees_dir: &Path,
     active_context: Option<&ai_runner::ActiveWorkspaceAiContext>,
+    task_pack: Option<&PreparedTaskPack>,
 ) -> CommandResult<String> {
     let app_rules = resolve_app_agents_md_inner(app_data_dir)?.content;
     let (_, project_rules) = read_agents_md(workspace_dir)?;
-    let fixed = match active_context {
-        Some(ctx) => format!(
-            "{}\n\n---\n\n{}",
-            ai_runner::active_context_rules(ctx).trim(),
-            ai_runner::worktree_rules(workspace_dir, worktrees_dir).trim()
-        ),
-        None => ai_runner::worktree_rules(workspace_dir, worktrees_dir),
-    };
+    let mut sections = Vec::new();
+    if let Some(ctx) = active_context {
+        sections.push(ai_runner::active_context_rules(ctx).trim().to_owned());
+    }
+    if let Some(pack) = task_pack {
+        sections.push(pack.markdown.trim().to_owned());
+    }
+    sections.push(
+        ai_runner::worktree_rules(launch_dir, worktrees_dir)
+            .trim()
+            .to_owned(),
+    );
+    let fixed = sections.join("\n\n---\n\n");
     Ok(ai_runner::compose_rules(
         &app_rules,
         &fixed,
@@ -260,7 +500,7 @@ fn load_ai_rules(
     ))
 }
 
-fn resolve_active_ai_context(
+pub(crate) fn resolve_active_ai_context(
     services: &AppServices,
     workspace_dir: &Path,
 ) -> ai_runner::ActiveWorkspaceAiContext {
@@ -374,12 +614,19 @@ fn resolve_active_ai_context(
     }
 }
 
-/// 다른 워크스페이스의 터미널이 서로의 규칙을 덮어쓰지 않도록 파일을 나눈다.
-fn rules_file_name(workspace_dir: &Path) -> String {
+fn rules_file_name_for_task(workspace_dir: &Path, slug: Option<&str>) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     workspace_dir.hash(&mut hasher);
+    if let Some(slug) = slug {
+        slug.hash(&mut hasher);
+    }
     format!("AI_SESSION_RULES-{:016x}.md", hasher.finish())
+}
+
+#[cfg(test)]
+fn rules_file_name(workspace_dir: &Path) -> String {
+    rules_file_name_for_task(workspace_dir, None)
 }
 
 #[cfg(test)]
@@ -388,17 +635,33 @@ fn write_rules_file(
     workspace_dir: &Path,
     worktrees_dir: &Path,
 ) -> CommandResult<PathBuf> {
-    write_rules_file_with_context(app_data_dir, workspace_dir, worktrees_dir, None)
+    write_rules_file_with_context_and_task(
+        app_data_dir,
+        workspace_dir,
+        workspace_dir,
+        worktrees_dir,
+        None,
+        None,
+    )
 }
 
 /// 터미널 CLI가 읽을 규칙 파일. 창이 언제 닫힐지 모르므로 고정 경로에 덮어쓴다.
-fn write_rules_file_with_context(
+fn write_rules_file_with_context_and_task(
     app_data_dir: &Path,
     workspace_dir: &Path,
+    launch_dir: &Path,
     worktrees_dir: &Path,
     active_context: Option<&ai_runner::ActiveWorkspaceAiContext>,
+    task_pack: Option<&PreparedTaskPack>,
 ) -> CommandResult<PathBuf> {
-    let rules = load_ai_rules(app_data_dir, workspace_dir, worktrees_dir, active_context)?;
+    let rules = load_ai_rules(
+        app_data_dir,
+        workspace_dir,
+        launch_dir,
+        worktrees_dir,
+        active_context,
+        task_pack,
+    )?;
     let okhub_dir = app_data_dir.join("okhub");
     std::fs::create_dir_all(&okhub_dir).map_err(|error| {
         AppError::new(
@@ -408,7 +671,10 @@ fn write_rules_file_with_context(
         .with_recovery(RecoveryAction::Retry)
         .with_detail("reason", error.to_string())
     })?;
-    let target = okhub_dir.join(rules_file_name(workspace_dir));
+    let target = okhub_dir.join(rules_file_name_for_task(
+        workspace_dir,
+        task_pack.map(|p| p.slug.as_str()),
+    ));
     std::fs::write(&target, rules).map_err(|error| {
         AppError::new(
             ErrorCode::LocalSettingsUnavailable,
@@ -837,14 +1103,17 @@ mod tests {
     }
 
     #[test]
-    fn agents_md_template_codifies_dual_format_reset_mark_and_cascading_layers() {
+    fn agents_md_template_codifies_dual_format_reset_mark_and_non_implementation_boundary() {
         assert!(AGENTS_MD_TEMPLATE.contains(".md"));
         assert!(AGENTS_MD_TEMPLATE.contains(".html"));
         assert!(AGENTS_MD_TEMPLATE.contains("Reset → Mark"));
+        assert!(AGENTS_MD_TEMPLATE.contains("PRD"));
+        assert!(AGENTS_MD_TEMPLATE.contains("화면명세서"));
         assert!(AGENTS_MD_TEMPLATE.contains("[기획]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[디자인]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[백엔드]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[프론트엔드]"));
+        assert!(AGENTS_MD_TEMPLATE.contains("코드 구현을 하지 않는다"));
         assert!(!AGENTS_MD_TEMPLATE.contains("Mockly-Company"));
     }
 
@@ -957,5 +1226,101 @@ mod tests {
         assert!(rules_b.contains("globex/beta-docs"), "{rules_b}");
         assert!(rules_b.contains("globex/beta-api"), "{rules_b}");
         assert!(!rules_b.contains("acme/alpha-web"), "{rules_b}");
+    }
+
+    #[test]
+    fn task_pack_launches_isolated_git_worktree_for_docs_or_code_repo_and_injects_context() {
+        use crate::settings::model::KnowledgeRepository;
+
+        let temp = tempfile::tempdir().unwrap();
+        let app_data = tempfile::tempdir().unwrap();
+        let docs_repo = temp.path().join("acme-docs");
+        let code_repo = temp.path().join("acme-web");
+        std::fs::create_dir_all(docs_repo.join(".okf")).unwrap();
+        std::fs::create_dir_all(&code_repo).unwrap();
+        std::fs::write(
+            docs_repo.join(".okf").join("AGENTS.md"),
+            "# 팀 문서 규칙: 2벌(.md+.html) 유지\n",
+        )
+        .unwrap();
+        std::fs::write(code_repo.join("README.md"), "# Acme Web\n").unwrap();
+
+        for repo_dir in [&docs_repo, &code_repo] {
+            let dir_str = repo_dir.display().to_string();
+            assert!(std::process::Command::new("git")
+                .args(["-C", &dir_str, "init"])
+                .status()
+                .unwrap()
+                .success());
+            assert!(std::process::Command::new("git")
+                .args(["-C", &dir_str, "config", "user.email", "dev@example.com"])
+                .status()
+                .unwrap()
+                .success());
+            assert!(std::process::Command::new("git")
+                .args(["-C", &dir_str, "config", "user.name", "Dev"])
+                .status()
+                .unwrap()
+                .success());
+            assert!(std::process::Command::new("git")
+                .args(["-C", &dir_str, "add", "-A"])
+                .status()
+                .unwrap()
+                .success());
+            assert!(std::process::Command::new("git")
+                .args(["-C", &dir_str, "commit", "-m", "init"])
+                .status()
+                .unwrap()
+                .success());
+        }
+
+        let settings = LocalSettingsService::new(MemoryStore::default());
+        settings
+            .set_current_for_repository(
+                &docs_repo,
+                KnowledgeRepository {
+                    id: "R_docs".into(),
+                    full_name: "acme/acme-docs".into(),
+                },
+            )
+            .unwrap();
+        let services = AppServices::new(settings);
+
+        let docs_pack = super::PreparedTaskPack {
+            slug: "issue-63".to_owned(),
+            branch_name: "docs/issue-63".to_owned(),
+            target_repo_dir: docs_repo.clone(),
+            markdown: "# 작업 컨텍스트 팩 — #63 [디자인] 화면명세서 작성\n\n- 완료 조건: 2벌(.md+.html) 화면명세서 확정".to_owned(),
+        };
+        let (_, launch_dir) = super::prepare_ai_terminal_with_task_pack(
+            &services,
+            AiTool::Claude,
+            app_data.path(),
+            None,
+            None,
+            Some(&docs_pack),
+        )
+        .unwrap();
+
+        assert!(
+            launch_dir.ends_with("issue-63"),
+            "launch_dir={launch_dir:?}"
+        );
+        assert!(launch_dir.join(".okf").join("AGENTS.md").is_file());
+        let okhub_dir = app_data.path().join("okhub");
+        let rules_path = std::fs::read_dir(&okhub_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("AI_SESSION_RULES-"))
+            })
+            .expect("expected generated AI_SESSION_RULES file");
+        let rules = std::fs::read_to_string(rules_path).unwrap();
+        assert!(rules.contains("# 작업 컨텍스트 팩 — #63 [디자인] 화면명세서 작성"));
+        assert!(rules.contains("팀 문서 규칙: 2벌(.md+.html) 유지"));
+        assert!(rules.contains("절대 원칙 (코드 구현 금지)"));
     }
 }

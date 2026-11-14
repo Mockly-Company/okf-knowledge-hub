@@ -470,10 +470,7 @@ impl AutomationRuntime {
         if let Some(repo) = explicit_repo.map(str::trim).filter(|s| !s.is_empty()) {
             return Ok(repo.to_owned());
         }
-        if matches!(
-            layer,
-            Some(BoardLayer::Frontend | BoardLayer::Backend | BoardLayer::Design)
-        ) {
+        if matches!(layer, Some(BoardLayer::Frontend | BoardLayer::Backend)) {
             if let Some(code_repo) = self.ai_context.code_repositories.first() {
                 return Ok(code_repo.full_name.clone());
             }
@@ -641,24 +638,13 @@ impl AutomationRuntime {
         layer: Option<BoardLayer>,
         status: Option<BoardStatus>,
         kind: Option<String>,
+        priority: Option<String>,
         parent_issue_number: Option<u64>,
         depends_on: Option<u64>,
     ) -> Result<CreatedProjectIssue, AppError> {
         let project = self.require_project()?;
         let repo = self.resolve_issue_target_repository(explicit_repo, layer)?;
-        let mut final_body = body.to_owned();
-        if let Some(dep) = depends_on {
-            let marker = format!("이전 단계: #{dep}");
-            if !final_body.contains("이전 단계:")
-                && !final_body.to_ascii_lowercase().contains("depends-on:")
-            {
-                if final_body.trim().is_empty() {
-                    final_body = marker;
-                } else {
-                    final_body = format!("{marker}\n\n{final_body}");
-                }
-            }
-        }
+        let final_body = inject_depends_on_line(body, depends_on);
         let github = self.build_github_service()?;
         github
             .create_project_issue(&CreateProjectIssueInput {
@@ -671,10 +657,118 @@ impl AutomationRuntime {
                 layer,
                 status,
                 kind,
+                priority,
                 parent_issue_number,
                 parent_issue_repository: None,
             })
             .await
+    }
+
+    pub async fn derive_backlog_from_issue(
+        &self,
+        source_issue_number: u64,
+        explicit_repo: Option<&str>,
+        doc_path: Option<&str>,
+    ) -> Result<Vec<CreatedProjectIssue>, AppError> {
+        let project = self.require_project()?;
+        let github = self.build_github_service()?;
+        let (items, _, _, _) = github
+            .list_project_items_with_fallback(project.scope, &project.owner, project.number)
+            .await?;
+        let source = items
+            .iter()
+            .find(|item| item.number == source_issue_number)
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    format!(
+                        "선택된 GitHub Project에서 상위 이슈 #{source_issue_number}을(를) 찾을 수 없습니다."
+                    ),
+                )
+                .with_recovery(RecoveryAction::Retry)
+            })?;
+
+        let source_layer = map_item_layer(source.area.as_deref(), &source.labels);
+        let base_title = strip_layer_prefix(&source.title);
+        let doc_note = doc_path
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|p| format!("\n\n## 관련 문서\n- `{p}`"))
+            .unwrap_or_default();
+
+        let mut created = Vec::new();
+        match source_layer {
+            BoardLayer::Design => {
+                let fe_repo = self
+                    .resolve_issue_target_repository(explicit_repo, Some(BoardLayer::Frontend))?;
+                let fe = github
+                    .create_project_issue(&CreateProjectIssueInput {
+                        project_scope: project.scope,
+                        project_owner: project.owner.clone(),
+                        project_number: project.number,
+                        repository_full_name: fe_repo,
+                        title: format!("[프론트엔드] {base_title} 화면·컴포넌트 구현"),
+                        body: format!(
+                            "이전 단계: #{source_issue_number}\n\n상위 디자인 이슈(#{source_issue_number}) 산출물을 바탕으로 프론트엔드 UI 및 상호작용을 구현합니다.{doc_note}"
+                        ),
+                        layer: Some(BoardLayer::Frontend),
+                        status: Some(BoardStatus::Backlog),
+                        kind: Some("작업".to_owned()),
+                        priority: source.priority.clone(),
+                        parent_issue_number: Some(source_issue_number),
+                        parent_issue_repository: source.infer_repository_full_name(),
+                    })
+                    .await?;
+                created.push(fe);
+            }
+            _ => {
+                let be_repo =
+                    self.resolve_issue_target_repository(explicit_repo, Some(BoardLayer::Backend))?;
+                let be = github
+                    .create_project_issue(&CreateProjectIssueInput {
+                        project_scope: project.scope,
+                        project_owner: project.owner.clone(),
+                        project_number: project.number,
+                        repository_full_name: be_repo,
+                        title: format!("[백엔드] {base_title} 도메인·API 구현"),
+                        body: format!(
+                            "이전 단계: #{source_issue_number}\n\n상위 기획 이슈(#{source_issue_number})의 확정 명세를 바탕으로 백엔드 로직과 계약을 구현합니다.{doc_note}"
+                        ),
+                        layer: Some(BoardLayer::Backend),
+                        status: Some(BoardStatus::Backlog),
+                        kind: Some("작업".to_owned()),
+                        priority: source.priority.clone(),
+                        parent_issue_number: Some(source_issue_number),
+                        parent_issue_repository: source.infer_repository_full_name(),
+                    })
+                    .await?;
+                let be_num = be.number;
+                created.push(be);
+
+                let fe_repo = self
+                    .resolve_issue_target_repository(explicit_repo, Some(BoardLayer::Frontend))?;
+                let fe = github
+                    .create_project_issue(&CreateProjectIssueInput {
+                        project_scope: project.scope,
+                        project_owner: project.owner.clone(),
+                        project_number: project.number,
+                        repository_full_name: fe_repo,
+                        title: format!("[프론트엔드] {base_title} UI·상태 연동 구현"),
+                        body: format!(
+                            "이전 단계: #{be_num}\n\n상위 기획 이슈(#{source_issue_number}) 및 선행 백엔드 이슈(#{be_num})를 바탕으로 프론트엔드 UI와 연동을 완성합니다.{doc_note}"
+                        ),
+                        layer: Some(BoardLayer::Frontend),
+                        status: Some(BoardStatus::Backlog),
+                        kind: Some("작업".to_owned()),
+                        priority: source.priority.clone(),
+                        parent_issue_number: Some(source_issue_number),
+                        parent_issue_repository: source.infer_repository_full_name(),
+                    })
+                    .await?;
+                created.push(fe);
+            }
+        }
+        Ok(created)
     }
 
     pub async fn update_board_item_status(
@@ -683,6 +777,7 @@ impl AutomationRuntime {
         status: Option<BoardStatus>,
         layer: Option<BoardLayer>,
         kind: Option<String>,
+        priority: Option<String>,
         explicit_repo: Option<&str>,
     ) -> Result<UpdatedProjectItem, AppError> {
         let project = self.require_project()?;
@@ -697,6 +792,7 @@ impl AutomationRuntime {
                 status,
                 layer,
                 kind,
+                priority,
             })
             .await
     }
@@ -729,6 +825,45 @@ impl AutomationRuntime {
             &self.ai_context,
         ))
     }
+}
+
+pub fn inject_depends_on_line(body: &str, depends_on: Option<u64>) -> String {
+    let mut final_body = body.to_owned();
+    if let Some(dep) = depends_on.filter(|n| *n > 0) {
+        let marker = format!("이전 단계: #{dep}");
+        if !final_body.contains("이전 단계:")
+            && !final_body.contains("이전단계:")
+            && !final_body.to_ascii_lowercase().contains("depends-on:")
+            && !final_body.to_ascii_lowercase().contains("depends on:")
+        {
+            if final_body.trim().is_empty() {
+                final_body = marker;
+            } else {
+                final_body = format!("{marker}\n\n{final_body}");
+            }
+        }
+    }
+    final_body
+}
+
+pub fn strip_layer_prefix(title: &str) -> String {
+    let trimmed = title.trim();
+    for prefix in [
+        "[기획]",
+        "[디자인]",
+        "[백엔드]",
+        "[프론트엔드]",
+        "[프론트]",
+        "[Epic]",
+    ] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            let clean = rest.trim();
+            if !clean.is_empty() {
+                return clean.to_owned();
+            }
+        }
+    }
+    trimmed.to_owned()
 }
 
 pub fn run_cli_from_env() -> ExitCode {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useInRouterContext } from "react-router-dom";
+import { Link, useInRouterContext, useNavigate } from "react-router-dom";
 import { Plus, RefreshCw } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FormField } from "@/components/patterns/FormField";
@@ -8,10 +8,28 @@ import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select } from "@/components/ui/select";
-import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import { setPendingAiLaunch } from "@/features/ai/pendingAiLaunch";
+import type {
+  ProjectBoardGateway,
+  ProjectBoardIssueDetail,
+  UpdateBoardItemInput,
+} from "@/features/project-board/ProjectBoardGateway";
+import {
+  BacklogDeriveDialog,
+  type BacklogDeriveSource,
+} from "@/features/project-board/BacklogDeriveDialog";
+import { CreateBoardIssueDialog } from "@/features/project-board/CreateBoardIssueDialog";
+import { ProjectIssueDrawer } from "@/features/project-board/ProjectIssueDrawer";
+import {
+  buildIssueReadinessIndex,
+  filterTreeToReadyOnly,
+  inferRepositoryFullNameFromUrl,
+  type IssueReadinessIndex,
+} from "@/features/project-board/readyFilter";
 import {
   BOARD_LAYERS,
   BOARD_STATUSES,
+  layerName as resolveLayerName,
   type BoardIssue,
   type BoardLayer,
   type ProjectBoard,
@@ -238,16 +256,82 @@ function formatFetchedAt(iso: string): string {
 
 const EMPTY_ISSUES: BoardIssue[] = [];
 
+function RouterRedirect({
+  to,
+  onNavigated,
+}: {
+  to: string;
+  onNavigated: () => void;
+}) {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate(to);
+    onNavigated();
+  }, [navigate, to, onNavigated]);
+  return null;
+}
+
+function patchIssueInTree(
+  issues: BoardIssue[],
+  issueNumber: number,
+  patch: Partial<Pick<BoardIssue, "status" | "layer" | "kind">>,
+): BoardIssue[] {
+  return issues.map((item) => {
+    const nextChildren =
+      item.children.length > 0
+        ? patchIssueInTree(item.children, issueNumber, patch)
+        : item.children;
+    if (item.number !== issueNumber) {
+      return nextChildren === item.children
+        ? item
+        : { ...item, children: nextChildren };
+    }
+    return {
+      ...item,
+      ...patch,
+      children: nextChildren,
+    };
+  });
+}
+
+function findIssueByNumber(
+  issues: ReadonlyArray<BoardIssue>,
+  issueNumber: number,
+): BoardIssue | null {
+  for (const item of issues) {
+    if (item.number === issueNumber) {
+      return item;
+    }
+    if (item.children.length > 0) {
+      const child = findIssueByNumber(item.children, issueNumber);
+      if (child) {
+        return child;
+      }
+    }
+  }
+  return null;
+}
+
 function BoardColumn({
+  layerId,
   layerName,
   statusName,
   issues,
   canAddIssue,
+  canCreateIssues,
+  readinessIndex,
+  onSelectIssue,
+  onOpenCreateIssue,
 }: {
+  layerId: BoardLayer;
   layerName: string;
   statusName: string;
   issues: BoardIssue[];
   canAddIssue: boolean;
+  canCreateIssues: boolean;
+  readinessIndex: IssueReadinessIndex | null;
+  onSelectIssue: (issue: BoardIssue) => void;
+  onOpenCreateIssue: (layer: BoardLayer) => void;
 }) {
   return (
     <section
@@ -266,45 +350,75 @@ function BoardColumn({
             연결된 Issue 없음
           </div>
         ) : (
-          issues.map((issue) => (
-            <article
-              key={`${issue.number}-${issueKey(issue)}`}
-              className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
-              aria-label={`Issue #${issue.number} ${issue.title}`}
-            >
-              <div className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-                #{issue.number}
-              </div>
-              <div>
-                {(() => {
-                  // 계층 보기와 같은 검증·렌더 규칙을 쓴다.
-                  const safeUrl = safeHref(issue.url);
-                  return safeUrl ? (
-                    <a
-                      href={safeUrl}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="text-inherit no-underline hover:underline"
-                    >
-                      {issue.title}
-                    </a>
-                  ) : (
-                    <span>{issue.title}</span>
-                  );
-                })()}
-              </div>
-            </article>
-          ))
+          issues.map((issue) => {
+            const readiness = readinessIndex?.getStatus(issue);
+            return (
+              <article
+                key={`${issue.number}-${issueKey(issue)}`}
+                className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
+                aria-label={`Issue #${issue.number} ${issue.title}`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+                  <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+                    <span className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+                      #{issue.number}
+                    </span>
+                    {readiness?.state === "ready" ? (
+                      <StatusBadge tone="success">시작 가능</StatusBadge>
+                    ) : readiness?.state === "blocked" &&
+                      readiness.waitingOn != null ? (
+                      <StatusBadge tone="warning">
+                        {`선행 #${readiness.waitingOn} 대기`}
+                      </StatusBadge>
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-label={`#${issue.number} 상세 보기`}
+                    onClick={() => onSelectIssue(issue)}
+                  >
+                    상세
+                  </Button>
+                </div>
+                <div>
+                  {(() => {
+                    // 계층 보기와 같은 검증·렌더 규칙을 쓴다.
+                    const safeUrl = safeHref(issue.url);
+                    return safeUrl ? (
+                      <a
+                        href={safeUrl}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="text-inherit no-underline hover:underline"
+                      >
+                        {issue.title}
+                      </a>
+                    ) : (
+                      <span>{issue.title}</span>
+                    );
+                  })()}
+                </div>
+              </article>
+            );
+          })
         )}
         {canAddIssue ? (
           <div className="grid min-h-28 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)] text-center">
             <div className="grid justify-items-center gap-[var(--space-2)]">
-              <Button type="button" variant="secondary" disabled>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!canCreateIssues}
+                onClick={() => onOpenCreateIssue(layerId)}
+              >
                 <Plus aria-hidden="true" strokeWidth={1.75} />
                 새 Issue
               </Button>
               <p className="m-0 text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]">
-                GitHub Project와 Iteration을 연결하면 만들 수 있습니다.
+                {canCreateIssues
+                  ? "연결된 저장소에 이슈를 만들고 보드에 즉시 등록합니다."
+                  : "GitHub Project와 Iteration을 연결하면 만들 수 있습니다."}
               </p>
             </div>
           </div>
@@ -389,21 +503,194 @@ export function ProjectPage({
   const [filter, setFilter] = useState<LayerFilter>("all");
   const [view, setView] = useState<BoardView>("tree");
   const [hideDone, setHideDone] = useState(true);
+  const [readyOnly, setReadyOnly] = useState(false);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [selectedIssueNumber, setSelectedIssueNumber] = useState<number | null>(
+    null,
+  );
+  const [selectedIssueFallback, setSelectedIssueFallback] =
+    useState<BoardIssue | null>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [createDefaultLayer, setCreateDefaultLayer] =
+    useState<BoardLayer>("planning");
+  const [createParentIssue, setCreateParentIssue] = useState<{
+    number: number;
+    repositoryFullName: string | null;
+  } | null>(null);
+  const [deriveSource, setDeriveSource] = useState<BacklogDeriveSource | null>(
+    null,
+  );
+  const [navigateTarget, setNavigateTarget] = useState<string | null>(null);
 
   const workspaceResetKey = `${activeWorkspace?.id ?? "none"}::${queryProjectId ?? "none"}`;
   useEffect(() => {
     setFilter("all");
     setView("tree");
     setHideDone(true);
+    setReadyOnly(false);
     setManageDialogOpen(false);
+    setSelectedIssueNumber(null);
+    setSelectedIssueFallback(null);
+    setCreateDialogOpen(false);
+    setCreateParentIssue(null);
+    setDeriveSource(null);
   }, [workspaceResetKey]);
+
+  const canCreateIssues = Boolean(gateway.createBoardIssues);
+  const selectedIssue = useMemo(() => {
+    if (selectedIssueNumber === null) {
+      return null;
+    }
+    return (
+      (board ? findIssueByNumber(board.issues, selectedIssueNumber) : null) ??
+      selectedIssueFallback
+    );
+  }, [board, selectedIssueNumber, selectedIssueFallback]);
+
+  const writableReposQuery = useQuery({
+    queryKey: ["project-board", "writable-repos", workspaceResetKey],
+    queryFn: () => gateway.listWritableRepositories?.() ?? Promise.resolve([]),
+    enabled:
+      !isUnlinked &&
+      Boolean(gateway.listWritableRepositories) &&
+      (createDialogOpen || deriveSource !== null),
+  });
+
+  const selectedRepoHint = selectedIssue
+    ? inferRepositoryFullNameFromUrl(selectedIssue.url)
+    : null;
+  const issueDetailQuery = useQuery({
+    queryKey: [
+      "project-board",
+      "issue-detail",
+      workspaceResetKey,
+      selectedIssueNumber,
+      selectedRepoHint,
+    ],
+    queryFn: () =>
+      gateway.getIssueDetail!(selectedIssueNumber!, selectedRepoHint),
+    enabled:
+      !isUnlinked &&
+      selectedIssueNumber !== null &&
+      Boolean(gateway.getIssueDetail),
+  });
+
+  const updateItemMutation = useMutation({
+    mutationFn: (request: UpdateBoardItemInput) =>
+      gateway.updateBoardItem!(request),
+    onMutate: async (request) => {
+      if (queryProjectId === null) {
+        return { previous: undefined as ProjectBoard | undefined };
+      }
+      const key = projectBoardKeys.board(queryProjectId);
+      await queryClient.cancelQueries({ queryKey: key });
+      const previous = queryClient.getQueryData<ProjectBoard>(key);
+      if (previous) {
+        queryClient.setQueryData<ProjectBoard>(key, {
+          ...previous,
+          issues: patchIssueInTree(previous.issues, request.issueNumber, {
+            ...(request.status !== undefined ? { status: request.status } : {}),
+            ...(request.layer !== undefined ? { layer: request.layer } : {}),
+            ...(request.kind !== undefined ? { kind: request.kind } : {}),
+          }),
+        });
+      }
+      return { previous };
+    },
+    onError: (_err, _request, context) => {
+      if (queryProjectId !== null && context?.previous) {
+        queryClient.setQueryData(
+          projectBoardKeys.board(queryProjectId),
+          context.previous,
+        );
+      }
+    },
+    onSuccess: (fresh) => {
+      if (queryProjectId !== null) {
+        queryClient.setQueryData(projectBoardKeys.board(queryProjectId), fresh);
+      }
+      void issueDetailQuery.refetch();
+    },
+  });
+
+  const handleCreateIssues = async (
+    items: Parameters<NonNullable<ProjectBoardGateway["createBoardIssues"]>>[0],
+  ) => {
+    if (!gateway.createBoardIssues) {
+      return;
+    }
+    const result = await gateway.createBoardIssues(items);
+    if (queryProjectId !== null) {
+      queryClient.setQueryData(
+        projectBoardKeys.board(queryProjectId),
+        result.board,
+      );
+    }
+    if (selectedIssueNumber !== null) {
+      void issueDetailQuery.refetch();
+    }
+  };
+
+  const openCreateDialog = (
+    layer: BoardLayer = "planning",
+    parent: { number: number; repositoryFullName: string | null } | null = null,
+  ) => {
+    setCreateDefaultLayer(layer);
+    setCreateParentIssue(parent);
+    setCreateDialogOpen(true);
+  };
+
+  const handleStartWithAi = (
+    issue: BoardIssue,
+    detail: ProjectBoardIssueDetail | null,
+  ) => {
+    if (issue.layer === "backend" || issue.layer === "frontend") {
+      return;
+    }
+    const repoFullName =
+      detail?.repositoryFullName ?? inferRepositoryFullNameFromUrl(issue.url);
+    const firstDoc = detail?.linkedDocuments[0]?.path ?? null;
+    setPendingAiLaunch({
+      request: {
+        issueNumber: issue.number,
+        repositoryFullName: repoFullName,
+        documentPath: firstDoc,
+      },
+      label: `#${issue.number} ${issue.title}`,
+      layer: issue.layer,
+      targetDescription: `문서 저장소 격리 worktree (${resolveLayerName(issue.layer)} — PRD·화면명세서 작성 전용, 코드 구현 비수행)`,
+    });
+    if (
+      queryProjectId !== null &&
+      board &&
+      (issue.status === "backlog" || issue.status === "ready")
+    ) {
+      queryClient.setQueryData<ProjectBoard>(
+        projectBoardKeys.board(queryProjectId),
+        {
+          ...board,
+          issues: patchIssueInTree(board.issues, issue.number, {
+            status: "in_progress",
+          }),
+        },
+      );
+    }
+    setSelectedIssueNumber(null);
+    if (inRouterContext) {
+      setNavigateTarget("/ai");
+    }
+  };
 
   // 전환 중 로딩 문구에 쓸 프로젝트 명. 목록에 없으면 일반 문구로 폴백.
   const switchingTitle =
     activeProject?.projects.find(
       (candidate) => candidate.id === activeProjectId,
     )?.title ?? null;
+
+  const readinessIndex = useMemo(
+    () => (board ? buildIssueReadinessIndex(board.issues) : null),
+    [board],
+  );
 
   const visibleLayers = useMemo(
     () =>
@@ -427,6 +714,13 @@ export function ProjectPage({
       if (hideDone && issue.status === "done") {
         continue;
       }
+      if (
+        readyOnly &&
+        readinessIndex &&
+        readinessIndex.getStatus(issue).state !== "ready"
+      ) {
+        continue;
+      }
       const dedupeKey = `${issue.layer}:${issue.status}:${issueKey(issue)}`;
       if (emitted.has(dedupeKey)) {
         continue;
@@ -441,19 +735,25 @@ export function ProjectPage({
       }
     }
     return { grouped, capped: budget.capped };
-  }, [board, hideDone, view]);
+  }, [board, hideDone, readyOnly, readinessIndex, view]);
 
   // 트리 펼침 상태(useState)가 무관한 렌더에 리셋되지 않도록 메모한다.
   const { issues: treeIssues, capped: treeCapped } = useMemo(() => {
-    if (view === "tree" && hideDone && board) {
-      const budget = { count: 0, capped: false };
-      return {
-        issues: withoutDone(board.issues, 0, new Set<string>(), budget),
-        capped: budget.capped,
-      };
+    if (!board) {
+      return { issues: EMPTY_ISSUES, capped: false };
     }
-    return { issues: board?.issues ?? [], capped: false };
-  }, [hideDone, board, view]);
+    let baseIssues = board.issues;
+    let capped = false;
+    if (view === "tree" && hideDone) {
+      const budget = { count: 0, capped: false };
+      baseIssues = withoutDone(board.issues, 0, new Set<string>(), budget);
+      capped = budget.capped;
+    }
+    if (view === "tree" && readyOnly && readinessIndex) {
+      baseIssues = filterTreeToReadyOnly(baseIssues, readinessIndex);
+    }
+    return { issues: baseIssues, capped };
+  }, [hideDone, readyOnly, readinessIndex, board, view]);
 
   return (
     <section
@@ -480,6 +780,16 @@ export function ProjectPage({
                 "아직 불러오지 않음"
               )}
             </span>
+            {!isUnlinked && canCreateIssues ? (
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => openCreateDialog("planning", null)}
+              >
+                <Plus aria-hidden="true" strokeWidth={1.75} />
+                새 이슈 / Epic
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="secondary"
@@ -631,6 +941,13 @@ export function ProjectPage({
                 />
                 완료 항목 숨기기
               </label>
+              <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                <Checkbox
+                  checked={readyOnly}
+                  onChange={(event) => setReadyOnly(event.target.checked)}
+                />
+                시작 가능만 보기
+              </label>
             </div>
           </div>
           {board && (board.truncated || walkCapped || treeCapped) ? (
@@ -664,7 +981,14 @@ export function ProjectPage({
           ) : null}
           {!isUnlinked && board ? (
             view === "tree" ? (
-              <ProjectTree issues={treeIssues} />
+              <ProjectTree
+                issues={treeIssues}
+                readinessIndex={readinessIndex}
+                onSelectIssue={(issue) => {
+                  setSelectedIssueFallback(issue);
+                  setSelectedIssueNumber(issue.number);
+                }}
+              />
             ) : (
         <div className="grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
@@ -682,10 +1006,20 @@ export function ProjectPage({
                   {BOARD_STATUSES.map(({ id, name }) => (
                     <BoardColumn
                       key={id}
+                      layerId={layer.id}
                       layerName={layer.name}
                       statusName={name}
                       issues={groupedIssues.get(`${layer.id}:${id}`) ?? EMPTY_ISSUES}
                       canAddIssue={id === "backlog"}
+                      canCreateIssues={canCreateIssues}
+                      readinessIndex={readinessIndex}
+                      onSelectIssue={(issue) => {
+                        setSelectedIssueFallback(issue);
+                        setSelectedIssueNumber(issue.number);
+                      }}
+                      onOpenCreateIssue={(targetLayer) =>
+                        openCreateDialog(targetLayer, null)
+                      }
                     />
                   ))}
                 </div>
@@ -697,6 +1031,111 @@ export function ProjectPage({
         ) : null}
         </>
       )}
+
+      <ProjectIssueDrawer
+        open={selectedIssue !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setSelectedIssueNumber(null);
+          }
+        }}
+        issue={selectedIssue}
+        detail={issueDetailQuery.data ?? null}
+        isLoadingDetail={issueDetailQuery.isPending && Boolean(gateway.getIssueDetail)}
+        detailError={
+          issueDetailQuery.isError
+            ? issueDetailQuery.error instanceof Error
+              ? issueDetailQuery.error.message
+              : "이슈 상세를 불러오지 못했습니다."
+            : null
+        }
+        readiness={
+          selectedIssue && readinessIndex
+            ? readinessIndex.getStatus(selectedIssue)
+            : null
+        }
+        isUpdating={updateItemMutation.isPending}
+        updateError={
+          updateItemMutation.isError
+            ? updateItemMutation.error instanceof Error
+              ? updateItemMutation.error.message
+              : "필드 변경에 실패했습니다."
+            : null
+        }
+        onRetryDetail={() => {
+          void issueDetailQuery.refetch();
+        }}
+        onUpdateField={
+          gateway.updateBoardItem && selectedIssue
+            ? (patch) =>
+                updateItemMutation.mutate({
+                  issueNumber: selectedIssue.number,
+                  ...patch,
+                })
+            : undefined
+        }
+        onAddSubIssue={
+          canCreateIssues
+            ? (issue, repo) =>
+                openCreateDialog(
+                  issue.layer === "planning" ? "backend" : issue.layer,
+                  { number: issue.number, repositoryFullName: repo },
+                )
+            : undefined
+        }
+        onDeriveBacklog={
+          canCreateIssues
+            ? (issue, detail) => {
+                setDeriveSource({
+                  kind: "issue",
+                  issueNumber: issue.number,
+                  title: issue.title,
+                  layer: issue.layer,
+                  repositoryFullName:
+                    detail?.repositoryFullName ??
+                    inferRepositoryFullNameFromUrl(issue.url),
+                  priority: detail?.priority ?? null,
+                  documentPath: detail?.linkedDocuments[0]?.path ?? null,
+                });
+              }
+            : undefined
+        }
+        onStartWithAi={handleStartWithAi}
+      />
+
+      {canCreateIssues ? (
+        <>
+          <CreateBoardIssueDialog
+            open={createDialogOpen}
+            onOpenChange={setCreateDialogOpen}
+            repositories={writableReposQuery.data ?? []}
+            defaultLayer={createDefaultLayer}
+            defaultParentIssueNumber={createParentIssue?.number ?? null}
+            defaultParentIssueRepository={
+              createParentIssue?.repositoryFullName ?? null
+            }
+            onSubmit={handleCreateIssues}
+          />
+          <BacklogDeriveDialog
+            open={deriveSource !== null}
+            onOpenChange={(open) => {
+              if (!open) {
+                setDeriveSource(null);
+              }
+            }}
+            source={deriveSource}
+            repositories={writableReposQuery.data ?? []}
+            onSubmit={handleCreateIssues}
+          />
+        </>
+      ) : null}
+
+      {inRouterContext && navigateTarget ? (
+        <RouterRedirect
+          to={navigateTarget}
+          onNavigated={() => setNavigateTarget(null)}
+        />
+      ) : null}
     </section>
   );
 }

@@ -44,7 +44,8 @@
 - Windows와 macOS를 지원하는 Tauri 기반 로컬 앱으로 시작합니다.
 - GitHub 인증 정보는 중앙에 저장하지 않고 각 사용자 기기의 보안 저장소에서 관리합니다.
 - Hub는 코드를 읽고 검색하고 diff를 보여주지만, 실제 코드 수정과 실행은 IDE에서 진행합니다.
-- 별도 AI API 키를 자체 서버에 두지 않고, Claude Code·Codex·Antigravity 등 로컬 AI CLI가 격리된 Git worktree와 `.okf/AGENTS.md` 규칙 위에서 작업할 수 있도록 연동합니다.
+- OkHub의 AI 워크플로우는 애플리케이션 코드를 직접 구현하지 않으며, **아이디어 → PRD·화면명세서(`.md` 정본 + `.html` 사람용 뷰) 작성 → 기획자·디자이너·개발자 전체 백로그 작성 → `[기획]`·`[디자인]` 백로그까지만 자율 수행해 문서 완성**을 담당합니다([`AGENTS.md`](./AGENTS.md)).
+- 별도 AI API 키를 자체 서버에 두지 않고, Claude Code·Codex·Antigravity 등 로컬 AI CLI가 문서 저장소의 격리된 Git worktree와 `.okf/AGENTS.md` 규칙 위에서 작업할 수 있도록 연동합니다.
 - 처음부터 Jira·Confluence·Postman 전체를 대체하지 않고 반복되는 협업 불편부터 해결합니다.
 
 ## 개발

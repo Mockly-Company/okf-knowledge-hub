@@ -195,7 +195,7 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers issue creation only from Backlog and explains why it is unavailable", async () => {
+  it("offers issue creation from Backlog when createBoardIssues is available and disables it on read-only gateways", async () => {
     const user = userEvent.setup();
     renderProject();
     await showLayersView(user);
@@ -207,10 +207,10 @@ describe("ProjectPage", () => {
       name: "기획 Backlog",
     });
     const addIssue = within(backlog).getByRole("button", { name: "새 Issue" });
-    expect(addIssue).toBeDisabled();
+    expect(addIssue).toBeEnabled();
     expect(
       within(backlog).getByText(
-        "GitHub Project와 Iteration을 연결하면 만들 수 있습니다.",
+        "연결된 저장소에 이슈를 만들고 보드에 즉시 등록합니다.",
       ),
     ).toBeInTheDocument();
   });
@@ -1283,5 +1283,167 @@ describe("ProjectPage project switching", () => {
     expect(
       screen.queryByRole("button", { name: "워크스페이스 연결" }),
     ).toBeNull();
+  });
+
+  it("highlights ready issues, marks blocked predecessors, and filters to ready-only items", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.withIssues(
+      [
+        {
+          number: 50,
+          title: "[기획] 주문 취소 정책",
+          url: "https://github.com/Acme-Org/acme-docs/issues/50",
+          layer: "planning",
+          status: "done",
+          children: [],
+          kind: "작업",
+        },
+        {
+          number: 51,
+          title: "[백엔드] 취소 API 구현",
+          url: "https://github.com/Acme-Org/acme-web/issues/51",
+          layer: "backend",
+          status: "backlog",
+          children: [],
+          kind: "작업",
+          dependsOn: 50,
+        },
+        {
+          number: 52,
+          title: "[프론트엔드] 취소 모달 연동",
+          url: "https://github.com/Acme-Org/acme-web/issues/52",
+          layer: "frontend",
+          status: "backlog",
+          children: [],
+          kind: "작업",
+          dependsOn: 51,
+        },
+      ],
+      "2026-11-14T00:00:00Z",
+    );
+
+    render(<ProjectPage gateway={gateway} />);
+
+    const readyCard = await screen.findByRole("article", {
+      name: /#51 \[백엔드\] 취소 API 구현/,
+    });
+    const blockedCard = screen.getByRole("article", {
+      name: /#52 \[프론트엔드\] 취소 모달 연동/,
+    });
+    expect(within(readyCard).getByText("시작 가능")).toBeInTheDocument();
+    expect(within(blockedCard).getByText("선행 #51 대기")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("시작 가능만 보기"));
+
+    expect(
+      screen.getByRole("article", {
+        name: /#51 \[백엔드\] 취소 API 구현/,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", {
+        name: /#52 \[프론트엔드\] 취소 모달 연동/,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens the issue detail drawer, derives cascading [백엔드]/[프론트엔드] sub-issues, and prepares AI task launch", async () => {
+    const user = userEvent.setup();
+    const { getPendingAiLaunch, clearPendingAiLaunch } = await import(
+      "@/features/ai/pendingAiLaunch"
+    );
+    clearPendingAiLaunch();
+
+    const gateway = FakeProjectBoardGateway.withIssues(
+      [
+        {
+          number: 70,
+          title: "[기획] 알림 채널 설정 명세",
+          url: "https://github.com/Acme-Org/acme-docs/issues/70",
+          layer: "planning",
+          status: "backlog",
+          children: [],
+          kind: "작업",
+        },
+      ],
+      "2026-11-14T00:00:00Z",
+    );
+    gateway.issueDetails.set(70, {
+      number: 70,
+      title: "[기획] 알림 채널 설정 명세",
+      url: "https://github.com/Acme-Org/acme-docs/issues/70",
+      repositoryFullName: "Acme-Org/acme-docs",
+      layer: "planning",
+      status: "backlog",
+      kind: "작업",
+      priority: "P1",
+      body: "## 참조 문서\n- `docs/product/alerts.md`\n\n## 완료 조건\n- [ ] 2벌(.md+.html) 작성",
+      dependsOn: null,
+      predecessorDone: true,
+      readyToStart: true,
+      subIssues: [],
+      linkedDocuments: [
+        { path: "docs/product/alerts.md", hasCompanionHtml: true },
+      ],
+      linkedPullRequests: [
+        {
+          number: 15,
+          title: "docs: 알림 채널 기획안 (#70)",
+          htmlUrl: "https://github.com/Acme-Org/acme-docs/pull/15",
+          repositoryFullName: "Acme-Org/acme-docs",
+          isDraft: false,
+        },
+      ],
+      recommendedWorkingDir: null,
+      priorityOptions: ["P0", "P1", "P2"],
+    });
+
+    render(<ProjectPage gateway={gateway} />);
+
+    await screen.findByRole("article", {
+      name: "단일 항목 #70 [기획] 알림 채널 설정 명세",
+    });
+    await user.click(screen.getByRole("button", { name: "#70 상세 보기" }));
+
+    const drawer = await screen.findByRole("dialog", {
+      name: "[기획] 알림 채널 설정 명세",
+    });
+    expect(within(drawer).getByText("docs/product/alerts.md")).toBeVisible();
+    expect(within(drawer).getByText("2벌 (.md + .html)")).toBeVisible();
+    expect(
+      within(drawer).getByRole("link", {
+        name: "#15 docs: 알림 채널 기획안 (#70)",
+      }),
+    ).toBeVisible();
+
+    await user.click(
+      within(drawer).getByRole("button", { name: "하위 백로그 파생" }),
+    );
+    const deriveDialog = await screen.findByRole("dialog", {
+      name: "#70 하위 구현 백로그 파생",
+    });
+    await user.click(
+      within(deriveDialog).getByRole("button", { name: "2개 백로그 일괄 등록" }),
+    );
+
+    await waitFor(() =>
+      expect(
+        gateway.calls.some((call) => call.method === "createBoardIssues"),
+      ).toBe(true),
+    );
+
+    await user.click(
+      within(drawer).getByRole("button", { name: "AI로 작업 시작" }),
+    );
+
+    expect(getPendingAiLaunch()).toMatchObject({
+      request: {
+        issueNumber: 70,
+        repositoryFullName: "Acme-Org/acme-docs",
+        documentPath: "docs/product/alerts.md",
+      },
+      layer: "planning",
+    });
+    clearPendingAiLaunch();
   });
 });

@@ -203,7 +203,8 @@ impl AuthService {
             refresh: Mutex::new(()),
             access_session: Mutex::new(AccessSession::Authenticated {
                 access_token,
-                expires_at_unix: i64::MAX,
+                // 2100-01-01T00:00:00Z — avoids Duration/SystemTime overflow from i64::MAX.
+                expires_at_unix: 4_102_444_800,
             }),
             authenticated_principal: Mutex::new(None),
         }

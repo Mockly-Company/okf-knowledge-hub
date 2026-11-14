@@ -119,9 +119,35 @@ pub struct GithubProjectItem {
     pub status: Option<String>,
     pub area: Option<String>,
     pub kind: Option<String>,
+    pub priority: Option<String>,
     /// 본문 `이전 단계: #N`에서 읽은 선행 이슈 번호. 없으면 `None`.
     pub depends_on: Option<u64>,
     pub sub_issues: Vec<GithubSubIssue>,
+}
+
+impl GithubProjectItem {
+    pub fn infer_repository_full_name(&self) -> Option<String> {
+        if let Some(repo) = self
+            .repository_full_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return Some(repo.to_owned());
+        }
+        let after_scheme = self
+            .url
+            .strip_prefix("https://")
+            .or_else(|| self.url.strip_prefix("http://"))?;
+        let mut parts = after_scheme.split('/');
+        let _host = parts.next()?;
+        let owner = parts.next()?.trim();
+        let repo = parts.next()?.trim();
+        if owner.is_empty() || repo.is_empty() {
+            return None;
+        }
+        Some(format!("{owner}/{repo}"))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -208,6 +234,27 @@ impl GithubProjectSchema {
         }
         self.find_option(&["타입", "Type", "Kind"], &[trimmed])
     }
+
+    pub fn find_priority_option(&self, priority: &str) -> Option<(&str, &str)> {
+        let trimmed = priority.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        self.find_option(&["Priority", "우선순위", "중요도"], &[trimmed])
+    }
+
+    pub fn priority_options(&self) -> Vec<String> {
+        self.single_select_fields
+            .iter()
+            .find(|field| {
+                let trimmed = field.name.trim();
+                ["Priority", "우선순위", "중요도"]
+                    .iter()
+                    .any(|want| trimmed.eq_ignore_ascii_case(want) || trimmed == *want)
+            })
+            .map(|field| field.options.iter().map(|opt| opt.name.clone()).collect())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +268,7 @@ pub struct CreateProjectIssueInput {
     pub layer: Option<BoardLayer>,
     pub status: Option<BoardStatus>,
     pub kind: Option<String>,
+    pub priority: Option<String>,
     pub parent_issue_number: Option<u64>,
     pub parent_issue_repository: Option<String>,
 }
@@ -246,6 +294,7 @@ pub struct UpdateProjectItemInput {
     pub status: Option<BoardStatus>,
     pub layer: Option<BoardLayer>,
     pub kind: Option<String>,
+    pub priority: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -258,6 +307,7 @@ pub struct UpdatedProjectItem {
     pub status: Option<String>,
     pub area: Option<String>,
     pub kind: Option<String>,
+    pub priority: Option<String>,
 }
 
 /// 이슈 본문에서 순서 약속을 읽는다.

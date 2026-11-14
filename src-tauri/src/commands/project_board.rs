@@ -1,8 +1,13 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::automation::context_pack::{assemble_issue_context_pack, extract_referenced_doc_paths};
+use crate::automation::inject_depends_on_line;
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
-use crate::github::model::{GithubProjectItem, GithubProjectSummary};
+use crate::github::model::{
+    CreateProjectIssueInput, CreatedProjectIssue, GithubProjectItem, GithubProjectSummary,
+    GithubSubIssue, UpdateProjectItemInput,
+};
 use crate::project_board::{
     load_cached_board, parse_project_url, project_board_cache_file, project_board_cache_tmp_file,
     BoardIssue, BoardLayer, BoardStatus, GithubProjectList, ProjectBoard, ProjectOwnerScope,
@@ -777,7 +782,14 @@ pub async fn sync_project_board(
     state: State<'_, AppServices>,
 ) -> CommandResult<ProjectBoard> {
     let _access = state.acquire_authenticated_command().await?;
-    let project = load_linked_project(&state)?;
+    sync_project_board_inner(&app, &state).await
+}
+
+async fn sync_project_board_inner(
+    app: &AppHandle,
+    state: &AppServices,
+) -> CommandResult<ProjectBoard> {
+    let project = load_linked_project(state)?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
     let (first_scope, fallback_scope) = resolve_project_scope(&project);
     let (items, truncated, dropped) = match github
@@ -828,6 +840,428 @@ pub async fn sync_project_board(
         eprintln!("warning: failed to persist project board cache: {error:?}");
     }
     Ok(board)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectWritableRepository {
+    pub key: String,
+    pub label: String,
+    pub full_name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardLinkedDocument {
+    pub path: String,
+    pub has_companion_html: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardLinkedPullRequest {
+    pub number: u64,
+    pub title: String,
+    pub html_url: String,
+    pub repository_full_name: String,
+    pub is_draft: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectBoardIssueDetail {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub repository_full_name: Option<String>,
+    pub layer: BoardLayer,
+    pub status: Option<BoardStatus>,
+    pub kind: Option<String>,
+    pub priority: Option<String>,
+    pub body: String,
+    pub depends_on: Option<u64>,
+    pub predecessor_done: bool,
+    pub ready_to_start: bool,
+    pub sub_issues: Vec<GithubSubIssue>,
+    pub linked_documents: Vec<BoardLinkedDocument>,
+    pub linked_pull_requests: Vec<BoardLinkedPullRequest>,
+    pub recommended_working_dir: Option<String>,
+    pub priority_options: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBoardIssueRequest {
+    pub repository_full_name: Option<String>,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    pub layer: Option<BoardLayer>,
+    pub status: Option<BoardStatus>,
+    pub kind: Option<String>,
+    pub priority: Option<String>,
+    pub parent_issue_number: Option<u64>,
+    pub parent_issue_repository: Option<String>,
+    pub parent_batch_index: Option<usize>,
+    pub depends_on: Option<u64>,
+    pub depends_on_batch_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateBoardIssuesResult {
+    pub created: Vec<CreatedProjectIssue>,
+    pub board: ProjectBoard,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBoardItemRequest {
+    pub issue_number: u64,
+    pub repository_full_name: Option<String>,
+    pub status: Option<BoardStatus>,
+    pub layer: Option<BoardLayer>,
+    pub kind: Option<String>,
+    pub priority: Option<String>,
+}
+
+pub(crate) fn text_mentions_issue(text: &str, issue_number: u64) -> bool {
+    let needle = format!("#{issue_number}");
+    for (idx, _) in text.match_indices(&needle) {
+        let after = &text[idx + needle.len()..];
+        let next_is_digit = after.chars().next().is_some_and(|ch| ch.is_ascii_digit());
+        if !next_is_digit {
+            return true;
+        }
+    }
+    false
+}
+
+fn connected_docs_workspace_dir(services: &AppServices) -> Option<std::path::PathBuf> {
+    services
+        .local_settings
+        .load_current()
+        .ok()
+        .flatten()
+        .filter(|current| {
+            current.status == crate::settings::model::CurrentWorkspaceStatus::Connected
+        })
+        .map(|current| current.path)
+        .filter(|p| p.is_dir())
+}
+
+pub(crate) fn collect_writable_repositories_inner(
+    services: &AppServices,
+) -> Vec<ProjectWritableRepository> {
+    let mut result: Vec<ProjectWritableRepository> = Vec::new();
+    let mut push_unique = |repo: ProjectWritableRepository| {
+        let clean = repo.full_name.trim();
+        if clean.is_empty()
+            || result
+                .iter()
+                .any(|existing| existing.full_name.eq_ignore_ascii_case(clean))
+        {
+            return;
+        }
+        result.push(repo);
+    };
+
+    let current = services.local_settings.load_current().ok().flatten();
+    let active_hub = services
+        .local_settings
+        .load_active_hub_workspace()
+        .ok()
+        .flatten();
+
+    if let Some(full_name) = current
+        .as_ref()
+        .and_then(|c| c.repository.as_ref().map(|r| r.full_name.clone()))
+        .or_else(|| {
+            active_hub
+                .as_ref()
+                .and_then(|w| w.docs_repository.as_ref().map(|d| d.full_name.clone()))
+        })
+    {
+        push_unique(ProjectWritableRepository {
+            key: "docs".to_owned(),
+            label: format!("문서 저장소 ({full_name})"),
+            full_name,
+            role: "docs".to_owned(),
+        });
+    }
+
+    if let Some(ws_dir) = connected_docs_workspace_dir(services) {
+        if let Ok(raw) = std::fs::read_to_string(ws_dir.join(".okf").join("workspace.yml")) {
+            if let Ok(manifest) =
+                serde_yaml_ng::from_str::<crate::workspace::model::WorkspaceConfigV1>(&raw)
+            {
+                for repo in manifest.repositories {
+                    push_unique(ProjectWritableRepository {
+                        key: repo.key,
+                        label: format!("{} ({})", repo.label, repo.github.full_name),
+                        full_name: repo.github.full_name,
+                        role: "code".to_owned(),
+                    });
+                }
+            }
+        }
+    }
+
+    result
+}
+
+fn select_default_writable_repository(
+    writable: &[ProjectWritableRepository],
+    layer: Option<BoardLayer>,
+) -> Option<String> {
+    if matches!(layer, Some(BoardLayer::Frontend | BoardLayer::Backend)) {
+        if let Some(code_repo) = writable.iter().find(|r| r.role == "code") {
+            return Some(code_repo.full_name.clone());
+        }
+    }
+    writable.first().map(|r| r.full_name.clone())
+}
+
+#[tauri::command]
+pub async fn list_project_writable_repositories(
+    state: State<'_, AppServices>,
+) -> CommandResult<Vec<ProjectWritableRepository>> {
+    let _access = state.acquire_authenticated_command().await?;
+    Ok(collect_writable_repositories_inner(&state))
+}
+
+#[tauri::command]
+pub async fn get_project_board_issue_detail(
+    state: State<'_, AppServices>,
+    issue_number: u64,
+    repository_full_name: Option<String>,
+) -> CommandResult<ProjectBoardIssueDetail> {
+    let _access = state.acquire_authenticated_command().await?;
+    let project = load_linked_project(&state)?;
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let (first_scope, _) = resolve_project_scope(&project);
+    let (items, _, _, resolved_scope) = github
+        .list_project_items_with_fallback(first_scope, &project.owner, project.number)
+        .await?;
+
+    let wanted_repo = repository_full_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let target = items
+        .iter()
+        .find(|item| {
+            item.number == issue_number
+                && match wanted_repo {
+                    Some(want) => item
+                        .infer_repository_full_name()
+                        .as_deref()
+                        .is_some_and(|actual| actual.eq_ignore_ascii_case(want)),
+                    None => true,
+                }
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                format!("활성 GitHub Project에서 이슈 #{issue_number}을(를) 찾을 수 없습니다."),
+            )
+            .with_recovery(RecoveryAction::Retry)
+        })?;
+
+    let docs_root = connected_docs_workspace_dir(&state);
+    let active_context = match docs_root.as_deref() {
+        Some(root) => crate::settings::commands::resolve_active_ai_context(&state, root),
+        None => crate::settings::ai_runner::ActiveWorkspaceAiContext::default(),
+    };
+    let pack = assemble_issue_context_pack(target, &items, docs_root.as_deref(), &active_context);
+
+    let mut linked_documents = Vec::new();
+    for rel_path in extract_referenced_doc_paths(&pack.body) {
+        let has_companion_html = docs_root
+            .as_ref()
+            .map(|root| {
+                let html_rel = format!("{}.html", rel_path.trim_end_matches(".md"));
+                root.join(html_rel).is_file()
+            })
+            .unwrap_or(false);
+        linked_documents.push(BoardLinkedDocument {
+            path: rel_path,
+            has_companion_html,
+        });
+    }
+
+    let mut pr_repos = Vec::new();
+    if let Some(issue_repo) = target.infer_repository_full_name() {
+        pr_repos.push(issue_repo);
+    }
+    if let Some(docs_repo) = active_context.docs_repository_full_name.as_ref() {
+        if !pr_repos
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(docs_repo))
+        {
+            pr_repos.push(docs_repo.clone());
+        }
+    }
+
+    let mut linked_pull_requests = Vec::new();
+    for repo in pr_repos {
+        if let Ok(prs) = github.list_open_pull_requests(&repo).await {
+            for pr in prs {
+                if text_mentions_issue(&pr.title, issue_number)
+                    || text_mentions_issue(&pr.body, issue_number)
+                {
+                    linked_pull_requests.push(BoardLinkedPullRequest {
+                        number: pr.number,
+                        title: pr.title,
+                        html_url: pr.html_url,
+                        repository_full_name: repo.clone(),
+                        is_draft: pr.is_draft,
+                    });
+                }
+            }
+        }
+    }
+
+    let priority_options = github
+        .inspect_project_schema(resolved_scope, &project.owner, project.number)
+        .await
+        .map(|schema| schema.priority_options())
+        .unwrap_or_default();
+
+    Ok(ProjectBoardIssueDetail {
+        number: pack.number,
+        title: pack.title,
+        url: pack.url,
+        repository_full_name: target.infer_repository_full_name(),
+        layer: pack.layer,
+        status: pack.status,
+        kind: pack.kind,
+        priority: pack.priority,
+        body: pack.body,
+        depends_on: pack.depends_on,
+        predecessor_done: pack.predecessor_done,
+        ready_to_start: pack.ready_to_start,
+        sub_issues: pack.sub_issues,
+        linked_documents,
+        linked_pull_requests,
+        recommended_working_dir: pack.recommended_working_dir,
+        priority_options,
+    })
+}
+
+#[tauri::command]
+pub async fn create_project_board_issues(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    items: Vec<CreateBoardIssueRequest>,
+) -> CommandResult<CreateBoardIssuesResult> {
+    let _access = state.acquire_authenticated_command().await?;
+    if items.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "생성할 이슈 항목이 비어 있습니다.",
+        )
+        .with_recovery(RecoveryAction::Retry));
+    }
+    let project = load_linked_project(&state)?;
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let (first_scope, _) = resolve_project_scope(&project);
+    let writable = collect_writable_repositories_inner(&state);
+
+    let mut created: Vec<CreatedProjectIssue> = Vec::with_capacity(items.len());
+    for req in items {
+        let target_repo = req
+            .repository_full_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .or_else(|| select_default_writable_repository(&writable, req.layer))
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "이슈를 생성할 저장소를 찾을 수 없습니다. 문서 저장소 또는 코드 저장소를 먼저 연결해 주세요.",
+                )
+                .with_recovery(RecoveryAction::Retry)
+            })?;
+
+        let (resolved_parent_num, resolved_parent_repo) =
+            if let Some(batch_idx) = req.parent_batch_index {
+                let parent_created = created.get(batch_idx).ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::WorkspaceInvalid,
+                        "유효하지 않은 상위 이슈 순서 참조입니다.",
+                    )
+                })?;
+                (
+                    Some(parent_created.number),
+                    Some(parent_created.repository_full_name.clone()),
+                )
+            } else {
+                (req.parent_issue_number, req.parent_issue_repository.clone())
+            };
+
+        let resolved_depends_on = if let Some(dep_idx) = req.depends_on_batch_index {
+            let dep_created = created.get(dep_idx).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "유효하지 않은 선행 이슈 순서 참조입니다.",
+                )
+            })?;
+            Some(dep_created.number)
+        } else {
+            req.depends_on
+        };
+
+        let final_body = inject_depends_on_line(&req.body, resolved_depends_on);
+        let item = github
+            .create_project_issue(&CreateProjectIssueInput {
+                project_scope: first_scope,
+                project_owner: project.owner.clone(),
+                project_number: project.number,
+                repository_full_name: target_repo,
+                title: req.title,
+                body: final_body,
+                layer: req.layer,
+                status: req.status,
+                kind: req.kind,
+                priority: req.priority,
+                parent_issue_number: resolved_parent_num,
+                parent_issue_repository: resolved_parent_repo,
+            })
+            .await?;
+        created.push(item);
+    }
+
+    let board = sync_project_board_inner(&app, &state).await?;
+    Ok(CreateBoardIssuesResult { created, board })
+}
+
+#[tauri::command]
+pub async fn update_project_board_item(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    request: UpdateBoardItemRequest,
+) -> CommandResult<ProjectBoard> {
+    let _access = state.acquire_authenticated_command().await?;
+    let project = load_linked_project(&state)?;
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let (first_scope, _) = resolve_project_scope(&project);
+    github
+        .update_project_item_fields(&UpdateProjectItemInput {
+            project_scope: first_scope,
+            project_owner: project.owner.clone(),
+            project_number: project.number,
+            issue_number: request.issue_number,
+            repository_full_name: request.repository_full_name,
+            status: request.status,
+            layer: request.layer,
+            kind: request.kind,
+            priority: request.priority,
+        })
+        .await?;
+    sync_project_board_inner(&app, &state).await
 }
 
 #[cfg(test)]
@@ -969,6 +1403,7 @@ mod tests {
             status: Some("In progress".to_owned()),
             area: Some("백엔드".to_owned()),
             kind: None,
+            priority: None,
             depends_on: None,
             sub_issues: sub_urls
                 .iter()
@@ -1145,5 +1580,80 @@ mod tests {
         // 둘 중 하나가 루트로 승격되고 다른 쪽은 그 자식으로 한 번만 렌더된다.
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].children.len(), 1);
+    }
+
+    #[test]
+    fn text_mentions_issue_respects_digit_boundaries() {
+        assert!(super::text_mentions_issue("Closes #60", 60));
+        assert!(super::text_mentions_issue("관련: #6, #60 반영", 6));
+        assert!(!super::text_mentions_issue("Closes #60", 6));
+    }
+
+    #[test]
+    fn writable_repositories_dynamically_follow_active_workspace_manifest() {
+        use std::collections::HashMap;
+        use std::sync::{Arc, Mutex};
+
+        use crate::error::AppError;
+        use crate::settings::model::KnowledgeRepository;
+        use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
+        use crate::state::AppServices;
+
+        #[derive(Clone, Default)]
+        struct MemStore(Arc<Mutex<HashMap<String, String>>>);
+        impl LocalSettingsStore for MemStore {
+            fn read(&self, key: &str) -> Result<Option<String>, AppError> {
+                Ok(self.0.lock().unwrap().get(key).cloned())
+            }
+            fn write(&self, key: &str, value: &str) -> Result<(), AppError> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .insert(key.to_owned(), value.to_owned());
+                Ok(())
+            }
+            fn remove(&self, key: &str) -> Result<(), AppError> {
+                self.0.lock().unwrap().remove(key);
+                Ok(())
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let docs_dir = temp.path().join("alpha-docs");
+        std::fs::create_dir_all(docs_dir.join(".okf")).unwrap();
+        std::fs::write(
+            docs_dir.join(".okf").join("workspace.yml"),
+            "schema_version: 1\nworkspace:\n  id: 00000000-0000-0000-0000-000000000001\n  name: Alpha\ndocuments:\n  roots:\n    - path: docs\nrepositories:\n  - key: web\n    label: Alpha Web\n    github:\n      id: R_web\n      full_name: Acme-Co/alpha-web\n",
+        )
+        .unwrap();
+
+        let settings = LocalSettingsService::new(MemStore::default());
+        settings
+            .set_current_for_repository(
+                &docs_dir,
+                KnowledgeRepository {
+                    id: "R_docs".into(),
+                    full_name: "Acme-Co/alpha-docs".into(),
+                },
+            )
+            .unwrap();
+        let services = AppServices::new(settings);
+        let writable = super::collect_writable_repositories_inner(&services);
+        assert_eq!(writable.len(), 2);
+        assert_eq!(writable[0].full_name, "Acme-Co/alpha-docs");
+        assert_eq!(writable[0].role, "docs");
+        assert_eq!(writable[1].full_name, "Acme-Co/alpha-web");
+        assert_eq!(writable[1].role, "code");
+
+        assert_eq!(
+            super::select_default_writable_repository(&writable, Some(BoardLayer::Planning))
+                .as_deref(),
+            Some("Acme-Co/alpha-docs")
+        );
+        assert_eq!(
+            super::select_default_writable_repository(&writable, Some(BoardLayer::Backend))
+                .as_deref(),
+            Some("Acme-Co/alpha-web")
+        );
     }
 }

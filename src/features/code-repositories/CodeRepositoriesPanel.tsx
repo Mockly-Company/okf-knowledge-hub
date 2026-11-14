@@ -152,6 +152,20 @@ export function CodeRepositoriesPanel({
         <p className="m-0 text-[var(--color-text-muted)]">
           연결된 코드 저장소 목록을 확인하는 중…
         </p>
+      ) : reposQuery.isError ? (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center justify-between gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-error-border)] bg-[var(--color-error-surface)] p-[var(--space-4)] text-[var(--color-error-text)]"
+        >
+          <span>코드 저장소 목록을 불러오지 못했습니다.</span>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void reposQuery.refetch()}
+          >
+            다시 시도
+          </Button>
+        </div>
       ) : repos.length === 0 ? (
         <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-[var(--space-4)] text-[var(--color-text-default)]">
           현재 문서 워크스페이스의 <code>.okf/workspace.yml</code>에 선언된 코드 저장소가 없습니다.
