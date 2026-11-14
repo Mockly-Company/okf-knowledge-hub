@@ -1,5 +1,5 @@
 import { RefreshCw } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge, type StatusTone } from "@/components/patterns/StatusBadge";
@@ -78,6 +78,9 @@ function PersonalDashboardInner({
     1,
     Math.ceil(notifications.length / NOTIFICATION_PAGE_SIZE),
   );
+  useEffect(() => {
+    setPage((prev) => Math.min(prev, totalPages - 1));
+  }, [totalPages]);
   const safePage = Math.min(page, totalPages - 1);
   const pagedNotifications = useMemo(
     () =>

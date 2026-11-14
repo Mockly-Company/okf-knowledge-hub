@@ -421,6 +421,12 @@ struct GithubPullRequestAuthorResponse {
     login: String,
 }
 
+fn parse_rfc3339_timestamp(raw: &str) -> Option<i64> {
+    time::OffsetDateTime::parse(raw.trim(), &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|dt| dt.unix_timestamp())
+}
+
 #[derive(Deserialize)]
 struct GithubPullRequestResponse {
     number: u64,
@@ -1603,35 +1609,48 @@ impl GithubHttpClient {
         repository_full_name: &str,
         since_unix_secs: i64,
     ) -> Result<Vec<DocsPullRequestSummary>, AppError> {
+        const MERGED_PR_PAGE_SIZE: usize = 100;
+        const MAX_MERGED_PR_PAGES: usize = 5;
+
         let (owner, name) = split_repository_full_name(repository_full_name)?;
-        let items: Vec<GithubPullRequestResponse> = self
-            .get_json(
-                &["repos", owner, name, "pulls"],
-                &[
-                    ("state", "closed".to_owned()),
-                    ("sort", "updated".to_owned()),
-                    ("direction", "desc".to_owned()),
-                    ("per_page", "30".to_owned()),
-                ],
-                HttpFailureContext::Repository,
-            )
-            .await?;
-        Ok(items
-            .into_iter()
-            .filter(|pr| {
-                pr.merged_at
+        let per_page_str = MERGED_PR_PAGE_SIZE.to_string();
+        let mut merged = Vec::new();
+        for page in 1..=MAX_MERGED_PR_PAGES {
+            let page_str = page.to_string();
+            let items: Vec<GithubPullRequestResponse> = self
+                .get_json(
+                    &["repos", owner, name, "pulls"],
+                    &[
+                        ("state", "closed".to_owned()),
+                        ("sort", "updated".to_owned()),
+                        ("direction", "desc".to_owned()),
+                        ("per_page", per_page_str.clone()),
+                        ("page", page_str),
+                    ],
+                    HttpFailureContext::Repository,
+                )
+                .await?;
+            let page_len = items.len();
+            let mut reached_cutoff = false;
+            for pr in items {
+                if parse_rfc3339_timestamp(&pr.updated_at).is_some_and(|ts| ts < since_unix_secs) {
+                    // updated 내림차순 응답이므로 기준 시각 이전부터는 이후 페이지에도 최근 머지가 없다.
+                    reached_cutoff = true;
+                }
+                if pr
+                    .merged_at
                     .as_deref()
-                    .and_then(|raw| {
-                        time::OffsetDateTime::parse(
-                            raw.trim(),
-                            &time::format_description::well_known::Rfc3339,
-                        )
-                        .ok()
-                    })
-                    .is_some_and(|dt| dt.unix_timestamp() >= since_unix_secs)
-            })
-            .map(GithubPullRequestResponse::into_public)
-            .collect())
+                    .and_then(parse_rfc3339_timestamp)
+                    .is_some_and(|ts| ts >= since_unix_secs)
+                {
+                    merged.push(pr.into_public());
+                }
+            }
+            if reached_cutoff || page_len < MERGED_PR_PAGE_SIZE {
+                break;
+            }
+        }
+        Ok(merged)
     }
 
     pub async fn get_pull_request(
@@ -3941,5 +3960,73 @@ mod tests {
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].number, 16);
         assert_eq!(merged[0].merged_at.as_deref(), Some("2026-11-14T05:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn list_recent_merged_pull_requests_paginates_past_100_items_until_cutoff() {
+        let mut page1 = Vec::new();
+        for n in 2..=101 {
+            page1.push(serde_json::json!({
+                "number": n,
+                "title": format!("docs: closed #{n}"),
+                "body": "",
+                "html_url": format!("https://github.com/Acme-Org/acme-docs/pull/{n}"),
+                "draft": false,
+                "updated_at": "2026-11-14T01:00:00Z",
+                "merged_at": null,
+                "user": { "login": "alice" },
+                "head": { "ref": "docs/a", "sha": "sha" },
+                "base": { "ref": "main", "sha": "base" }
+            }));
+        }
+        let page2 = serde_json::json!([
+            {
+                "number": 201,
+                "title": "docs: 2페이지 최근 머지",
+                "body": "## 이번 변경 요약\n- 페이지2\n",
+                "html_url": "https://github.com/Acme-Org/acme-docs/pull/201",
+                "draft": false,
+                "updated_at": "2026-11-10T01:00:00Z",
+                "merged_at": "2026-11-10T01:00:00Z",
+                "user": { "login": "alice" },
+                "head": { "ref": "docs/p2", "sha": "sha201" },
+                "base": { "ref": "main", "sha": "base" }
+            },
+            {
+                "number": 10,
+                "title": "docs: cutoff 이전",
+                "body": "",
+                "html_url": "https://github.com/Acme-Org/acme-docs/pull/10",
+                "draft": false,
+                "updated_at": "2026-10-20T05:00:00Z",
+                "merged_at": "2026-10-20T05:00:00Z",
+                "user": { "login": "alice" },
+                "head": { "ref": "docs/old", "sha": "sha10" },
+                "base": { "ref": "main", "sha": "base" }
+            }
+        ]);
+
+        let transport = RecordingTransport::with_responses(vec![
+            response(200, &serde_json::to_string(&page1).unwrap()),
+            response(200, &page2.to_string()),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let cutoff = time::OffsetDateTime::parse(
+            "2026-11-07T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp();
+        let merged = service
+            .list_recent_merged_pull_requests("Acme-Org/acme-docs", cutoff)
+            .await
+            .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].number, 201);
+        let reqs = transport.requests();
+        assert_eq!(reqs.len(), 2);
+        assert!(reqs[0].url.contains("per_page=100") && reqs[0].url.contains("page=1"));
+        assert!(reqs[1].url.contains("per_page=100") && reqs[1].url.contains("page=2"));
     }
 }

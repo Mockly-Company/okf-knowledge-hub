@@ -890,4 +890,84 @@ describe("HomePage (내 대시보드)", () => {
       expect.objectContaining({ assigneeFilter: null, forceSync: false }),
     );
   });
+
+  it("clamps notification page state when totalPages shrinks so returning to a larger list stays on page 1 (S30)", async () => {
+    const user = userEvent.setup();
+    const makeNotification = (index: number): DashboardNotificationItem => ({
+      id: `notif-${index}`,
+      workspaceId: "PVT_alpha",
+      workspaceTitle: "Alpha Project",
+      repositoryFullName: "Mockly-Company/alpha-docs",
+      kind: "merged_doc",
+      prNumber: index,
+      title: `문서 알림 #${index}`,
+      summary: `요약 #${index}`,
+      authorLogin: "alice",
+      url: `https://github.com/Mockly-Company/alpha-docs/pull/${index}`,
+      primaryDocPath: null,
+      hasCompanionHtml: false,
+      timestamp: `2026-11-14T10:${String(60 - index).padStart(2, "0")}:00Z`,
+      isNew: false,
+    });
+
+    const twelveNotifications = Array.from({ length: 12 }, (_, i) =>
+      makeNotification(i + 1),
+    );
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      notifications: twelveNotifications,
+    });
+    const origGet = dashboardGateway.getPersonalDashboard.bind(dashboardGateway);
+    let currentNotifications = twelveNotifications;
+    vi.spyOn(dashboardGateway, "getPersonalDashboard").mockImplementation(
+      async (params) => ({
+        ...(await origGet(params)),
+        notifications: currentNotifications,
+      }),
+    );
+
+    render(
+      <TestQueryProvider>
+        <MemoryRouter initialEntries={["/home"]}>
+          <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+            <ActiveProjectProvider
+              projectGateway={FakeProjectBoardGateway.empty()}
+              docsRepositoryGateway={docsRepoGateway}
+            >
+              <PersonalDashboardProvider gateway={dashboardGateway}>
+                <HomePage />
+              </PersonalDashboardProvider>
+            </ActiveProjectProvider>
+          </WorkspaceConnectionProvider>
+        </MemoryRouter>
+      </TestQueryProvider>,
+    );
+
+    expect(await screen.findByText("1 / 2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "다음" }));
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    expect(screen.getByText("#11 문서 알림 #11")).toBeInTheDocument();
+
+    currentNotifications = twelveNotifications.slice(0, 3);
+    await user.click(screen.getByRole("button", { name: "새로고침" }));
+    expect(await screen.findByText("#1 문서 알림 #1")).toBeInTheDocument();
+
+    currentNotifications = twelveNotifications;
+    await user.click(screen.getByRole("button", { name: "새로고침" }));
+    expect(await screen.findByText("1 / 2")).toBeInTheDocument();
+    expect(screen.getByText("#1 문서 알림 #1")).toBeInTheDocument();
+  });
 });

@@ -105,8 +105,10 @@ export function PersonalDashboardProvider({
       if (pending) {
         pendingSyncByKeyRef.current.delete(serialized);
       }
+      const rawFilter = typeof currentKey[2] === "string" ? currentKey[2] : "__me__";
+      const resolvedFilter = rawFilter === "__me__" ? null : rawFilter;
       return gateway.getPersonalDashboard({
-        assigneeFilter,
+        assigneeFilter: resolvedFilter,
         forceSync: pending?.forceSync ?? false,
         retryWorkspaceId: pending?.retryWorkspaceId ?? null,
       });

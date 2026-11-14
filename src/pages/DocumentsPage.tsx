@@ -1,4 +1,5 @@
 import { FilePlus2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
@@ -11,6 +12,7 @@ import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { PlanningPrReviewSection } from "@/features/documents/components/PlanningPrReviewPanel";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
+import { documentsKeys } from "@/features/documents/queryKeys";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import {
@@ -46,16 +48,71 @@ function DocumentsDeepLinkSync({
   showDocumentsHome: () => void;
   selectDocument: (path: string) => void;
 }) {
+  const { state, listDocsPullRequests } = useDocuments();
+  const sessionId = state.activeSessionId;
   const [searchParams, setSearchParams] = useSearchParams();
   const prParam = searchParams.get("pr");
   const docParam = searchParams.get("doc");
   const lastConsumedDocRef = useRef<string | null>(null);
+  const parsedPrNumber = prParam ? Number(prParam) : Number.NaN;
+  const hasPositivePrNumber =
+    Number.isInteger(parsedPrNumber) && parsedPrNumber > 0;
+
+  const pullRequestsQuery = useQuery({
+    queryKey: documentsKeys.pullRequests(sessionId ?? "inactive"),
+    queryFn: () => listDocsPullRequests(),
+    enabled:
+      ready && sessionId !== null && Boolean(prParam) && hasPositivePrNumber,
+    staleTime: 15_000,
+  });
+
+  const prExists =
+    hasPositivePrNumber &&
+    pullRequestsQuery.status === "success" &&
+    (pullRequestsQuery.data ?? []).some(
+      (pr) => pr.number === parsedPrNumber,
+    );
 
   useEffect(() => {
-    if (prParam && selectedPath !== null) {
+    if (!ready || sessionId === null || !prParam) return;
+    if (!hasPositivePrNumber) {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("pr");
+          return next;
+        },
+        { replace: true },
+      );
+      return;
+    }
+    if (pullRequestsQuery.status === "pending") return;
+    if (!prExists) {
+      // 존재하지 않는 ?pr=는 현재 열려 있던 문서를 닫지 않고 파라미터만 비운다(M9).
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("pr");
+          return next;
+        },
+        { replace: true },
+      );
+      return;
+    }
+    if (selectedPath !== null) {
       showDocumentsHome();
     }
-  }, [prParam, selectedPath, showDocumentsHome]);
+  }, [
+    ready,
+    sessionId,
+    prParam,
+    hasPositivePrNumber,
+    pullRequestsQuery.status,
+    prExists,
+    selectedPath,
+    showDocumentsHome,
+    setSearchParams,
+  ]);
 
   useEffect(() => {
     if (!docParam) {

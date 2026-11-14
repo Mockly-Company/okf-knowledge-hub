@@ -832,4 +832,37 @@ describe("DocumentsPage", () => {
     });
     expect(selectSpy).not.toHaveBeenCalledWith(guide.path);
   });
+
+  it("keeps the currently open document open when ?pr= does not exist (M9)", async () => {
+    function SearchEcho() {
+      const location = useLocation();
+      return <span data-testid="search-echo">{location.search}</span>;
+    }
+
+    const gateway = new FakeDocumentsGateway();
+    const guide = gateway.guideCatalog.documents[0];
+    gateway.sessionSnapshot.lastOpenedPath = guide.path;
+    gateway.openPullRequests = [];
+
+    render(
+      <MemoryRouter initialEntries={["/documents?pr=999"]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+            <SearchEcho />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("region", { name: guide.title }),
+    ).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByTestId("search-echo")).toHaveTextContent(/^$/);
+    });
+    expect(
+      screen.getByRole("region", { name: guide.title }),
+    ).toBeVisible();
+  });
 });
