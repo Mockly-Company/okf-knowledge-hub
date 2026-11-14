@@ -3,6 +3,7 @@ import type {
   AgentsMdResolution,
   AiConfig,
   AiGateway,
+  AiTaskLaunchRequest,
   AiTerminalEvent,
   AiToolAvailability,
   AiToolId,
@@ -87,13 +88,23 @@ export class TauriAiGateway implements AiGateway {
     tool: AiToolId,
     size: { cols: number; rows: number },
     onEvent: (event: AiTerminalEvent) => void,
+    taskContext?: AiTaskLaunchRequest,
   ): Promise<string> {
     const channel = this.createChannel();
     channel.onmessage = onEvent;
     try {
+      const args: Record<string, unknown> = {
+        tool,
+        cols: size.cols,
+        rows: size.rows,
+        onEvent: channel,
+      };
+      if (taskContext) {
+        args.taskContext = taskContext;
+      }
       const result = await this.invokeCommand<{ session_id: string }>(
         "start_ai_terminal",
-        { tool, cols: size.cols, rows: size.rows, onEvent: channel },
+        args,
       );
       return result.session_id;
     } catch (error) {

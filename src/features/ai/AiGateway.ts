@@ -43,6 +43,12 @@ export interface AppAgentsMdResolution {
   content: string;
 }
 
+export interface AiTaskLaunchRequest {
+  issueNumber?: number;
+  repositoryFullName?: string | null;
+  documentPath?: string | null;
+}
+
 export interface AiGateway {
   getConfig(): Promise<AiConfig>;
   setConfig(cliCommand: string): Promise<void>;
@@ -51,6 +57,7 @@ export interface AiGateway {
     tool: AiToolId,
     size: { cols: number; rows: number },
     onEvent: (event: AiTerminalEvent) => void,
+    taskContext?: AiTaskLaunchRequest,
   ): Promise<string>;
   writeTerminal(sessionId: string, data: string): Promise<void>;
   resizeTerminal(sessionId: string, cols: number, rows: number): Promise<void>;

@@ -1182,6 +1182,14 @@ impl GithubHttpClient {
                     .iter()
                     .find(|(field, _)| field == "타입")
                     .map(|(_, name)| name.clone());
+                let priority = single_selects
+                    .iter()
+                    .find(|(field, _)| {
+                        field.eq_ignore_ascii_case("Priority")
+                            || field == "우선순위"
+                            || field == "중요도"
+                    })
+                    .map(|(_, name)| name.clone());
                 let mut sub_issues = Vec::new();
                 if let Some(connection) = content.sub_issues {
                     collect_sub_issues(connection.nodes, &mut sub_issues, &mut dropped);
@@ -1226,6 +1234,7 @@ impl GithubHttpClient {
                     status,
                     area,
                     kind,
+                    priority,
                     depends_on,
                     sub_issues,
                 });
@@ -2035,6 +2044,17 @@ impl GithubHttpClient {
                 .await?;
             }
         }
+        if let Some(priority) = input.priority.as_deref() {
+            if let Some((field_id, option_id)) = schema.find_priority_option(priority) {
+                self.set_project_single_select_field(
+                    &schema.project_id,
+                    &item_id,
+                    field_id,
+                    option_id,
+                )
+                .await?;
+            }
+        }
 
         Ok(CreatedProjectIssue {
             id: issue_id,
@@ -2065,21 +2085,47 @@ impl GithubHttpClient {
             )
             .await?;
 
-        let matched = items.into_iter().find(|item| {
-            if item.number != input.issue_number {
-                return false;
-            }
-            match input.repository_full_name.as_deref().map(str::trim) {
-                Some(want) if !want.is_empty() => item
-                    .repository_full_name
-                    .as_deref()
-                    .map(|actual| actual.eq_ignore_ascii_case(want))
-                    .unwrap_or(true),
-                _ => true,
-            }
-        });
+        let wanted_repo = input
+            .repository_full_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
-        let Some(item) = matched else {
+        let mut candidates: Vec<GithubProjectItem> = items
+            .into_iter()
+            .filter(|item| {
+                if item.number != input.issue_number {
+                    return false;
+                }
+                match wanted_repo {
+                    Some(want) => item
+                        .infer_repository_full_name()
+                        .as_deref()
+                        .is_some_and(|actual| actual.eq_ignore_ascii_case(want)),
+                    None => true,
+                }
+            })
+            .collect();
+
+        if wanted_repo.is_none() && candidates.len() > 1 {
+            let distinct_repos: HashSet<String> = candidates
+                .iter()
+                .filter_map(GithubProjectItem::infer_repository_full_name)
+                .map(|r| r.to_ascii_lowercase())
+                .collect();
+            if distinct_repos.len() > 1 {
+                return Err(AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    format!(
+                        "동일한 번호(#{})의 이슈가 여러 저장소에 존재합니다. 대상 저장소(owner/repo)를 함께 지정해 주세요.",
+                        input.issue_number
+                    ),
+                )
+                .with_recovery(RecoveryAction::Retry));
+            }
+        }
+
+        let Some(item) = candidates.drain(..).next() else {
             return Err(AppError::new(
                 ErrorCode::WorkspaceInvalid,
                 format!(
@@ -2107,6 +2153,7 @@ impl GithubHttpClient {
         let mut status_out = item.status;
         let mut area_out = item.area;
         let mut kind_out = item.kind;
+        let mut priority_out = item.priority;
 
         if let Some(status) = input.status {
             let (field_id, option_id) = schema.find_status_option(status).ok_or_else(|| {
@@ -2146,6 +2193,18 @@ impl GithubHttpClient {
                 kind_out = Some(kind.trim().to_owned());
             }
         }
+        if let Some(priority) = input.priority.as_deref() {
+            if let Some((field_id, option_id)) = schema.find_priority_option(priority) {
+                self.set_project_single_select_field(
+                    &schema.project_id,
+                    &item_id,
+                    field_id,
+                    option_id,
+                )
+                .await?;
+                priority_out = Some(priority.trim().to_owned());
+            }
+        }
 
         Ok(UpdatedProjectItem {
             item_id,
@@ -2155,6 +2214,7 @@ impl GithubHttpClient {
             status: status_out,
             area: area_out,
             kind: kind_out,
+            priority: priority_out,
         })
     }
 
@@ -2170,12 +2230,25 @@ impl GithubHttpClient {
             .list_project_items_with_fallback(project_scope, project_owner, project_number)
             .await
         {
-            if let Some(found_id) = items
+            let matching: Vec<_> = items
                 .into_iter()
-                .find(|item| item.number == issue_number)
-                .and_then(|item| item.content_id)
-            {
-                return Ok(Some(found_id));
+                .filter(|item| item.number == issue_number)
+                .collect();
+            if let Some(exact) = matching.iter().find(|item| {
+                item.infer_repository_full_name()
+                    .as_deref()
+                    .is_some_and(|actual| {
+                        actual.eq_ignore_ascii_case(fallback_repository_full_name)
+                    })
+            }) {
+                if let Some(id) = exact.content_id.clone() {
+                    return Ok(Some(id));
+                }
+            }
+            if matching.len() == 1 {
+                if let Some(id) = matching.into_iter().next().and_then(|item| item.content_id) {
+                    return Ok(Some(id));
+                }
             }
         }
         let (owner, name) = split_repository_full_name(fallback_repository_full_name)?;
@@ -3681,6 +3754,7 @@ mod tests {
                 layer: Some(BoardLayer::Backend),
                 status: Some(BoardStatus::Backlog),
                 kind: Some("작업".to_owned()),
+                priority: None,
                 parent_issue_number: Some(10),
                 parent_issue_repository: None,
             })
@@ -3701,6 +3775,7 @@ mod tests {
                 status: Some(BoardStatus::InProgress),
                 layer: None,
                 kind: None,
+                priority: None,
             })
             .await
             .unwrap();

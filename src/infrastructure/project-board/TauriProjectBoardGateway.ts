@@ -1,8 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ActiveProjectResult,
+  CreateBoardIssuesResult,
   ProjectBoardGateway,
+  ProjectBoardIssueDetail,
+  UpdateBoardItemInput,
 } from "@/features/project-board/ProjectBoardGateway";
+import type {
+  CreateBoardIssueInput,
+  ProjectWritableRepository,
+} from "@/features/project-board/backlogDerivation";
 import type {
   BoardIssue,
   ProjectBoard,
@@ -87,6 +94,50 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
     return this.invokeCommand<unknown>("list_linked_projects", {}).then(
       normalizeLinkedProjects,
     );
+  }
+
+  listWritableRepositories(): Promise<ProjectWritableRepository[]> {
+    return this.invokeCommand<ProjectWritableRepository[]>(
+      "list_project_writable_repositories",
+      {},
+    ).catch((error: unknown) => {
+      if (isMissingCommandError(error, "list_project_writable_repositories")) {
+        return [];
+      }
+      throw error;
+    });
+  }
+
+  getIssueDetail(
+    issueNumber: number,
+    repositoryFullName?: string | null,
+  ): Promise<ProjectBoardIssueDetail> {
+    return this.invokeCommand<ProjectBoardIssueDetail>(
+      "get_project_board_issue_detail",
+      {
+        issueNumber,
+        repositoryFullName: repositoryFullName ?? null,
+      },
+    );
+  }
+
+  async createBoardIssues(
+    items: CreateBoardIssueInput[],
+  ): Promise<CreateBoardIssuesResult> {
+    const raw = await this.invokeCommand<CreateBoardIssuesResult>(
+      "create_project_board_issues",
+      { items },
+    );
+    return {
+      created: Array.isArray(raw.created) ? raw.created : [],
+      board: normalizeBoard(raw.board),
+    };
+  }
+
+  updateBoardItem(request: UpdateBoardItemInput): Promise<ProjectBoard> {
+    return this.invokeCommand<ProjectBoard>("update_project_board_item", {
+      request,
+    }).then(normalizeBoard);
   }
 }
 

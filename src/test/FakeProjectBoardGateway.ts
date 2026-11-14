@@ -1,8 +1,16 @@
 import type {
   ActiveProjectResult,
+  CreateBoardIssuesResult,
+  CreatedBoardIssueRef,
   DocsRepositoryRef,
   ProjectBoardGateway,
+  ProjectBoardIssueDetail,
+  UpdateBoardItemInput,
 } from "@/features/project-board/ProjectBoardGateway";
+import type {
+  CreateBoardIssueInput,
+  ProjectWritableRepository,
+} from "@/features/project-board/backlogDerivation";
 import type {
   BoardIssue,
   ProjectBoard,
@@ -20,7 +28,33 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
     | { method: "linkGithubProject"; project: ResolvedGithubProject }
     | { method: "setActiveProject"; id: string }
     | { method: "unlinkGithubProject"; id: string }
+    | { method: "listWritableRepositories" }
+    | {
+        method: "getIssueDetail";
+        issueNumber: number;
+        repositoryFullName?: string | null;
+      }
+    | { method: "createBoardIssues"; items: CreateBoardIssueInput[] }
+    | { method: "updateBoardItem"; request: UpdateBoardItemInput }
   > = [];
+
+  writableRepositories: ProjectWritableRepository[] = [
+    {
+      key: "docs",
+      label: "문서 저장소 (Acme-Org/acme-docs)",
+      fullName: "Acme-Org/acme-docs",
+      role: "docs",
+    },
+    {
+      key: "web",
+      label: "웹 앱 (Acme-Org/acme-web)",
+      fullName: "Acme-Org/acme-web",
+      role: "code",
+    },
+  ];
+
+  readonly issueDetails = new Map<number, ProjectBoardIssueDetail>();
+  private nextIssueNumber = 100;
 
   projectList: ResolvedGithubProject[] | Error = [
     {
@@ -175,4 +209,202 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
       this.activeProjectId = null;
     }
   }
+
+  async listWritableRepositories(): Promise<ProjectWritableRepository[]> {
+    this.calls.push({ method: "listWritableRepositories" });
+    return [...this.writableRepositories];
+  }
+
+  async getIssueDetail(
+    issueNumber: number,
+    repositoryFullName?: string | null,
+  ): Promise<ProjectBoardIssueDetail> {
+    this.calls.push({
+      method: "getIssueDetail",
+      issueNumber,
+      repositoryFullName,
+    });
+    const preset = this.issueDetails.get(issueNumber);
+    if (preset) {
+      return preset;
+    }
+    const found = findIssueRecursive(this.board.issues, issueNumber);
+    if (!found) {
+      throw new Error(`이슈 #${issueNumber}을(를) 찾을 수 없습니다.`);
+    }
+    return {
+      number: found.number,
+      title: found.title,
+      url: found.url,
+      repositoryFullName: repositoryFullName ?? "Acme-Org/acme-web",
+      layer: found.layer,
+      status: found.status,
+      kind: found.kind,
+      priority: "P1",
+      body: `## 완료 조건\n- [ ] ${found.title} 검증 통과`,
+      dependsOn: found.dependsOn ?? null,
+      predecessorDone: found.dependsOn == null,
+      readyToStart:
+        (found.status === "backlog" || found.status === "ready") &&
+        found.dependsOn == null,
+      subIssues: found.children.map((child) => ({
+        number: child.number,
+        title: child.title,
+        url: child.url,
+      })),
+      linkedDocuments: [],
+      linkedPullRequests: [],
+      recommendedWorkingDir: null,
+      priorityOptions: ["P0", "P1", "P2"],
+    };
+  }
+
+  async createBoardIssues(
+    items: CreateBoardIssueInput[],
+  ): Promise<CreateBoardIssuesResult> {
+    this.calls.push({ method: "createBoardIssues", items });
+    const created: CreatedBoardIssueRef[] = [];
+    const createdIssues: BoardIssue[] = [];
+
+    for (const item of items) {
+      const number = this.nextIssueNumber++;
+      const repo =
+        item.repositoryFullName?.trim() ||
+        this.writableRepositories[0]?.fullName ||
+        "Acme-Org/acme-docs";
+      const url = `https://github.com/${repo}/issues/${number}`;
+      const dependsOn =
+        item.dependsOnBatchIndex != null
+          ? created[item.dependsOnBatchIndex]?.number ?? null
+          : item.dependsOn ?? null;
+      const newIssue: BoardIssue = {
+        number,
+        title: item.title,
+        url,
+        layer: item.layer ?? "planning",
+        status: item.status ?? "backlog",
+        children: [],
+        kind: item.kind ?? "작업",
+        dependsOn,
+      };
+      created.push({
+        number,
+        title: item.title,
+        url,
+        repositoryFullName: repo,
+      });
+      createdIssues.push(newIssue);
+
+      const parentNumber =
+        item.parentBatchIndex != null
+          ? created[item.parentBatchIndex]?.number ?? null
+          : item.parentIssueNumber ?? null;
+
+      if (parentNumber != null) {
+        const attached = attachChildRecursive(
+          createdIssues,
+          this.board.issues,
+          parentNumber,
+          newIssue,
+        );
+        if (!attached) {
+          this.board = {
+            ...this.board,
+            issues: [...this.board.issues, newIssue],
+          };
+        }
+      } else {
+        this.board = {
+          ...this.board,
+          issues: [...this.board.issues, newIssue],
+        };
+      }
+    }
+
+    return { created, board: this.board };
+  }
+
+  async updateBoardItem(request: UpdateBoardItemInput): Promise<ProjectBoard> {
+    this.calls.push({ method: "updateBoardItem", request });
+    const updateNodes = (nodes: BoardIssue[]): BoardIssue[] =>
+      nodes.map((node) => {
+        const updatedChildren =
+          node.children.length > 0 ? updateNodes(node.children) : [];
+        if (node.number !== request.issueNumber) {
+          return updatedChildren === node.children
+            ? node
+            : { ...node, children: updatedChildren };
+        }
+        return {
+          ...node,
+          status: request.status ?? node.status,
+          layer: request.layer ?? node.layer,
+          kind: request.kind !== undefined ? request.kind : node.kind,
+          children: updatedChildren,
+        };
+      });
+    this.board = {
+      ...this.board,
+      issues: updateNodes(this.board.issues),
+    };
+    const existingDetail = this.issueDetails.get(request.issueNumber);
+    if (existingDetail) {
+      this.issueDetails.set(request.issueNumber, {
+        ...existingDetail,
+        status: request.status ?? existingDetail.status,
+        layer: request.layer ?? existingDetail.layer,
+        kind: request.kind !== undefined ? request.kind : existingDetail.kind,
+        priority:
+          request.priority !== undefined
+            ? request.priority
+            : existingDetail.priority,
+      });
+    }
+    return this.board;
+  }
+}
+
+function findIssueRecursive(
+  nodes: ReadonlyArray<BoardIssue>,
+  issueNumber: number,
+): BoardIssue | null {
+  for (const node of nodes) {
+    if (node.number === issueNumber) {
+      return node;
+    }
+    if (node.children.length > 0) {
+      const child = findIssueRecursive(node.children, issueNumber);
+      if (child) {
+        return child;
+      }
+    }
+  }
+  return null;
+}
+
+function attachChildRecursive(
+  batchNodes: BoardIssue[],
+  boardNodes: BoardIssue[],
+  parentNumber: number,
+  child: BoardIssue,
+): boolean {
+  for (const candidate of batchNodes) {
+    if (candidate.number === parentNumber && candidate !== child) {
+      candidate.children = [...candidate.children, child];
+      return true;
+    }
+  }
+  const walk = (list: BoardIssue[]): boolean => {
+    for (const node of list) {
+      if (node.number === parentNumber) {
+        node.children = [...node.children, child];
+        return true;
+      }
+      if (node.children.length > 0 && walk(node.children)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return walk(boardNodes);
 }

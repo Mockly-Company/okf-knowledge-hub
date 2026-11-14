@@ -16,6 +16,7 @@ import {
   normalizeDependsOn,
   safeHref,
 } from "@/features/project-board/boardUtils";
+import type { IssueReadinessIndex } from "@/features/project-board/readyFilter";
 
 export interface EpicProgress {
   done: number;
@@ -131,6 +132,50 @@ function OmittedNote({ issue }: { issue: BoardIssue }) {
   ) : null;
 }
 
+function ReadinessBadge({
+  issue,
+  readinessIndex,
+}: {
+  issue: BoardIssue;
+  readinessIndex?: IssueReadinessIndex | null;
+}) {
+  if (!readinessIndex) {
+    return null;
+  }
+  const readiness = readinessIndex.getStatus(issue);
+  if (readiness.state === "ready") {
+    return <StatusBadge tone="success">시작 가능</StatusBadge>;
+  }
+  if (readiness.state === "blocked" && readiness.waitingOn != null) {
+    return (
+      <StatusBadge tone="warning">{`선행 #${readiness.waitingOn} 대기`}</StatusBadge>
+    );
+  }
+  return null;
+}
+
+function DetailActionButton({
+  issue,
+  onSelectIssue,
+}: {
+  issue: BoardIssue;
+  onSelectIssue?: (issue: BoardIssue) => void;
+}) {
+  if (!onSelectIssue) {
+    return null;
+  }
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      aria-label={`#${issue.number} 상세 보기`}
+      onClick={() => onSelectIssue(issue)}
+    >
+      상세
+    </Button>
+  );
+}
+
 const STATUS_ORDER: BoardStatus[] = [
   "backlog",
   "ready",
@@ -178,7 +223,17 @@ function ProgressBar({ progress }: { progress: EpicProgress }) {
   );
 }
 
-function LeafRow({ issue, depth }: { issue: BoardIssue; depth: number }) {
+function LeafRow({
+  issue,
+  depth,
+  readinessIndex,
+  onSelectIssue,
+}: {
+  issue: BoardIssue;
+  depth: number;
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
+}) {
   return (
     <article
       aria-label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
@@ -194,15 +249,22 @@ function LeafRow({ issue, depth }: { issue: BoardIssue; depth: number }) {
           label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
         />
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+        <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
         {issue.kind ? (
           <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
             {issue.kind}
           </span>
         ) : null}
         <OmittedNote issue={issue} />
+        <DetailActionButton issue={issue} onSelectIssue={onSelectIssue} />
       </div>
       {issue.children.length > 0 ? (
-        <ChildList issues={issue.children} depth={depth + 1} />
+        <ChildList
+          issues={issue.children}
+          depth={depth + 1}
+          readinessIndex={readinessIndex}
+          onSelectIssue={onSelectIssue}
+        />
       ) : null}
     </article>
   );
@@ -211,9 +273,13 @@ function LeafRow({ issue, depth }: { issue: BoardIssue; depth: number }) {
 function LayerGroup({
   name,
   issues,
+  readinessIndex,
+  onSelectIssue,
 }: {
   name: string;
   issues: BoardIssue[];
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
 }) {
   const ordered = useMemo(
     () =>
@@ -234,7 +300,13 @@ function LayerGroup({
       </h3>
       <div className="grid gap-[var(--space-2)]">
         {siblingKeys(ordered).map((key, index) => (
-          <FlowNodeCard key={key} issue={ordered[index]} isBranch={false} />
+          <FlowNodeCard
+            key={key}
+            issue={ordered[index]}
+            isBranch={false}
+            readinessIndex={readinessIndex}
+            onSelectIssue={onSelectIssue}
+          />
         ))}
       </div>
     </section>
@@ -321,9 +393,13 @@ interface FlowTreeNode {
 function FlowNodeCard({
   issue,
   isBranch,
+  readinessIndex,
+  onSelectIssue,
 }: {
   issue: BoardIssue;
   isBranch: boolean;
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
 }) {
   const progress = useMemo(() => epicProgress(issue), [issue]);
   return (
@@ -331,14 +407,18 @@ function FlowNodeCard({
       aria-label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
       className={`grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)] ${isBranch ? "ring-1 ring-[var(--color-primary-action)]" : ""}`}
     >
-      <h3 className="m-0 text-[length:inherit] font-[number:var(--font-weight-control)]">
-        <IssueTitle
-          issue={issue}
-          label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
-        />
-      </h3>
+      <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+        <h3 className="m-0 text-[length:inherit] font-[number:var(--font-weight-control)]">
+          <IssueTitle
+            issue={issue}
+            label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
+          />
+        </h3>
+        <DetailActionButton issue={issue} onSelectIssue={onSelectIssue} />
+      </div>
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+        <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
         <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
           {layerName(issue.layer)}
           {issue.kind ? ` · ${issue.kind}` : null}
@@ -348,7 +428,12 @@ function FlowNodeCard({
       {issue.children.length > 0 ? (
         <div className="grid gap-[var(--space-1)]">
           <ProgressBar progress={progress} />
-          <ChildList issues={issue.children} depth={1} />
+          <ChildList
+            issues={issue.children}
+            depth={1}
+            readinessIndex={readinessIndex}
+            onSelectIssue={onSelectIssue}
+          />
         </div>
       ) : null}
     </article>
@@ -373,10 +458,14 @@ function FlowTreeRow({
   node,
   isLast,
   isRoot,
+  readinessIndex,
+  onSelectIssue,
 }: {
   node: FlowTreeNode;
   isLast: boolean;
   isRoot: boolean;
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
 }) {
   const childKeys = siblingKeys(node.children.map((child) => child.issue));
   return (
@@ -387,6 +476,8 @@ function FlowTreeRow({
           <FlowNodeCard
             issue={node.issue}
             isBranch={node.children.length > 0}
+            readinessIndex={readinessIndex}
+            onSelectIssue={onSelectIssue}
           />
           {node.children.length > 0 ? (
             <ol className="m-0 grid list-none gap-0 p-0">
@@ -396,6 +487,8 @@ function FlowTreeRow({
                   node={child}
                   isLast={index === node.children.length - 1}
                   isRoot={false}
+                  readinessIndex={readinessIndex}
+                  onSelectIssue={onSelectIssue}
                 />
               ))}
             </ol>
@@ -470,9 +563,13 @@ function buildForest(steps: FlowStep[]): FlowTreeNode[] {
 function ForestList({
   forest,
   label,
+  readinessIndex,
+  onSelectIssue,
 }: {
   forest: FlowTreeNode[];
   label?: string;
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
 }) {
   const rootKeys = siblingKeys(forest.map((root) => root.issue));
   return (
@@ -486,27 +583,50 @@ function ForestList({
           node={root}
           isLast={index === forest.length - 1}
           isRoot
+          readinessIndex={readinessIndex}
+          onSelectIssue={onSelectIssue}
         />
       ))}
     </ol>
   );
 }
 
-function FlowSteps({ steps, label }: { steps: FlowStep[]; label?: string }) {
+function FlowSteps({
+  steps,
+  label,
+  readinessIndex,
+  onSelectIssue,
+}: {
+  steps: FlowStep[];
+  label?: string;
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
+}) {
   const forest = useMemo(() => buildForest(steps), [steps]);
   if (steps.length === 0) {
     return null;
   }
-  return <ForestList forest={forest} label={label} />;
+  return (
+    <ForestList
+      forest={forest}
+      label={label}
+      readinessIndex={readinessIndex}
+      onSelectIssue={onSelectIssue}
+    />
+  );
 }
 
 /** 형제 목록을 흐름(의존 연결)과 낱개로 나눠 그린다. 모든 깊이에 적용. */
 function ChildList({
   issues,
   depth,
+  readinessIndex,
+  onSelectIssue,
 }: {
   issues: BoardIssue[];
   depth: number;
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
 }) {
   const flow = useMemo(() => buildFlow(issues), [issues]);
   const ordered = useMemo(
@@ -519,9 +639,19 @@ function ChildList({
   );
   return (
     <div className="grid gap-[var(--space-1)]">
-      <FlowSteps steps={flow.steps} />
+      <FlowSteps
+        steps={flow.steps}
+        readinessIndex={readinessIndex}
+        onSelectIssue={onSelectIssue}
+      />
       {siblingKeys(ordered).map((key, index) => (
-        <LeafRow key={key} issue={ordered[index]} depth={depth} />
+        <LeafRow
+          key={key}
+          issue={ordered[index]}
+          depth={depth}
+          readinessIndex={readinessIndex}
+          onSelectIssue={onSelectIssue}
+        />
       ))}
     </div>
   );
@@ -530,9 +660,13 @@ function ChildList({
 function EpicCard({
   issue,
   defaultOpen,
+  readinessIndex,
+  onSelectIssue,
 }: {
   issue: BoardIssue;
   defaultOpen: boolean;
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const bodyId = useId();
@@ -575,23 +709,32 @@ function EpicCard({
             />
           </h2>
           <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+          <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
           {issue.kind ? (
             <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
               {issue.kind}
             </span>
           ) : null}
           <OmittedNote issue={issue} />
+          <DetailActionButton issue={issue} onSelectIssue={onSelectIssue} />
         </div>
         <ProgressBar progress={progress} />
       </div>
       {open ? (
         <div id={bodyId} className="grid gap-[var(--space-3)]">
-          <FlowSteps steps={flow.steps} label={`${issue.title} 흐름 요약`} />
+          <FlowSteps
+            steps={flow.steps}
+            label={`${issue.title} 흐름 요약`}
+            readinessIndex={readinessIndex}
+            onSelectIssue={onSelectIssue}
+          />
           {groups.map((group) => (
             <LayerGroup
               key={group.layer}
               name={layerName(group.layer)}
               issues={group.issues}
+              readinessIndex={readinessIndex}
+              onSelectIssue={onSelectIssue}
             />
           ))}
         </div>
@@ -600,7 +743,15 @@ function EpicCard({
   );
 }
 
-export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
+export function ProjectTree({
+  issues,
+  readinessIndex = null,
+  onSelectIssue,
+}: {
+  issues: BoardIssue[];
+  readinessIndex?: IssueReadinessIndex | null;
+  onSelectIssue?: (issue: BoardIssue) => void;
+}) {
   // 트리가 한 화면에 둘 이상 렌더돼도 헤딩 ID가 겹치지 않게 한다.
   const singlesHeadingId = useId();
   // 훅은 early return보다 앞에서 호출한다(훅 순서 규칙).
@@ -635,12 +786,23 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
         묶음 위·아래 순서는 진행 순서가 아닙니다.
       </p>
       {siblingKeys(epics).map((key, index) => (
-        <EpicCard key={key} issue={epics[index]} defaultOpen={autoExpand} />
+        <EpicCard
+          key={key}
+          issue={epics[index]}
+          defaultOpen={autoExpand}
+          readinessIndex={readinessIndex}
+          onSelectIssue={onSelectIssue}
+        />
       ))}
       {singles.length > 0 ? (
         <section aria-labelledby={singlesHeadingId}>
           <h2 id={singlesHeadingId} className="m-0 mb-[var(--space-3)]">단일 항목</h2>
-          <FlowSteps steps={singleFlow.steps} label="단일 항목 흐름 요약" />
+          <FlowSteps
+            steps={singleFlow.steps}
+            label="단일 항목 흐름 요약"
+            readinessIndex={readinessIndex}
+            onSelectIssue={onSelectIssue}
+          />
           <div className="grid gap-[var(--space-2)]">
             {siblingKeys(loneSingles).map((key, index) => {
               const issue = loneSingles[index];
@@ -654,10 +816,12 @@ export function ProjectTree({ issues }: { issues: BoardIssue[] }) {
                   <StatusBadge tone="neutral">
                     {statusName(issue.status)}
                   </StatusBadge>
+                  <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
                   <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
                     {layerName(issue.layer)}
                   </span>
                   <OmittedNote issue={issue} />
+                  <DetailActionButton issue={issue} onSelectIssue={onSelectIssue} />
                 </article>
               );
             })}

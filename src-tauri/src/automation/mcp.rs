@@ -236,22 +236,13 @@ async fn dispatch_tool_call(
             Ok(serde_json::to_value(outcome).unwrap_or(Value::Null))
         }
         "okhub_board_list" => {
-            let layer = args
-                .get("layer")
-                .and_then(Value::as_str)
-                .and_then(parse_board_layer_arg);
-            let status = args
-                .get("status")
-                .and_then(Value::as_str)
-                .and_then(parse_board_status_arg);
+            let layer = optional_layer_arg(args, "layer")?;
+            let status = optional_status_arg(args, "status")?;
             let items = runtime.list_board_items(layer, status).await?;
             Ok(serde_json::to_value(items).unwrap_or(Value::Null))
         }
         "okhub_board_ready" => {
-            let layer = args
-                .get("layer")
-                .and_then(Value::as_str)
-                .and_then(parse_board_layer_arg);
+            let layer = optional_layer_arg(args, "layer")?;
             let ready = runtime.list_ready_items(layer).await?;
             Ok(serde_json::to_value(ready).unwrap_or(Value::Null))
         }
@@ -259,36 +250,43 @@ async fn dispatch_tool_call(
             let repo = args.get("repository").and_then(Value::as_str);
             let title = required_str(args, "title")?;
             let body = args.get("body").and_then(Value::as_str).unwrap_or_default();
-            let layer = args
-                .get("layer")
-                .and_then(Value::as_str)
-                .and_then(parse_board_layer_arg);
-            let status = args
-                .get("status")
-                .and_then(Value::as_str)
-                .and_then(parse_board_status_arg);
+            let layer = optional_layer_arg(args, "layer")?;
+            let status = optional_status_arg(args, "status")?;
             let kind = args.get("kind").and_then(Value::as_str).map(str::to_owned);
-            let parent = args.get("parentIssueNumber").and_then(Value::as_u64);
-            let depends_on = args.get("dependsOn").and_then(Value::as_u64);
+            let priority = args
+                .get("priority")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            let parent = optional_u64_arg(args, "parentIssueNumber")?;
+            let depends_on = optional_u64_arg(args, "dependsOn")?;
             let created = runtime
-                .create_board_issue(repo, title, body, layer, status, kind, parent, depends_on)
+                .create_board_issue(
+                    repo, title, body, layer, status, kind, priority, parent, depends_on,
+                )
+                .await?;
+            Ok(serde_json::to_value(created).unwrap_or(Value::Null))
+        }
+        "okhub_board_derive_backlog" => {
+            let number = required_u64(args, "number")?;
+            let repo = args.get("repository").and_then(Value::as_str);
+            let doc_path = args.get("documentPath").and_then(Value::as_str);
+            let created = runtime
+                .derive_backlog_from_issue(number, repo, doc_path)
                 .await?;
             Ok(serde_json::to_value(created).unwrap_or(Value::Null))
         }
         "okhub_board_update_status" => {
             let number = required_u64(args, "number")?;
-            let status = args
-                .get("status")
-                .and_then(Value::as_str)
-                .and_then(parse_board_status_arg);
-            let layer = args
-                .get("layer")
-                .and_then(Value::as_str)
-                .and_then(parse_board_layer_arg);
+            let status = optional_status_arg(args, "status")?;
+            let layer = optional_layer_arg(args, "layer")?;
             let kind = args.get("kind").and_then(Value::as_str).map(str::to_owned);
+            let priority = args
+                .get("priority")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             let repo = args.get("repository").and_then(Value::as_str);
             let updated = runtime
-                .update_board_item_status(number, status, layer, kind, repo)
+                .update_board_item_status(number, status, layer, kind, priority, repo)
                 .await?;
             Ok(serde_json::to_value(updated).unwrap_or(Value::Null))
         }
@@ -327,6 +325,58 @@ fn required_u64(args: &Value, key: &str) -> Result<u64, AppError> {
                 format!("필수 양의 정수 인자 `{key}`가 필요합니다."),
             )
         })
+}
+
+fn optional_u64_arg(args: &Value, key: &str) -> Result<Option<u64>, AppError> {
+    let Some(val) = args.get(key) else {
+        return Ok(None);
+    };
+    if val.is_null() {
+        return Ok(None);
+    }
+    let parsed = val.as_u64().filter(|n| *n > 0).ok_or_else(|| {
+        AppError::new(
+            crate::error::ErrorCode::WorkspaceInvalid,
+            format!("`{key}` 인자에는 양의 정수를 지정해 주세요."),
+        )
+    })?;
+    Ok(Some(parsed))
+}
+
+fn optional_layer_arg(
+    args: &Value,
+    key: &str,
+) -> Result<Option<crate::project_board::model::BoardLayer>, AppError> {
+    let Some(raw) = args.get(key).and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_board_layer_arg(raw).map(Some).ok_or_else(|| {
+        AppError::new(
+            crate::error::ErrorCode::WorkspaceInvalid,
+            format!("지원하지 않는 `{key}` 값입니다: {raw}"),
+        )
+    })
+}
+
+fn optional_status_arg(
+    args: &Value,
+    key: &str,
+) -> Result<Option<crate::project_board::model::BoardStatus>, AppError> {
+    let Some(raw) = args.get(key).and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_board_status_arg(raw).map(Some).ok_or_else(|| {
+        AppError::new(
+            crate::error::ErrorCode::WorkspaceInvalid,
+            format!("지원하지 않는 `{key}` 값입니다: {raw}"),
+        )
+    })
 }
 
 pub fn mcp_tool_definitions() -> Vec<Value> {
@@ -439,14 +489,28 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
                     "layer": { "type": "string", "description": "planning | design | frontend | backend" },
                     "status": { "type": "string", "description": "backlog | ready | in_progress | in_review | done" },
                     "kind": { "type": "string", "description": "예: 작업, 스토리, 기능, 에픽" },
+                    "priority": { "type": "string", "description": "예: P0, P1, P2, High, Medium, Low" },
                     "parentIssueNumber": { "type": "integer" },
                     "dependsOn": { "type": "integer" }
                 }
             }
         }),
         json!({
+            "name": "okhub_board_derive_backlog",
+            "description": "완료된 [기획] 또는 [디자인] 상위 이슈에서 [백엔드]/[프론트엔드] 하위 백로그(Sub-issues + 이전 단계 체인)를 일괄 파생·등록합니다.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["number"],
+                "properties": {
+                    "number": { "type": "integer" },
+                    "repository": { "type": "string" },
+                    "documentPath": { "type": "string" }
+                }
+            }
+        }),
+        json!({
             "name": "okhub_board_update_status",
-            "description": "현재 선택된 GitHub Project에서 지정한 이슈의 Status/영역/타입 필드를 갱신합니다.",
+            "description": "현재 선택된 GitHub Project에서 지정한 이슈의 Status/영역/타입/Priority 필드를 갱신합니다.",
             "inputSchema": {
                 "type": "object",
                 "required": ["number"],
@@ -455,7 +519,8 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
                     "repository": { "type": "string" },
                     "status": { "type": "string" },
                     "layer": { "type": "string" },
-                    "kind": { "type": "string" }
+                    "kind": { "type": "string" },
+                    "priority": { "type": "string" }
                 }
             }
         }),

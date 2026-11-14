@@ -8,6 +8,7 @@ import {
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { PageHeader } from "@/components/patterns/PageHeader";
+import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import {
   StatusFeedback,
@@ -20,6 +21,10 @@ import type {
   AiToolId,
   BuiltinAiToolId,
 } from "@/features/ai/AiGateway";
+import {
+  clearPendingAiLaunch,
+  usePendingAiLaunch,
+} from "@/features/ai/pendingAiLaunch";
 import { AiTerminalPanel } from "@/features/ai/AiTerminalPanel";
 import {
   DEFAULT_WORKSPACE_SCOPE,
@@ -90,6 +95,7 @@ export function AiPage({
   );
   const [openingTool, setOpeningTool] = useState<AiToolId | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  const pendingLaunch = usePendingAiLaunch();
 
   useEffect(() => {
     setOpeningTool(null);
@@ -148,10 +154,16 @@ export function AiPage({
   const hasCustomTerminal = Boolean(configQuery.data?.cli_command.trim());
   const openTerminal = async (tool: AiToolId) => {
     const requestScopeKey = scopeKey;
+    const launchRequest = pendingLaunch?.request;
     setOpeningTool(tool);
     setOpenError(null);
     try {
-      await terminalStore.open(tool);
+      if (launchRequest) {
+        await terminalStore.open(tool, launchRequest);
+        clearPendingAiLaunch();
+      } else {
+        await terminalStore.open(tool);
+      }
     } catch (error) {
       if (scopeKeyRef.current === requestScopeKey) {
         setOpenError(
@@ -250,6 +262,36 @@ export function AiPage({
             <StatusFeedbackDescription>{contextError}</StatusFeedbackDescription>
           </StatusFeedback>
         </div>
+      ) : null}
+      {pendingLaunch ? (
+        <section
+          aria-label="준비된 작업 컨텍스트"
+          className="mt-[var(--space-4)] flex flex-wrap items-center justify-between gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-4)]"
+        >
+          <div className="grid gap-[var(--space-1)]">
+            <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+              <StatusBadge tone="info">격리 worktree 실행 대기</StatusBadge>
+              {pendingLaunch.targetDescription ? (
+                <span className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+                  {pendingLaunch.targetDescription}
+                </span>
+              ) : null}
+            </div>
+            <p className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+              {pendingLaunch.label}
+            </p>
+            <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+              아래 AI 도구를 선택하면 격리된 git worktree를 열고 `.okf/AGENTS.md`·연결 문서·완료 조건을 자동 주입합니다.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => clearPendingAiLaunch()}
+          >
+            컨텍스트 해제
+          </Button>
+        </section>
       ) : null}
       <div className="mt-[var(--space-6)] grid gap-[var(--space-3)]">
         <div className="grid gap-[var(--space-2)]">

@@ -1,5 +1,6 @@
 import { EllipsisVertical, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useInRouterContext, useNavigate } from "react-router-dom";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button, IconButton } from "@/components/ui/button";
 import {
@@ -13,7 +14,12 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { setPendingAiLaunch } from "@/features/ai/pendingAiLaunch";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
+import { BacklogDeriveDialog } from "@/features/project-board/BacklogDeriveDialog";
+import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import type { ProjectWritableRepository } from "@/features/project-board/backlogDerivation";
+import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDocuments } from "../DocumentsProvider";
 import type { DocumentContent } from "../model";
@@ -21,6 +27,23 @@ import type { DisplayDensity } from "@/features/preferences/display-density";
 import { MarkdownDocument } from "./MarkdownDocument";
 import { DocumentHistory } from "./DocumentHistory";
 import { DocumentOverview } from "./DocumentOverview";
+
+const sharedBoardGateway = new TauriProjectBoardGateway();
+
+function ReaderRouterRedirect({
+  to,
+  onNavigated,
+}: {
+  to: string;
+  onNavigated: () => void;
+}) {
+  const navigate = useNavigate();
+  useEffect(() => {
+    navigate(to);
+    onNavigated();
+  }, [navigate, to, onNavigated]);
+  return null;
+}
 
 type ContextTab = "overview" | "history";
 
@@ -47,6 +70,7 @@ export function DocumentReader({
   navigation,
   onEdit,
   versionLabel,
+  projectBoardGateway = sharedBoardGateway,
 }: {
   document: DocumentContent;
   notice?: string | null;
@@ -54,7 +78,9 @@ export function DocumentReader({
   navigation?: ReactNode;
   onEdit?(): void;
   versionLabel?: string;
+  projectBoardGateway?: ProjectBoardGateway;
 }) {
+  const inRouterContext = useInRouterContext();
   const {
     state,
     authoringState,
@@ -69,6 +95,10 @@ export function DocumentReader({
     document.companionHtml ? "html" : "markdown",
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  const [deriveDialogOpen, setDeriveDialogOpen] = useState(false);
+  const [writableRepos, setWritableRepos] = useState<ProjectWritableRepository[]>([]);
+  const [deriveNotice, setDeriveNotice] = useState<string | null>(null);
+  const [navigateTarget, setNavigateTarget] = useState<string | null>(null);
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const isNarrow = useSyncExternalStore(subscribeNarrow, isNarrowScreen, () => false);
   const [mobileContextOpen, setMobileContextOpen] = useState(false);
@@ -80,7 +110,45 @@ export function DocumentReader({
     if (state.selectedVersion === null) {
       setViewMode(document.companionHtml ? "html" : "markdown");
     }
+    setDeriveNotice(null);
   }, [document.summary.path, document.companionHtml, state.selectedVersion]);
+
+  useEffect(() => {
+    if (!deriveDialogOpen || !projectBoardGateway.listWritableRepositories) {
+      return;
+    }
+    let cancelled = false;
+    void projectBoardGateway
+      .listWritableRepositories()
+      .then((repos) => {
+        if (!cancelled) {
+          setWritableRepos(repos);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setWritableRepos([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deriveDialogOpen, projectBoardGateway]);
+
+  const handleStartAiFromDoc = () => {
+    setPendingAiLaunch({
+      request: {
+        documentPath: document.summary.path,
+        repositoryFullName: state.repositoryFullName || null,
+      },
+      label: `${document.summary.title} (${document.summary.path})`,
+      layer: "planning",
+      targetDescription: "문서 저장소 격리 worktree",
+    });
+    if (inRouterContext) {
+      setNavigateTarget("/ai");
+    }
+  };
   const hasCompanionHtml = Boolean(document.companionHtml) && state.selectedVersion === null;
   const effectiveView = hasCompanionHtml ? viewMode : "markdown";
   const headerRef = useRef<HTMLElement>(null);
@@ -167,14 +235,32 @@ export function DocumentReader({
             </TabsList>
           ) : null}
           {state.selectedVersion === null ? (
-            <Button
-              disabled={authoringState.existingEdit.status === "opening"}
-              onClick={onEdit ?? editSelectedDocument}
-            >
-              {authoringState.existingEdit.status === "opening"
-                ? "편집 준비 중…"
-                : "편집"}
-            </Button>
+            <>
+              {projectBoardGateway.createBoardIssues ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => setDeriveDialogOpen(true)}
+                >
+                  백로그 파생
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleStartAiFromDoc}
+              >
+                AI로 작업 시작
+              </Button>
+              <Button
+                disabled={authoringState.existingEdit.status === "opening"}
+                onClick={onEdit ?? editSelectedDocument}
+              >
+                {authoringState.existingEdit.status === "opening"
+                  ? "편집 준비 중…"
+                  : "편집"}
+              </Button>
+            </>
           ) : null}
           <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
             <DropdownMenuTrigger asChild>
@@ -224,6 +310,11 @@ export function DocumentReader({
       {notice ? (
         <div className="documents-page__notice" role="alert">
           <span>{notice}</span>
+        </div>
+      ) : null}
+      {deriveNotice ? (
+        <div className="documents-page__notice" role="status">
+          <span>{deriveNotice}</span>
         </div>
       ) : null}
       {authoringState.existingEdit.error ? (
@@ -296,6 +387,35 @@ export function DocumentReader({
           <DialogBody id="document-reader-context" className="document-reader__context-scroll">{contextContents}</DialogBody>
         </DialogContent>
       </Dialog> : null}
+      {projectBoardGateway.createBoardIssues ? (
+        <BacklogDeriveDialog
+          open={deriveDialogOpen}
+          onOpenChange={setDeriveDialogOpen}
+          source={
+            deriveDialogOpen
+              ? {
+                  kind: "document",
+                  documentTitle: document.summary.title,
+                  documentPath: document.summary.path,
+                  markdown: document.markdown,
+                }
+              : null
+          }
+          repositories={writableRepos}
+          onSubmit={async (items) => {
+            const res = await projectBoardGateway.createBoardIssues!(items);
+            setDeriveNotice(
+              `보드에 ${res.created.length}개의 백로그 이슈가 등록되었습니다.`,
+            );
+          }}
+        />
+      ) : null}
+      {inRouterContext && navigateTarget ? (
+        <ReaderRouterRedirect
+          to={navigateTarget}
+          onNavigated={() => setNavigateTarget(null)}
+        />
+      ) : null}
     </section>
   );
 }

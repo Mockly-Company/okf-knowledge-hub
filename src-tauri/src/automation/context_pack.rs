@@ -39,6 +39,7 @@ pub struct IssueContextPack {
     pub layer: BoardLayer,
     pub status: Option<BoardStatus>,
     pub kind: Option<String>,
+    pub priority: Option<String>,
     pub body: String,
     pub depends_on: Option<u64>,
     pub predecessor_done: bool,
@@ -321,6 +322,7 @@ pub fn assemble_issue_context_pack(
         layer,
         status,
         kind: target.kind.clone(),
+        priority: target.priority.clone(),
         body,
         depends_on: target.depends_on,
         predecessor_done,
@@ -362,6 +364,7 @@ mod tests {
             status: Some(status.to_owned()),
             area: Some(area.to_owned()),
             kind: Some("작업".to_owned()),
+            priority: None,
             depends_on,
             sub_issues: Vec::new(),
         }
