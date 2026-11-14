@@ -6,7 +6,7 @@ class UnavailablePersonalDashboardGateway implements PersonalDashboardGateway {
   async getPersonalDashboard() {
     return {
       viewerLogin: null,
-      fetchedAt: "",
+      fetchedAt: new Date().toISOString(),
       lastSeenAt: null,
       unreadNewCount: 0,
       readyTaskCount: 0,
@@ -24,7 +24,7 @@ class UnavailablePersonalDashboardGateway implements PersonalDashboardGateway {
   }
 
   async markDashboardSeen(timestamp?: string | null) {
-    return timestamp ?? "";
+    return timestamp ?? new Date().toISOString();
   }
 }
 

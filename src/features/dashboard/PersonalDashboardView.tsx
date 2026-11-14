@@ -327,7 +327,8 @@ function PersonalDashboardInner({
 
         <section
           aria-label="대시보드 요약"
-          className="grid grid-cols-1 gap-[var(--space-3)] sm:grid-cols-3"
+          aria-busy={isFetching}
+          className={`grid grid-cols-1 gap-[var(--space-3)] sm:grid-cols-3${isFetching ? " opacity-75 transition-opacity" : ""}`}
         >
           <div className="grid gap-[var(--space-1)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] px-[var(--space-4)] py-[var(--space-3)]">
             <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">

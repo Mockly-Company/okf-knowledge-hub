@@ -629,6 +629,54 @@ fn aggregate_pr_file_outcomes(
     (files_by_idx, failure)
 }
 
+#[derive(Debug)]
+struct DocsPrListsPartition {
+    open: Vec<DocsPullRequestSummary>,
+    merged: Vec<DocsPullRequestSummary>,
+    failure: Option<DashboardWorkspaceFailure>,
+}
+
+fn partition_open_and_merged_pr_results(
+    workspace: &HubWorkspace,
+    open_res: CommandResult<Vec<DocsPullRequestSummary>>,
+    merged_res: CommandResult<Vec<DocsPullRequestSummary>>,
+) -> Result<DocsPrListsPartition, DashboardWorkspaceFailure> {
+    let docs_failure = |message: String| DashboardWorkspaceFailure {
+        workspace_id: workspace.id.clone(),
+        workspace_title: workspace.title.clone(),
+        scope: DashboardFailureScope::Docs,
+        message,
+    };
+
+    match (open_res, merged_res) {
+        (Ok(open), Ok(merged)) => Ok(DocsPrListsPartition {
+            open,
+            merged,
+            failure: None,
+        }),
+        (Ok(open), Err(merged_err)) => Ok(DocsPrListsPartition {
+            open,
+            merged: Vec::new(),
+            failure: Some(docs_failure(format!(
+                "{} (최근 머지된 PR 조회 실패)",
+                merged_err.message
+            ))),
+        }),
+        (Err(open_err), Ok(merged)) => Ok(DocsPrListsPartition {
+            open: Vec::new(),
+            merged,
+            failure: Some(docs_failure(format!(
+                "{} (열린 PR 조회 실패)",
+                open_err.message
+            ))),
+        }),
+        (Err(open_err), Err(merged_err)) => Err(docs_failure(format!(
+            "열린 PR({}) 및 머지된 PR({}) 조회 실패",
+            open_err.message, merged_err.message
+        ))),
+    }
+}
+
 async fn fetch_workspace_docs_notifications(
     github: &Arc<GithubService>,
     workspace: &HubWorkspace,
@@ -641,18 +689,11 @@ async fn fetch_workspace_docs_notifications(
         github.list_open_pull_requests(repo_full_name),
         github.list_recent_merged_pull_requests(repo_full_name, cutoff),
     );
-    let open_prs = open_res.map_err(|error| DashboardWorkspaceFailure {
-        workspace_id: workspace.id.clone(),
-        workspace_title: workspace.title.clone(),
-        scope: DashboardFailureScope::Docs,
-        message: error.message,
-    })?;
-    let merged_prs = merged_res.map_err(|error| DashboardWorkspaceFailure {
-        workspace_id: workspace.id.clone(),
-        workspace_title: workspace.title.clone(),
-        scope: DashboardFailureScope::Docs,
-        message: error.message,
-    })?;
+    let DocsPrListsPartition {
+        open: open_prs,
+        merged: merged_prs,
+        failure: list_failure,
+    } = partition_open_and_merged_pr_results(workspace, open_res, merged_res)?;
 
     let mut seen_numbers = HashSet::new();
     let mut combined: Vec<(DashboardNotificationKind, DocsPullRequestSummary)> = Vec::new();
@@ -689,8 +730,15 @@ async fn fetch_workspace_docs_notifications(
             }
         }
     }
-    let (mut files_by_idx, failure) =
+    let (mut files_by_idx, files_failure) =
         aggregate_pr_file_outcomes(workspace, repo_full_name, file_outcomes, join_failures);
+    let failure = match (list_failure, files_failure) {
+        (Some(mut first), Some(second)) => {
+            first.message = format!("{}; {}", first.message, second.message);
+            Some(first)
+        }
+        (first, second) => first.or(second),
+    };
 
     let enriched = combined
         .into_iter()
@@ -1509,5 +1557,50 @@ mod tests {
         let err = super::format_utc_pair(negative_year)
             .expect_err("out-of-range RFC3339 year must return AppError instead of empty string");
         assert_eq!(err.code, crate::error::ErrorCode::CacheUnavailable);
+    }
+
+    #[test]
+    fn partition_open_and_merged_pr_results_preserves_partial_success() {
+        let ws = sample_workspace("project:1", "Board");
+        let make_pr = |number: u64| DocsPullRequestSummary {
+            number,
+            title: format!("PR #{number}"),
+            body: String::new(),
+            html_url: format!("https://example.test/pr/{number}"),
+            author_login: "alice".into(),
+            head_ref: "feat".into(),
+            head_sha: "abc".into(),
+            base_ref: "main".into(),
+            base_sha: "def".into(),
+            is_draft: false,
+            mergeable: None,
+            updated_at: "2026-11-14T10:00:00Z".into(),
+            merged_at: None,
+        };
+
+        let partition = super::partition_open_and_merged_pr_results(
+            &ws,
+            Ok(vec![make_pr(1)]),
+            Err(AppError::new(
+                ErrorCode::GithubUnavailable,
+                "merged lookup timed out",
+            )),
+        )
+        .expect("open PRs should be preserved when merged lookup fails");
+        assert_eq!(partition.open.len(), 1);
+        assert!(partition.merged.is_empty());
+        let failure = partition.failure.expect("partial docs failure expected");
+        assert_eq!(failure.scope, DashboardFailureScope::Docs);
+        assert!(failure.message.contains("merged lookup timed out"));
+
+        let err = super::partition_open_and_merged_pr_results(
+            &ws,
+            Err(AppError::new(ErrorCode::GithubUnavailable, "open err")),
+            Err(AppError::new(ErrorCode::GithubUnavailable, "merged err")),
+        )
+        .expect_err("both failing should yield workspace Docs failure");
+        assert_eq!(err.scope, DashboardFailureScope::Docs);
+        assert!(err.message.contains("open err"));
+        assert!(err.message.contains("merged err"));
     }
 }

@@ -221,4 +221,15 @@ describe("TauriPersonalDashboardGateway", () => {
     expect(result.unreadNotificationCount).toBe(1);
     expect(result.totalUnreadCount).toBe(2);
   });
+
+  it("fallback web gateway returns valid non-empty RFC3339 timestamps", async () => {
+    const { createPersonalDashboardGateway } = await import(
+      "./createPersonalDashboardGateway"
+    );
+    const gateway = createPersonalDashboardGateway(() => false);
+    const snapshot = await gateway.getPersonalDashboard();
+    expect(Number.isNaN(Date.parse(snapshot.fetchedAt))).toBe(false);
+    const seenAt = await gateway.markDashboardSeen();
+    expect(Number.isNaN(Date.parse(seenAt))).toBe(false);
+  });
 });
