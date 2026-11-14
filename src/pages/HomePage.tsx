@@ -24,7 +24,8 @@ export function HomePage({
   const isPreviewMode =
     tasks !== undefined ||
     insights !== undefined ||
-    onOpenReview !== undefined;
+    onOpenReview !== undefined ||
+    onOpenDocuments !== undefined;
 
   if (!isPreviewMode) {
     return <PersonalDashboardView />;

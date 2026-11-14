@@ -43,6 +43,15 @@ describe("TauriPersonalDashboardGateway", () => {
       notifications: [
         { id: "bad", workspaceId: "ws-1" },
         {
+          id: "open:ws-1:19",
+          workspaceId: "ws-1",
+          kind: "open_pr",
+          prNumber: 19,
+          title: "PR #19 missing timestamp",
+          url: "https://github.com/Mockly-Company/hub-knowledge/pull/19",
+          timestamp: "   ",
+        },
+        {
           id: "open:ws-1:18",
           workspaceId: "ws-1",
           workspaceTitle: "OkHub",

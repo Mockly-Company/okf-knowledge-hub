@@ -550,13 +550,68 @@ fn build_notifications_for_prs(
         .collect()
 }
 
+struct DocsNotificationFetchOutcome {
+    items: Vec<DashboardNotificationItem>,
+    failure: Option<DashboardWorkspaceFailure>,
+}
+
+fn aggregate_pr_file_outcomes(
+    workspace: &HubWorkspace,
+    repo_full_name: &str,
+    outcomes: Vec<(usize, u64, Result<Vec<PullRequestChangedFile>, AppError>)>,
+    join_failures: usize,
+) -> (
+    HashMap<usize, Vec<PullRequestChangedFile>>,
+    Option<DashboardWorkspaceFailure>,
+) {
+    let mut files_by_idx = HashMap::new();
+    let mut api_failures = 0usize;
+    let mut first_error_msg: Option<String> = None;
+
+    for (idx, pr_number, result) in outcomes {
+        match result {
+            Ok(files) => {
+                files_by_idx.insert(idx, files);
+            }
+            Err(err) => {
+                eprintln!(
+                    "dashboard pr #{pr_number} files fetch failed ({repo_full_name}): {}",
+                    err.message
+                );
+                api_failures += 1;
+                if first_error_msg.is_none() {
+                    first_error_msg = Some(err.message);
+                }
+            }
+        }
+    }
+
+    let total_failures = api_failures + join_failures;
+    let failure = (total_failures > 0).then(|| {
+        let base_msg = first_error_msg
+            .unwrap_or_else(|| "문서 PR 변경 파일 목록을 확인하지 못했습니다.".to_owned());
+        DashboardWorkspaceFailure {
+            workspace_id: workspace.id.clone(),
+            workspace_title: workspace.title.clone(),
+            scope: DashboardFailureScope::Docs,
+            message: if total_failures > 1 {
+                format!("{base_msg} ({total_failures}건의 PR 파일 확인 실패)")
+            } else {
+                format!("{base_msg} (PR 파일 확인 실패)")
+            },
+        }
+    });
+
+    (files_by_idx, failure)
+}
+
 async fn fetch_workspace_docs_notifications(
     github: &Arc<GithubService>,
     workspace: &HubWorkspace,
     repo_full_name: &str,
     last_seen_at: Option<&str>,
     now_unix: i64,
-) -> Result<Vec<DashboardNotificationItem>, DashboardWorkspaceFailure> {
+) -> Result<DocsNotificationFetchOutcome, DashboardWorkspaceFailure> {
     let cutoff = now_unix - SEVEN_DAYS_SECS;
     let (open_res, merged_res) = tokio::join!(
         github.list_open_pull_requests(repo_full_name),
@@ -594,44 +649,39 @@ async fn fetch_workspace_docs_notifications(
         let repo = repo_full_name.to_owned();
         let pr_number = pr.number;
         file_tasks.spawn(async move {
-            let files = gh
-                .list_pull_request_files(&repo, pr_number)
-                .await
-                .unwrap_or_default();
-            (idx, files)
+            let result = gh.list_pull_request_files(&repo, pr_number).await;
+            (idx, pr_number, result)
         });
     }
-    let mut files_by_idx: HashMap<usize, Vec<PullRequestChangedFile>> = HashMap::new();
+    let mut file_outcomes = Vec::new();
+    let mut join_failures = 0usize;
     while let Some(joined) = file_tasks.join_next().await {
         match joined {
-            Ok((idx, files)) => {
-                files_by_idx.insert(idx, files);
-            }
+            Ok(outcome) => file_outcomes.push(outcome),
             Err(err) => {
                 eprintln!("dashboard pr files task failed: {err:?}");
+                join_failures += 1;
             }
         }
     }
+    let (mut files_by_idx, failure) =
+        aggregate_pr_file_outcomes(workspace, repo_full_name, file_outcomes, join_failures);
 
     let enriched = combined
         .into_iter()
         .enumerate()
         .map(|(idx, (kind, pr))| (kind, pr, files_by_idx.remove(&idx).unwrap_or_default()))
         .collect();
-    Ok(build_notifications_for_prs(
-        workspace,
-        repo_full_name,
-        enriched,
-        last_seen_at,
-        now_unix,
-    ))
+    let items =
+        build_notifications_for_prs(workspace, repo_full_name, enriched, last_seen_at, now_unix);
+    Ok(DocsNotificationFetchOutcome { items, failure })
 }
 
 struct WorkspaceFetchOutcome {
     idx: usize,
     workspace: HubWorkspace,
     board_result: Option<CommandResult<ProjectBoard>>,
-    docs_result: Option<Result<Vec<DashboardNotificationItem>, DashboardWorkspaceFailure>>,
+    docs_result: Option<Result<DocsNotificationFetchOutcome, DashboardWorkspaceFailure>>,
 }
 
 fn join_error_outcome(idx: usize, workspace: HubWorkspace) -> WorkspaceFetchOutcome {
@@ -875,7 +925,12 @@ pub async fn get_personal_dashboard(
         }
         if let Some(docs_result) = outcome.docs_result {
             match docs_result {
-                Ok(items) => notifications.extend(items),
+                Ok(docs) => {
+                    notifications.extend(docs.items);
+                    if let Some(failure) = docs.failure {
+                        failures.push(failure);
+                    }
+                }
                 Err(failure) => failures.push(failure),
             }
         }
@@ -1340,5 +1395,40 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn aggregate_pr_file_outcomes_preserves_succeeded_prs_and_surfaces_failure() {
+        let ws = sample_workspace("okf", "OkHub");
+        let (files_by_idx, failure) = super::aggregate_pr_file_outcomes(
+            &ws,
+            "Mockly-Company/okf-docs",
+            vec![
+                (
+                    0,
+                    18,
+                    Ok(vec![PullRequestChangedFile {
+                        filename: "docs/spec.md".into(),
+                        status: "modified".into(),
+                        previous_filename: None,
+                    }]),
+                ),
+                (
+                    1,
+                    19,
+                    Err(crate::error::AppError::new(
+                        crate::error::ErrorCode::GithubUnavailable,
+                        "GitHub API rate limit exceeded",
+                    )),
+                ),
+            ],
+            0,
+        );
+
+        assert_eq!(files_by_idx.len(), 1);
+        assert_eq!(files_by_idx.get(&0).unwrap()[0].filename, "docs/spec.md");
+        let failure = failure.expect("failed PR file lookup must surface a Docs failure");
+        assert_eq!(failure.scope, DashboardFailureScope::Docs);
+        assert!(failure.message.contains("GitHub API rate limit exceeded"));
     }
 }

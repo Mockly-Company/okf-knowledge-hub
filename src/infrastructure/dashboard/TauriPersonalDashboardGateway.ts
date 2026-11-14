@@ -117,6 +117,7 @@ function normalizeNotifications(raw: unknown): DashboardNotificationItem[] {
     const workspaceId = asNonEmptyString(record.workspaceId);
     const title = asNonEmptyString(record.title);
     const url = asNonEmptyString(record.url);
+    const timestamp = asNonEmptyString(record.timestamp);
     const prNumber = record.prNumber;
     const kind = record.kind;
     if (
@@ -124,6 +125,7 @@ function normalizeNotifications(raw: unknown): DashboardNotificationItem[] {
       !workspaceId ||
       !title ||
       !url ||
+      !timestamp ||
       typeof prNumber !== "number" ||
       !Number.isInteger(prNumber) ||
       typeof kind !== "string" ||
@@ -150,7 +152,7 @@ function normalizeNotifications(raw: unknown): DashboardNotificationItem[] {
           ? record.primaryDocPath
           : null,
       hasCompanionHtml: Boolean(record.hasCompanionHtml),
-      timestamp: typeof record.timestamp === "string" ? record.timestamp : "",
+      timestamp,
       isNew: Boolean(record.isNew),
     });
   }

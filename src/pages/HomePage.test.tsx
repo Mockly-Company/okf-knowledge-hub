@@ -718,4 +718,38 @@ describe("HomePage (내 대시보드)", () => {
       expect.objectContaining({ forceSync: false, retryWorkspaceId: null }),
     );
   });
+
+  it("stays disabled outside WorkspaceConnectionProvider (M6) and honors onOpenDocuments preview mode (S17)", () => {
+    const gateway = new FakePersonalDashboardGateway({ viewerLogin: "YoonDongGeun" });
+    const getSpy = vi.spyOn(gateway, "getPersonalDashboard");
+
+    function CountProbe() {
+      const ctx = useOptionalPersonalDashboard();
+      return <span data-testid="probe-unread">{ctx?.unreadCount ?? 0}</span>;
+    }
+
+    render(
+      <TestQueryProvider>
+        <PersonalDashboardProvider gateway={gateway}>
+          <CountProbe />
+        </PersonalDashboardProvider>
+      </TestQueryProvider>,
+    );
+    expect(screen.getByTestId("probe-unread")).toHaveTextContent("0");
+    expect(getSpy).not.toHaveBeenCalled();
+
+    const onOpenDocuments = vi.fn();
+    render(
+      <TestQueryProvider>
+        <MemoryRouter initialEntries={["/home"]}>
+          <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+            <HomePage onOpenDocuments={onOpenDocuments} />
+          </WorkspaceConnectionProvider>
+        </MemoryRouter>
+      </TestQueryProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "모두 읽음" })).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "내 작업" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "프로젝트 요약" })).toBeInTheDocument();
+  });
 });

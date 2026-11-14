@@ -65,7 +65,8 @@ export function PersonalDashboardProvider({
   }, [activeProject?.workspaces]);
 
   const workspaceCount = activeProject?.workspaces.length ?? 0;
-  const authStatus = connection?.account.status ?? "authenticated";
+  // WorkspaceConnectionProvider 밖이나 초기 미연결 상태에서는 안전하게 비활성화한다(M6).
+  const authStatus = connection?.account.status ?? "unauthenticated";
   const viewerLogin =
     connection?.account.status === "authenticated"
       ? connection.account.user.login
