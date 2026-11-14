@@ -613,7 +613,10 @@ describe("AppSidebar workspace switcher", () => {
     });
     expect(dashboardLink).toHaveAttribute("href", "/home");
     expect(dashboardLink).toHaveAttribute("aria-current", "page");
-    await waitFor(() => expect(within(dashboardLink).getByText("2")).toBeVisible());
+    await waitFor(() => {
+      expect(within(dashboardLink).getByText("2")).toBeVisible();
+      expect(dashboardLink).toHaveAccessibleName("내 대시보드, 새 알림 2개");
+    });
 
     const switcher = await screen.findByRole("button", {
       name: /^워크스페이스 전환/,

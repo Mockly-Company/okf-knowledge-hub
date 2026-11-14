@@ -1,5 +1,12 @@
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
@@ -17,7 +24,10 @@ import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakePersonalDashboardGateway } from "@/test/FakePersonalDashboardGateway";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
-import { TestQueryProvider } from "@/test/queryTestUtils";
+import {
+  createTestQueryClient,
+  TestQueryProvider,
+} from "@/test/queryTestUtils";
 import { HomePage } from "./HomePage";
 import { unavailableHomeTasks } from "./home/HomeTasks";
 
@@ -630,5 +640,82 @@ describe("HomePage (내 대시보드)", () => {
     await user.click(await screen.findByRole("option", { name: /내 작업/ }));
     await screen.findByText("#74 내 작업");
     expect(screen.queryByText(/Gamma Project/)).toBeNull();
+  });
+
+  it("ignores refresh/retryWorkspace while disabled so enabling later never triggers stale forceSync (M8)", async () => {
+    const user = userEvent.setup();
+    const queryClient = createTestQueryClient();
+    const gateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      tasks: [makeTask({ issueNumber: 74, title: "새로 연결된 작업" })],
+    });
+    const getSpy = vi.spyOn(gateway, "getPersonalDashboard");
+
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [];
+    docsRepoGateway.activeWorkspaceId = null;
+
+    function Probe() {
+      const ctx = useOptionalPersonalDashboard();
+      return (
+        <div>
+          <button type="button" onClick={() => void ctx?.refresh()}>
+            trigger-refresh
+          </button>
+          <button type="button" onClick={() => void ctx?.retryWorkspace("PVT_alpha")}>
+            trigger-retry
+          </button>
+          <span data-testid="task-count">{ctx?.dashboard?.tasks.length ?? 0}</span>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/home"]}>
+          <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+            <ActiveProjectProvider
+              projectGateway={FakeProjectBoardGateway.empty()}
+              docsRepositoryGateway={docsRepoGateway}
+            >
+              <PersonalDashboardProvider gateway={gateway}>
+                <Probe />
+              </PersonalDashboardProvider>
+            </ActiveProjectProvider>
+          </WorkspaceConnectionProvider>
+        </MemoryRouter>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "trigger-refresh" })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "trigger-refresh" }));
+    await user.click(screen.getByRole("button", { name: "trigger-retry" }));
+    expect(getSpy).not.toHaveBeenCalled();
+
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-count")).toHaveTextContent("1");
+    });
+    expect(getSpy).toHaveBeenCalledTimes(1);
+    expect(getSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ forceSync: false, retryWorkspaceId: null }),
+    );
   });
 });

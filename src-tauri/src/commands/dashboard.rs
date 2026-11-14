@@ -257,9 +257,12 @@ pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<Stri
 
     let has_companion_html = match &primary {
         Some(md_path) => {
-            let expected_html = (md_path.len() >= 3
-                && md_path[md_path.len() - 3..].eq_ignore_ascii_case(".md"))
-            .then(|| format!("{}.html", &md_path[..md_path.len() - 3]));
+            // 바이트 길이 인덱싱 대신 ASCII 구분자 `.` 기준으로 확장자를 분리해
+            // 비ASCII·이모지 경로에서도 UTF-8 경계 패닉이 나지 않게 한다.
+            let expected_html = md_path
+                .rsplit_once('.')
+                .filter(|(_, ext)| ext.eq_ignore_ascii_case("md"))
+                .map(|(stem, _)| format!("{stem}.html"));
             pool.iter().any(|f| {
                 let norm = f.filename.replace('\\', "/");
                 expected_html
@@ -997,6 +1000,33 @@ mod tests {
         let (path, has_html) = pick_primary_doc(&files);
         assert_eq!(path.as_deref(), Some("docs/product/spec.md"));
         assert!(has_html);
+    }
+
+    #[test]
+    fn pick_primary_doc_handles_multibyte_paths_without_panicking() {
+        let non_md_emoji = vec![PullRequestChangedFile {
+            filename: "docs/😀".into(),
+            status: "added".into(),
+            previous_filename: None,
+        }];
+        assert_eq!(pick_primary_doc(&non_md_emoji), (None, false));
+
+        let korean_md = vec![
+            PullRequestChangedFile {
+                filename: "docs/기획_😀.md".into(),
+                status: "added".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/기획_😀.html".into(),
+                status: "added".into(),
+                previous_filename: None,
+            },
+        ];
+        assert_eq!(
+            pick_primary_doc(&korean_md),
+            (Some("docs/기획_😀.md".into()), true)
+        );
     }
 
     #[test]

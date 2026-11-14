@@ -194,12 +194,15 @@ export function AppSidebar({
             <LayoutDashboard aria-hidden="true" strokeWidth={1.75} />
             <span className="flex-1">내 대시보드</span>
             {unreadDashboardCount > 0 ? (
-              <span
-                className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-primary-soft)] px-[var(--space-2)] py-0.5 text-[11px] font-[number:var(--font-weight-control)] text-[var(--color-primary-text)] tabular-nums"
-                aria-label={`새 알림 ${unreadDashboardCount}개`}
-              >
-                {unreadDashboardCount > 99 ? "99+" : unreadDashboardCount}
-              </span>
+              <>
+                <span
+                  aria-hidden="true"
+                  className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-primary-soft)] px-[var(--space-2)] py-0.5 text-[11px] font-[number:var(--font-weight-control)] text-[var(--color-primary-text)] tabular-nums"
+                >
+                  {unreadDashboardCount > 99 ? "99+" : unreadDashboardCount}
+                </span>
+                <span className="sr-only">{`, 새 알림 ${unreadDashboardCount}개`}</span>
+              </>
             ) : null}
           </NavLink>
         </div>

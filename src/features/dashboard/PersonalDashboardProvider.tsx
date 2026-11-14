@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -108,31 +109,36 @@ export function PersonalDashboardProvider({
     },
   });
 
-  const refresh = useCallback(async () => {
-    pendingSyncByKeyRef.current.set(JSON.stringify(queryKey), {
-      forceSync: true,
-      retryWorkspaceId: null,
-    });
-    queryClient.removeQueries({
-      queryKey: personalDashboardKeys.all,
-      type: "inactive",
-    });
-    await queryClient.refetchQueries({ queryKey, exact: true });
-  }, [queryClient, queryKey]);
+  useEffect(() => {
+    if (!enabled) {
+      pendingSyncByKeyRef.current.clear();
+    }
+  }, [enabled]);
 
-  const retryWorkspace = useCallback(
-    async (workspaceId: string) => {
-      pendingSyncByKeyRef.current.set(JSON.stringify(queryKey), {
-        forceSync: false,
-        retryWorkspaceId: workspaceId,
-      });
+  const runSyncedRefetch = useCallback(
+    async (options: { forceSync: boolean; retryWorkspaceId: string | null }) => {
+      if (!enabled) {
+        return;
+      }
+      pendingSyncByKeyRef.current.set(JSON.stringify(queryKey), options);
       queryClient.removeQueries({
         queryKey: personalDashboardKeys.all,
         type: "inactive",
       });
       await queryClient.refetchQueries({ queryKey, exact: true });
     },
-    [queryClient, queryKey],
+    [enabled, queryClient, queryKey],
+  );
+
+  const refresh = useCallback(
+    () => runSyncedRefetch({ forceSync: true, retryWorkspaceId: null }),
+    [runSyncedRefetch],
+  );
+
+  const retryWorkspace = useCallback(
+    (workspaceId: string) =>
+      runSyncedRefetch({ forceSync: false, retryWorkspaceId: workspaceId }),
+    [runSyncedRefetch],
   );
 
   const markSeenMutation = useMutation({
