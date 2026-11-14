@@ -638,9 +638,8 @@ describe("DocumentsPage", () => {
     expect(
       await screen.findByRole("region", { name: "현재 작업 공간" }),
     ).toBeVisible();
-    expect(screen.getByText("Project · Mockly-Company #1")).toBeVisible();
-    expect(screen.getByText("Mockly 기획 보드")).toBeVisible();
-    expect(screen.getByText(/Mockly-Company\/Mockly/)).toBeVisible();
+    expect(screen.getByText("선택된 Project · Mockly 기획 보드")).toBeVisible();
+    expect(screen.getByText("문서 저장소 · Mockly-Company/Mockly")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "워크스페이스 설정" }),
     ).toBeNull();
@@ -650,7 +649,7 @@ describe("DocumentsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "switch-standalone" }));
 
-    expect(await screen.findByText("문서 저장소 단독")).toBeVisible();
+    expect(await screen.findByText("문서 전용")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Project 보드 연결" }),
     ).toBeNull();
@@ -663,10 +662,10 @@ describe("DocumentsPage", () => {
     );
 
     expect(
-      await screen.findByText("Project · Mockly-Company #2"),
+      await screen.findByText("Mockly-Company #2"),
     ).toBeVisible();
     expect(
-      screen.getByText(/문서 미연결 보드.*소속 문서 저장소를 선택하세요/),
+      screen.getByText(/문서 미연결 보드.*문서 저장소를 선택하세요/),
     ).toBeVisible();
   });
 });

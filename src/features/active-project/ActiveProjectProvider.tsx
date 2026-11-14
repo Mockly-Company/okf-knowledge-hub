@@ -314,7 +314,10 @@ export function ActiveProjectProvider({
         : [...filteredWorkspaces, workspace];
       const nextActiveId = options.makeActive
         ? workspace.id
-        : (prev?.activeWorkspaceId ?? nextWorkspaces[0]?.id ?? null);
+        : (prev?.activeWorkspaceId ??
+            activeWorkspaceIdRef.current ??
+            nextWorkspaces[0]?.id ??
+            null);
       const nextActiveWorkspace =
         nextWorkspaces.find((item) => item.id === nextActiveId) ?? null;
       const nextActiveDocsConnected =

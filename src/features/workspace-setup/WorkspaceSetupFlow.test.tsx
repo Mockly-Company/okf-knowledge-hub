@@ -149,20 +149,11 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
     );
   });
 
-  it("creates a standalone document workspace without a project and can attach/detach a board later", async () => {
+  it("creates a standalone document workspace without a project and keeps WorkspaceManageDialog read-only on project settings", async () => {
     const user = userEvent.setup();
     const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
     workspaceGateway.currentWorkspace = null;
     const projectGateway = FakeProjectBoardGateway.empty();
-    projectGateway.projectList = [
-      {
-        id: "PVT_roadmap",
-        owner: "Mockly-Company",
-        number: 7,
-        title: "제품 로드맵",
-        scope: "organization",
-      },
-    ];
     const docsGateway = new FakeDocsRepositoryGateway();
     docsGateway.prepareResult = {
       parentDirectory: "/app/repos/Mockly-Company",
@@ -210,27 +201,23 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
       ),
     );
 
-    // 관리 다이얼로그에서 나중에 GitHub Project 보드를 연결할 수 있다.
-    await user.click(
-      await screen.findByRole("button", { name: "GitHub Project 보드 연결" }),
-    );
-    await user.click(await screen.findByRole("button", { name: /제품 로드맵/ }));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("active-ws")).toHaveTextContent(
-        "제품 로드맵|project=PVT_roadmap|docs=Mockly-Company/mockly-knowledge",
+    const dialog = await screen.findByRole("dialog", {
+      name: "워크스페이스 설정",
+    });
+    expect(
+      within(dialog).getByText(
+        "문서 전용 워크스페이스 · 연결된 GitHub Project가 없습니다.",
       ),
-    );
-
-    // 보드만 연결 해제해도 문서 저장소 단독 워크스페이스는 그대로 유지된다.
-    await user.click(
-      await screen.findByRole("button", { name: "보드만 연결 해제" }),
-    );
-    await waitFor(() =>
-      expect(screen.getByTestId("active-ws")).toHaveTextContent(
-        "mockly-knowledge|project=none|docs=Mockly-Company/mockly-knowledge",
-      ),
-    );
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).queryByRole("button", { name: "GitHub Project 보드 연결" }),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "다른 Project로 변경" }),
+    ).toBeNull();
+    expect(
+      within(dialog).queryByRole("button", { name: "보드만 연결 해제" }),
+    ).toBeNull();
   });
 
   it("supports keyboard arrow/Home/End tab switching and links tabs to tabpanel", async () => {
@@ -288,12 +275,17 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
     expect(docsTab).toHaveAttribute("aria-selected", "true");
   });
 
-  it("renders nested Project > 소속 문서 저장소 hierarchy in WorkspaceManageDialog and read-only WorkspaceContextBar", async () => {
+  it("renders flat WorkspaceContextBar labels without hierarchy glyphs and read-only 선택된 Project in WorkspaceManageDialog", async () => {
     const { useState } = await import("react");
     const user = userEvent.setup();
     const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
     const projectGateway = FakeProjectBoardGateway.empty();
-    projectGateway.projectList = [
+    const docsGateway = new FakeDocsRepositoryGateway();
+    await docsGateway.createStandaloneWorkspace(
+      "R_1",
+      "Mockly-Company/mockly-knowledge",
+    );
+    await docsGateway.createProjectWorkspace(
       {
         id: "PVT_roadmap",
         owner: "Mockly-Company",
@@ -301,12 +293,12 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
         title: "제품 로드맵",
         scope: "organization",
       },
-    ];
-    const docsGateway = new FakeDocsRepositoryGateway();
-    await docsGateway.createStandaloneWorkspace(
-      "R_1",
-      "Mockly-Company/mockly-knowledge",
+      {
+        repositoryId: "R_2",
+        fullName: "Mockly-Company/roadmap-docs",
+      },
     );
+    await docsGateway.setActiveWorkspace("repo:R_1");
     const documentsGateway = new FakeDocumentsGateway();
 
     function ManageHarness() {
@@ -345,72 +337,199 @@ describe("WorkspaceSetupFlow & WorkspaceManageDialog", () => {
       </TestQueryProvider>,
     );
 
-    // 1. 단독 문서 모드: WorkspaceContextBar는 읽기 전용 컨텍스트만 표시하고 중복 설정 버튼은 두지 않는다
     const contextBar = await screen.findByRole("region", {
       name: "현재 작업 공간",
     });
-    expect(within(contextBar).getByText("문서 저장소 단독")).toBeInTheDocument();
+    expect(within(contextBar).getByText("문서 전용")).toBeInTheDocument();
     expect(
-      within(contextBar).getByText("Mockly-Company/mockly-knowledge"),
+      within(contextBar).getByText("문서 저장소 · Mockly-Company/mockly-knowledge"),
     ).toBeInTheDocument();
-    expect(within(contextBar).getByText("상위 Project 없음")).toBeInTheDocument();
-    expect(
-      within(contextBar).queryByRole("button", { name: "워크스페이스 설정" }),
-    ).toBeNull();
-    expect(
-      within(contextBar).queryByRole("button", { name: "Project 보드 연결" }),
-    ).toBeNull();
+    expect(within(contextBar).queryByText("상위 Project 없음")).toBeNull();
+    expect(within(contextBar).queryByText(/└/)).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "open-sidebar-manage" }));
     const dialog = await screen.findByRole("dialog", {
-      name: /워크스페이스 설정/,
+      name: "워크스페이스 설정",
     });
-    const unlinkedParent = within(dialog).getByRole("region", {
-      name: "상위 GitHub Project 미연결",
+    const standaloneTab = within(dialog).getByRole("tab", {
+      name: /mockly-knowledge \(문서 전용\) · 사용 중/,
     });
-    const standaloneDocsSection = within(dialog).getByRole("region", {
-      name: "단독 문서 저장소 설정",
+    const projectTab = within(dialog).getByRole("tab", {
+      name: "제품 로드맵",
     });
-    expect(
-      within(unlinkedParent).queryByRole("region", {
-        name: "단독 문서 저장소 설정",
-      }),
-    ).toBeNull();
-    expect(standaloneDocsSection).toHaveTextContent(
-      "Mockly-Company/mockly-knowledge",
-    );
+    expect(standaloneTab).toHaveAttribute("aria-selected", "true");
+    expect(projectTab).toHaveAttribute("aria-selected", "false");
 
-    // 2. Project 연결 후: 상위 GitHub Project 설정 컨테이너 내부에 소속 문서 저장소 설정이 중첩된다
-    await user.click(
-      within(unlinkedParent).getByRole("button", {
-        name: "GitHub Project 보드 연결",
-      }),
-    );
-    await user.click(await screen.findByRole("button", { name: /제품 로드맵/ }));
-
-    const projectSection = await within(dialog).findByRole("region", {
-      name: "상위 GitHub Project 설정",
+    await user.click(projectTab);
+    expect(projectTab).toHaveAttribute("aria-selected", "true");
+    const projectSection = within(dialog).getByRole("region", {
+      name: "선택된 Project",
     });
-    const nestedDocsGroup = within(projectSection).getByRole("group", {
-      name: "소속 문서 저장소 설정",
+    expect(projectSection).toHaveTextContent("Mockly-Company #7");
+    expect(projectSection).toHaveTextContent("제품 로드맵");
+    const docsSection = within(dialog).getByRole("region", {
+      name: "문서 저장소",
     });
-    expect(nestedDocsGroup).toHaveTextContent(
-      "Mockly-Company/mockly-knowledge",
-    );
+    expect(docsSection).toHaveTextContent("Mockly-Company/roadmap-docs");
+    expect(docsSection).toHaveTextContent("저장소 변경");
+    expect(within(dialog).queryByText(/└/)).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "다른 Project로 변경" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "보드만 연결 해제" })).toBeNull();
 
     await user.click(within(dialog).getByRole("button", { name: "닫기" }));
+    // 비활성 탭만 보고 닫았으므로 뒤 화면의 활성 워크스페이스는 그대로 유지된다.
+    expect(
+      within(contextBar).getByText("문서 저장소 · Mockly-Company/mockly-knowledge"),
+    ).toBeInTheDocument();
+  });
 
-    const updatedBar = await screen.findByRole("region", {
-      name: "현재 작업 공간",
-    });
-    expect(
-      within(updatedBar).getByText("Project · Mockly-Company #7"),
-    ).toBeInTheDocument();
-    expect(within(updatedBar).getByText("제품 로드맵")).toBeInTheDocument();
-    expect(
-      within(updatedBar).getByText(
-        "└ 소속 문서 저장소 · Mockly-Company/mockly-knowledge",
+  it("manages inactive and active workspace tabs independently without unintended background switching and closes only when empty", async () => {
+    const { useState } = await import("react");
+    const user = userEvent.setup();
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    workspaceGateway.repositories = [
+      {
+        id: "R_alpha",
+        owner: "Mockly-Company",
+        name: "alpha-docs",
+        fullName: "Mockly-Company/alpha-docs",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+      {
+        id: "R_beta",
+        owner: "Mockly-Company",
+        name: "beta-docs",
+        fullName: "Mockly-Company/beta-docs",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+      {
+        id: "R_beta_new",
+        owner: "Mockly-Company",
+        name: "beta-v2-docs",
+        fullName: "Mockly-Company/beta-v2-docs",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+      {
+        id: "R_solo",
+        owner: "Mockly-Company",
+        name: "solo-notes",
+        fullName: "Mockly-Company/solo-notes",
+        defaultBranch: "main",
+        isEmpty: false,
+      },
+    ];
+    const projectGateway = FakeProjectBoardGateway.empty();
+    const docsGateway = new FakeDocsRepositoryGateway();
+    docsGateway.prepareResult = {
+      parentDirectory: "/app/repos/Mockly-Company",
+      alreadyCloned: true,
+    };
+    await docsGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsGateway.createProjectWorkspace(
+      {
+        id: "PVT_beta",
+        owner: "Mockly-Company",
+        number: 2,
+        title: "Beta Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_beta", fullName: "Mockly-Company/beta-docs" },
+    );
+    await docsGateway.createStandaloneWorkspace("R_solo", "Mockly-Company/solo-notes");
+    await docsGateway.setActiveWorkspace("PVT_alpha");
+    const documentsGateway = new FakeDocumentsGateway();
+
+    function ManageDialogHarness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <ActiveWorkspaceProbe />
+          <WorkspaceContextBar
+            docsRepositoryGateway={docsGateway}
+            repositoryGateway={workspaceGateway}
+          />
+          <output data-testid="dialog-open">{open ? "open" : "closed"}</output>
+          <WorkspaceManageDialog
+            open={open}
+            onOpenChange={setOpen}
+            docsRepositoryGateway={docsGateway}
+            repositoryGateway={workspaceGateway}
+          />
+        </>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={workspaceGateway}>
+          <ActiveProjectProvider
+            projectGateway={projectGateway}
+            docsRepositoryGateway={docsGateway}
+          >
+            <DocumentsProvider gateway={documentsGateway} searchDebounceMs={0}>
+              <ManageDialogHarness />
+            </DocumentsProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "워크스페이스 설정" });
+    expect(screen.getByTestId("active-ws")).toHaveTextContent("Alpha Project|project=PVT_alpha|docs=Mockly-Company/alpha-docs");
+
+    // 1. 비활성 Beta 탭에서 문서 저장소 변경해도 활성 Alpha는 유지된다
+    await user.click(within(dialog).getByRole("tab", { name: "Beta Project" }));
+    await user.click(within(dialog).getByRole("button", { name: "저장소 변경" }));
+    await user.click(await within(dialog).findByRole("button", { name: /Mockly-Company\/beta-v2-docs/ }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole("region", { name: "문서 저장소" })).toHaveTextContent(
+        "Mockly-Company/beta-v2-docs",
       ),
+    );
+    expect(screen.getByTestId("active-ws")).toHaveTextContent("Alpha Project|project=PVT_alpha|docs=Mockly-Company/alpha-docs");
+
+    // 2. 비활성 Beta 탭 해제 시 모달이 열려 있고 남은 탭으로 포커스가 이동하며, Alpha는 유지된다
+    await user.click(within(dialog).getByRole("button", { name: "워크스페이스 연결 해제" }));
+    await user.click(within(dialog).getByRole("button", { name: "연결 해제 확인" }));
+    await waitFor(() =>
+      expect(within(dialog).queryByRole("tab", { name: "Beta Project" })).toBeNull(),
+    );
+    expect(screen.getByTestId("dialog-open")).toHaveTextContent("open");
+    expect(screen.getByTestId("active-ws")).toHaveTextContent("Alpha Project|project=PVT_alpha");
+    await waitFor(() => {
+      const remainingTab = within(dialog).getByRole("tab", { name: /solo-notes \(문서 전용\)/ });
+      expect(remainingTab).toHaveFocus();
+    });
+
+    // 3. '사용 중'인 Alpha 탭을 해제하면 남은 solo-notes로 활성 워크스페이스가 자동 전환된다
+    await user.click(within(dialog).getByRole("tab", { name: /Alpha Project · 사용 중/ }));
+    await user.click(within(dialog).getByRole("button", { name: "워크스페이스 연결 해제" }));
+    await user.click(within(dialog).getByRole("button", { name: "연결 해제 확인" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("solo-notes|project=none|docs=Mockly-Company/solo-notes"),
+    );
+    expect(screen.getByTestId("dialog-open")).toHaveTextContent("open");
+    expect(
+      within(dialog).getByRole("tab", { name: /solo-notes \(문서 전용\) · 사용 중/ }),
     ).toBeInTheDocument();
+
+    // 4. 마지막 남은 워크스페이스까지 해제하면 모달이 자동으로 닫힌다
+    await user.click(within(dialog).getByRole("button", { name: "워크스페이스 연결 해제" }));
+    await user.click(within(dialog).getByRole("button", { name: "연결 해제 확인" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("dialog-open")).toHaveTextContent("closed"),
+    );
   });
 });

@@ -287,8 +287,9 @@ describe("App", () => {
       expect(switcher).toHaveTextContent("문서 · Mockly-Company/Mockly");
     });
     expect(
-      await screen.findByText("Project · Mockly-Company #1"),
+      await screen.findByText("선택된 Project · Mockly Board"),
     ).toBeVisible();
+    expect(screen.getByText("Mockly-Company #1")).toBeVisible();
 
     // 2. 사이드바에서 단독 문서 저장소 워크스페이스 추가
     await user.click(switcher);
@@ -389,12 +390,10 @@ describe("App", () => {
       name: "현재 작업 공간",
     });
     await waitFor(() =>
-      expect(within(contextBar).getByText("Beta Project")).toBeInTheDocument(),
+      expect(within(contextBar).getByText("선택된 Project · Beta Project")).toBeInTheDocument(),
     );
     expect(
-      within(contextBar).getByText(
-        "└ 소속 문서 저장소 · Mockly-Company/beta-docs",
-      ),
+      within(contextBar).getByText("문서 저장소 · Mockly-Company/beta-docs"),
     ).toBeInTheDocument();
 
     // Beta Project에서는 이전 Alpha의 CLI 탭이 보이지 않고 백그라운드 실행 안내가 표시된다
@@ -410,7 +409,7 @@ describe("App", () => {
       await screen.findByRole("menuitemradio", { name: /Alpha Project/ }),
     );
     await waitFor(() =>
-      expect(within(contextBar).getByText("Alpha Project")).toBeInTheDocument(),
+      expect(within(contextBar).getByText("선택된 Project · Alpha Project")).toBeInTheDocument(),
     );
     expect(
       await screen.findByRole("tab", { name: /Antigravity/ }),

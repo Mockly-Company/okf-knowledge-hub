@@ -70,10 +70,10 @@ const NOOP_UNSUBSCRIBE = () => {};
 
 function describeWorkspaceSubtitle(workspace: HubWorkspace): string {
   if (workspace.project && workspace.docsRepository) {
-    return `└ 문서 · ${workspace.docsRepository.fullName}`;
+    return `문서 · ${workspace.docsRepository.fullName}`;
   }
   if (workspace.project && !workspace.docsRepository) {
-    return "└ 문서 저장소 연결 필요";
+    return "문서 저장소 연결 필요";
   }
   if (!workspace.project && workspace.docsRepository) {
     return `문서 전용 · ${workspace.docsRepository.fullName}`;
@@ -84,7 +84,7 @@ function describeWorkspaceSubtitle(workspace: HubWorkspace): string {
 function describeDropdownWorkspaceMeta(workspace: HubWorkspace): string {
   if (workspace.project) {
     const repoLabel = workspace.docsRepository?.fullName ?? "문서 미연결";
-    return `${workspace.project.owner} #${workspace.project.number} · └ 문서 · ${repoLabel}`;
+    return `${workspace.project.owner} #${workspace.project.number} · 문서 · ${repoLabel}`;
   }
   return `문서 전용 · ${workspace.docsRepository?.fullName ?? "저장소 미연결"}`;
 }
@@ -179,6 +179,9 @@ export function AppSidebar({
             className="grid gap-[var(--space-2)] px-[var(--space-2)] pb-[var(--space-3)]"
             aria-label="활성 워크스페이스"
           >
+            <span className="px-[var(--space-1)] text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-muted)]">
+              선택된 Project
+            </span>
             {currentWorkspace ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

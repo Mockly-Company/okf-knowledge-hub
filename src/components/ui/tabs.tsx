@@ -40,7 +40,7 @@ export function TabsList({
       const listRect = list.getBoundingClientRect();
       const tabRect = selectedTab.getBoundingClientRect();
       setIndicator({
-        left: tabRect.left - listRect.left,
+        left: tabRect.left - listRect.left + list.scrollLeft,
         width: tabRect.width,
       });
     };
@@ -49,10 +49,12 @@ export function TabsList({
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateIndicator);
     observer?.observe(list);
     list.querySelectorAll('[role="tab"]').forEach((tab) => observer?.observe(tab));
+    list.addEventListener("scroll", updateIndicator, { passive: true });
     window.addEventListener("resize", updateIndicator);
 
     return () => {
       observer?.disconnect();
+      list.removeEventListener("scroll", updateIndicator);
       window.removeEventListener("resize", updateIndicator);
     };
   }, [children, selectedIndex]);

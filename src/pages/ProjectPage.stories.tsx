@@ -74,7 +74,10 @@ export const Empty: StoryObj<typeof meta> = {
   ),
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByText("연결된 Issue 없음"),
+      await canvas.findByText(/아직 등록된 백로그가 없습니다/),
+    ).toBeVisible();
+    await expect(
+      canvas.getByRole("link", { name: "AI에서 시작하기" }),
     ).toBeVisible();
   },
 };

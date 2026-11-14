@@ -138,7 +138,7 @@ export function DocumentsPage({
         <PageHeader
           titleId="documents-title"
           title="Documents"
-          description="Project와 소속 문서 저장소를 연결하거나, 문서 저장소만 단독으로 관리합니다."
+          description="Project와 문서 저장소를 연결하거나, 문서 저장소만 단독으로 관리합니다."
           actions={headerActions}
         />
         <WorkspaceSetupFlow
@@ -190,10 +190,10 @@ export function DocumentsPage({
         {activeWorkspace?.project ? (
           <div className="mb-[var(--space-3)] flex flex-wrap items-center gap-[var(--space-2)]">
             <StatusBadge tone="info">
-              {`Project · ${activeWorkspace.project.owner} #${activeWorkspace.project.number}`}
+              {`${activeWorkspace.project.owner} #${activeWorkspace.project.number}`}
             </StatusBadge>
             <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-              &ldquo;{activeWorkspace.title}&rdquo;의 기획·명세를 관리할 소속 문서 저장소를 선택하세요.
+              &ldquo;{activeWorkspace.title}&rdquo;의 기획·명세를 관리할 문서 저장소를 선택하세요.
             </span>
           </div>
         ) : null}

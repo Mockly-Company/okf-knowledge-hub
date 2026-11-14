@@ -61,7 +61,19 @@ function stepTitle(item: HTMLElement): string {
 describe("ProjectPage", () => {
   it("renders one swimlane per layer with five status columns", async () => {
     const user = userEvent.setup();
-    renderProject();
+    renderProject(
+      FakeProjectBoardGateway.withIssues([
+        {
+          number: 1,
+          title: "기획 기준 정리",
+          url: "https://example.test/issues/1",
+          layer: "planning",
+          status: "backlog",
+          children: [],
+          kind: null,
+        },
+      ]),
+    );
     await showLayersView(user);
 
     for (const layer of ["기획", "디자인", "프론트엔드", "백엔드", "미지정"]) {
@@ -142,7 +154,28 @@ describe("ProjectPage", () => {
 
   it("filters swimlanes by layer", async () => {
     const user = userEvent.setup();
-    renderProject();
+    renderProject(
+      FakeProjectBoardGateway.withIssues([
+        {
+          number: 11,
+          title: "기획 시안",
+          url: "https://example.test/issues/11",
+          layer: "planning",
+          status: "backlog",
+          children: [],
+          kind: null,
+        },
+        {
+          number: 12,
+          title: "디자인 시안",
+          url: "https://example.test/issues/12",
+          layer: "design",
+          status: "backlog",
+          children: [],
+          kind: null,
+        },
+      ]),
+    );
     await showLayersView(user);
 
     await user.click(screen.getByRole("button", { name: "디자인" }));
@@ -195,24 +228,24 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers issue creation from Backlog when createBoardIssues is available and disables it on read-only gateways", async () => {
-    const user = userEvent.setup();
-    renderProject();
-    await showLayersView(user);
+  it("hides manual issue creation and dummy Iteration controls and guides to AI when the board has zero issues", async () => {
+    renderProject(FakeProjectBoardGateway.empty());
 
-    const planning = screen.getByRole("region", {
-      name: "기획 레이어",
-    });
-    const backlog = within(planning).getByRole("region", {
-      name: "기획 Backlog",
-    });
-    const addIssue = within(backlog).getByRole("button", { name: "새 Issue" });
-    expect(addIssue).toBeEnabled();
     expect(
-      within(backlog).getByText(
-        "연결된 저장소에 이슈를 만들고 보드에 즉시 등록합니다.",
+      await screen.findByText(
+        "아직 등록된 백로그가 없습니다. AI 화면에서 구현하고 싶은 아이디어를 이야기하면 PRD·화면명세서와 담당자별 백로그가 자동으로 준비됩니다.",
       ),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "AI에서 시작하기" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /새 이슈/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "새 Issue" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Iteration")).not.toBeInTheDocument();
   });
 
   it("shows a retry affordance when loading fails", async () => {
@@ -800,7 +833,17 @@ describe("ProjectPage", () => {
 
   it("keeps the board read-only without the project switch UI when linked", async () => {
     const user = userEvent.setup();
-    const gateway = FakeProjectBoardGateway.empty();
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 101,
+        title: "읽기 전용 테스트 이슈",
+        url: "https://example.test/issues/101",
+        layer: "planning",
+        status: "backlog",
+        children: [],
+        kind: null,
+      },
+    ]);
     render(<ProjectPage gateway={gateway} />);
     await showLayersView(user);
     expect(
@@ -1128,7 +1171,7 @@ describe("ProjectPage project switching", () => {
       screen.getByRole("button", { name: "GitHub Project 보드 연결" }),
     );
     expect(
-      await screen.findByRole("dialog", { name: /워크스페이스 설정/ }),
+      await screen.findByRole("dialog", { name: "GitHub Project 보드 연결" }),
     ).toBeVisible();
   });
 
@@ -1207,12 +1250,10 @@ describe("ProjectPage project switching", () => {
       name: "현재 작업 공간",
     });
     await waitFor(() =>
-      expect(within(contextBar).getByText("Alpha")).toBeInTheDocument(),
+      expect(within(contextBar).getByText("선택된 Project · Alpha")).toBeInTheDocument(),
     );
     expect(
-      within(contextBar).getByText(
-        "└ 소속 문서 저장소 · Mockly-Company/alpha-docs",
-      ),
+      within(contextBar).getByText("문서 저장소 · Mockly-Company/alpha-docs"),
     ).toBeInTheDocument();
 
     // Alpha에서 영역별 보기 + "기획" 필터 선택
@@ -1225,12 +1266,10 @@ describe("ProjectPage project switching", () => {
     // Beta로 전환하면 보기 방식(계층별)과 레이어 필터(전체)가 초기화되어 Beta의 백엔드 이슈가 즉시 보인다
     await user.click(screen.getByRole("button", { name: "switch-to-beta" }));
     await waitFor(() =>
-      expect(within(contextBar).getByText("Beta")).toBeInTheDocument(),
+      expect(within(contextBar).getByText("선택된 Project · Beta")).toBeInTheDocument(),
     );
     expect(
-      within(contextBar).getByText(
-        "└ 소속 문서 저장소 · Mockly-Company/beta-docs",
-      ),
+      within(contextBar).getByText("문서 저장소 · Mockly-Company/beta-docs"),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("article", {
@@ -1347,7 +1386,7 @@ describe("ProjectPage project switching", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("opens the issue detail drawer, derives cascading [백엔드]/[프론트엔드] sub-issues, and prepares AI task launch", async () => {
+  it("opens the issue detail drawer without manual derive actions and prepares AI task launch", async () => {
     const user = userEvent.setup();
     const { getPendingAiLaunch, clearPendingAiLaunch } = await import(
       "@/features/ai/pendingAiLaunch"
@@ -1416,21 +1455,12 @@ describe("ProjectPage project switching", () => {
       }),
     ).toBeVisible();
 
-    await user.click(
-      within(drawer).getByRole("button", { name: "하위 백로그 파생" }),
-    );
-    const deriveDialog = await screen.findByRole("dialog", {
-      name: "#70 하위 구현 백로그 파생",
-    });
-    await user.click(
-      within(deriveDialog).getByRole("button", { name: "2개 백로그 일괄 등록" }),
-    );
-
-    await waitFor(() =>
-      expect(
-        gateway.calls.some((call) => call.method === "createBoardIssues"),
-      ).toBe(true),
-    );
+    expect(
+      within(drawer).queryByRole("button", { name: "하위 백로그 파생" }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(drawer).queryByRole("button", { name: "하위 이슈 추가" }),
+    ).not.toBeInTheDocument();
 
     await user.click(
       within(drawer).getByRole("button", { name: "AI로 작업 시작" }),

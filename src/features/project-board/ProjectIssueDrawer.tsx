@@ -1,5 +1,5 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ExternalLink, GitPullRequest, FileText, Play, Plus, Sparkles } from "lucide-react";
+import { ExternalLink, GitPullRequest, FileText, Play } from "lucide-react";
 import { FormField } from "@/components/patterns/FormField";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -44,11 +44,6 @@ export interface ProjectIssueDrawerProps {
   updateError: string | null;
   onRetryDetail?: () => void;
   onUpdateField?: (patch: Omit<UpdateBoardItemInput, "issueNumber">) => void;
-  onAddSubIssue?: (issue: BoardIssue, repositoryFullName: string | null) => void;
-  onDeriveBacklog?: (
-    issue: BoardIssue,
-    detail: ProjectBoardIssueDetail | null,
-  ) => void;
   onStartWithAi?: (
     issue: BoardIssue,
     detail: ProjectBoardIssueDetail | null,
@@ -67,8 +62,6 @@ export function ProjectIssueDrawer({
   updateError,
   onRetryDetail,
   onUpdateField,
-  onAddSubIssue,
-  onDeriveBacklog,
   onStartWithAi,
 }: ProjectIssueDrawerProps) {
   const effectiveStatus = issue?.status ?? detail?.status ?? "backlog";
@@ -78,8 +71,6 @@ export function ProjectIssueDrawer({
     detail && detail.priorityOptions.length > 0
       ? detail.priorityOptions
       : ["P0", "P1", "P2"];
-  const canDeriveCascading =
-    effectiveLayer === "planning" || effectiveLayer === "design";
   const isDeveloperBacklog =
     effectiveLayer === "backend" || effectiveLayer === "frontend";
   const githubHref = issue ? safeHref(issue.url) : null;
@@ -248,25 +239,11 @@ export function ProjectIssueDrawer({
                 </section>
 
                 <section aria-label="하위 이슈 목록" className="grid gap-[var(--space-2)]">
-                  <div className="flex items-center justify-between gap-[var(--space-2)]">
-                    <h3 className="m-0 text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                      Sub-issues (
-                      {detail ? detail.subIssues.length : issue.children.length}
-                      )
-                    </h3>
-                    {onAddSubIssue ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        onClick={() =>
-                          onAddSubIssue(issue, detail?.repositoryFullName ?? null)
-                        }
-                      >
-                        <Plus aria-hidden="true" strokeWidth={1.75} />
-                        하위 이슈 추가
-                      </Button>
-                    ) : null}
-                  </div>
+                  <h3 className="m-0 text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+                    Sub-issues (
+                    {detail ? detail.subIssues.length : issue.children.length}
+                    )
+                  </h3>
                   {(detail ? detail.subIssues : issue.children).length === 0 ? (
                     <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                       연결된 하위 이슈가 없습니다.
@@ -398,16 +375,6 @@ export function ProjectIssueDrawer({
                         <ExternalLink aria-hidden="true" strokeWidth={1.75} />
                         GitHub
                       </a>
-                    </Button>
-                  ) : null}
-                  {canDeriveCascading && onDeriveBacklog ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => onDeriveBacklog(issue, detail)}
-                    >
-                      <Sparkles aria-hidden="true" strokeWidth={1.75} />
-                      하위 백로그 파생
                     </Button>
                   ) : null}
                 </div>

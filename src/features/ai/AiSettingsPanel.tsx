@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SectionHeader } from "@/components/patterns/SectionHeader";
+import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import {
   StatusFeedback,
@@ -86,14 +87,8 @@ export function AiSettingsPanel({
     ? describeAiSettingsError(saveMutation.error)
     : null;
   const saved = saveMutation.isSuccess;
-  const workspacePath = agentsQuery.data?.workspace_path ?? null;
-  const agentsPath = agentsQuery.data?.path ?? null;
   const agentsContent = agentsQuery.data?.content ?? null;
-  const appAgentsPath = appAgentsQuery.data?.path ?? null;
   const appAgentsContent = appAgentsQuery.data?.content ?? null;
-  const appAgentsError = appAgentsQuery.isError
-    ? describeAiSettingsError(appAgentsQuery.error)
-    : null;
   const isCreating = createMutation.isPending;
   const createError = createMutation.isError
     ? describeAiSettingsError(createMutation.error)
@@ -159,32 +154,36 @@ export function AiSettingsPanel({
           </p>
         ) : null}
       </div>
-      <div className="mt-[var(--space-6)] grid gap-[var(--space-3)]">
-        <h3 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-          AGENTS.md
-        </h3>
+      <section
+        aria-label="저장소 공통 규칙"
+        className="mt-[var(--space-6)] grid gap-[var(--space-3)]"
+      >
+        <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+          <h3 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+            저장소 공통 규칙
+          </h3>
+          {!isLoading ? (
+            <StatusBadge tone={agentsContent ? "success" : "neutral"}>
+              {agentsContent ? "적용 중" : "미설정"}
+            </StatusBadge>
+          ) : null}
+        </div>
         {isLoading ? (
           <p role="status" className="m-0 text-[var(--color-text-muted)]">
             불러오는 중
           </p>
-        ) : agentsPath && agentsContent ? (
-          <>
-            <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-              {agentsPath}
-              {workspacePath ? ` (워크스페이스: ${workspacePath})` : null}
-            </p>
-            <pre
-              aria-label="AGENTS.md 미리보기"
-              tabIndex={0}
-              className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
-            >
-              {previewLines(agentsContent)}
-            </pre>
-          </>
+        ) : agentsContent ? (
+          <pre
+            aria-label="저장소 공통 규칙 미리보기"
+            tabIndex={0}
+            className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
+          >
+            {previewLines(agentsContent)}
+          </pre>
         ) : (
           <>
             <p className="m-0 text-[var(--color-text-muted)]">
-              없음 — .okf/AGENTS.md를 만들면 프로젝트 규칙으로 쓰입니다
+              아직 저장소 공통 규칙이 없습니다. 기본 템플릿으로 만들면 이 저장소의 AI 작업 규칙으로 사용됩니다.
             </p>
             <div>
               <Button
@@ -204,34 +203,39 @@ export function AiSettingsPanel({
             ) : null}
           </>
         )}
-      </div>
-      <div className="mt-[var(--space-6)] grid gap-[var(--space-3)]">
-        <h3 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-          허브 공통 규칙
-        </h3>
+      </section>
+      <section
+        aria-label="허브 공통 규칙"
+        className="mt-[var(--space-6)] grid gap-[var(--space-3)]"
+      >
+        <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+          <h3 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+            허브 공통 규칙
+          </h3>
+          {!(isLoading || appAgentsQuery.isPending) ? (
+            <StatusBadge tone={appAgentsContent ? "success" : "neutral"}>
+              {appAgentsContent ? "적용 중" : "미설정"}
+            </StatusBadge>
+          ) : null}
+        </div>
         {isLoading || appAgentsQuery.isPending ? (
           <p role="status" className="m-0 text-[var(--color-text-muted)]">
             불러오는 중
           </p>
-        ) : appAgentsPath && appAgentsContent ? (
-          <>
-            <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-              {appAgentsPath}
-            </p>
-            <pre
-              aria-label="앱 AGENTS.md 미리보기"
-              tabIndex={0}
-              className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
-            >
-              {previewLines(appAgentsContent, 10)}
-            </pre>
-          </>
+        ) : appAgentsContent ? (
+          <pre
+            aria-label="허브 공통 규칙 미리보기"
+            tabIndex={0}
+            className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
+          >
+            {previewLines(appAgentsContent, 10)}
+          </pre>
         ) : (
           <p className="m-0 text-[var(--color-text-muted)]">
-            {appAgentsError ?? "앱 AGENTS.md를 불러오지 못했습니다"}
+            허브 공통 규칙을 불러오지 못했습니다.
           </p>
         )}
-      </div>
+      </section>
     </div>
   );
 }
