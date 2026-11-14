@@ -113,6 +113,8 @@ function RouterPrDeepLinkSync({
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("pr");
+        // 같은 커밋에서 DocumentsDeepLinkSync와 setSearchParams가 경쟁해도 잔류 ?doc=이 남지 않도록 함께 비운다.
+        next.delete("doc");
         return next;
       },
       { replace: true },
@@ -239,10 +241,9 @@ export function PlanningPrReviewSection() {
     }
   };
 
+  // 목록 조회가 성공해 최신 상태가 확정된 뒤에만 ?pr= 딥링크를 소비/정리한다(M11).
   const prListSettled =
-    ready &&
-    !pullRequestsQuery.isFetching &&
-    (pullRequestsQuery.isSuccess || pullRequestsQuery.isError);
+    ready && !pullRequestsQuery.isFetching && pullRequestsQuery.isSuccess;
   const canOpenPrNumber = useCallback(
     (prNumber: number) =>
       pullRequestsQuery.isSuccess &&

@@ -219,9 +219,9 @@ export class TauriPersonalDashboardGateway implements PersonalDashboardGateway {
         ? raw.unreadNotificationCount
         : notifications.filter((n) => n.isNew).length;
     return {
-      viewerLogin: typeof raw?.viewerLogin === "string" ? raw.viewerLogin : null,
-      fetchedAt: typeof raw?.fetchedAt === "string" ? raw.fetchedAt : new Date().toISOString(),
-      lastSeenAt: typeof raw?.lastSeenAt === "string" ? raw.lastSeenAt : null,
+      viewerLogin: asNonEmptyString(raw?.viewerLogin),
+      fetchedAt: asNonEmptyString(raw?.fetchedAt) ?? new Date().toISOString(),
+      lastSeenAt: asNonEmptyString(raw?.lastSeenAt),
       assigneeOptions: normalizeBoardAssignees(raw?.assigneeOptions),
       tasks,
       unreadNewCount,

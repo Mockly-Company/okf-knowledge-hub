@@ -138,4 +138,43 @@ describe("TauriPersonalDashboardGateway", () => {
 
     expect(result.tasks.map((t) => t.dependsOn)).toEqual([null, null, null, 74]);
   });
+
+  it("normalizes blank viewerLogin and lastSeenAt to null and trims populated metadata (S33)", async () => {
+    const gatewayBlank = new TauriPersonalDashboardGateway(
+      vi.fn().mockResolvedValue({
+        viewerLogin: "   ",
+        fetchedAt: "  2026-11-14T12:00:00Z  ",
+        lastSeenAt: "   ",
+        assigneeOptions: [
+          { login: "   ", name: "Empty" },
+          { login: "  alice  ", name: "  Alice  ", avatarUrl: "   " },
+        ],
+        tasks: [],
+        notifications: [],
+        failures: [],
+      }),
+    );
+
+    const blankResult = await gatewayBlank.getPersonalDashboard();
+    expect(blankResult.viewerLogin).toBeNull();
+    expect(blankResult.fetchedAt).toBe("2026-11-14T12:00:00Z");
+    expect(blankResult.lastSeenAt).toBeNull();
+    expect(blankResult.assigneeOptions).toEqual([
+      { login: "alice", name: "Alice", avatarUrl: null },
+    ]);
+
+    const gatewayTrimmed = new TauriPersonalDashboardGateway(
+      vi.fn().mockResolvedValue({
+        viewerLogin: "  YoonDongGeun  ",
+        lastSeenAt: "  2026-11-14T11:00:00Z  ",
+        tasks: [],
+        notifications: [],
+        failures: [],
+      }),
+    );
+
+    const trimmedResult = await gatewayTrimmed.getPersonalDashboard();
+    expect(trimmedResult.viewerLogin).toBe("YoonDongGeun");
+    expect(trimmedResult.lastSeenAt).toBe("2026-11-14T11:00:00Z");
+  });
 });

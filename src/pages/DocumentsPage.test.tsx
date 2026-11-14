@@ -865,4 +865,59 @@ describe("DocumentsPage", () => {
       screen.getByRole("region", { name: guide.title }),
     ).toBeVisible();
   });
+
+  it("preserves ?pr= query parameter when open PR list fails instead of dropping the deep link (M10, M11)", async () => {
+    function SearchEcho() {
+      const location = useLocation();
+      return <span data-testid="search-echo">{location.search}</span>;
+    }
+
+    const gateway = new FakeDocumentsGateway();
+    const guide = gateway.guideCatalog.documents[0];
+    const prListSpy = vi
+      .spyOn(gateway, "listDocsPullRequests")
+      .mockRejectedValue(new Error("network timeout"));
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={["/documents?pr=17"]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+            <SearchEcho />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(prListSpy).toHaveBeenCalled();
+    });
+    expect(screen.getByTestId("search-echo")).toHaveTextContent("?pr=17");
+    unmount();
+
+    const gatewayWithDoc = new FakeDocumentsGateway();
+    gatewayWithDoc.sessionSnapshot.lastOpenedPath = guide.path;
+    const docPrListSpy = vi
+      .spyOn(gatewayWithDoc, "listDocsPullRequests")
+      .mockRejectedValue(new Error("network timeout"));
+
+    render(
+      <MemoryRouter initialEntries={["/documents?pr=17"]}>
+        <DocumentsProvider gateway={gatewayWithDoc} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+            <SearchEcho />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("region", { name: guide.title }),
+    ).toBeVisible();
+    await waitFor(() => {
+      expect(docPrListSpy).toHaveBeenCalled();
+    });
+    expect(screen.getByTestId("search-echo")).toHaveTextContent("?pr=17");
+  });
 });

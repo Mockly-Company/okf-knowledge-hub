@@ -86,7 +86,10 @@ function DocumentsDeepLinkSync({
       );
       return;
     }
-    if (pullRequestsQuery.status === "pending") return;
+    // PR 목록이 에러 없이 최신 상태로 로드된 뒤에만 미존재 판단 및 ?pr= 정리를 수행한다(M10).
+    if (pullRequestsQuery.status !== "success" || pullRequestsQuery.isFetching) {
+      return;
+    }
     if (!prExists) {
       // 존재하지 않는 ?pr=는 현재 열려 있던 문서를 닫지 않고 파라미터만 비운다(M9).
       setSearchParams(
@@ -108,6 +111,7 @@ function DocumentsDeepLinkSync({
     prParam,
     hasPositivePrNumber,
     pullRequestsQuery.status,
+    pullRequestsQuery.isFetching,
     prExists,
     selectedPath,
     showDocumentsHome,
@@ -144,14 +148,7 @@ function DocumentsDeepLinkSync({
       },
       { replace: true },
     );
-  }, [
-    prParam,
-    docParam,
-    ready,
-    searchParams,
-    setSearchParams,
-    selectDocument,
-  ]);
+  }, [prParam, docParam, ready, setSearchParams, selectDocument]);
 
   return null;
 }
