@@ -127,6 +127,88 @@ impl AuthService {
         }
     }
 
+    pub(crate) fn with_static_token(
+        client_id: impl Into<String>,
+        access_token: SecretString,
+    ) -> Self {
+        use crate::auth::model::{DeviceCodeResponse, StoredTokens, TokenGrant};
+        use crate::auth::ports::{NoopAuthEvents, SystemClock, TokioDelay};
+
+        struct StaticNoopStore;
+        #[async_trait::async_trait]
+        impl CredentialStore for StaticNoopStore {
+            async fn load(&self) -> Result<Option<StoredTokens>, AppError> {
+                Ok(None)
+            }
+            async fn save(&self, _tokens: &StoredTokens) -> Result<(), AppError> {
+                Ok(())
+            }
+            async fn delete(&self) -> Result<(), AppError> {
+                Ok(())
+            }
+        }
+
+        struct StaticNoopApi;
+        #[async_trait::async_trait]
+        impl DeviceFlowApi for StaticNoopApi {
+            async fn request_device_code(
+                &self,
+                _client_id: &str,
+            ) -> Result<DeviceCodeResponse, AppError> {
+                Err(AppError::new(
+                    ErrorCode::ReauthenticationRequired,
+                    "정적 토큰 세션에서는 Device Flow를 지원하지 않습니다.",
+                ))
+            }
+            async fn poll_access_token(
+                &self,
+                _client_id: &str,
+                _device_code: &SecretString,
+            ) -> Result<DeviceTokenPoll, AppError> {
+                Err(AppError::new(
+                    ErrorCode::ReauthenticationRequired,
+                    "정적 토큰 세션에서는 Device Flow를 지원하지 않습니다.",
+                ))
+            }
+            async fn refresh_access_token(
+                &self,
+                _client_id: &str,
+                _refresh_token: &SecretString,
+            ) -> Result<TokenGrant, AppError> {
+                Err(AppError::new(
+                    ErrorCode::ReauthenticationRequired,
+                    "정적 토큰 세션에서는 토큰 갱신을 지원하지 않습니다.",
+                ))
+            }
+            async fn authenticated_user(
+                &self,
+                _access_token: &SecretString,
+            ) -> Result<GithubUserSummary, AppError> {
+                Err(AppError::new(
+                    ErrorCode::ReauthenticationRequired,
+                    "정적 토큰 세션에서는 사용자 조회 API를 별도로 호출합니다.",
+                ))
+            }
+        }
+
+        Self {
+            client_id: client_id.into(),
+            api: Arc::new(StaticNoopApi),
+            credentials: Arc::new(StaticNoopStore),
+            clock: Arc::new(SystemClock),
+            delay: Arc::new(TokioDelay),
+            events: Arc::new(NoopAuthEvents),
+            lifecycle: Mutex::new(Lifecycle::default()),
+            begin_reservations: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            refresh: Mutex::new(()),
+            access_session: Mutex::new(AccessSession::Authenticated {
+                access_token,
+                expires_at_unix: i64::MAX,
+            }),
+            authenticated_principal: Mutex::new(None),
+        }
+    }
+
     pub async fn begin(&self, request_id: Uuid) -> Result<DeviceAuthorization, AppError> {
         self.ensure_client_id()?;
         let (generation, reservation) = {

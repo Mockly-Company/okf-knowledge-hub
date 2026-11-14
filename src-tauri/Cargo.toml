@@ -5,6 +5,15 @@ description = "A Git-native OKF knowledge workspace"
 authors = ["OkHub contributors"]
 edition = "2021"
 rust-version = "1.88.0"
+default-run = "okhub"
+
+[[bin]]
+name = "okhub"
+path = "src/main.rs"
+
+[[bin]]
+name = "okhub-cli"
+path = "src/bin/okhub_cli.rs"
 
 [lib]
 name = "okhub_lib"

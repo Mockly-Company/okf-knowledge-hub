@@ -286,6 +286,28 @@ where
     inject_csp_meta(&output)
 }
 
+pub(crate) fn extract_local_stylesheet_hrefs(raw_html: &str) -> Vec<String> {
+    let lower_html = raw_html.to_ascii_lowercase();
+    let mut hrefs = Vec::new();
+    let mut cursor = 0;
+    while let Some(rel_idx) = lower_html[cursor..].find("<link") {
+        let tag_start = cursor + rel_idx;
+        let Some(end_offset) = raw_html[tag_start..].find('>') else {
+            break;
+        };
+        let tag_end = tag_start + end_offset + 1;
+        let tag = &raw_html[tag_start..tag_end];
+        if let Some(clean_href) = extract_local_stylesheet_href(tag) {
+            hrefs.push(clean_href.to_owned());
+            if hrefs.len() >= MAX_INLINED_STYLESHEETS {
+                break;
+            }
+        }
+        cursor = tag_end;
+    }
+    hrefs
+}
+
 fn extract_local_stylesheet_href(tag: &str) -> Option<&str> {
     let rel = extract_html_attr(tag, "rel")?;
     if !rel

@@ -21,6 +21,11 @@ import type {
   SaveDocumentDraftRequest,
   SaveDocumentDraftResponse,
   RecoveredDocument,
+  DocsPullRequestSummary,
+  DocsPullRequestDetail,
+  PublishDocumentDraftRequest,
+  PublishDocumentDraftResponse,
+  ApproveAndMergeDocsPrResponse,
 } from "@/features/documents/model";
 
 const DESKTOP_ONLY_MESSAGE =
@@ -161,6 +166,31 @@ export class UnavailableDocumentsGateway implements DocumentsGateway {
   }
 
   openExternal(_url: string): Promise<void> {
+    return unavailable();
+  }
+
+  listDocsPullRequests(_sessionId: string): Promise<DocsPullRequestSummary[]> {
+    return unavailable();
+  }
+
+  getDocsPullRequestDetail(
+    _sessionId: string,
+    _number: number,
+  ): Promise<DocsPullRequestDetail> {
+    return unavailable();
+  }
+
+  publishDocumentDraft(
+    _request: PublishDocumentDraftRequest,
+  ): Promise<PublishDocumentDraftResponse> {
+    return unavailable();
+  }
+
+  approveAndMergeDocsPullRequest(
+    _sessionId: string,
+    _number: number,
+    _comment?: string,
+  ): Promise<ApproveAndMergeDocsPrResponse> {
     return unavailable();
   }
 }

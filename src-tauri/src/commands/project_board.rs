@@ -958,9 +958,13 @@ mod tests {
 
     fn sample_item(number: u64, url: &str, sub_urls: &[&str]) -> GithubProjectItem {
         GithubProjectItem {
+            item_id: Some(format!("PVTI_{number}")),
+            content_id: Some(format!("I_{number}")),
             number,
             title: format!("issue-{number}"),
             url: url.to_owned(),
+            body: None,
+            repository_full_name: Some("Acme-Org/acme-web".to_owned()),
             labels: Vec::new(),
             status: Some("In progress".to_owned()),
             area: Some("백엔드".to_owned()),

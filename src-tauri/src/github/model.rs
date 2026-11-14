@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::project_board::model::{BoardLayer, BoardStatus, ProjectOwnerScope};
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubProjectSummary {
@@ -103,11 +105,16 @@ pub struct CreatePullRequestInput {
     pub draft: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GithubProjectItem {
+    pub item_id: Option<String>,
+    pub content_id: Option<String>,
     pub number: u64,
     pub title: String,
     pub url: String,
+    pub body: Option<String>,
+    pub repository_full_name: Option<String>,
     pub labels: Vec<String>,
     pub status: Option<String>,
     pub area: Option<String>,
@@ -117,11 +124,140 @@ pub struct GithubProjectItem {
     pub sub_issues: Vec<GithubSubIssue>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GithubSubIssue {
     pub number: u64,
     pub title: String,
     pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubProjectFieldOption {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubProjectSingleSelectField {
+    pub id: String,
+    pub name: String,
+    pub options: Vec<GithubProjectFieldOption>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubProjectSchema {
+    pub project_id: String,
+    pub title: String,
+    pub scope: ProjectOwnerScope,
+    pub single_select_fields: Vec<GithubProjectSingleSelectField>,
+}
+
+impl GithubProjectSchema {
+    pub fn find_option(
+        &self,
+        field_names: &[&str],
+        option_candidates: &[&str],
+    ) -> Option<(&str, &str)> {
+        let field = self.single_select_fields.iter().find(|field| {
+            let trimmed = field.name.trim();
+            field_names
+                .iter()
+                .any(|want| trimmed.eq_ignore_ascii_case(want) || trimmed == *want)
+        })?;
+        for candidate in option_candidates {
+            if let Some(option) = field.options.iter().find(|opt| {
+                let trimmed = opt.name.trim();
+                trimmed.eq_ignore_ascii_case(candidate) || trimmed == *candidate
+            }) {
+                return Some((field.id.as_str(), option.id.as_str()));
+            }
+        }
+        None
+    }
+
+    pub fn find_status_option(&self, status: BoardStatus) -> Option<(&str, &str)> {
+        let candidates: &[&str] = match status {
+            BoardStatus::Backlog => &["Backlog", "Todo", "백로그"],
+            BoardStatus::Ready => &["Ready", "준비됨"],
+            BoardStatus::InProgress => &["In progress", "In Progress", "진행 중"],
+            BoardStatus::InReview => &["In review", "In Review", "검토 중"],
+            BoardStatus::Done => &["Done", "완료"],
+        };
+        self.find_option(&["Status", "상태"], candidates)
+    }
+
+    pub fn find_layer_option(&self, layer: BoardLayer) -> Option<(&str, &str)> {
+        let candidates: &[&str] = match layer {
+            BoardLayer::Planning => &["기획", "Planning"],
+            BoardLayer::Design => &["디자인", "Design"],
+            BoardLayer::Frontend => &["프론트엔드", "프론트", "Frontend"],
+            BoardLayer::Backend => &["백엔드", "Backend"],
+            BoardLayer::Unassigned => return None,
+        };
+        self.find_option(&["영역", "Area", "Layer"], candidates)
+    }
+
+    pub fn find_kind_option(&self, kind: &str) -> Option<(&str, &str)> {
+        let trimmed = kind.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        self.find_option(&["타입", "Type", "Kind"], &[trimmed])
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateProjectIssueInput {
+    pub project_scope: ProjectOwnerScope,
+    pub project_owner: String,
+    pub project_number: u64,
+    pub repository_full_name: String,
+    pub title: String,
+    pub body: String,
+    pub layer: Option<BoardLayer>,
+    pub status: Option<BoardStatus>,
+    pub kind: Option<String>,
+    pub parent_issue_number: Option<u64>,
+    pub parent_issue_repository: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedProjectIssue {
+    pub id: String,
+    pub item_id: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub repository_full_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateProjectItemInput {
+    pub project_scope: ProjectOwnerScope,
+    pub project_owner: String,
+    pub project_number: u64,
+    pub issue_number: u64,
+    pub repository_full_name: Option<String>,
+    pub status: Option<BoardStatus>,
+    pub layer: Option<BoardLayer>,
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedProjectItem {
+    pub item_id: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub status: Option<String>,
+    pub area: Option<String>,
+    pub kind: Option<String>,
 }
 
 /// 이슈 본문에서 순서 약속을 읽는다.

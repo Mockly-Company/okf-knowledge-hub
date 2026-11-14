@@ -148,6 +148,10 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
             }
         }
     }
+    lines.push(
+        "- 로컬 자동화 도구: `okhub-cli` (`doc validate`, `pr list|create|approve-merge`, `board list|ready|create-issue|update-status`, `context issue <번호>`, STDIO MCP `okhub-cli mcp`)"
+            .to_owned(),
+    );
     lines.push(String::new());
     lines.join("\n")
 }

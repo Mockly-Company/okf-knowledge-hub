@@ -153,7 +153,7 @@ export function PlanningPrReviewSection() {
   useEffect(() => {
     if (!activeDoc) return;
     setViewTab(defaultTabForDocument(activeDoc));
-  }, [selectedPrNumber, activeDoc?.path, activeDoc?.hasCompanionHtml]);
+  }, [selectedPrNumber, activeDoc]);
 
   const diffRows = useMemo(() => {
     if (!activeDoc) return [];
@@ -481,13 +481,13 @@ export function PlanningPrReviewSection() {
                             </span>
                           </div>
                           {diffRows.length > 0 ? (
-                            diffRows.map((row, index) => (
+                            diffRows.map((row) => (
                               <div
                                 className="document-source-diff__row"
                                 data-same={
                                   row.before?.kind === "same" ? "true" : "false"
                                 }
-                                key={index}
+                                key={`${row.before?.number ?? "-"}:${row.after?.number ?? "-"}`}
                               >
                                 <DiffCell
                                   line={row.before}

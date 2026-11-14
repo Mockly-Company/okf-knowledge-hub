@@ -12,11 +12,13 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    parse_depends_on, CreatePullRequestInput, DocsPullRequestSummary, DraftPullRequest,
-    DraftPullRequestRequest, GithubProjectItem, GithubProjectListItem, GithubProjectSummary,
-    GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page, PullRequestChangedFile,
+    parse_depends_on, CreateProjectIssueInput, CreatePullRequestInput, CreatedProjectIssue,
+    DocsPullRequestSummary, DraftPullRequest, DraftPullRequestRequest, GithubProjectFieldOption,
+    GithubProjectItem, GithubProjectListItem, GithubProjectSchema, GithubProjectSingleSelectField,
+    GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page,
+    PullRequestChangedFile, UpdateProjectItemInput, UpdatedProjectItem,
 };
-use crate::project_board::model::ProjectOwnerScope;
+use crate::project_board::model::{BoardStatus, ProjectOwnerScope};
 
 pub const INITIALIZATION_DRAFT_PR_BODY: &str = "## Summary\n\n- Initialize this repository as an OkHub knowledge workspace\n\n## Why\n\n- Share OKF documents and workspace metadata through Git\n\n## Changes\n\n- Add `.okf/workspace.yml`\n- Add the initial document and template roots when missing\n\n## Test Plan\n\n- Validate `.okf/workspace.yml` in OkHub\n- Confirm the configured document root stays inside the repository\n\n## Review Notes\n\n- This change contains workspace metadata only";
 /// 보드 조회에서 Issue당 함께 가져오는 서브이슈 수. 초과분은 `node(id)` 후속 조회로
@@ -217,9 +219,17 @@ struct GithubProjectPageInfo {
 
 #[derive(Deserialize)]
 struct GithubProjectItemNode {
+    #[serde(default)]
+    id: Option<String>,
     content: Option<GithubProjectItemContent>,
     #[serde(rename = "fieldValues", default)]
     field_values: Option<GithubProjectFieldValues>,
+}
+
+#[derive(Deserialize)]
+struct GithubContentRepository {
+    #[serde(rename = "nameWithOwner", default)]
+    name_with_owner: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -235,6 +245,8 @@ struct GithubProjectItemContent {
     /// 본문의 `이전 단계: #N` 줄을 읽어 선행 이슈를 정한다.
     #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
+    repository: Option<GithubContentRepository>,
     labels: Option<GithubProjectLabelConnection>,
     #[serde(rename = "subIssues", default)]
     sub_issues: Option<GithubSubIssuesConnection>,
@@ -576,7 +588,7 @@ fn project_permission_error() -> AppError {
 /// `sub_issues_query`로 이어서 가져온다.
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{content{{__typename ... on Issue{{id number title url body labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url body labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{id content{{__typename ... on Issue{{id number title url body repository{{nameWithOwner}} labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url body repository{{nameWithOwner}} labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -620,6 +632,21 @@ fn project_not_found_error() -> AppError {
     )
     .with_recovery(RecoveryAction::ReinstallGithubApp)
     .with_detail("reason", "project_not_found")
+}
+
+fn is_project_not_found_error(error: &AppError) -> bool {
+    error.code == ErrorCode::GithubPermissionDenied
+        && error
+            .details
+            .get("reason")
+            .is_some_and(|reason| reason == "project_not_found")
+}
+
+fn flip_project_scope(scope: ProjectOwnerScope) -> ProjectOwnerScope {
+    match scope {
+        ProjectOwnerScope::Organization => ProjectOwnerScope::User,
+        ProjectOwnerScope::User => ProjectOwnerScope::Organization,
+    }
 }
 
 fn map_draft_pull_request_error(
@@ -1182,15 +1209,24 @@ impl GithubHttpClient {
                         }
                     }
                 }
+                let depends_on = parse_depends_on(content.body.as_deref());
+                let repository_full_name = content
+                    .repository
+                    .and_then(|repo| repo.name_with_owner)
+                    .filter(|name| !name.trim().is_empty());
                 items.push(GithubProjectItem {
+                    item_id: node.id.filter(|id| !id.trim().is_empty()),
+                    content_id: content.id.filter(|id| !id.trim().is_empty()),
                     number,
                     title,
                     url,
+                    body: content.body,
+                    repository_full_name,
                     labels,
                     status,
                     area,
                     kind,
-                    depends_on: parse_depends_on(content.body.as_deref()),
+                    depends_on,
                     sub_issues,
                 });
             }
@@ -1514,17 +1550,31 @@ impl GithubHttpClient {
     ) -> Result<Vec<PullRequestChangedFile>, AppError> {
         let (owner, name) = split_repository_full_name(repository_full_name)?;
         let number_str = number.to_string();
-        let files: Vec<GithubPullRequestFileResponse> = self
-            .get_json(
-                &["repos", owner, name, "pulls", &number_str, "files"],
-                &[("per_page", "100".to_owned())],
-                HttpFailureContext::Repository,
-            )
-            .await?;
-        Ok(files
-            .into_iter()
-            .map(GithubPullRequestFileResponse::into_public)
-            .collect())
+        let mut all_files = Vec::new();
+        for page in 1..=5u32 {
+            let page_query = if page == 1 {
+                vec![("per_page", "100".to_owned())]
+            } else {
+                vec![("per_page", "100".to_owned()), ("page", page.to_string())]
+            };
+            let files: Vec<GithubPullRequestFileResponse> = self
+                .get_json(
+                    &["repos", owner, name, "pulls", &number_str, "files"],
+                    &page_query,
+                    HttpFailureContext::Repository,
+                )
+                .await?;
+            let count = files.len();
+            all_files.extend(
+                files
+                    .into_iter()
+                    .map(GithubPullRequestFileResponse::into_public),
+            );
+            if count < 100 {
+                break;
+            }
+        }
+        Ok(all_files)
     }
 
     pub async fn read_repository_text_file_at_ref(
@@ -1704,6 +1754,534 @@ impl GithubHttpClient {
             .with_recovery(RecoveryAction::Retry));
         }
         Ok(merged.sha)
+    }
+
+    pub async fn list_project_items_with_fallback(
+        &self,
+        owner_scope: ProjectOwnerScope,
+        owner: &str,
+        number: u64,
+    ) -> Result<(Vec<GithubProjectItem>, bool, u32, ProjectOwnerScope), AppError> {
+        match self.list_project_items(owner_scope, owner, number).await {
+            Ok((items, truncated, dropped)) => Ok((items, truncated, dropped, owner_scope)),
+            Err(error) if is_project_not_found_error(&error) => {
+                let fallback = flip_project_scope(owner_scope);
+                let (items, truncated, dropped) =
+                    self.list_project_items(fallback, owner, number).await?;
+                Ok((items, truncated, dropped, fallback))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub async fn inspect_project_schema(
+        &self,
+        owner_scope: ProjectOwnerScope,
+        owner: &str,
+        number: u64,
+    ) -> Result<GithubProjectSchema, AppError> {
+        match self
+            .inspect_project_schema_once(owner_scope, owner, number)
+            .await
+        {
+            Ok(schema) => Ok(schema),
+            Err(error) if is_project_not_found_error(&error) => {
+                let fallback = flip_project_scope(owner_scope);
+                self.inspect_project_schema_once(fallback, owner, number)
+                    .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn inspect_project_schema_once(
+        &self,
+        owner_scope: ProjectOwnerScope,
+        owner: &str,
+        number: u64,
+    ) -> Result<GithubProjectSchema, AppError> {
+        let root = match owner_scope {
+            ProjectOwnerScope::Organization => "organization",
+            ProjectOwnerScope::User => "user",
+        };
+        let query = format!(
+            "query($login:String!,$number:Int!){{{root}(login:$login){{projectV2(number:$number){{id title fields(first:50){{nodes{{__typename ... on ProjectV2SingleSelectField{{id name options{{id name}}}}}}}}}}}}}}"
+        );
+        let data = self
+            .graphql_value(&query, json!({ "login": owner, "number": number }))
+            .await?;
+        let project = data
+            .get(root)
+            .and_then(|owner_val| owner_val.get("projectV2"))
+            .filter(|val| !val.is_null())
+            .ok_or_else(project_not_found_error)?;
+        let project_id = project
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        if project_id.is_empty() {
+            return Err(project_not_found_error());
+        }
+        let title = project
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let mut single_select_fields = Vec::new();
+        if let Some(nodes) = project
+            .get("fields")
+            .and_then(|f| f.get("nodes"))
+            .and_then(serde_json::Value::as_array)
+        {
+            for node in nodes {
+                if node.get("__typename").and_then(serde_json::Value::as_str)
+                    != Some("ProjectV2SingleSelectField")
+                {
+                    continue;
+                }
+                let Some(id) = node.get("id").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let Some(name) = node.get("name").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let options = node
+                    .get("options")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|opts| {
+                        opts.iter()
+                            .filter_map(|opt| {
+                                let opt_id = opt.get("id")?.as_str()?;
+                                let opt_name = opt.get("name")?.as_str()?;
+                                Some(GithubProjectFieldOption {
+                                    id: opt_id.to_owned(),
+                                    name: opt_name.to_owned(),
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                single_select_fields.push(GithubProjectSingleSelectField {
+                    id: id.to_owned(),
+                    name: name.to_owned(),
+                    options,
+                });
+            }
+        }
+        Ok(GithubProjectSchema {
+            project_id,
+            title,
+            scope: owner_scope,
+            single_select_fields,
+        })
+    }
+
+    pub async fn create_project_issue(
+        &self,
+        input: &CreateProjectIssueInput,
+    ) -> Result<CreatedProjectIssue, AppError> {
+        let title = input.title.trim();
+        if title.is_empty() {
+            return Err(
+                AppError::new(ErrorCode::WorkspaceInvalid, "이슈 제목을 입력해 주세요.")
+                    .with_recovery(RecoveryAction::Retry),
+            );
+        }
+        let (repo_owner, repo_name) = split_repository_full_name(&input.repository_full_name)?;
+        let schema = self
+            .inspect_project_schema(
+                input.project_scope,
+                &input.project_owner,
+                input.project_number,
+            )
+            .await?;
+
+        let repo_data = self
+            .graphql_value(
+                "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id labels(first:100){nodes{id name}}}}",
+                json!({ "owner": repo_owner, "name": repo_name }),
+            )
+            .await?;
+        let repository = repo_data
+            .get("repository")
+            .filter(|v| !v.is_null())
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::GithubPermissionDenied,
+                    "이슈를 생성할 저장소에 접근할 수 없습니다.",
+                )
+                .with_recovery(RecoveryAction::ReinstallGithubApp)
+            })?;
+        let repository_id = repository
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(github_unavailable_error)?;
+
+        let mut label_ids = Vec::new();
+        if let Some(wanted_label) = input.layer.and_then(|layer| layer.label()) {
+            if let Some(nodes) = repository
+                .get("labels")
+                .and_then(|l| l.get("nodes"))
+                .and_then(serde_json::Value::as_array)
+            {
+                if let Some(label_id) = nodes.iter().find_map(|node| {
+                    let name = node.get("name")?.as_str()?;
+                    if name.eq_ignore_ascii_case(wanted_label) {
+                        node.get("id")?.as_str().map(str::to_owned)
+                    } else {
+                        None
+                    }
+                }) {
+                    label_ids.push(label_id);
+                }
+            }
+        }
+
+        let parent_issue_id = if let Some(parent_number) = input.parent_issue_number {
+            let parent_repo = input
+                .parent_issue_repository
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or(&input.repository_full_name);
+            self.resolve_issue_node_id(
+                schema.scope,
+                &input.project_owner,
+                input.project_number,
+                parent_repo,
+                parent_number,
+            )
+            .await?
+        } else {
+            None
+        };
+
+        let mut create_input = json!({
+            "repositoryId": repository_id,
+            "title": title,
+            "body": input.body,
+        });
+        if !label_ids.is_empty() {
+            create_input["labelIds"] = json!(label_ids);
+        }
+        let created_data = self
+            .graphql_value(
+                "mutation($input:CreateIssueInput!){createIssue(input:$input){issue{id number title url}}}",
+                json!({ "input": create_input }),
+            )
+            .await?;
+        let issue_val = created_data
+            .get("createIssue")
+            .and_then(|c| c.get("issue"))
+            .ok_or_else(github_unavailable_error)?;
+        let issue_id = issue_val
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(github_unavailable_error)?
+            .to_owned();
+        let issue_number = issue_val
+            .get("number")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(github_unavailable_error)?;
+        let issue_title = issue_val
+            .get("title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(title)
+            .to_owned();
+        let issue_url = issue_val
+            .get("url")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+
+        if let Some(parent_id) = parent_issue_id {
+            let _ = self
+                .graphql_value(
+                    "mutation($parentId:ID!,$subIssueId:ID!){addSubIssue(input:{issueId:$parentId,subIssueId:$subIssueId}){issue{id}subIssue{id}}}",
+                    json!({ "parentId": parent_id, "subIssueId": issue_id }),
+                )
+                .await?;
+        }
+
+        let item_id = self.add_project_item(&schema.project_id, &issue_id).await?;
+
+        let target_status = input.status.unwrap_or(BoardStatus::Backlog);
+        if let Some((field_id, option_id)) = schema.find_status_option(target_status) {
+            self.set_project_single_select_field(&schema.project_id, &item_id, field_id, option_id)
+                .await?;
+        }
+        if let Some(layer) = input.layer {
+            if let Some((field_id, option_id)) = schema.find_layer_option(layer) {
+                self.set_project_single_select_field(
+                    &schema.project_id,
+                    &item_id,
+                    field_id,
+                    option_id,
+                )
+                .await?;
+            }
+        }
+        if let Some(kind) = input.kind.as_deref() {
+            if let Some((field_id, option_id)) = schema.find_kind_option(kind) {
+                self.set_project_single_select_field(
+                    &schema.project_id,
+                    &item_id,
+                    field_id,
+                    option_id,
+                )
+                .await?;
+            }
+        }
+
+        Ok(CreatedProjectIssue {
+            id: issue_id,
+            item_id,
+            number: issue_number,
+            title: issue_title,
+            url: issue_url,
+            repository_full_name: format!("{repo_owner}/{repo_name}"),
+        })
+    }
+
+    pub async fn update_project_item_fields(
+        &self,
+        input: &UpdateProjectItemInput,
+    ) -> Result<UpdatedProjectItem, AppError> {
+        let schema = self
+            .inspect_project_schema(
+                input.project_scope,
+                &input.project_owner,
+                input.project_number,
+            )
+            .await?;
+        let (items, _, _, _) = self
+            .list_project_items_with_fallback(
+                schema.scope,
+                &input.project_owner,
+                input.project_number,
+            )
+            .await?;
+
+        let matched = items.into_iter().find(|item| {
+            if item.number != input.issue_number {
+                return false;
+            }
+            match input.repository_full_name.as_deref().map(str::trim) {
+                Some(want) if !want.is_empty() => item
+                    .repository_full_name
+                    .as_deref()
+                    .map(|actual| actual.eq_ignore_ascii_case(want))
+                    .unwrap_or(true),
+                _ => true,
+            }
+        });
+
+        let Some(item) = matched else {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                format!(
+                    "활성 GitHub Project에서 이슈 #{}을(를) 찾을 수 없습니다.",
+                    input.issue_number
+                ),
+            )
+            .with_recovery(RecoveryAction::Retry));
+        };
+
+        let item_id = match item.item_id.clone() {
+            Some(id) => id,
+            None => {
+                let content_id = item.content_id.as_deref().ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::WorkspaceInvalid,
+                        "이슈의 Project 항목 ID를 확인할 수 없습니다.",
+                    )
+                })?;
+                self.add_project_item(&schema.project_id, content_id)
+                    .await?
+            }
+        };
+
+        let mut status_out = item.status;
+        let mut area_out = item.area;
+        let mut kind_out = item.kind;
+
+        if let Some(status) = input.status {
+            let (field_id, option_id) = schema.find_status_option(status).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    format!(
+                        "선택한 GitHub Project에 Status '{}' 옵션이 없습니다.",
+                        status.display_name()
+                    ),
+                )
+            })?;
+            self.set_project_single_select_field(&schema.project_id, &item_id, field_id, option_id)
+                .await?;
+            status_out = Some(status.display_name().to_owned());
+        }
+        if let Some(layer) = input.layer {
+            if let Some((field_id, option_id)) = schema.find_layer_option(layer) {
+                self.set_project_single_select_field(
+                    &schema.project_id,
+                    &item_id,
+                    field_id,
+                    option_id,
+                )
+                .await?;
+                area_out = Some(layer.display_name().to_owned());
+            }
+        }
+        if let Some(kind) = input.kind.as_deref() {
+            if let Some((field_id, option_id)) = schema.find_kind_option(kind) {
+                self.set_project_single_select_field(
+                    &schema.project_id,
+                    &item_id,
+                    field_id,
+                    option_id,
+                )
+                .await?;
+                kind_out = Some(kind.trim().to_owned());
+            }
+        }
+
+        Ok(UpdatedProjectItem {
+            item_id,
+            number: item.number,
+            title: item.title,
+            url: item.url,
+            status: status_out,
+            area: area_out,
+            kind: kind_out,
+        })
+    }
+
+    async fn resolve_issue_node_id(
+        &self,
+        project_scope: ProjectOwnerScope,
+        project_owner: &str,
+        project_number: u64,
+        fallback_repository_full_name: &str,
+        issue_number: u64,
+    ) -> Result<Option<String>, AppError> {
+        if let Ok((items, _, _, _)) = self
+            .list_project_items_with_fallback(project_scope, project_owner, project_number)
+            .await
+        {
+            if let Some(found_id) = items
+                .into_iter()
+                .find(|item| item.number == issue_number)
+                .and_then(|item| item.content_id)
+            {
+                return Ok(Some(found_id));
+            }
+        }
+        let (owner, name) = split_repository_full_name(fallback_repository_full_name)?;
+        let data = self
+            .graphql_value(
+                "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){issue(number:$number){id}}}",
+                json!({ "owner": owner, "name": name, "number": issue_number }),
+            )
+            .await?;
+        Ok(data
+            .get("repository")
+            .and_then(|r| r.get("issue"))
+            .and_then(|i| i.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned))
+    }
+
+    async fn add_project_item(
+        &self,
+        project_id: &str,
+        content_id: &str,
+    ) -> Result<String, AppError> {
+        let data = self
+            .graphql_value(
+                "mutation($projectId:ID!,$contentId:ID!){addProjectV2ItemById(input:{projectId:$projectId,contentId:$contentId}){item{id}}}",
+                json!({ "projectId": project_id, "contentId": content_id }),
+            )
+            .await?;
+        data.get("addProjectV2ItemById")
+            .and_then(|res| res.get("item"))
+            .and_then(|item| item.get("id"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(github_unavailable_error)
+    }
+
+    async fn set_project_single_select_field(
+        &self,
+        project_id: &str,
+        item_id: &str,
+        field_id: &str,
+        option_id: &str,
+    ) -> Result<(), AppError> {
+        let _ = self
+            .graphql_value(
+                "mutation($projectId:ID!,$itemId:ID!,$fieldId:ID!,$optionId:String!){updateProjectV2ItemFieldValue(input:{projectId:$projectId,itemId:$itemId,fieldId:$fieldId,value:{singleSelectOptionId:$optionId}}){projectV2Item{id}}}",
+                json!({
+                    "projectId": project_id,
+                    "itemId": item_id,
+                    "fieldId": field_id,
+                    "optionId": option_id,
+                }),
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn graphql_value(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> Result<serde_json::Value, AppError> {
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["graphql"],
+                &[],
+                Some(json!({
+                    "query": query,
+                    "variables": variables,
+                })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_project_error(response.status));
+        }
+        let parsed: serde_json::Value =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        if let Some(errors) = parsed
+            .get("errors")
+            .and_then(serde_json::Value::as_array)
+            .filter(|arr| !arr.is_empty())
+        {
+            let mapped: Vec<GithubProjectLookupError> = errors
+                .iter()
+                .map(|err| GithubProjectLookupError {
+                    kind: err
+                        .get("type")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    message: err
+                        .get("message")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown GraphQL error")
+                        .to_owned(),
+                })
+                .collect();
+            return Err(map_project_lookup_errors(&mapped));
+        }
+        parsed
+            .get("data")
+            .cloned()
+            .filter(|v| !v.is_null())
+            .ok_or_else(github_unavailable_error)
     }
 
     async fn list_installations(&self) -> Result<Vec<u64>, AppError> {
@@ -3024,5 +3602,122 @@ mod tests {
             urls[5].1,
             "https://api.example.test/repos/Acme-Org/acme-docs/pulls/12/merge"
         );
+    }
+
+    #[tokio::test]
+    async fn project_schema_introspection_issue_creation_and_field_updates_are_dynamic() {
+        use crate::project_board::model::BoardLayer;
+
+        let schema_json = r#"{"data":{"organization":{"projectV2":{"id":"PVT_acme_9","title":"Acme Roadmap","fields":{"nodes":[
+          {"__typename":"ProjectV2SingleSelectField","id":"FLD_status","name":"Status","options":[{"id":"OPT_backlog","name":"Backlog"},{"id":"OPT_progress","name":"In progress"},{"id":"OPT_done","name":"Done"}]},
+          {"__typename":"ProjectV2SingleSelectField","id":"FLD_area","name":"영역","options":[{"id":"OPT_plan","name":"기획"},{"id":"OPT_back","name":"백엔드"}]},
+          {"__typename":"ProjectV2SingleSelectField","id":"FLD_kind","name":"타입","options":[{"id":"OPT_task","name":"작업"}]}
+        ]}}}}}"#;
+
+        let transport = RecordingTransport::with_responses(vec![
+            // 1. inspect_project_schema
+            response(200, schema_json),
+            // 2. repository lookup + labels
+            response(
+                200,
+                r#"{"data":{"repository":{"id":"R_acme_api","labels":{"nodes":[{"id":"LBL_back","name":"layer:backend"}]}}}}"#,
+            ),
+            // 3. list_project_items_with_fallback (to resolve parent issue #10 even across repos)
+            response(
+                200,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"PVTI_10","content":{"__typename":"Issue","id":"I_parent_10","number":10,"title":"[기획] 결제 개편","url":"https://github.com/Acme-Org/acme-docs/issues/10","body":"기획안","repository":{"nameWithOwner":"Acme-Org/acme-docs"},"labels":{"nodes":[]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"Done","field":{"name":"Status"}}]}}]}}}}}"#,
+            ),
+            // 4. createIssue
+            response(
+                200,
+                r#"{"data":{"createIssue":{"issue":{"id":"I_new_21","number":21,"title":"[백엔드] 결제 API 구현","url":"https://github.com/Acme-Org/acme-api/issues/21"}}}}"#,
+            ),
+            // 5. addSubIssue
+            response(
+                200,
+                r#"{"data":{"addSubIssue":{"issue":{"id":"I_parent_10"},"subIssue":{"id":"I_new_21"}}}}"#,
+            ),
+            // 6. addProjectV2ItemById
+            response(
+                200,
+                r#"{"data":{"addProjectV2ItemById":{"item":{"id":"PVTI_21"}}}}"#,
+            ),
+            // 7..9. Status + 영역 + 타입 updates
+            response(
+                200,
+                r#"{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_21"}}}}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_21"}}}}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_21"}}}}"#,
+            ),
+            // 10. update_project_item_fields -> inspect_project_schema
+            response(200, schema_json),
+            // 11. update_project_item_fields -> list_project_items
+            response(
+                200,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"PVTI_21","content":{"__typename":"Issue","id":"I_new_21","number":21,"title":"[백엔드] 결제 API 구현","url":"https://github.com/Acme-Org/acme-api/issues/21","body":"이전 단계: #10","repository":{"nameWithOwner":"Acme-Org/acme-api"},"labels":{"nodes":[]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"Backlog","field":{"name":"Status"}}]}}]}}}}}"#,
+            ),
+            // 12. update Status -> In progress
+            response(
+                200,
+                r#"{"data":{"updateProjectV2ItemFieldValue":{"projectV2Item":{"id":"PVTI_21"}}}}"#,
+            ),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let created = service
+            .create_project_issue(&CreateProjectIssueInput {
+                project_scope: ProjectOwnerScope::Organization,
+                project_owner: "Acme-Org".to_owned(),
+                project_number: 9,
+                repository_full_name: "Acme-Org/acme-api".to_owned(),
+                title: "[백엔드] 결제 API 구현".to_owned(),
+                body: "이전 단계: #10\n\n상세 스펙".to_owned(),
+                layer: Some(BoardLayer::Backend),
+                status: Some(BoardStatus::Backlog),
+                kind: Some("작업".to_owned()),
+                parent_issue_number: Some(10),
+                parent_issue_repository: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(created.number, 21);
+        assert_eq!(created.item_id, "PVTI_21");
+        assert_eq!(created.repository_full_name, "Acme-Org/acme-api");
+
+        let updated = service
+            .update_project_item_fields(&UpdateProjectItemInput {
+                project_scope: ProjectOwnerScope::Organization,
+                project_owner: "Acme-Org".to_owned(),
+                project_number: 9,
+                issue_number: 21,
+                repository_full_name: Some("Acme-Org/acme-api".to_owned()),
+                status: Some(BoardStatus::InProgress),
+                layer: None,
+                kind: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(updated.number, 21);
+        assert_eq!(updated.status.as_deref(), Some("In progress"));
+
+        let bodies: Vec<String> = transport
+            .requests()
+            .into_iter()
+            .map(|r| r.body.unwrap().to_string())
+            .collect();
+        assert!(bodies[3].contains("\"LBL_back\""));
+        assert!(bodies[4].contains("\"I_parent_10\""));
+        assert!(bodies[6].contains("\"OPT_backlog\""));
+        assert!(bodies[7].contains("\"OPT_back\""));
+        assert!(bodies[8].contains("\"OPT_task\""));
+        assert!(bodies[11].contains("\"OPT_progress\""));
     }
 }
