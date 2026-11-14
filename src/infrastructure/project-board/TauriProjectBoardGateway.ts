@@ -356,6 +356,8 @@ function normalizeIssue(
         dependsOn: normalizeDependsOn(issue.dependsOn),
         childrenTruncated: hasChildren,
         assignees: normalizeBoardAssignees(issue.assignees),
+        createdAt: typeof issue.createdAt === "string" ? issue.createdAt : null,
+        updatedAt: typeof issue.updatedAt === "string" ? issue.updatedAt : null,
       };
     }
     if (depth > MAX_ISSUE_TREE_DEPTH) {
@@ -379,6 +381,8 @@ function normalizeIssue(
         dependsOn: normalizeDependsOn(issue.dependsOn),
         childrenTruncated: hasChildren,
         assignees: normalizeBoardAssignees(issue.assignees),
+        createdAt: typeof issue.createdAt === "string" ? issue.createdAt : null,
+        updatedAt: typeof issue.updatedAt === "string" ? issue.updatedAt : null,
       };
     }
     const children: BoardIssue[] = [];
@@ -404,6 +408,8 @@ function normalizeIssue(
       // 정규화해 구 캐시의 이상치가 다음 세대에 남지 않게 한다.
       childrenTruncated: issue.childrenTruncated === true,
       assignees: normalizeBoardAssignees(issue.assignees),
+      createdAt: typeof issue.createdAt === "string" ? issue.createdAt : null,
+      updatedAt: typeof issue.updatedAt === "string" ? issue.updatedAt : null,
     };
   } finally {
     release();

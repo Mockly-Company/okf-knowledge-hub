@@ -5,7 +5,8 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use crate::commands::project_board::{
-    is_empty_board, load_board_for_ref, sync_project_board_for_ref,
+    is_empty_board, load_board_from_cache_root, resolve_project_board_cache_root,
+    sync_project_board_with_github,
 };
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::github::model::{BoardAssignee, DocsPullRequestSummary, PullRequestChangedFile};
@@ -19,6 +20,7 @@ const MAX_BOARD_DEPTH: usize = 32;
 const SEVEN_DAYS_SECS: i64 = 7 * 86_400;
 const MAX_PR_FILES_PER_REPO: usize = 12;
 const SUMMARY_MAX_CHARS: usize = 160;
+const WORKSPACE_FETCH_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -254,16 +256,14 @@ pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<Stri
 
     let has_companion_html = match &primary {
         Some(md_path) => {
-            let expected_html = md_path
-                .strip_suffix(".md")
-                .or_else(|| md_path.strip_suffix(".MD"))
-                .map(|stem| format!("{stem}.html"));
+            let expected_html = (md_path.len() >= 3
+                && md_path[md_path.len() - 3..].eq_ignore_ascii_case(".md"))
+            .then(|| format!("{}.html", &md_path[..md_path.len() - 3]));
             pool.iter().any(|f| {
                 let norm = f.filename.replace('\\', "/");
                 expected_html
                     .as_deref()
                     .is_some_and(|exp| norm.eq_ignore_ascii_case(exp))
-                    || norm.to_ascii_lowercase().ends_with(".html")
             })
         }
         None => pool
@@ -546,24 +546,22 @@ async fn fetch_workspace_docs_notifications(
     now_unix: i64,
 ) -> Result<Vec<DashboardNotificationItem>, DashboardWorkspaceFailure> {
     let cutoff = now_unix - SEVEN_DAYS_SECS;
-    let open_prs = github
-        .list_open_pull_requests(repo_full_name)
-        .await
-        .map_err(|error| DashboardWorkspaceFailure {
-            workspace_id: workspace.id.clone(),
-            workspace_title: workspace.title.clone(),
-            scope: DashboardFailureScope::Docs,
-            message: error.message,
-        })?;
-    let merged_prs = github
-        .list_recent_merged_pull_requests(repo_full_name, cutoff)
-        .await
-        .map_err(|error| DashboardWorkspaceFailure {
-            workspace_id: workspace.id.clone(),
-            workspace_title: workspace.title.clone(),
-            scope: DashboardFailureScope::Docs,
-            message: error.message,
-        })?;
+    let (open_res, merged_res) = tokio::join!(
+        github.list_open_pull_requests(repo_full_name),
+        github.list_recent_merged_pull_requests(repo_full_name, cutoff),
+    );
+    let open_prs = open_res.map_err(|error| DashboardWorkspaceFailure {
+        workspace_id: workspace.id.clone(),
+        workspace_title: workspace.title.clone(),
+        scope: DashboardFailureScope::Docs,
+        message: error.message,
+    })?;
+    let merged_prs = merged_res.map_err(|error| DashboardWorkspaceFailure {
+        workspace_id: workspace.id.clone(),
+        workspace_title: workspace.title.clone(),
+        scope: DashboardFailureScope::Docs,
+        message: error.message,
+    })?;
 
     let mut seen_numbers = HashSet::new();
     let mut combined: Vec<(DashboardNotificationKind, DocsPullRequestSummary)> = Vec::new();
@@ -612,6 +610,113 @@ async fn fetch_workspace_docs_notifications(
     ))
 }
 
+struct WorkspaceFetchOutcome {
+    idx: usize,
+    workspace: HubWorkspace,
+    board_result: Option<CommandResult<ProjectBoard>>,
+    docs_result: Option<Result<Vec<DashboardNotificationItem>, DashboardWorkspaceFailure>>,
+}
+
+pub(crate) fn sort_dashboard_items(
+    tasks: &mut Vec<DashboardTaskItem>,
+    notifications: &mut Vec<DashboardNotificationItem>,
+) {
+    let mut keyed_tasks: Vec<(Option<i64>, DashboardTaskItem)> = std::mem::take(tasks)
+        .into_iter()
+        .map(|item| (parse_rfc3339_unix(item.updated_at.as_deref()), item))
+        .collect();
+    keyed_tasks.sort_by(|a, b| {
+        b.1.is_new
+            .cmp(&a.1.is_new)
+            .then_with(|| b.1.ready_to_start.cmp(&a.1.ready_to_start))
+            .then_with(|| b.0.cmp(&a.0))
+            .then_with(|| b.1.issue_number.cmp(&a.1.issue_number))
+    });
+    *tasks = keyed_tasks.into_iter().map(|(_, item)| item).collect();
+
+    let mut keyed_notifs: Vec<(Option<i64>, DashboardNotificationItem)> =
+        std::mem::take(notifications)
+            .into_iter()
+            .map(|item| (parse_rfc3339_unix(Some(item.timestamp.as_str())), item))
+            .collect();
+    keyed_notifs.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.pr_number.cmp(&a.1.pr_number))
+    });
+    *notifications = keyed_notifs.into_iter().map(|(_, item)| item).collect();
+}
+
+struct WorkspaceFetchContext {
+    github: Arc<GithubService>,
+    cache_root: std::path::PathBuf,
+    last_seen_at: Option<String>,
+    now_unix: i64,
+    semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+async fn fetch_workspace_dashboard(
+    idx: usize,
+    workspace: HubWorkspace,
+    should_sync: bool,
+    ctx: Arc<WorkspaceFetchContext>,
+) -> WorkspaceFetchOutcome {
+    let _permit = ctx.semaphore.clone().acquire_owned().await;
+
+    let board_fut = async {
+        let project = workspace.project.as_ref()?;
+        let project_ref = GithubProjectRef {
+            id: project.id.clone(),
+            owner: project.owner.clone(),
+            number: project.number,
+            scope: Some(project.scope),
+            extra: Default::default(),
+        };
+        let res = if should_sync {
+            sync_project_board_with_github(
+                ctx.cache_root.clone(),
+                Arc::clone(&ctx.github),
+                project_ref,
+            )
+            .await
+        } else {
+            match load_board_from_cache_root(&ctx.cache_root, &project_ref).await {
+                Ok(cached) if !is_empty_board(&cached) => Ok(cached),
+                _ => {
+                    sync_project_board_with_github(
+                        ctx.cache_root.clone(),
+                        Arc::clone(&ctx.github),
+                        project_ref,
+                    )
+                    .await
+                }
+            }
+        };
+        Some(res)
+    };
+
+    let docs_fut = async {
+        let docs_repo = workspace.docs_repository.as_ref()?;
+        Some(
+            fetch_workspace_docs_notifications(
+                &ctx.github,
+                &workspace,
+                &docs_repo.full_name,
+                ctx.last_seen_at.as_deref(),
+                ctx.now_unix,
+            )
+            .await,
+        )
+    };
+
+    let (board_result, docs_result) = tokio::join!(board_fut, docs_fut);
+    WorkspaceFetchOutcome {
+        idx,
+        workspace,
+        board_result,
+        docs_result,
+    }
+}
+
 #[tauri::command]
 pub async fn get_personal_dashboard(
     app: AppHandle,
@@ -622,6 +727,7 @@ pub async fn get_personal_dashboard(
 ) -> CommandResult<PersonalDashboardResult> {
     let _access = state.acquire_authenticated_command().await?;
     let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let cache_root = resolve_project_board_cache_root(&app)?;
     let viewer = github.current_user().await?;
     let viewer_login = viewer.login.trim().to_owned();
     let viewer_avatar = viewer.avatar_url.trim().to_owned();
@@ -658,32 +764,42 @@ pub async fn get_personal_dashboard(
         now_unix,
     };
 
+    let ctx = Arc::new(WorkspaceFetchContext {
+        github,
+        cache_root,
+        last_seen_at: last_seen_at.clone(),
+        now_unix,
+        semaphore: Arc::new(tokio::sync::Semaphore::new(WORKSPACE_FETCH_CONCURRENCY)),
+    });
+    let mut join_set = tokio::task::JoinSet::new();
+    for (idx, workspace) in workspaces.into_iter().enumerate() {
+        let should_sync = force_all || retry_target == Some(workspace.id.as_str());
+        join_set.spawn(fetch_workspace_dashboard(
+            idx,
+            workspace,
+            should_sync,
+            Arc::clone(&ctx),
+        ));
+    }
+
+    let mut outcomes = Vec::new();
+    while let Some(joined) = join_set.join_next().await {
+        if let Ok(outcome) = joined {
+            outcomes.push(outcome);
+        }
+    }
+    outcomes.sort_by_key(|o| o.idx);
+
     let mut tasks: Vec<DashboardTaskItem> = Vec::new();
     let mut notifications: Vec<DashboardNotificationItem> = Vec::new();
     let mut failures: Vec<DashboardWorkspaceFailure> = Vec::new();
 
-    for workspace in &workspaces {
-        if let Some(project) = workspace.project.as_ref() {
-            let project_ref = GithubProjectRef {
-                id: project.id.clone(),
-                owner: project.owner.clone(),
-                number: project.number,
-                scope: Some(project.scope),
-                extra: Default::default(),
-            };
-            let should_sync = force_all || retry_target == Some(workspace.id.as_str());
-            let board_result = if should_sync {
-                sync_project_board_for_ref(&app, &state, &project_ref).await
-            } else {
-                match load_board_for_ref(&app, &project_ref).await {
-                    Ok(cached) if !is_empty_board(&cached) => Ok(cached),
-                    _ => sync_project_board_for_ref(&app, &state, &project_ref).await,
-                }
-            };
+    for outcome in outcomes {
+        if let Some(board_result) = outcome.board_result {
             match board_result {
                 Ok(board) => {
                     collect_workspace_tasks(
-                        workspace,
+                        &outcome.workspace,
                         &board,
                         &filter,
                         &mut discovered_assignees,
@@ -692,49 +808,23 @@ pub async fn get_personal_dashboard(
                 }
                 Err(error) => {
                     failures.push(DashboardWorkspaceFailure {
-                        workspace_id: workspace.id.clone(),
-                        workspace_title: workspace.title.clone(),
+                        workspace_id: outcome.workspace.id.clone(),
+                        workspace_title: outcome.workspace.title.clone(),
                         scope: DashboardFailureScope::Board,
                         message: error.message,
                     });
                 }
             }
         }
-
-        if let Some(docs_repo) = workspace.docs_repository.as_ref() {
-            match fetch_workspace_docs_notifications(
-                &github,
-                workspace,
-                &docs_repo.full_name,
-                last_seen_at.as_deref(),
-                now_unix,
-            )
-            .await
-            {
+        if let Some(docs_result) = outcome.docs_result {
+            match docs_result {
                 Ok(items) => notifications.extend(items),
                 Err(failure) => failures.push(failure),
             }
         }
     }
 
-    tasks.sort_by(|a, b| {
-        b.is_new
-            .cmp(&a.is_new)
-            .then_with(|| b.ready_to_start.cmp(&a.ready_to_start))
-            .then_with(|| {
-                b.updated_at
-                    .as_deref()
-                    .unwrap_or("")
-                    .cmp(a.updated_at.as_deref().unwrap_or(""))
-            })
-            .then_with(|| b.issue_number.cmp(&a.issue_number))
-    });
-
-    notifications.sort_by(|a, b| {
-        b.timestamp
-            .cmp(&a.timestamp)
-            .then_with(|| b.pr_number.cmp(&a.pr_number))
-    });
+    sort_dashboard_items(&mut tasks, &mut notifications);
 
     let unread_new_count = tasks.iter().filter(|t| t.is_new).count() as u32;
     let ready_task_count = tasks.iter().filter(|t| t.ready_to_start).count() as u32;
@@ -1027,5 +1117,95 @@ mod tests {
         );
         assert!(items[1].has_companion_html);
         assert_eq!(items[1].summary, "내 대시보드 명세 반영");
+    }
+
+    #[test]
+    fn pick_primary_doc_requires_exact_companion_html_stem() {
+        let files = vec![
+            PullRequestChangedFile {
+                filename: "docs/product/spec.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/other/unrelated.html".into(),
+                status: "added".into(),
+                previous_filename: None,
+            },
+        ];
+        let (primary, has_html) = super::pick_primary_doc(&files);
+        assert_eq!(primary.as_deref(), Some("docs/product/spec.md"));
+        assert!(!has_html);
+    }
+
+    #[test]
+    fn sort_dashboard_items_orders_timestamps_numerically_across_offsets_and_none() {
+        let ws = sample_workspace("okf", "OkHub");
+        let make_task = |num: u64, updated_at: Option<&str>| super::DashboardTaskItem {
+            workspace_id: ws.id.clone(),
+            workspace_title: ws.title.clone(),
+            project_owner: "Mockly-Company".into(),
+            project_number: 3,
+            project_title: "OkHub".into(),
+            repository_full_name: Some("Mockly-Company/okf".into()),
+            issue_number: num,
+            title: format!("Task {num}"),
+            url: format!("https://github.com/Mockly-Company/okf/issues/{num}"),
+            status: BoardStatus::Ready,
+            layer: BoardLayer::Frontend,
+            kind: Some("작업".into()),
+            depends_on: None,
+            predecessor_done: true,
+            ready_to_start: true,
+            is_new: false,
+            assignees: vec![],
+            created_at: None,
+            updated_at: updated_at.map(str::to_owned),
+        };
+        let mut tasks = vec![
+            make_task(1, None),
+            make_task(2, Some("2026-11-14T10:00:00+09:00")), // 01:00Z
+            make_task(3, Some("2026-11-14T02:00:00Z")),      // 02:00Z (더 최신!)
+        ];
+        let mut notifs = vec![
+            super::DashboardNotificationItem {
+                id: "1".into(),
+                workspace_id: ws.id.clone(),
+                workspace_title: ws.title.clone(),
+                repository_full_name: "Mockly-Company/okf-docs".into(),
+                kind: DashboardNotificationKind::OpenPr,
+                pr_number: 1,
+                title: "old".into(),
+                summary: "old".into(),
+                author_login: "alice".into(),
+                url: "https://example.test/1".into(),
+                primary_doc_path: None,
+                has_companion_html: false,
+                timestamp: "2026-11-14T10:00:00+09:00".into(), // 01:00Z
+                is_new: false,
+            },
+            super::DashboardNotificationItem {
+                id: "2".into(),
+                workspace_id: ws.id,
+                workspace_title: ws.title,
+                repository_full_name: "Mockly-Company/okf-docs".into(),
+                kind: DashboardNotificationKind::OpenPr,
+                pr_number: 2,
+                title: "new".into(),
+                summary: "new".into(),
+                author_login: "alice".into(),
+                url: "https://example.test/2".into(),
+                primary_doc_path: None,
+                has_companion_html: false,
+                timestamp: "2026-11-14T02:00:00Z".into(), // 02:00Z
+                is_new: false,
+            },
+        ];
+
+        super::sort_dashboard_items(&mut tasks, &mut notifs);
+        let nums: Vec<u64> = tasks.iter().map(|t| t.issue_number).collect();
+        assert_eq!(nums, vec![3, 2, 1]);
+        let pr_nums: Vec<u64> = notifs.iter().map(|n| n.pr_number).collect();
+        assert_eq!(pr_nums, vec![2, 1]);
     }
 }

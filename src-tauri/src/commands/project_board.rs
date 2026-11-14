@@ -65,16 +65,21 @@ async fn load_board_with_migration(
     Ok(legacy)
 }
 
-pub(crate) async fn load_board_for_ref(
-    app: &AppHandle,
+pub(crate) async fn load_board_from_cache_root(
+    cache_root: &std::path::Path,
     project: &GithubProjectRef,
 ) -> CommandResult<ProjectBoard> {
-    let cache_root = app
+    load_board_with_migration(cache_root, project).await
+}
+
+pub(crate) fn resolve_project_board_cache_root(
+    app: &AppHandle,
+) -> CommandResult<std::path::PathBuf> {
+    Ok(app
         .path()
         .app_data_dir()
         .map_err(|_| settings_unavailable_error())?
-        .join(PROJECT_BOARD_CACHE_DIR_NAME);
-    load_board_with_migration(&cache_root, project).await
+        .join(PROJECT_BOARD_CACHE_DIR_NAME))
 }
 
 pub(crate) fn is_empty_board(board: &ProjectBoard) -> bool {
@@ -800,13 +805,12 @@ pub async fn sync_project_board(
     sync_project_board_inner(&app, &state).await
 }
 
-pub(crate) async fn sync_project_board_for_ref(
-    app: &AppHandle,
-    state: &AppServices,
-    project: &GithubProjectRef,
+pub(crate) async fn sync_project_board_with_github(
+    cache_root: std::path::PathBuf,
+    github: std::sync::Arc<crate::github::GithubService>,
+    project: GithubProjectRef,
 ) -> CommandResult<ProjectBoard> {
-    let github = state.github.clone().ok_or_else(service_unavailable)?;
-    let (first_scope, fallback_scope) = resolve_project_scope(project);
+    let (first_scope, fallback_scope) = resolve_project_scope(&project);
     let (items, truncated, dropped) = match github
         .list_project_items(first_scope, &project.owner, project.number)
         .await
@@ -845,16 +849,21 @@ pub(crate) async fn sync_project_board_for_ref(
         skipped,
         truncated: board_truncated,
     };
-    let cache_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| settings_unavailable_error())?
-        .join(PROJECT_BOARD_CACHE_DIR_NAME);
     // 캐시 저장은 best-effort다. 실패해도 갓 가져온 보드는 반환한다.
-    if let Err(error) = save_cached_board(&cache_root, &board_cache_key(project), &board).await {
+    if let Err(error) = save_cached_board(&cache_root, &board_cache_key(&project), &board).await {
         eprintln!("warning: failed to persist project board cache: {error:?}");
     }
     Ok(board)
+}
+
+pub(crate) async fn sync_project_board_for_ref(
+    app: &AppHandle,
+    state: &AppServices,
+    project: &GithubProjectRef,
+) -> CommandResult<ProjectBoard> {
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let cache_root = resolve_project_board_cache_root(app)?;
+    sync_project_board_with_github(cache_root, github, project.clone()).await
 }
 
 async fn sync_project_board_inner(

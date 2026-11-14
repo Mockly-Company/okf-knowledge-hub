@@ -388,4 +388,44 @@ describe("TauriProjectBoardGateway", () => {
       },
     ]);
   });
+
+  it("normalizes createdAt and updatedAt fields across issue nodes", async () => {
+    const invoke = async <T>(): Promise<T> =>
+      ({
+        issues: [
+          {
+            number: 10,
+            title: "정상 타임스탬프",
+            url: "https://example.test/issues/10",
+            layer: "frontend",
+            status: "ready",
+            kind: "작업",
+            createdAt: "2026-11-14T01:00:00Z",
+            updatedAt: 12345,
+            children: [
+              {
+                number: 11,
+                title: "자식 이슈",
+                url: "https://example.test/issues/11",
+                layer: "frontend",
+                status: "backlog",
+                kind: "작업",
+                children: [],
+              },
+            ],
+          },
+        ],
+        fetchedAt: null,
+        skipped: 0,
+        truncated: false,
+      }) as T;
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    const board = await gateway.getProjectBoard();
+
+    expect(board.issues[0].createdAt).toBe("2026-11-14T01:00:00Z");
+    expect(board.issues[0].updatedAt).toBeNull();
+    expect(board.issues[0].children[0].createdAt).toBeNull();
+    expect(board.issues[0].children[0].updatedAt).toBeNull();
+  });
 });

@@ -34,21 +34,29 @@ function formatAssigneeOptionLabel(login: string, name?: string | null): string 
 }
 
 export function PersonalDashboardView() {
+  const inRouter = useInRouterContext();
+  return inRouter ? (
+    <RoutedPersonalDashboardView />
+  ) : (
+    <PersonalDashboardInner navigate={null} />
+  );
+}
+
+function RoutedPersonalDashboardView() {
+  const routerNavigate = useNavigate();
+  const navigate = useCallback((to: string) => routerNavigate(to), [routerNavigate]);
+  return <PersonalDashboardInner navigate={navigate} />;
+}
+
+function PersonalDashboardInner({
+  navigate,
+}: {
+  navigate: ((to: string) => void) | null;
+}) {
   const dashboardContext = useOptionalPersonalDashboard();
   const activeProject = useOptionalActiveProject();
-  const inRouter = useInRouterContext();
-  const routerNavigate = useNavigate();
   const [page, setPage] = useState(0);
   const [switchError, setSwitchError] = useState<string | null>(null);
-
-  const navigate = useCallback(
-    (to: string) => {
-      if (inRouter) {
-        routerNavigate(to);
-      }
-    },
-    [inRouter, routerNavigate],
-  );
 
   const dashboard = dashboardContext?.dashboard ?? null;
   const isLoading = dashboardContext?.isLoading ?? false;
@@ -140,21 +148,21 @@ export function PersonalDashboardView() {
   const handleOpenTask = async (task: DashboardTaskItem) => {
     const ok = await switchWorkspaceIfNeeded(task.workspaceId);
     if (!ok) return;
-    navigate(`/project?issue=${task.issueNumber}`);
+    navigate?.(`/project?issue=${task.issueNumber}`);
   };
 
   const handleOpenNotification = async (item: DashboardNotificationItem) => {
     const ok = await switchWorkspaceIfNeeded(item.workspaceId);
     if (!ok) return;
     if (item.kind === "open_pr") {
-      navigate(`/documents?pr=${item.prNumber}`);
+      navigate?.(`/documents?pr=${item.prNumber}`);
       return;
     }
     if (item.primaryDocPath) {
-      navigate(`/documents?doc=${encodeURIComponent(item.primaryDocPath)}`);
+      navigate?.(`/documents?doc=${encodeURIComponent(item.primaryDocPath)}`);
       return;
     }
-    navigate("/documents");
+    navigate?.("/documents");
   };
 
   return (

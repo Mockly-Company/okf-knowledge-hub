@@ -99,8 +99,7 @@ export function PersonalDashboardProvider({
   const refresh = useCallback(async () => {
     nextSyncOptionsRef.current = { forceSync: true, retryWorkspaceId: null };
     await queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
-    await query.refetch();
-  }, [query, queryClient]);
+  }, [queryClient]);
 
   const retryWorkspace = useCallback(
     async (workspaceId: string) => {

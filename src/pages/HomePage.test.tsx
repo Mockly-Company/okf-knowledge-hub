@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
 import { PersonalDashboardProvider } from "@/features/dashboard/PersonalDashboardProvider";
+import { PersonalDashboardView } from "@/features/dashboard/PersonalDashboardView";
 import type {
   DashboardNotificationItem,
   DashboardTaskItem,
@@ -432,5 +433,54 @@ describe("HomePage (내 대시보드)", () => {
       screen.getByRole("heading", { level: 1, name: "내 작업" }),
     ).toBeInTheDocument();
     expect(await screen.findByText("안녕하세요, @hyeeun님")).toBeInTheDocument();
+  });
+
+  it("renders PersonalDashboardView safely outside a Router without crashing on navigation clicks", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const connectionGateway = FakeWorkspaceConnectionGateway.connected();
+    if (connectionGateway.authState.status === "authenticated") {
+      connectionGateway.authState = {
+        status: "authenticated",
+        user: {
+          ...connectionGateway.authState.user,
+          login: "YoonDongGeun",
+        },
+      };
+    }
+    const gateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      tasks: [makeTask({ issueNumber: 74, title: "대시보드 렌더링 확인" })],
+    });
+    const fetchSpy = vi.spyOn(gateway, "getPersonalDashboard");
+
+    render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={connectionGateway}>
+          <ActiveProjectProvider
+            projectGateway={FakeProjectBoardGateway.empty()}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <PersonalDashboardProvider gateway={gateway}>
+              <PersonalDashboardView />
+            </PersonalDashboardProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    const taskBtn = await screen.findByRole("button", {
+      name: /#74 대시보드 렌더링 확인/,
+    });
+    await user.click(taskBtn);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "새로고침" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(fetchSpy).toHaveBeenLastCalledWith({
+      assigneeFilter: null,
+      forceSync: true,
+      retryWorkspaceId: null,
+    });
   });
 });
