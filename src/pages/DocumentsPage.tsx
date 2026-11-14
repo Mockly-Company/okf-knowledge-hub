@@ -62,12 +62,31 @@ function DocumentsDeepLinkSync({
       lastConsumedDocRef.current = null;
       return;
     }
-    if (prParam || !ready || lastConsumedDocRef.current === docParam) return;
+    if (!ready) return;
+    if (prParam) {
+      // `?pr=`와 `?doc=`가 동시에 오면 PR 보기가 우선이므로 잔류 `?doc=`을 함께 비운다(S21).
+      lastConsumedDocRef.current = null;
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("doc");
+          return next;
+        },
+        { replace: true },
+      );
+      return;
+    }
+    if (lastConsumedDocRef.current === docParam) return;
     lastConsumedDocRef.current = docParam;
     selectDocument(docParam);
-    const next = new URLSearchParams(searchParams);
-    next.delete("doc");
-    setSearchParams(next, { replace: true });
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("doc");
+        return next;
+      },
+      { replace: true },
+    );
   }, [
     prParam,
     docParam,

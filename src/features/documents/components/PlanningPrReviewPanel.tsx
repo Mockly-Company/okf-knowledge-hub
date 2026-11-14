@@ -92,9 +92,11 @@ function DiffCell({
 
 function RouterPrDeepLinkSync({
   ready,
+  canOpenPrNumber,
   onOpenPr,
 }: {
   ready: boolean;
+  canOpenPrNumber: (prNumber: number) => boolean;
   onOpenPr: (prNumber: number) => void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -104,13 +106,18 @@ function RouterPrDeepLinkSync({
     const raw = searchParams.get("pr");
     if (!raw) return;
     const prNumber = Number(raw);
-    if (Number.isInteger(prNumber) && prNumber > 0) {
+    if (Number.isInteger(prNumber) && prNumber > 0 && canOpenPrNumber(prNumber)) {
       onOpenPr(prNumber);
     }
-    const next = new URLSearchParams(searchParams);
-    next.delete("pr");
-    setSearchParams(next, { replace: true });
-  }, [ready, searchParams, setSearchParams, onOpenPr]);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("pr");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [ready, canOpenPrNumber, searchParams, setSearchParams, onOpenPr]);
 
   return null;
 }
@@ -232,8 +239,23 @@ export function PlanningPrReviewSection() {
     }
   };
 
+  const prListSettled =
+    ready &&
+    !pullRequestsQuery.isFetching &&
+    (pullRequestsQuery.isSuccess || pullRequestsQuery.isError);
+  const canOpenPrNumber = useCallback(
+    (prNumber: number) =>
+      pullRequestsQuery.isSuccess &&
+      openPullRequests.some((pr) => pr.number === prNumber),
+    [openPullRequests, pullRequestsQuery.isSuccess],
+  );
+
   const deepLinkSync = inRouter ? (
-    <RouterPrDeepLinkSync ready={ready} onOpenPr={handleOpenPr} />
+    <RouterPrDeepLinkSync
+      ready={prListSettled}
+      canOpenPrNumber={canOpenPrNumber}
+      onOpenPr={handleOpenPr}
+    />
   ) : null;
 
   if (!ready) return deepLinkSync;

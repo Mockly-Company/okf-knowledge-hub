@@ -18,7 +18,9 @@ use crate::workspace::model::GithubProjectRef;
 
 const MAX_BOARD_DEPTH: usize = 32;
 const SEVEN_DAYS_SECS: i64 = 7 * 86_400;
-const MAX_PR_FILES_PER_REPO: usize = 12;
+// GitHub rate-limit과 지연을 제어하기 위해 최신 알림 상위 20건(홈 알림 2페이지 분량)까지만
+// PR 변경 파일 목록을 추가 조회하고, 나머지는 기본 알림 정보만 노출한다(S22).
+const MAX_PR_FILES_FETCH: usize = 20;
 const SUMMARY_MAX_CHARS: usize = 160;
 const WORKSPACE_FETCH_CONCURRENCY: usize = 4;
 
@@ -501,6 +503,26 @@ pub(crate) fn collect_workspace_tasks(
     );
 }
 
+fn pr_effective_timestamp(kind: DashboardNotificationKind, pr: &DocsPullRequestSummary) -> &str {
+    match kind {
+        DashboardNotificationKind::MergedDoc => pr
+            .merged_at
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(pr.updated_at.as_str()),
+        DashboardNotificationKind::OpenPr => pr.updated_at.as_str(),
+    }
+}
+
+fn order_prs_for_file_fetch(prs: &mut [(DashboardNotificationKind, DocsPullRequestSummary)]) {
+    prs.sort_by(|(a_kind, a_pr), (b_kind, b_pr)| {
+        let a_ts = parse_rfc3339_unix(Some(pr_effective_timestamp(*a_kind, a_pr)));
+        let b_ts = parse_rfc3339_unix(Some(pr_effective_timestamp(*b_kind, b_pr)));
+        b_ts.cmp(&a_ts).then_with(|| b_pr.number.cmp(&a_pr.number))
+    });
+}
+
 fn build_notifications_for_prs(
     workspace: &HubWorkspace,
     repo_full_name: &str,
@@ -514,15 +536,7 @@ fn build_notifications_for_prs(
 ) -> Vec<DashboardNotificationItem> {
     prs.into_iter()
         .map(|(kind, pr, files)| {
-            let timestamp = match kind {
-                DashboardNotificationKind::MergedDoc => pr
-                    .merged_at
-                    .as_deref()
-                    .filter(|s| !s.trim().is_empty())
-                    .unwrap_or(&pr.updated_at)
-                    .to_owned(),
-                DashboardNotificationKind::OpenPr => pr.updated_at.clone(),
-            };
+            let timestamp = pr_effective_timestamp(kind, &pr).to_owned();
             let is_new = is_timestamp_new(Some(&timestamp), last_seen_at, now_unix);
             let summary = extract_change_summary(&pr.body, &pr.title);
             let (primary_doc_path, has_companion_html) = pick_primary_doc(&files);
@@ -642,9 +656,10 @@ async fn fetch_workspace_docs_notifications(
             combined.push((DashboardNotificationKind::MergedDoc, pr));
         }
     }
+    order_prs_for_file_fetch(&mut combined);
 
     let mut file_tasks = tokio::task::JoinSet::new();
-    for (idx, (_, pr)) in combined.iter().take(MAX_PR_FILES_PER_REPO).enumerate() {
+    for (idx, (_, pr)) in combined.iter().take(MAX_PR_FILES_FETCH).enumerate() {
         let gh = Arc::clone(github);
         let repo = repo_full_name.to_owned();
         let pr_number = pr.number;
@@ -1430,5 +1445,42 @@ mod tests {
         let failure = failure.expect("failed PR file lookup must surface a Docs failure");
         assert_eq!(failure.scope, DashboardFailureScope::Docs);
         assert!(failure.message.contains("GitHub API rate limit exceeded"));
+    }
+
+    #[test]
+    fn order_prs_for_file_fetch_prioritizes_newest_across_open_and_merged() {
+        let make_pr =
+            |number: u64, updated_at: &str, merged_at: Option<&str>| DocsPullRequestSummary {
+                number,
+                title: format!("PR #{number}"),
+                body: String::new(),
+                html_url: format!("https://example.test/pr/{number}"),
+                author_login: "alice".into(),
+                head_ref: "feat".into(),
+                head_sha: "abc".into(),
+                base_ref: "main".into(),
+                base_sha: "def".into(),
+                is_draft: false,
+                mergeable: None,
+                updated_at: updated_at.into(),
+                merged_at: merged_at.map(str::to_owned),
+            };
+        let mut list = vec![
+            (
+                DashboardNotificationKind::OpenPr,
+                make_pr(10, "2026-11-10T01:00:00Z", None),
+            ),
+            (
+                DashboardNotificationKind::MergedDoc,
+                make_pr(22, "2026-11-11T00:00:00Z", Some("2026-11-14T12:00:00Z")),
+            ),
+            (
+                DashboardNotificationKind::OpenPr,
+                make_pr(15, "2026-11-14T10:00:00Z", None),
+            ),
+        ];
+        super::order_prs_for_file_fetch(&mut list);
+        let nums: Vec<u64> = list.iter().map(|(_, pr)| pr.number).collect();
+        assert_eq!(nums, vec![22, 15, 10]);
     }
 }

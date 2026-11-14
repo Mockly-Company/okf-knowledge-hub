@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
@@ -743,5 +743,93 @@ describe("DocumentsPage", () => {
     expect(
       await screen.findByRole("region", { name: guide.title }),
     ).toBeVisible();
+  });
+
+  it("ignores nonexistent ?pr= deep-links (S20) and clears ?doc= when paired with ?pr= (S21)", async () => {
+    function SearchEcho() {
+      const location = useLocation();
+      return <span data-testid="search-echo">{location.search}</span>;
+    }
+
+    const gatewayMissing = new FakeDocumentsGateway();
+    gatewayMissing.openPullRequests = [];
+    const detailSpy = vi.spyOn(gatewayMissing, "getDocsPullRequestDetail");
+
+    const { unmount } = render(
+      <MemoryRouter initialEntries={["/documents?pr=999"]}>
+        <DocumentsProvider gateway={gatewayMissing} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+            <SearchEcho />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByRole("heading", { level: 1, name: "Documents" });
+    await waitFor(() => {
+      expect(screen.getByTestId("search-echo")).toHaveTextContent(/^$/);
+    });
+    expect(detailSpy).not.toHaveBeenCalled();
+    unmount();
+
+    const gateway = new FakeDocumentsGateway();
+    const guide = gateway.guideCatalog.documents[0];
+    gateway.openPullRequests = [
+      {
+        number: 17,
+        title: "docs(v2): 동시 딥링크 우선순위 검증 PR",
+        body: "설명",
+        htmlUrl: "https://github.com/Mockly-Company/Mockly/pull/17",
+        authorLogin: "alice",
+        headRef: "draft/alice/spec",
+        headSha: "head17",
+        baseRef: "main",
+        baseSha: "base17",
+        isDraft: false,
+        mergeable: true,
+        updatedAt: "2026-11-14T00:00:00Z",
+      },
+    ];
+    gateway.pullRequestDetails.set(17, {
+      pullRequest: gateway.openPullRequests[0],
+      viewerLogin: "hyeeun",
+      documents: [
+        {
+          path: "docs/product/spec.md",
+          title: "기획 명세",
+          status: "modified",
+          baseMarkdown: "# 전",
+          headMarkdown: "# 후",
+          companionHtml: "<!doctype html><html><body><h1>Spec</h1></body></html>",
+          hasCompanionHtml: true,
+        },
+      ],
+    });
+    const selectSpy = vi.spyOn(gateway, "readDocument");
+
+    render(
+      <MemoryRouter initialEntries={[`/documents?pr=17&doc=${encodeURIComponent(guide.path)}`]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+            <SearchEcho />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    const prSection = await screen.findByRole("region", {
+      name: "열린 기획 PR 검토 및 승인",
+    });
+    expect(
+      await within(prSection).findByRole("heading", {
+        name: "docs(v2): 동시 딥링크 우선순위 검증 PR",
+      }),
+    ).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getByTestId("search-echo")).toHaveTextContent(/^$/);
+    });
+    expect(selectSpy).not.toHaveBeenCalledWith(guide.path);
   });
 });

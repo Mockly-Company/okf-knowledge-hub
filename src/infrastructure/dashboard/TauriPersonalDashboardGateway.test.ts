@@ -52,15 +52,15 @@ describe("TauriPersonalDashboardGateway", () => {
           timestamp: "   ",
         },
         {
-          id: "open:ws-1:18",
-          workspaceId: "ws-1",
-          workspaceTitle: "OkHub",
+          id: "  open:ws-1:18  ",
+          workspaceId: "  ws-1  ",
+          workspaceTitle: "  OkHub  ",
           repositoryFullName: "Mockly-Company/hub-knowledge",
           kind: "open_pr",
           prNumber: 18,
-          title: "PR #18",
-          url: "https://github.com/Mockly-Company/hub-knowledge/pull/18",
-          timestamp: "2026-11-14T09:00:00Z",
+          title: "  PR #18  ",
+          url: "  https://github.com/Mockly-Company/hub-knowledge/pull/18  ",
+          timestamp: "  2026-11-14T09:00:00Z  ",
           isNew: true,
         },
       ],
@@ -86,6 +86,13 @@ describe("TauriPersonalDashboardGateway", () => {
     ]);
 
     expect(result.notifications).toHaveLength(1);
+    expect(result.notifications[0]?.id).toBe("open:ws-1:18");
+    expect(result.notifications[0]?.workspaceId).toBe("ws-1");
+    expect(result.notifications[0]?.title).toBe("PR #18");
+    expect(result.notifications[0]?.url).toBe(
+      "https://github.com/Mockly-Company/hub-knowledge/pull/18",
+    );
+    expect(result.notifications[0]?.timestamp).toBe("2026-11-14T09:00:00Z");
     expect(result.notifications[0]?.prNumber).toBe(18);
     expect(result.notifications[0]?.summary).toBe("PR #18");
 
