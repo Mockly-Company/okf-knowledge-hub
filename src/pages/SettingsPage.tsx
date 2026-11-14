@@ -13,6 +13,8 @@ import type { BuildInfoGateway } from "@/features/build-info/BuildInfoGateway";
 import { createBuildInfoGateway } from "@/infrastructure/build-info/createBuildInfoGateway";
 import { AiSettingsPanel } from "@/features/ai/AiSettingsPanel";
 import type { AiGateway } from "@/features/ai/AiGateway";
+import { CodeRepositoriesPanel } from "@/features/code-repositories/CodeRepositoriesPanel";
+import type { CodeRepositoriesGateway } from "@/features/code-repositories/CodeRepositoriesGateway";
 
 const settingsCategories = [
   "외부 연결",
@@ -104,9 +106,11 @@ const defaultBuildInfoGateway = createBuildInfoGateway();
 export function SettingsPage({
   buildInfoGateway = defaultBuildInfoGateway,
   aiGateway,
+  codeRepositoriesGateway,
 }: {
   buildInfoGateway?: BuildInfoGateway;
   aiGateway?: AiGateway;
+  codeRepositoriesGateway?: CodeRepositoriesGateway;
 }) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [activeCategory, setActiveCategory] = useState(readInitialSettingsCategory);
@@ -210,6 +214,8 @@ export function SettingsPage({
           <BuildInfoPanel gateway={buildInfoGateway} />
         ) : activeCategory === "AI 연동" ? (
           <AiSettingsPanel gateway={aiGateway} />
+        ) : activeCategory === "작업 방식" ? (
+          <CodeRepositoriesPanel gateway={codeRepositoriesGateway} />
         ) : (
           <div>
             <SectionHeader

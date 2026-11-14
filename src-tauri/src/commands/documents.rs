@@ -20,7 +20,9 @@ use crate::documents::drafts::{
     CreatedDocument, DraftSummary, RecoveredDocument, SaveDocumentResult,
 };
 use crate::documents::history::{DocumentHistory, DEFAULT_HISTORY_PAGE_LIMIT};
-use crate::documents::reader::{sanitize_and_inline_html, DocumentReader};
+use crate::documents::reader::{
+    extract_local_stylesheet_hrefs, sanitize_and_inline_html, DocumentReader,
+};
 use crate::documents::runtime::{DocumentRuntime, DocumentRuntimeGeneration, DocumentWorkspace};
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::github::model::{
@@ -1370,45 +1372,6 @@ fn extract_markdown_title(markdown: Option<&str>, fallback_path: &str) -> String
         .to_owned()
 }
 
-fn extract_stylesheet_hrefs(raw_html: &str) -> Vec<String> {
-    let lower = raw_html.to_ascii_lowercase();
-    let mut hrefs = Vec::new();
-    let mut cursor = 0;
-    while let Some(rel_idx) = lower[cursor..].find("<link") {
-        let start = cursor + rel_idx;
-        let Some(end_off) = raw_html[start..].find('>') else {
-            break;
-        };
-        let end = start + end_off + 1;
-        let tag = &raw_html[start..end];
-        let tag_lower = tag.to_ascii_lowercase();
-        if tag_lower.contains("stylesheet") {
-            if let Some(pos) = tag_lower.find("href=") {
-                let after = tag[pos + 5..].trim_start();
-                if let Some(quote) = after.chars().next() {
-                    if quote == '"' || quote == '\'' {
-                        let rest = &after[quote.len_utf8()..];
-                        if let Some(q_end) = rest.find(quote) {
-                            let href = rest[..q_end].trim();
-                            let clean = href.split(['?', '#']).next().unwrap_or(href);
-                            if !clean.is_empty()
-                                && !clean.starts_with("http://")
-                                && !clean.starts_with("https://")
-                                && !clean.starts_with("//")
-                                && !clean.starts_with("data:")
-                            {
-                                hrefs.push(clean.to_owned());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        cursor = end;
-    }
-    hrefs
-}
-
 #[tauri::command]
 pub async fn list_docs_pull_requests(
     state: State<'_, AppServices>,
@@ -1486,7 +1449,7 @@ pub async fn get_docs_pull_request_detail(
                 )
                 .await?;
             if let Some(raw_html) = raw_html {
-                for href in extract_stylesheet_hrefs(&raw_html) {
+                for href in extract_local_stylesheet_hrefs(&raw_html) {
                     if let Ok(resolved_css) = resolve_asset_path(html_path, &href) {
                         if let std::collections::hash_map::Entry::Vacant(entry) =
                             css_cache.entry(resolved_css)
@@ -1542,6 +1505,12 @@ pub async fn publish_document_draft(
     state: State<'_, AppServices>,
     request: PublishDocumentDraftRequest,
 ) -> CommandResult<PublishDocumentDraftResponse> {
+    if request.intent != "review" && request.intent != "publish" {
+        return Err(AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            "지원하지 않는 발행 방식입니다.",
+        ));
+    }
     let _access = state.acquire_authenticated_command().await?;
     validate_client_id(request.session_id, "문서 세션")?;
     let context = active_context(&state, request.session_id)?;

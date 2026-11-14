@@ -88,15 +88,15 @@ export interface DocumentsGateway {
   ): Promise<Unlisten>;
   copyText(value: string): Promise<void>;
   openExternal(url: string): Promise<void>;
-  listDocsPullRequests?(sessionId: string): Promise<DocsPullRequestSummary[]>;
-  getDocsPullRequestDetail?(
+  listDocsPullRequests(sessionId: string): Promise<DocsPullRequestSummary[]>;
+  getDocsPullRequestDetail(
     sessionId: string,
     number: number,
   ): Promise<DocsPullRequestDetail>;
-  publishDocumentDraft?(
+  publishDocumentDraft(
     request: PublishDocumentDraftRequest,
   ): Promise<PublishDocumentDraftResponse>;
-  approveAndMergeDocsPullRequest?(
+  approveAndMergeDocsPullRequest(
     sessionId: string,
     number: number,
     comment?: string,

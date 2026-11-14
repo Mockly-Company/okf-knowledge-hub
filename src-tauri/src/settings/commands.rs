@@ -329,6 +329,10 @@ fn resolve_active_ai_context(
         .map(|w| w.title.clone())
         .or_else(|| manifest.as_ref().map(|m| m.workspace.name.clone()));
 
+    let mapped_paths = services
+        .local_settings
+        .load_code_repository_paths()
+        .unwrap_or_default();
     let parent_dir = workspace_dir.parent();
     let code_repositories = manifest
         .as_ref()
@@ -336,6 +340,11 @@ fn resolve_active_ai_context(
             m.repositories
                 .iter()
                 .map(|repo| {
+                    let key_lower = repo.github.full_name.trim().to_ascii_lowercase();
+                    let manual = mapped_paths
+                        .get(&key_lower)
+                        .filter(|candidate| candidate.join(".git").exists())
+                        .map(|candidate| ai_runner::shell_path(candidate).display().to_string());
                     let repo_short = repo
                         .github
                         .full_name
@@ -350,7 +359,7 @@ fn resolve_active_ai_context(
                         key: repo.key.clone(),
                         label: repo.label.clone(),
                         full_name: repo.github.full_name.clone(),
-                        local_path: sibling,
+                        local_path: manual.or(sibling),
                     }
                 })
                 .collect()

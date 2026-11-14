@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod automation;
 pub mod build_info;
 pub mod commands;
 pub mod documents;
@@ -13,7 +14,7 @@ pub mod workspace;
 pub const APP_TITLE: &str = "OkHub";
 const OFFICIAL_GITHUB_CLIENT_ID: &str = "Iv23liwme4YWGbzRMNxH";
 
-fn github_client_id() -> String {
+pub(crate) fn github_client_id() -> String {
     let runtime = std::env::var("OKHUB_GITHUB_CLIENT_ID").ok();
     select_github_client_id(runtime.as_deref(), option_env!("OKHUB_GITHUB_CLIENT_ID"))
 }
@@ -131,6 +132,10 @@ pub fn run() {
             commands::docs_repository::attach_project_to_workspace,
             commands::docs_repository::detach_project_from_workspace,
             commands::docs_repository::remove_hub_workspace,
+            commands::code_repositories::list_workspace_code_repositories,
+            commands::code_repositories::set_code_repository_local_path,
+            commands::code_repositories::clear_code_repository_local_path,
+            commands::code_repositories::read_code_repository_file,
             commands::project_board::get_project_board,
             commands::project_board::sync_project_board,
             commands::project_board::resolve_github_project,

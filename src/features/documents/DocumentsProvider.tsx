@@ -1220,14 +1220,14 @@ export function DocumentsProvider({
 
   const listDocsPullRequests = useCallback(async () => {
     const sessionId = stateRef.current.activeSessionId;
-    if (!sessionId || !gateway.listDocsPullRequests) return [];
+    if (!sessionId) return [];
     return gateway.listDocsPullRequests(sessionId);
   }, [gateway]);
 
   const getDocsPullRequestDetail = useCallback(
     async (number: number) => {
       const sessionId = stateRef.current.activeSessionId;
-      if (!sessionId || !gateway.getDocsPullRequestDetail) {
+      if (!sessionId) {
         throw fallbackDocumentError();
       }
       return gateway.getDocsPullRequestDetail(sessionId, number);
@@ -1242,7 +1242,7 @@ export function DocumentsProvider({
       reviewNote: string;
     }) => {
       const sessionId = stateRef.current.activeSessionId;
-      if (!sessionId || !gateway.publishDocumentDraft) {
+      if (!sessionId) {
         throw fallbackDocumentError();
       }
       if (!(await flushCurrentEditor())) {
@@ -1269,7 +1269,7 @@ export function DocumentsProvider({
   const approveAndMergeDocsPullRequest = useCallback(
     async (number: number, comment?: string) => {
       const sessionId = stateRef.current.activeSessionId;
-      if (!sessionId || !gateway.approveAndMergeDocsPullRequest) {
+      if (!sessionId) {
         throw fallbackDocumentError();
       }
       const response = await gateway.approveAndMergeDocsPullRequest(

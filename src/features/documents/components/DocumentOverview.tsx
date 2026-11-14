@@ -1,5 +1,75 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  createCodeRepositoriesGateway,
+  type CodeRepositoriesGateway,
+  type CodeRepositoryFilePreview,
+} from "@/features/code-repositories/CodeRepositoriesGateway";
 import type { DocumentContent } from "../model";
+
+interface ParsedCodeReference {
+  raw: string;
+  repository: string;
+  filePath: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+const defaultCodeGateway = createCodeRepositoriesGateway();
+
+function parseCodeReference(raw: string): ParsedCodeReference | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const [pathWithRepo, fragment] = trimmed.split("#", 2);
+  let repository = "";
+  let filePath = pathWithRepo.trim();
+  const colonIdx = filePath.indexOf(":");
+  if (colonIdx > 0 && !filePath.slice(0, colonIdx).includes("\\")) {
+    repository = filePath.slice(0, colonIdx).trim();
+    filePath = filePath.slice(colonIdx + 1).trim();
+  }
+  if (!filePath) return null;
+
+  let startLine: number | undefined;
+  let endLine: number | undefined;
+  if (fragment) {
+    const lineMatch = /^L?(\d+)(?:-L?(\d+))?$/i.exec(fragment.trim());
+    if (lineMatch) {
+      startLine = Number(lineMatch[1]);
+      endLine = lineMatch[2] ? Number(lineMatch[2]) : startLine;
+    }
+  }
+  return {
+    raw: trimmed,
+    repository,
+    filePath,
+    startLine,
+    endLine,
+  };
+}
+
+function extractCodeReferences(properties: unknown): ParsedCodeReference[] {
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return [];
+  }
+  const record = properties as Record<string, unknown>;
+  const rawList: string[] = [];
+  for (const key of ["code_refs", "codeRefs", "code_paths", "codePaths", "code"]) {
+    const val = record[key];
+    if (typeof val === "string") {
+      rawList.push(val);
+    } else if (Array.isArray(val)) {
+      for (const item of val) {
+        if (typeof item === "string") {
+          rawList.push(item);
+        }
+      }
+    }
+  }
+  return rawList
+    .map(parseCodeReference)
+    .filter((item): item is ParsedCodeReference => item !== null);
+}
 
 function displayProperty(value: unknown): string {
   if (value === null) return "null";
@@ -22,8 +92,23 @@ function scrollContainer(element: Element | null): HTMLElement | null {
   return parent;
 }
 
-export function DocumentOverview({ document, readerRef, onNavigate }: { document: DocumentContent; readerRef?: RefObject<HTMLElement | null>; onNavigate?: (id: string) => void }) {
+export function DocumentOverview({
+  document,
+  readerRef,
+  onNavigate,
+  codeRepositoriesGateway = defaultCodeGateway,
+}: {
+  document: DocumentContent;
+  readerRef?: RefObject<HTMLElement | null>;
+  onNavigate?: (id: string) => void;
+  codeRepositoriesGateway?: CodeRepositoriesGateway;
+}) {
   const entries = propertyEntries(document.properties);
+  const codeReferences = extractCodeReferences(document.properties);
+  const [selectedCodeRef, setSelectedCodeRef] = useState<string | null>(null);
+  const [codePreview, setCodePreview] =
+    useState<CodeRepositoryFilePreview | null>(null);
+  const [codePreviewError, setCodePreviewError] = useState<string | null>(null);
   const navRef = useRef<HTMLElement>(null);
   const requestedLocation = useRef<{id: string; scrollTop: number} | null>(null);
   const [activeId, setActiveId] = useState(document.tableOfContents[0]?.id);
@@ -93,6 +178,33 @@ export function DocumentOverview({ document, readerRef, onNavigate }: { document
     onNavigate?.(id);
   };
 
+  const toggleCodeReference = async (ref: ParsedCodeReference) => {
+    if (selectedCodeRef === ref.raw) {
+      setSelectedCodeRef(null);
+      setCodePreview(null);
+      setCodePreviewError(null);
+      return;
+    }
+    setSelectedCodeRef(ref.raw);
+    setCodePreview(null);
+    setCodePreviewError(null);
+    try {
+      const loaded = await codeRepositoriesGateway.readCodeRepositoryFile(
+        ref.repository,
+        ref.filePath,
+        ref.startLine,
+        ref.endLine,
+      );
+      setCodePreview(loaded);
+    } catch (err) {
+      setCodePreviewError(
+        err instanceof Error
+          ? err.message
+          : "연결된 코드 저장소에서 파일을 읽지 못했습니다.",
+      );
+    }
+  };
+
   return (
     <>
       <section className="document-overview__properties" aria-label="문서 속성">
@@ -110,6 +222,48 @@ export function DocumentOverview({ document, readerRef, onNavigate }: { document
           </dl>
         )}
       </section>
+      {codeReferences.length > 0 && (
+        <section
+          className="mt-[var(--space-4)] grid gap-[var(--space-2)]"
+          aria-label="연결된 코드 참조"
+        >
+          <h2 className="m-0 text-[length:var(--text-sm)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+            연결된 코드 참조
+          </h2>
+          <div className="grid gap-[var(--space-1)]">
+            {codeReferences.map((ref) => (
+              <Button
+                key={ref.raw}
+                type="button"
+                variant="secondary"
+                onClick={() => void toggleCodeReference(ref)}
+                className="justify-start font-mono text-[length:var(--text-xs)]"
+              >
+                {ref.raw}
+              </Button>
+            ))}
+          </div>
+          {codePreviewError && (
+            <p
+              role="alert"
+              className="m-0 text-[length:var(--text-xs)] text-[var(--color-error-text)]"
+            >
+              {codePreviewError}
+            </p>
+          )}
+          {codePreview && (
+            <div className="grid gap-[var(--space-1)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-[var(--space-2)]">
+              <div className="text-[length:var(--text-xs)] text-[var(--color-text-muted)]">
+                {codePreview.repositoryFullName} · {codePreview.filePath} (L
+                {codePreview.startLine}–L{codePreview.endLine})
+              </div>
+              <pre className="m-0 overflow-x-auto font-mono text-[length:var(--text-xs)] text-[var(--color-text-strong)]">
+                <code>{codePreview.content}</code>
+              </pre>
+            </div>
+          )}
+        </section>
+      )}
       <nav ref={navRef} className="document-overview__toc" aria-label="목차">
         <h2>목차</h2>
         {document.tableOfContents.length === 0 ? (

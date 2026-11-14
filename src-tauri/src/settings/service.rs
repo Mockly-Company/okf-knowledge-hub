@@ -18,6 +18,7 @@ pub const ACTIVE_PROJECT_KEY: &str = "active-project-id";
 pub const PROJECT_DOCS_REPOSITORIES_KEY: &str = "project-docs-repositories";
 pub const HUB_WORKSPACES_KEY: &str = "hub-workspaces";
 pub const ACTIVE_HUB_WORKSPACE_KEY: &str = "active-hub-workspace-id";
+pub const CODE_REPOSITORY_PATHS_KEY: &str = "code-repository-paths";
 const INVALIDATED_PENDING_INITIALIZATION: &str = r#"{"state":"invalidated"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -852,6 +853,58 @@ impl LocalSettingsService {
             PENDING_INITIALIZATION_KEY,
             INVALIDATED_PENDING_INITIALIZATION,
         )
+    }
+
+    pub fn load_code_repository_paths(&self) -> Result<BTreeMap<String, PathBuf>, AppError> {
+        let stored: BTreeMap<String, PathBuf> = self.read_json(CODE_REPOSITORY_PATHS_KEY)?;
+        Ok(stored
+            .into_iter()
+            .filter_map(|(full_name, path)| {
+                let trimmed = full_name.trim();
+                valid_repository_full_name(trimmed).then(|| (trimmed.to_ascii_lowercase(), path))
+            })
+            .collect())
+    }
+
+    pub fn code_repository_local_path(&self, full_name: &str) -> Result<Option<PathBuf>, AppError> {
+        let key = full_name.trim().to_ascii_lowercase();
+        Ok(self.load_code_repository_paths()?.remove(&key))
+    }
+
+    pub fn set_code_repository_local_path(
+        &self,
+        full_name: &str,
+        local_path: &Path,
+    ) -> Result<PathBuf, AppError> {
+        let trimmed = full_name.trim();
+        if !valid_repository_full_name(trimmed) {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "유효한 GitHub 저장소 이름(owner/name)이 아닙니다.",
+            ));
+        }
+        let canonical = self.path_resolver.canonicalize(local_path)?;
+        if !canonical.join(".git").exists() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "선택한 폴더는 Git 저장소(.git)가 아닙니다.",
+            )
+            .with_recovery(RecoveryAction::ChooseAnotherDirectory));
+        }
+        let clean = crate::settings::ai_runner::shell_path(&canonical);
+        let mut paths = self.load_code_repository_paths()?;
+        paths.insert(trimmed.to_ascii_lowercase(), clean.clone());
+        self.write_json(CODE_REPOSITORY_PATHS_KEY, &paths)?;
+        Ok(clean)
+    }
+
+    pub fn clear_code_repository_local_path(&self, full_name: &str) -> Result<(), AppError> {
+        let key = full_name.trim().to_ascii_lowercase();
+        let mut paths = self.load_code_repository_paths()?;
+        if paths.remove(&key).is_some() {
+            self.write_json(CODE_REPOSITORY_PATHS_KEY, &paths)?;
+        }
+        Ok(())
     }
 }
 
@@ -1839,6 +1892,39 @@ mod tests {
         assert_eq!(
             store.raw(CURRENT_WORKSPACE_PATH_KEY),
             Some(ready.path().canonicalize().unwrap().display().to_string())
+        );
+    }
+
+    #[test]
+    fn code_repository_paths_persist_case_insensitively_and_require_git_clone() {
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store);
+        let not_git = tempfile::tempdir().unwrap();
+        let err = service
+            .set_code_repository_local_path("Acme-Org/acme-web", not_git.path())
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkspaceInvalid);
+
+        let git_repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(git_repo.path().join(".git")).unwrap();
+        let saved = service
+            .set_code_repository_local_path("Acme-Org/Acme-Web", git_repo.path())
+            .unwrap();
+        assert_eq!(
+            service
+                .code_repository_local_path("acme-org/acme-web")
+                .unwrap(),
+            Some(saved)
+        );
+
+        service
+            .clear_code_repository_local_path("ACME-ORG/ACME-WEB")
+            .unwrap();
+        assert_eq!(
+            service
+                .code_repository_local_path("acme-org/acme-web")
+                .unwrap(),
+            None
         );
     }
 }
