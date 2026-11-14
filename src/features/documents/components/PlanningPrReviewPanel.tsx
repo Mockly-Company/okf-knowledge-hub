@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, GitPullRequest, ArrowLeft, Check } from "lucide-react";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -89,6 +90,31 @@ function DiffCell({
   );
 }
 
+function RouterPrDeepLinkSync({
+  ready,
+  onOpenPr,
+}: {
+  ready: boolean;
+  onOpenPr: (prNumber: number) => void;
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    if (!ready) return;
+    const raw = searchParams.get("pr");
+    if (!raw) return;
+    const prNumber = Number(raw);
+    if (Number.isInteger(prNumber) && prNumber > 0) {
+      onOpenPr(prNumber);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("pr");
+    setSearchParams(next, { replace: true });
+  }, [ready, searchParams, setSearchParams, onOpenPr]);
+
+  return null;
+}
+
 export function PlanningPrReviewSection() {
   const {
     state,
@@ -99,6 +125,8 @@ export function PlanningPrReviewSection() {
   } = useDocuments();
   const sessionId = state.activeSessionId;
   const ready = state.status === "ready" && sessionId !== null;
+  const inRouter = useInRouterContext();
+  const prevRepoRef = useRef(state.repositoryFullName);
 
   const [selectedPrNumber, setSelectedPrNumber] = useState<number | null>(null);
   const [selectedDocPath, setSelectedDocPath] = useState<string | null>(null);
@@ -125,6 +153,8 @@ export function PlanningPrReviewSection() {
   });
 
   useEffect(() => {
+    if (prevRepoRef.current === state.repositoryFullName) return;
+    prevRepoRef.current = state.repositoryFullName;
     setSelectedPrNumber(null);
     setSelectedDocPath(null);
     setApproveError(null);
@@ -163,13 +193,13 @@ export function PlanningPrReviewSection() {
     );
   }, [activeDoc]);
 
-  const handleOpenPr = (number: number) => {
+  const handleOpenPr = useCallback((number: number) => {
     setSelectedPrNumber(number);
     setSelectedDocPath(null);
     setReviewComment("");
     setApproveError(null);
     setApprovalNotice(null);
-  };
+  }, []);
 
   const handleApproveAndMerge = async () => {
     if (selectedPrNumber === null || approving) return;
@@ -202,17 +232,23 @@ export function PlanningPrReviewSection() {
     }
   };
 
-  if (!ready) return null;
+  const deepLinkSync = inRouter ? (
+    <RouterPrDeepLinkSync ready={ready} onOpenPr={handleOpenPr} />
+  ) : null;
+
+  if (!ready) return deepLinkSync;
   if (
     openPullRequests.length === 0 &&
     selectedPrNumber === null &&
     !approvalNotice
   ) {
-    return null;
+    return deepLinkSync;
   }
 
   return (
-    <section
+    <>
+      {deepLinkSync}
+      <section
       className="planning-pr-section"
       aria-label="열린 기획 PR 검토 및 승인"
     >
@@ -516,6 +552,7 @@ export function PlanningPrReviewSection() {
           )}
         </div>
       )}
-    </section>
+      </section>
+    </>
   );
 }

@@ -115,4 +115,48 @@ describe("ProjectIssueDrawer", () => {
       screen.getByText("개발자 구현 백로그 (OkHub 코드 구현 비수행)"),
     ).toBeVisible();
   });
+
+  it("displays assignees in the issue drawer header and shows 미배정 when empty", () => {
+    const assignedDetail: ProjectBoardIssueDetail = {
+      ...detail,
+      assignees: [
+        { login: "alice", name: "앨리스" },
+        { login: "bob", name: "밥" },
+      ],
+    };
+
+    const view = render(
+      <ProjectIssueDrawer
+        open
+        onOpenChange={() => {}}
+        issue={{ ...issue, assignees: assignedDetail.assignees }}
+        detail={assignedDetail}
+        isLoadingDetail={false}
+        detailError={null}
+        readiness={{ state: "ready", waitingOn: null }}
+        isUpdating={false}
+        updateError={null}
+      />,
+    );
+
+    expect(screen.getByText("@alice")).toBeVisible();
+    expect(screen.getByText("@bob")).toBeVisible();
+    view.unmount();
+
+    render(
+      <ProjectIssueDrawer
+        open
+        onOpenChange={() => {}}
+        issue={{ ...issue, assignees: [] }}
+        detail={{ ...detail, assignees: [] }}
+        isLoadingDetail={false}
+        detailError={null}
+        readiness={{ state: "ready", waitingOn: null }}
+        isUpdating={false}
+        updateError={null}
+      />,
+    );
+
+    expect(screen.getByText("미배정")).toBeVisible();
+  });
 });

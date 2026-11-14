@@ -1551,4 +1551,128 @@ describe("ProjectPage project switching", () => {
     });
     clearPendingAiLaunch();
   });
+
+  it("shows assignee badges, filters by 내 담당만 보기 and 담당자 필터, and resets empty filter state", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 70,
+        title: "내 담당 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/70",
+        status: "ready",
+        layer: "frontend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "hyeeun" }],
+        children: [],
+      },
+      {
+        number: 71,
+        title: "동료 담당 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/71",
+        status: "ready",
+        layer: "backend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "alice" }, { login: "bob" }],
+        children: [],
+      },
+      {
+        number: 72,
+        title: "담당자 없는 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/72",
+        status: "backlog",
+        layer: "design",
+        kind: "작업",
+        dependsOn: 71,
+        assignees: [],
+        children: [],
+      },
+    ]);
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+
+    render(
+      <WorkspaceConnectionProvider gateway={workspaceGateway}>
+        <ProjectPage gateway={gateway} />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await screen.findByText(/#70 내 담당 백로그/);
+    expect(screen.getByText("@hyeeun")).toBeInTheDocument();
+    expect(screen.getByText("@alice 외 1")).toBeInTheDocument();
+    expect(screen.getByText("미배정")).toBeInTheDocument();
+
+    // 1. 내 담당만 보기 체크박스 토글 -> @hyeeun만 남는다
+    const mineCheckbox = screen.getByRole("checkbox", { name: "내 담당만 보기" });
+    expect(mineCheckbox).not.toBeDisabled();
+    await user.click(mineCheckbox);
+
+    await waitFor(() => {
+      expect(screen.getByText(/#70 내 담당 백로그/)).toBeInTheDocument();
+      expect(screen.queryByText(/#71 동료 담당 백로그/)).toBeNull();
+      expect(screen.queryByText(/#72 담당자 없는 백로그/)).toBeNull();
+    });
+
+    // 2. 영역별 뷰로 전환해도 필터 적용, 내 담당 필터 해제 + 미배정 필터 확인
+    await user.click(screen.getByRole("button", { name: "영역별" }));
+    expect(screen.getByText("내 담당 백로그")).toBeInTheDocument();
+    expect(screen.queryByText("동료 담당 백로그")).toBeNull();
+
+    // 3. 담당자 필터 드롭다운으로 미배정 선택 -> 72만 표시
+    await user.click(screen.getByRole("combobox", { name: "담당자 필터" }));
+    await user.click(await screen.findByRole("option", { name: "미배정" }));
+    await waitFor(() => {
+      expect(screen.getByText("담당자 없는 백로그")).toBeInTheDocument();
+      expect(screen.queryByText("내 담당 백로그")).toBeNull();
+      expect(screen.queryByText("동료 담당 백로그")).toBeNull();
+    });
+    expect(mineCheckbox).not.toBeChecked();
+
+    // 4. 빈 필터 결과 상태에서 필터 초기화 동작 (시작 가능만 보기 + 미배정 -> #72는 선행 #71 대기로 비어있음)
+    await user.click(screen.getByRole("checkbox", { name: "시작 가능만 보기" }));
+    expect(
+      await screen.findByText("선택한 담당자에게 배정된 열린 작업이 없습니다."),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "필터 초기화" }));
+    await waitFor(() => {
+      expect(screen.getByText("내 담당 백로그")).toBeInTheDocument();
+      expect(screen.getByText("동료 담당 백로그")).toBeInTheDocument();
+    });
+  });
+
+  it("disables 내 담당만 보기 when signed out and auto-opens issue drawer from /project?issue=", async () => {
+    const user = userEvent.setup();
+    const { MemoryRouter } = await import("react-router-dom");
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 70,
+        title: "딥링크 대상 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/70",
+        status: "ready",
+        layer: "planning",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "alice" }],
+        children: [],
+      },
+    ]);
+    const workspaceGateway = FakeWorkspaceConnectionGateway.disconnected();
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=70"]}>
+        <WorkspaceConnectionProvider gateway={workspaceGateway}>
+          <ProjectPage gateway={gateway} />
+        </WorkspaceConnectionProvider>
+      </MemoryRouter>,
+    );
+
+    const drawer = await screen.findByRole("dialog", { name: "딥링크 대상 백로그" });
+    expect(drawer).toBeVisible();
+
+    await user.click(within(drawer).getByRole("button", { name: "상세 닫기" }));
+    const mineCheckbox = await screen.findByRole("checkbox", {
+      name: "내 담당만 보기",
+    });
+    expect(mineCheckbox).toBeDisabled();
+  });
 });

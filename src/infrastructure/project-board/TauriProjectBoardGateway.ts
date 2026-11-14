@@ -24,6 +24,7 @@ import {
   issueKey,
   normalizeDependsOn,
 } from "@/features/project-board/boardUtils";
+import { normalizeBoardAssignees } from "@/features/project-board/assigneeFilter";
 
 type InvokeDesktop = <T>(
   command: string,
@@ -354,6 +355,7 @@ function normalizeIssue(
         kind: typeof issue.kind === "string" ? issue.kind : null,
         dependsOn: normalizeDependsOn(issue.dependsOn),
         childrenTruncated: hasChildren,
+        assignees: normalizeBoardAssignees(issue.assignees),
       };
     }
     if (depth > MAX_ISSUE_TREE_DEPTH) {
@@ -376,6 +378,7 @@ function normalizeIssue(
         kind: typeof issue.kind === "string" ? issue.kind : null,
         dependsOn: normalizeDependsOn(issue.dependsOn),
         childrenTruncated: hasChildren,
+        assignees: normalizeBoardAssignees(issue.assignees),
       };
     }
     const children: BoardIssue[] = [];
@@ -400,6 +403,7 @@ function normalizeIssue(
       // 실제 절단이 있었는데도 표시가 사라진다. 오염된 비불리언 값만 false로
       // 정규화해 구 캐시의 이상치가 다음 세대에 남지 않게 한다.
       childrenTruncated: issue.childrenTruncated === true,
+      assignees: normalizeBoardAssignees(issue.assignees),
     };
   } finally {
     release();

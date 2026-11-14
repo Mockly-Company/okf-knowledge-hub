@@ -29,6 +29,35 @@ fn set_display_density_inner(services: &AppServices, density: DisplayDensity) ->
     services.local_settings.set_display_density(density)
 }
 
+#[tauri::command]
+pub fn get_dashboard_last_seen_at(state: State<'_, AppServices>) -> CommandResult<Option<String>> {
+    state.local_settings.load_dashboard_last_seen_at()
+}
+
+#[tauri::command]
+pub fn mark_dashboard_seen(
+    state: State<'_, AppServices>,
+    timestamp: Option<String>,
+) -> CommandResult<String> {
+    let ts = match timestamp
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(value) => value.to_owned(),
+        None => time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| {
+                crate::error::AppError::new(
+                    crate::error::ErrorCode::LocalSettingsUnavailable,
+                    "현재 시각을 기록하지 못했습니다.",
+                )
+            })?,
+    };
+    state.local_settings.set_dashboard_last_seen_at(Some(&ts))?;
+    Ok(ts)
+}
+
 const AGENTS_MD_LIMIT_BYTES: usize = 200 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]

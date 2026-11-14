@@ -12,6 +12,12 @@ export type BoardStatus =
   | "in_review"
   | "done";
 
+export interface BoardAssignee {
+  login: string;
+  avatarUrl?: string | null;
+  name?: string | null;
+}
+
 export interface BoardIssue {
   number: number;
   title: string;
@@ -26,6 +32,9 @@ export interface BoardIssue {
   dependsOn?: number | null;
   /** 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시. 구 캐시에는 없음. */
   childrenTruncated?: boolean;
+  assignees?: BoardAssignee[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface ProjectBoard {

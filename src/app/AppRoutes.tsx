@@ -7,6 +7,7 @@ import { ProjectPage } from "@/pages/ProjectPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { DesignSystemPage } from "@/pages/DesignSystemPage";
 import { WorkspaceGate } from "@/features/workspace-connection/WorkspaceGate";
+import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import {
   DocumentsFollowActiveProject,
@@ -79,6 +80,25 @@ function ConnectedAiPage({
   );
 }
 
+function IndexRedirect() {
+  const activeProject = useOptionalActiveProject();
+  if (activeProject?.isListing) {
+    return (
+      <div
+        role="status"
+        className="p-[var(--space-6)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
+      >
+        작업 공간을 불러오는 중…
+      </div>
+    );
+  }
+  const target =
+    activeProject && activeProject.workspaces.length > 0
+      ? "/home"
+      : "/documents";
+  return <Navigate to={target} replace />;
+}
+
 export function AppRoutes({
   documentsGateway,
   aiGateway = sharedAiGateway,
@@ -105,7 +125,7 @@ export function AppRoutes({
             />
           }
         >
-          <Route index element={<Navigate to="/documents" replace />} />
+          <Route index element={<IndexRedirect />} />
           <Route path="home" element={<HomePage />} />
           <Route
             path="documents"

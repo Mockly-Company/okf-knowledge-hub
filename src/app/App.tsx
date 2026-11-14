@@ -9,10 +9,13 @@ import type { PreferencesRepository } from "@/features/preferences/PreferencesRe
 import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import { PersonalDashboardProvider } from "@/features/dashboard/PersonalDashboardProvider";
+import type { PersonalDashboardGateway } from "@/features/dashboard/PersonalDashboardGateway";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { WorkspaceConnectionGateway } from "@/features/workspace-connection/WorkspaceConnectionGateway";
 import { createDocumentsGateway } from "@/infrastructure/documents/createDocumentsGateway";
 import { TauriDocsRepositoryGateway } from "@/infrastructure/docs-repository/TauriDocsRepositoryGateway";
+import { createPersonalDashboardGateway } from "@/infrastructure/dashboard/createPersonalDashboardGateway";
 import { createPreferencesRepository } from "@/infrastructure/preferences/createPreferencesRepository";
 import { createWorkspaceConnectionGateway } from "@/infrastructure/workspace/createWorkspaceConnectionGateway";
 import { TauriAiGateway } from "@/infrastructure/ai/TauriAiGateway";
@@ -26,6 +29,7 @@ interface AppProps {
   projectBoardGateway?: ProjectBoardGateway;
   docsRepositoryGateway?: DocsRepositoryGateway;
   aiGateway?: AiGateway;
+  personalDashboardGateway?: PersonalDashboardGateway;
 }
 
 // React Query devtools는 dev 웹뷰에서만 띄운다. 테스트에서는 DOM 오염 방지.
@@ -49,6 +53,7 @@ export function App({
   projectBoardGateway,
   docsRepositoryGateway,
   aiGateway,
+  personalDashboardGateway,
 }: AppProps) {
   const [repository] = useState(() => preferencesRepository);
   const [workspace] = useState(() => workspaceGateway);
@@ -60,6 +65,9 @@ export function App({
     () => docsRepositoryGateway ?? new TauriDocsRepositoryGateway(),
   );
   const [ai] = useState(() => aiGateway ?? new TauriAiGateway());
+  const [personalDashboard] = useState(
+    () => personalDashboardGateway ?? createPersonalDashboardGateway(),
+  );
   const [queryClient] = useState(() => createQueryClient());
 
   return (
@@ -71,15 +79,17 @@ export function App({
             docsRepositoryGateway={docsRepo}
             aiGateway={ai}
           >
-            <HashRouter>
-              <AppRoutes
-                documentsGateway={documents}
-                aiGateway={ai}
-                projectBoardGateway={projectBoard}
-                docsRepositoryGateway={docsRepo}
-                repositoryGateway={workspace}
-              />
-            </HashRouter>
+            <PersonalDashboardProvider gateway={personalDashboard}>
+              <HashRouter>
+                <AppRoutes
+                  documentsGateway={documents}
+                  aiGateway={ai}
+                  projectBoardGateway={projectBoard}
+                  docsRepositoryGateway={docsRepo}
+                  repositoryGateway={workspace}
+                />
+              </HashRouter>
+            </PersonalDashboardProvider>
           </ActiveProjectProvider>
         </WorkspaceConnectionProvider>
       </PreferencesProvider>

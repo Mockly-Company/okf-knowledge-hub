@@ -142,4 +142,26 @@ describe("ProjectTree", () => {
       screen.queryByRole("list", { name: "항목 1 흐름 요약" }),
     ).not.toBeInTheDocument();
   });
+
+  it("displays assignee badges (@login, @login 외 N, and 미배정) across tree cards and leaves", () => {
+    const epic: BoardIssue = {
+      ...issue(1, [
+        {
+          ...issue(2),
+          assignees: [{ login: "alice" }],
+        },
+        {
+          ...issue(3),
+          assignees: [{ login: "bob" }, { login: "carol" }],
+        },
+      ]),
+      assignees: [],
+    };
+
+    render(<ProjectTree issues={[epic]} />);
+
+    expect(screen.getByText("미배정")).toBeInTheDocument();
+    expect(screen.getByText("@alice")).toBeInTheDocument();
+    expect(screen.getByText("@bob 외 1")).toBeInTheDocument();
+  });
 });

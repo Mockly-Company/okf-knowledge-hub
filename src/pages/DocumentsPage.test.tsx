@@ -5,6 +5,7 @@ import {
   render as renderWithoutPreferences,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -666,6 +667,81 @@ describe("DocumentsPage", () => {
     ).toBeVisible();
     expect(
       screen.getByText(/문서 미연결 보드.*문서 저장소를 선택하세요/),
+    ).toBeVisible();
+  });
+
+  it("deep-links /documents?pr= directly into the PR review view even if a document was previously open", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = gateway.guideCatalog.documents[0].path;
+    gateway.openPullRequests = [
+      {
+        number: 17,
+        title: "docs(v2): 기획 로드맵 및 기능 명세 제안",
+        body: "변경 설명",
+        htmlUrl: "https://github.com/Mockly-Company/Mockly/pull/17",
+        authorLogin: "alice",
+        headRef: "draft/alice/roadmap",
+        headSha: "head17",
+        baseRef: "main",
+        baseSha: "base17",
+        isDraft: false,
+        mergeable: true,
+        updatedAt: "2026-11-14T00:00:00Z",
+      },
+    ];
+    gateway.pullRequestDetails.set(17, {
+      pullRequest: gateway.openPullRequests[0],
+      viewerLogin: "hyeeun",
+      documents: [
+        {
+          path: "docs/product/roadmap-v2.md",
+          title: "OkHub v2 로드맵",
+          status: "modified",
+          baseMarkdown: "# 기존",
+          headMarkdown: "# 변경",
+          companionHtml: "<!doctype html><html><body><h1>PR Review HTML</h1></body></html>",
+          hasCompanionHtml: true,
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter initialEntries={["/documents?pr=17"]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    const prSection = await screen.findByRole("region", {
+      name: "열린 기획 PR 검토 및 승인",
+    });
+    expect(
+      await within(prSection).findByRole("heading", {
+        name: "docs(v2): 기획 로드맵 및 기능 명세 제안",
+      }),
+    ).toBeVisible();
+  });
+
+  it("deep-links /documents?doc= directly into the requested document reader", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const guide = gateway.guideCatalog.documents[0];
+
+    render(
+      <MemoryRouter initialEntries={[`/documents?doc=${encodeURIComponent(guide.path)}`]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("region", { name: guide.title }),
     ).toBeVisible();
   });
 });

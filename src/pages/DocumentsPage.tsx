@@ -1,5 +1,6 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { lazy, Suspense, useEffect, useState, type ReactNode } from "react";
+import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,45 @@ const DocumentDraftEditor = lazy(() =>
     (module) => ({ default: module.DocumentDraftEditor }),
   ),
 );
+
+function DocumentsDeepLinkSync({
+  ready,
+  selectedPath,
+  showDocumentsHome,
+  selectDocument,
+}: {
+  ready: boolean;
+  selectedPath: string | null;
+  showDocumentsHome: () => void;
+  selectDocument: (path: string) => void;
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const prParam = searchParams.get("pr");
+  const docParam = searchParams.get("doc");
+
+  useEffect(() => {
+    if (prParam && selectedPath !== null) {
+      showDocumentsHome();
+    }
+  }, [prParam, selectedPath, showDocumentsHome]);
+
+  useEffect(() => {
+    if (prParam || !ready || !docParam) return;
+    selectDocument(docParam);
+    const next = new URLSearchParams(searchParams);
+    next.delete("doc");
+    setSearchParams(next, { replace: true });
+  }, [
+    prParam,
+    docParam,
+    ready,
+    searchParams,
+    setSearchParams,
+    selectDocument,
+  ]);
+
+  return null;
+}
 
 export function DocumentsPage({
   headerActions,
@@ -78,6 +118,16 @@ export function DocumentsPage({
     pullRequestNumber: number;
     pullRequestUrl: string;
   } | null>(null);
+  const inRouter = useInRouterContext();
+  const deepLinkSync = inRouter ? (
+    <DocumentsDeepLinkSync
+      ready={state.status === "ready"}
+      selectedPath={state.selectedPath}
+      showDocumentsHome={showDocumentsHome}
+      selectDocument={selectDocument}
+    />
+  ) : null;
+
   // provider 밖(단위 테스트·스토리)에서는 null이므로 배너를 숨긴다.
   const activeProject = useOptionalActiveProject();
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
@@ -274,6 +324,7 @@ export function DocumentsPage({
   if (state.selectedPath !== null) {
     return (
       <section className="documents-page documents-page--reader" aria-labelledby="documents-title">
+        {deepLinkSync}
         <h1 id="documents-title" className="sr-only">Documents</h1>
         {activeWorkspace && !docsMissing ? (
           <WorkspaceContextBar
@@ -334,6 +385,7 @@ export function DocumentsPage({
 
   return (
     <section className="documents-page" aria-labelledby="documents-title">
+      {deepLinkSync}
       <PageHeader
         titleId="documents-title"
         title="Documents"

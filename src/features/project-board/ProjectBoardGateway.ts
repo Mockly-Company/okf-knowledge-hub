@@ -1,4 +1,5 @@
 import type {
+  BoardAssignee,
   BoardLayer,
   BoardStatus,
   ProjectBoard,
@@ -58,6 +59,9 @@ export interface ProjectBoardIssueDetail {
   linkedPullRequests: BoardLinkedPullRequest[];
   recommendedWorkingDir: string | null;
   priorityOptions: string[];
+  assignees?: BoardAssignee[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface CreatedBoardIssueRef {
