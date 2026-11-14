@@ -166,8 +166,8 @@ export function BacklogDeriveDialog({
             </DialogTitle>
             <DialogDescription>
               {source?.kind === "issue"
-                ? `상위 ${layerName(source.layer)} 이슈 완료 후 이어질 [백엔드]·[프론트엔드] 하위 이슈와 선행 순서(이전 단계: #N)를 일괄 등록합니다.`
-                : `기획 문서(${source?.documentPath ?? ""}) 링크가 포함된 보드 백로그 세트를 미리 확인하고 일괄 등록합니다.`}
+                ? `상위 ${layerName(source.layer)} 문서 확정 후 이어질 개발자 핸드오프([백엔드]·[프론트엔드]) 백로그와 선행 순서(이전 단계: #N)를 일괄 등록합니다. (OkHub는 코드 구현을 수행하지 않습니다.)`
+                : `기획 문서(${source?.documentPath ?? ""}) 링크가 포함된 직군별 백로그 세트를 미리 확인하고 일괄 등록합니다. ([기획]·[디자인] 문서화까지만 OkHub AI가 수행합니다.)`}
             </DialogDescription>
           </div>
           <DialogCloseButton label="닫기" />
@@ -190,7 +190,7 @@ export function BacklogDeriveDialog({
                   aria-pressed={docMode === "implementation"}
                   onClick={() => setDocMode("implementation")}
                 >
-                  구현 백로그 세트 (Epic + [백엔드] + [프론트엔드])
+                  개발 핸드오프 세트 (Epic + [백엔드] + [프론트엔드])
                 </Button>
                 <Button
                   type="button"
@@ -198,7 +198,7 @@ export function BacklogDeriveDialog({
                   aria-pressed={docMode === "upper"}
                   onClick={() => setDocMode("upper")}
                 >
-                  상위 기획·디자인 세트 (Epic + [기획] + [디자인])
+                  전체 직군 세트 (Epic + [기획]·[디자인]·[백엔드]·[프론트엔드])
                 </Button>
               </div>
             ) : null}

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { FormField } from "@/components/patterns/FormField";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogBody,
@@ -66,6 +67,9 @@ export function CreateBoardIssueDialog({
   );
   const [dependsOnInput, setDependsOnInput] = useState<string>("");
   const [documentPath, setDocumentPath] = useState<string>("");
+  const [screenSpecPath, setScreenSpecPath] = useState<string>("");
+  const [includeDeveloperBacklog, setIncludeDeveloperBacklog] =
+    useState<boolean>(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -86,6 +90,8 @@ export function CreateBoardIssueDialog({
     );
     setDependsOnInput("");
     setDocumentPath("");
+    setScreenSpecPath("");
+    setIncludeDeveloperBacklog(true);
     setSubmitError(null);
   }, [
     open,
@@ -97,9 +103,7 @@ export function CreateBoardIssueDialog({
 
   const resolvedDefaultRepo = useMemo(() => {
     const preferredRole =
-      layer === "frontend" || layer === "backend" || layer === "design"
-        ? "code"
-        : "docs";
+      layer === "frontend" || layer === "backend" ? "code" : "docs";
     return pickDefaultRepository(repositories, preferredRole) ?? "";
   }, [layer, repositories]);
 
@@ -111,10 +115,21 @@ export function CreateBoardIssueDialog({
       epicTitle: title || "신규 기능",
       epicBody: body,
       documentPath: documentPath || null,
+      screenSpecPath: screenSpecPath || null,
       priority: priority === NONE_OPTION ? null : priority,
+      includeDeveloperBacklog,
       repositories,
     });
-  }, [mode, title, body, documentPath, priority, repositories]);
+  }, [
+    mode,
+    title,
+    body,
+    documentPath,
+    screenSpecPath,
+    priority,
+    includeDeveloperBacklog,
+    repositories,
+  ]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -132,7 +147,9 @@ export function CreateBoardIssueDialog({
           epicTitle: trimmedTitle,
           epicBody: body,
           documentPath: documentPath || null,
+          screenSpecPath: screenSpecPath || null,
           priority: priority === NONE_OPTION ? null : priority,
+          includeDeveloperBacklog,
           repositories,
         });
         await onSubmit(drafts);
@@ -241,13 +258,15 @@ export function CreateBoardIssueDialog({
                   aria-pressed={mode === "epic_starter"}
                   onClick={() => setMode("epic_starter")}
                 >
-                  새 Epic + [기획]/[디자인] 상위 백로그 세트
+                  아이디어 → 기획·디자인·개발 전체 백로그 세트
                 </Button>
               </div>
             ) : null}
 
             <FormField
-              label={mode === "epic_starter" ? "Epic 기능명" : "이슈 제목"}
+              label={
+                mode === "epic_starter" ? "Epic 기능/아이디어명" : "이슈 제목"
+              }
               required
             >
               <Input
@@ -263,15 +282,27 @@ export function CreateBoardIssueDialog({
 
             {mode === "epic_starter" ? (
               <>
-                <div className="grid gap-[var(--space-3)] sm:grid-cols-2">
+                <div className="grid gap-[var(--space-3)] sm:grid-cols-3">
                   <FormField
-                    label="연결 기획 문서 경로 (선택)"
-                    description="본문에 AI 정본(.md) 참조 링크를 함께 넣습니다."
+                    label="PRD 문서 경로 (선택)"
+                    description="본문에 PRD 정본(.md) 참조 링크를 함께 넣습니다."
                   >
                     <Input
                       value={documentPath}
                       onChange={(event) => setDocumentPath(event.target.value)}
-                      placeholder="예: docs/product/refund-spec.md"
+                      placeholder="예: docs/product/refund-prd.md"
+                    />
+                  </FormField>
+                  <FormField
+                    label="화면명세서 경로 (선택)"
+                    description="본문에 화면명세서(.md) 참조 링크를 함께 넣습니다."
+                  >
+                    <Input
+                      value={screenSpecPath}
+                      onChange={(event) =>
+                        setScreenSpecPath(event.target.value)
+                      }
+                      placeholder="예: docs/product/refund-screen-spec.md"
                     />
                   </FormField>
                   <FormField label="Priority">
@@ -284,21 +315,34 @@ export function CreateBoardIssueDialog({
                   </FormField>
                 </div>
 
-                <FormField label="배경 및 목표">
+                <FormField label="아이디어 설명">
                   <Textarea
                     rows={4}
                     value={body}
                     onChange={(event) => setBody(event.target.value)}
-                    placeholder="해결하려는 문제와 핵심 요구사항을 적어 주세요."
+                    placeholder="아이디어 배경, 해결하려는 문제, 핵심 요구사항을 적어 주세요."
                   />
                 </FormField>
+
+                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[length:var(--font-meta-size)] text-[var(--color-text-default)]">
+                  <Checkbox
+                    checked={includeDeveloperBacklog}
+                    onChange={(event) =>
+                      setIncludeDeveloperBacklog(event.target.checked)
+                    }
+                  />
+                  개발자 핸드오프 백로그([백엔드]·[프론트엔드])도 함께 생성
+                </label>
 
                 <section
                   aria-label="상위 백로그 자동 구성 미리보기"
                   className="grid gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)]"
                 >
                   <p className="m-0 text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                    생성될 상위 백로그 (총 {starterPreview.length}건)
+                    생성될 직군별 백로그 (총 {starterPreview.length}건)
+                  </p>
+                  <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+                    [기획](PRD)·[디자인](화면명세서) 백로그까지만 OkHub AI가 수행해 문서를 완성하며, [백엔드]·[프론트엔드]는 개발자 핸드오프 백로그로 등록됩니다.
                   </p>
                   <ul className="m-0 grid gap-[var(--space-1)] pl-[var(--space-4)] text-[length:var(--font-meta-size)] text-[var(--color-text-default)]">
                     {starterPreview.map((draft, idx) => (
@@ -308,7 +352,7 @@ export function CreateBoardIssueDialog({
                           ? ` → ${draft.repositoryFullName}`
                           : ""}
                         {draft.dependsOnBatchIndex != null
-                          ? " (기획 완료 후 진행)"
+                          ? ` (항목 #${draft.dependsOnBatchIndex + 1} 완료 후 진행)`
                           : ""}
                       </li>
                     ))}
@@ -437,7 +481,7 @@ export function CreateBoardIssueDialog({
               취소
             </Button>
             <Button type="submit" variant="primary" loading={submitting}>
-              {mode === "epic_starter" ? "상위 백로그 일괄 생성" : "이슈 생성"}
+              {mode === "epic_starter" ? "직군별 백로그 일괄 생성" : "이슈 생성"}
             </Button>
           </DialogFooter>
         </form>

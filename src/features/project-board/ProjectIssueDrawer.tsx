@@ -80,6 +80,8 @@ export function ProjectIssueDrawer({
       : ["P0", "P1", "P2"];
   const canDeriveCascading =
     effectiveLayer === "planning" || effectiveLayer === "design";
+  const isDeveloperBacklog =
+    effectiveLayer === "backend" || effectiveLayer === "frontend";
   const githubHref = issue ? safeHref(issue.url) : null;
 
   return (
@@ -410,7 +412,11 @@ export function ProjectIssueDrawer({
                   ) : null}
                 </div>
 
-                {onStartWithAi ? (
+                {isDeveloperBacklog ? (
+                  <StatusBadge tone="neutral">
+                    개발자 구현 백로그 (OkHub 코드 구현 비수행)
+                  </StatusBadge>
+                ) : onStartWithAi ? (
                   <Button
                     type="button"
                     variant="primary"

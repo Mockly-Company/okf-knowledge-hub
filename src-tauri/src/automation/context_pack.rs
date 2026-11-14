@@ -180,30 +180,18 @@ pub fn extract_referenced_doc_paths(text: &str) -> Vec<String> {
 
 pub fn select_working_directory_for_issue(
     layer: BoardLayer,
-    issue_repository_full_name: Option<&str>,
+    _issue_repository_full_name: Option<&str>,
     docs_workspace_root: Option<&Path>,
-    active_context: &ActiveWorkspaceAiContext,
+    _active_context: &ActiveWorkspaceAiContext,
 ) -> Option<String> {
-    if matches!(
-        layer,
-        BoardLayer::Frontend | BoardLayer::Backend | BoardLayer::Design
-    ) {
-        if let Some(repo_full_name) = issue_repository_full_name {
-            if let Some(matched) = active_context.code_repositories.iter().find(|repo| {
-                repo.full_name.eq_ignore_ascii_case(repo_full_name) && repo.local_path.is_some()
-            }) {
-                return matched.local_path.clone();
-            }
-        }
-        if let Some(first_connected) = active_context
-            .code_repositories
-            .iter()
-            .find_map(|repo| repo.local_path.clone())
-        {
-            return Some(first_connected);
+    // OkHub는 코드 구현([백엔드]·[프론트엔드])을 수행하지 않고,
+    // [기획](PRD·정책서)과 [디자인](화면명세서·인터랙션 명세) 문서 작업만 문서 저장소에서 수행한다.
+    match layer {
+        BoardLayer::Backend | BoardLayer::Frontend => None,
+        BoardLayer::Planning | BoardLayer::Design | BoardLayer::Unassigned => {
+            docs_workspace_root.map(|p| p.display().to_string())
         }
     }
-    docs_workspace_root.map(|p| p.display().to_string())
 }
 
 pub fn assemble_issue_context_pack(
@@ -280,7 +268,29 @@ pub fn assemble_issue_context_pack(
         md.push("- 선행 이슈(`이전 단계`): 없음 (즉시 시작 가능)".to_owned());
     }
     if let Some(cwd) = recommended_working_dir.as_deref() {
-        md.push(format!("- 권장 작업 폴더: `{cwd}`"));
+        md.push(format!("- 권장 작업 폴더 (문서 저장소): `{cwd}`"));
+    } else if matches!(layer, BoardLayer::Backend | BoardLayer::Frontend) {
+        md.push(
+            "- 수행 경계: **개발자 구현 백로그 (`[백엔드]`/`[프론트엔드]`) — OkHub에서는 코드 구현을 수행하지 않고 문서·백로그 핸드오프까지만 담당합니다.**"
+                .to_owned(),
+        );
+    }
+    md.push(String::new());
+    md.push("## OkHub 수행 원칙 요약".to_owned());
+    md.push(String::new());
+    match layer {
+        BoardLayer::Planning => {
+            md.push("- 이번 작업은 **`[기획]` 문서화 백로그**입니다. PRD·기획서를 `.md` + `.html` 2벌(`Reset → Mark` 변경 표시 포함)로 작성해 문서 저장소 PR을 올리고, 필요한 `[디자인]`·`[백엔드]`·`[프론트엔드]` 백로그를 보드에 등록하세요. **코드는 구현하지 않습니다.**".to_owned());
+        }
+        BoardLayer::Design => {
+            md.push("- 이번 작업은 **`[디자인]` 문서화 백로그**입니다. 화면명세서(화면 구성·상태별 UI·인터랙션 명세)를 `.md` + `.html` 2벌(`Reset → Mark` 변경 표시 포함)로 작성해 문서 저장소 PR을 올리고, `[프론트엔드]` 개발 백로그의 완료 조건과 문서 링크를 보강하세요. **코드는 구현하지 않습니다.**".to_owned());
+        }
+        BoardLayer::Backend | BoardLayer::Frontend => {
+            md.push("- 이 이슈는 **개발자 핸드오프용 구현 백로그**입니다. OkHub 세션에서는 애플리케이션 코드를 수정하거나 구현 PR을 만들지 마세요.".to_owned());
+        }
+        BoardLayer::Unassigned => {
+            md.push("- 아이디어를 바탕으로 PRD·화면명세서(`.md` + `.html` 2벌)를 작성하고 기획자·디자이너·개발자 백로그를 정리하세요. **`[기획]`·`[디자인]` 문서 작성까지만 수행하며 코드는 구현하지 않습니다.**".to_owned());
+        }
     }
     md.push(String::new());
     md.push("## 이슈 본문".to_owned());
@@ -421,12 +431,29 @@ mod tests {
         let pack = assemble_issue_context_pack(&items[1], &items, Some(temp.path()), &ctx);
         assert!(pack.ready_to_start);
         assert!(pack.predecessor_done);
-        assert_eq!(
-            pack.recommended_working_dir.as_deref(),
-            Some("/work/acme-web")
-        );
+        // [백엔드] 이슈는 개발자 핸드오프 대상이므로 OkHub에서 작업 디렉터리를 열지 않는다.
+        assert_eq!(pack.recommended_working_dir, None);
+        assert!(pack
+            .markdown_summary
+            .contains("개발자 핸드오프용 구현 백로그"));
         assert_eq!(pack.linked_documents.len(), 1);
         assert_eq!(pack.linked_documents[0].path, "docs/product/checkout.md");
         assert!(pack.markdown_summary.contains("요구사항 A"));
+
+        let design_item = make_item(
+            13,
+            "[디자인] 결제 화면명세서 작성",
+            "Backlog",
+            "디자인",
+            Some(10),
+            "참고 문서: `docs/product/checkout.md`\n이전 단계: #10",
+        );
+        let design_pack =
+            assemble_issue_context_pack(&design_item, &items, Some(temp.path()), &ctx);
+        assert_eq!(
+            design_pack.recommended_working_dir.as_deref(),
+            Some(temp.path().display().to_string().as_str())
+        );
+        assert!(design_pack.markdown_summary.contains("화면명세서"));
     }
 }

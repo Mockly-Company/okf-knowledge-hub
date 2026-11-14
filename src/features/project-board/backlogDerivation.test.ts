@@ -21,38 +21,59 @@ const writableRepos = [
 ];
 
 describe("backlogDerivation", () => {
-  it("creates an Epic + [기획] + [디자인] upper-layer backlog starter set", () => {
-    const drafts = buildEpicStarterDrafts({
+  it("creates an Epic + [기획] PRD + [디자인] 화면명세서 set (and optional developer handoff backlogs) targeting docs vs code repos properly", () => {
+    const upperOnly = buildEpicStarterDrafts({
       epicTitle: "결제 환불 자동화",
       epicBody: "환불 승인부터 정산까지 자동화합니다.",
-      documentPath: "docs/product/refund-spec.md",
+      documentPath: "docs/product/refund-prd.md",
+      screenSpecPath: "docs/product/refund-screen-spec.md",
       repositories: writableRepos,
     });
 
-    expect(drafts).toHaveLength(3);
-    expect(drafts[0]).toMatchObject({
+    expect(upperOnly).toHaveLength(3);
+    expect(upperOnly[0]).toMatchObject({
       title: "[Epic] 결제 환불 자동화",
       repositoryFullName: "Acme-Org/acme-docs",
       layer: "planning",
       kind: "기능",
     });
-    expect(drafts[1]).toMatchObject({
-      title: "[기획] 결제 환불 자동화 상세 명세 확정",
+    expect(upperOnly[1]).toMatchObject({
+      title: "[기획] 결제 환불 자동화 PRD·상세 기획서 작성",
       repositoryFullName: "Acme-Org/acme-docs",
       layer: "planning",
       parentBatchIndex: 0,
     });
-    expect(drafts[2]).toMatchObject({
-      title: "[디자인] 결제 환불 자동화 화면·인터랙션 설계",
-      repositoryFullName: "Acme-Org/acme-web",
+    expect(upperOnly[2]).toMatchObject({
+      title: "[디자인] 결제 환불 자동화 화면명세서·인터랙션 설계 문서 작성",
+      repositoryFullName: "Acme-Org/acme-docs",
       layer: "design",
       parentBatchIndex: 0,
       dependsOnBatchIndex: 1,
     });
-    expect(drafts[0].body).toContain("`docs/product/refund-spec.md`");
+    expect(upperOnly[0].body).toContain("`docs/product/refund-prd.md`");
+    expect(upperOnly[0].body).toContain("`docs/product/refund-screen-spec.md`");
+
+    const fullRoleSet = buildEpicStarterDrafts({
+      epicTitle: "결제 환불 자동화",
+      includeDeveloperBacklog: true,
+      repositories: writableRepos,
+    });
+    expect(fullRoleSet).toHaveLength(5);
+    expect(fullRoleSet[3]).toMatchObject({
+      layer: "backend",
+      repositoryFullName: "Acme-Org/acme-web",
+      parentBatchIndex: 0,
+      dependsOnBatchIndex: 1,
+    });
+    expect(fullRoleSet[4]).toMatchObject({
+      layer: "frontend",
+      repositoryFullName: "Acme-Org/acme-web",
+      parentBatchIndex: 0,
+      dependsOnBatchIndex: 2,
+    });
   });
 
-  it("derives [백엔드] -> [프론트엔드] sub-issues from a [기획] issue and [프론트엔드] from a [디자인] issue", () => {
+  it("derives developer handoff [백엔드] -> [프론트엔드] sub-issues from [기획] and [프론트엔드] from [디자인]", () => {
     const fromPlanning = buildCascadingSubIssuesFromIssue({
       sourceIssueNumber: 42,
       sourceTitle: "[기획] 주문 취소 정책 수립",
@@ -83,16 +104,16 @@ describe("backlogDerivation", () => {
 
     const fromDesign = buildCascadingSubIssuesFromIssue({
       sourceIssueNumber: 55,
-      sourceTitle: "[디자인] 취소 확인 모달 시안",
+      sourceTitle: "[디자인] 취소 확인 모달 화면명세서",
       sourceLayer: "design",
-      sourceRepositoryFullName: "Acme-Org/acme-web",
+      sourceRepositoryFullName: "Acme-Org/acme-docs",
       priority: "P2",
       repositories: writableRepos,
     });
 
     expect(fromDesign).toHaveLength(1);
     expect(fromDesign[0]).toMatchObject({
-      title: "[프론트엔드] 취소 확인 모달 시안 화면·컴포넌트 구현",
+      title: "[프론트엔드] 취소 확인 모달 화면명세서 화면·컴포넌트 구현",
       repositoryFullName: "Acme-Org/acme-web",
       layer: "frontend",
       priority: "P2",
@@ -101,7 +122,7 @@ describe("backlogDerivation", () => {
     });
   });
 
-  it("derives implementation backlog from an approved .md spec with mutual document links", () => {
+  it("derives developer handoff backlog from an approved .md spec with mutual document links", () => {
     const drafts = buildDocumentBacklogDrafts({
       documentTitle: "팀 알림 설정 기획서",
       documentPath: "docs/product/notifications.md",

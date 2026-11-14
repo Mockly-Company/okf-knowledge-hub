@@ -1015,10 +1015,7 @@ fn select_default_writable_repository(
     writable: &[ProjectWritableRepository],
     layer: Option<BoardLayer>,
 ) -> Option<String> {
-    if matches!(
-        layer,
-        Some(BoardLayer::Frontend | BoardLayer::Backend | BoardLayer::Design)
-    ) {
+    if matches!(layer, Some(BoardLayer::Frontend | BoardLayer::Backend)) {
         if let Some(code_repo) = writable.iter().find(|r| r.role == "code") {
             return Some(code_repo.full_name.clone());
         }

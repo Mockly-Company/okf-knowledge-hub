@@ -644,6 +644,9 @@ export function ProjectPage({
     issue: BoardIssue,
     detail: ProjectBoardIssueDetail | null,
   ) => {
+    if (issue.layer === "backend" || issue.layer === "frontend") {
+      return;
+    }
     const repoFullName =
       detail?.repositoryFullName ?? inferRepositoryFullNameFromUrl(issue.url);
     const firstDoc = detail?.linkedDocuments[0]?.path ?? null;
@@ -655,10 +658,7 @@ export function ProjectPage({
       },
       label: `#${issue.number} ${issue.title}`,
       layer: issue.layer,
-      targetDescription:
-        issue.layer === "planning"
-          ? "문서 저장소 격리 worktree"
-          : `코드 저장소 격리 worktree (${resolveLayerName(issue.layer)})`,
+      targetDescription: `문서 저장소 격리 worktree (${resolveLayerName(issue.layer)} — PRD·화면명세서 작성 전용, 코드 구현 비수행)`,
     });
     if (
       queryProjectId !== null &&

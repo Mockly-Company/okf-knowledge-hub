@@ -281,7 +281,7 @@ export function AiPage({
               {pendingLaunch.label}
             </p>
             <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-              아래 AI 도구를 선택하면 격리된 git worktree를 열고 `.okf/AGENTS.md`·연결 문서·완료 조건을 자동 주입합니다.
+              아래 AI 도구를 선택하면 문서 저장소의 격리된 git worktree를 열고 `.okf/AGENTS.md`·연결 문서·완료 조건을 자동 주입합니다. (OkHub는 PRD·화면명세서 `.md`+`.html` 작성 및 백로그 정리만 수행하며 코드 구현은 하지 않습니다.)
             </p>
           </div>
           <Button

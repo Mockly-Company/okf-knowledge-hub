@@ -470,10 +470,7 @@ impl AutomationRuntime {
         if let Some(repo) = explicit_repo.map(str::trim).filter(|s| !s.is_empty()) {
             return Ok(repo.to_owned());
         }
-        if matches!(
-            layer,
-            Some(BoardLayer::Frontend | BoardLayer::Backend | BoardLayer::Design)
-        ) {
+        if matches!(layer, Some(BoardLayer::Frontend | BoardLayer::Backend)) {
             if let Some(code_repo) = self.ai_context.code_repositories.first() {
                 return Ok(code_repo.full_name.clone());
             }

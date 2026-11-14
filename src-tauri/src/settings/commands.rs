@@ -226,6 +226,17 @@ async fn prepare_ai_terminal_async(
                         &active_context,
                     );
                     if matches!(
+                        pack.layer,
+                        crate::project_board::model::BoardLayer::Backend
+                            | crate::project_board::model::BoardLayer::Frontend
+                    ) {
+                        return Err(AppError::new(
+                            ErrorCode::WorkspaceInvalid,
+                            "OkHub는 기획서·PRD·화면명세서 작성 및 [기획]·[디자인] 백로그 처리 전용입니다. [백엔드]·[프론트엔드] 개발 백로그는 코드 구현 환경에서 진행해 주세요.",
+                        )
+                        .with_recovery(RecoveryAction::Retry));
+                    }
+                    if matches!(
                         pack.status,
                         Some(
                             crate::project_board::model::BoardStatus::Backlog
@@ -250,16 +261,10 @@ async fn prepare_ai_terminal_async(
                             )
                             .await;
                     }
-                    let target_repo_dir = pack
-                        .recommended_working_dir
-                        .as_deref()
-                        .map(PathBuf::from)
-                        .filter(|p| p.exists())
-                        .unwrap_or_else(|| workspace_dir.clone());
                     let prepared = PreparedTaskPack {
                         slug: format!("issue-{issue_number}"),
-                        branch_name: format!("feat/issue-{issue_number}"),
-                        target_repo_dir,
+                        branch_name: format!("docs/issue-{issue_number}"),
+                        target_repo_dir: workspace_dir.clone(),
                         markdown: pack.markdown_summary,
                     };
                     return prepare_ai_terminal_with_task_pack(
@@ -1098,14 +1103,17 @@ mod tests {
     }
 
     #[test]
-    fn agents_md_template_codifies_dual_format_reset_mark_and_cascading_layers() {
+    fn agents_md_template_codifies_dual_format_reset_mark_and_non_implementation_boundary() {
         assert!(AGENTS_MD_TEMPLATE.contains(".md"));
         assert!(AGENTS_MD_TEMPLATE.contains(".html"));
         assert!(AGENTS_MD_TEMPLATE.contains("Reset → Mark"));
+        assert!(AGENTS_MD_TEMPLATE.contains("PRD"));
+        assert!(AGENTS_MD_TEMPLATE.contains("화면명세서"));
         assert!(AGENTS_MD_TEMPLATE.contains("[기획]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[디자인]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[백엔드]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[프론트엔드]"));
+        assert!(AGENTS_MD_TEMPLATE.contains("코드 구현을 하지 않는다"));
         assert!(!AGENTS_MD_TEMPLATE.contains("Mockly-Company"));
     }
 
@@ -1278,11 +1286,11 @@ mod tests {
             .unwrap();
         let services = AppServices::new(settings);
 
-        let code_pack = super::PreparedTaskPack {
+        let docs_pack = super::PreparedTaskPack {
             slug: "issue-63".to_owned(),
-            branch_name: "feat/issue-63".to_owned(),
-            target_repo_dir: code_repo.clone(),
-            markdown: "# 작업 컨텍스트 팩 — #63 코드 구현\n\n- 완료 조건: 테스트 통과".to_owned(),
+            branch_name: "docs/issue-63".to_owned(),
+            target_repo_dir: docs_repo.clone(),
+            markdown: "# 작업 컨텍스트 팩 — #63 [디자인] 화면명세서 작성\n\n- 완료 조건: 2벌(.md+.html) 화면명세서 확정".to_owned(),
         };
         let (_, launch_dir) = super::prepare_ai_terminal_with_task_pack(
             &services,
@@ -1290,7 +1298,7 @@ mod tests {
             app_data.path(),
             None,
             None,
-            Some(&code_pack),
+            Some(&docs_pack),
         )
         .unwrap();
 
@@ -1298,7 +1306,7 @@ mod tests {
             launch_dir.ends_with("issue-63"),
             "launch_dir={launch_dir:?}"
         );
-        assert!(launch_dir.join("README.md").is_file());
+        assert!(launch_dir.join(".okf").join("AGENTS.md").is_file());
         let okhub_dir = app_data.path().join("okhub");
         let rules_path = std::fs::read_dir(&okhub_dir)
             .unwrap()
@@ -1311,7 +1319,8 @@ mod tests {
             })
             .expect("expected generated AI_SESSION_RULES file");
         let rules = std::fs::read_to_string(rules_path).unwrap();
-        assert!(rules.contains("# 작업 컨텍스트 팩 — #63 코드 구현"));
+        assert!(rules.contains("# 작업 컨텍스트 팩 — #63 [디자인] 화면명세서 작성"));
         assert!(rules.contains("팀 문서 규칙: 2벌(.md+.html) 유지"));
+        assert!(rules.contains("절대 원칙 (코드 구현 금지)"));
     }
 }

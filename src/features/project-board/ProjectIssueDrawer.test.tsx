@@ -74,4 +74,45 @@ describe("ProjectIssueDrawer", () => {
     await user.click(screen.getByRole("button", { name: "AI로 작업 시작" }));
     expect(onStartWithAi).toHaveBeenCalledWith(issue, detail);
   });
+
+  it("hides AI launch action for [백엔드]/[프론트엔드] developer backlogs and shows non-implementation handoff badge", () => {
+    const backendIssue: BoardIssue = {
+      ...issue,
+      number: 55,
+      title: "[백엔드] 결제 실패 재시도 API 구현",
+      layer: "backend",
+    };
+    const backendDetail: ProjectBoardIssueDetail = {
+      ...detail,
+      number: 55,
+      title: "[백엔드] 결제 실패 재시도 API 구현",
+      layer: "backend",
+    };
+
+    render(
+      <ProjectIssueDrawer
+        open
+        onOpenChange={() => {}}
+        issue={backendIssue}
+        detail={backendDetail}
+        isLoadingDetail={false}
+        detailError={null}
+        readiness={{ state: "ready", waitingOn: null }}
+        isUpdating={false}
+        updateError={null}
+        onDeriveBacklog={vi.fn()}
+        onStartWithAi={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "AI로 작업 시작" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "하위 백로그 파생" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("개발자 구현 백로그 (OkHub 코드 구현 비수행)"),
+    ).toBeVisible();
+  });
 });
