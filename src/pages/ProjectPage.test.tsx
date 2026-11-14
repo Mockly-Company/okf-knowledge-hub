@@ -1175,6 +1175,81 @@ describe("ProjectPage project switching", () => {
     ).toBeVisible();
   });
 
+  it("keeps the attach dialog closable via Escape/close while attach is in flight and blocks duplicate submit", async () => {
+    const user = userEvent.setup();
+    const projectGateway = FakeProjectBoardGateway.empty();
+    projectGateway.projectList = [alpha];
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [
+      {
+        id: "docs:Mockly-Company/handbook",
+        title: "Mockly-Company/handbook",
+        project: null,
+        docsRepository: {
+          repositoryId: "R_2",
+          fullName: "Mockly-Company/handbook",
+        },
+      },
+    ];
+    docsRepoGateway.activeWorkspaceId = "docs:Mockly-Company/handbook";
+    let resolveAttach!: () => void;
+    const attachCalls: string[] = [];
+    docsRepoGateway.attachProject = async (workspaceId, project) => {
+      attachCalls.push(project.id);
+      await new Promise<void>((resolve) => {
+        resolveAttach = resolve;
+      });
+      throw new Error("프로젝트 연결에 실패했습니다.");
+    };
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+
+    render(
+      <WorkspaceConnectionProvider gateway={workspaceGateway}>
+        <ActiveProjectProvider
+          projectGateway={projectGateway}
+          docsRepositoryGateway={docsRepoGateway}
+        >
+          <ProjectPage
+            gateway={projectGateway}
+            docsRepositoryGateway={docsRepoGateway}
+            repositoryGateway={workspaceGateway}
+          />
+        </ActiveProjectProvider>
+      </WorkspaceConnectionProvider>,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "GitHub Project 보드 연결" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "GitHub Project 보드 연결",
+    });
+
+    await user.click(await within(dialog).findByRole("button", { name: /Alpha/ }));
+    expect(attachCalls).toEqual(["PVT_alpha"]);
+
+    // 연결 진행 중에도 닫기 버튼으로 다이얼로그를 닫을 수 있어야 한다.
+    await user.click(
+      within(dialog).getByRole("button", { name: "GitHub Project 보드 연결 닫기" }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "GitHub Project 보드 연결" }),
+      ).toBeNull(),
+    );
+
+    // 연결 중 트리거 버튼은 비활성화되어 중복 제출을 막는다.
+    expect(
+      screen.getByRole("button", { name: /GitHub Project 보드 연결/ }),
+    ).toBeDisabled();
+
+    resolveAttach();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "프로젝트 연결에 실패했습니다.",
+    );
+  });
+
   it("resets layer filter and updates WorkspaceContextBar when switching between project workspaces", async () => {
     const user = userEvent.setup();
     const projectGateway = FakeProjectBoardGateway.empty();

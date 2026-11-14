@@ -615,4 +615,82 @@ describe("ActiveProjectProvider", () => {
     );
     expect(getRunningTerminalCounts(aiGateway)).toEqual({});
   });
+
+  it("ignores stale activeWorkspaceIdRef when optimistic workspace updates follow removing the active workspace", async () => {
+    const user = userEvent.setup();
+    const projectGateway = FakeProjectBoardGateway.empty();
+    const docsGateway = new FakeDocsRepositoryGateway();
+    await docsGateway.createProjectWorkspace(project, {
+      repositoryId: "R_1",
+      fullName: "Mockly-Company/docs-1",
+    });
+    await docsGateway.createStandaloneWorkspace("R_2", "Mockly-Company/docs-2");
+    await docsGateway.setActiveWorkspace("PVT_1");
+    docsGateway.removeWorkspace = async (workspaceId) => {
+      docsGateway.workspaces = docsGateway.workspaces.filter(
+        (item) => item.id !== workspaceId,
+      );
+      docsGateway.activeWorkspaceId = null;
+      return {
+        workspaces: docsGateway.workspaces.map((item) => ({ ...item })),
+        activeWorkspaceId: null,
+        activeDocsConnected: false,
+      };
+    };
+    docsGateway.attachProject = async (workspaceId, attached) => {
+      const target = docsGateway.workspaces.find((item) => item.id === workspaceId);
+      if (!target) throw new Error("not found");
+      const updated = {
+        ...target,
+        id: attached.id,
+        title: attached.title,
+        project: attached,
+      };
+      docsGateway.workspaces = docsGateway.workspaces.map((item) =>
+        item.id === workspaceId ? updated : item,
+      );
+      return { ...updated };
+    };
+
+    function StaleRefHarness() {
+      const ctx = useActiveProject();
+      return (
+        <div>
+          <output data-testid="active-ws">{ctx.activeWorkspaceId ?? "none"}</output>
+          <output data-testid="active-title">{ctx.activeWorkspace?.title ?? "missing"}</output>
+          <button
+            type="button"
+            onClick={async () => {
+              await ctx.removeWorkspace("PVT_1");
+              await ctx.attachProjectToWorkspace("repo:R_2", secondProject);
+            }}
+          >
+            기존 삭제 후 연결
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <ActiveProjectProvider
+          projectGateway={projectGateway}
+          docsRepositoryGateway={docsGateway}
+        >
+          <StaleRefHarness />
+        </ActiveProjectProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("PVT_1"),
+    );
+
+    await user.click(screen.getByRole("button", { name: "기존 삭제 후 연결" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("active-ws")).toHaveTextContent("PVT_2"),
+    );
+    expect(screen.getByTestId("active-title")).toHaveTextContent("Second Board");
+  });
 });

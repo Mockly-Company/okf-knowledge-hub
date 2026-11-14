@@ -66,6 +66,12 @@ export function AiSettingsPanel({
   }, [configQuery.data]);
 
   useEffect(() => {
+    if (agentsQuery.isError && agentsQuery.error) {
+      console.error("[ai-settings] agents md load failed", agentsQuery.error);
+    }
+  }, [agentsQuery.isError, agentsQuery.error]);
+
+  useEffect(() => {
     if (appAgentsQuery.isError && appAgentsQuery.error) {
       console.error("[ai-settings] app agents md load failed", appAgentsQuery.error);
     }
@@ -85,9 +91,7 @@ export function AiSettingsPanel({
   });
 
   const isLoading = configQuery.isPending || agentsQuery.isPending;
-  const loadError = describeAiSettingsError(
-    configQuery.error ?? agentsQuery.error,
-  );
+  const loadError = describeAiSettingsError(configQuery.error);
   const isSaving = saveMutation.isPending;
   const saveError = saveMutation.isError
     ? describeAiSettingsError(saveMutation.error)
@@ -168,7 +172,7 @@ export function AiSettingsPanel({
           <h3 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
             저장소 공통 규칙
           </h3>
-          {!isLoading ? (
+          {!isLoading && !agentsQuery.isError ? (
             <StatusBadge tone={agentsContent ? "success" : "neutral"}>
               {agentsContent ? "적용 중" : "미설정"}
             </StatusBadge>
@@ -186,6 +190,10 @@ export function AiSettingsPanel({
           >
             {previewLines(agentsContent)}
           </pre>
+        ) : agentsQuery.isError ? (
+          <StatusFeedback variant="field" tone="error">
+            저장소 공통 규칙을 불러오지 못했습니다.
+          </StatusFeedback>
         ) : (
           <>
             <p className="m-0 text-[var(--color-text-muted)]">
@@ -218,7 +226,7 @@ export function AiSettingsPanel({
           <h3 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
             허브 공통 규칙
           </h3>
-          {!(isLoading || appAgentsQuery.isPending) ? (
+          {!(isLoading || appAgentsQuery.isPending) && !appAgentsQuery.isError ? (
             <StatusBadge tone={appAgentsContent ? "success" : "neutral"}>
               {appAgentsContent ? "적용 중" : "미설정"}
             </StatusBadge>

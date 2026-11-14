@@ -510,7 +510,7 @@ export function ProjectPage({
   }, [activeProject?.workspaces]);
 
   const handleAttachProject = async (project: ResolvedGithubProject) => {
-    if (!activeProject || !activeWorkspace) {
+    if (!activeProject || !activeWorkspace || attachingProject) {
       return;
     }
     setAttachingProject(true);
@@ -769,6 +769,8 @@ export function ProjectPage({
           <Button
             type="button"
             variant="primary"
+            disabled={attachingProject}
+            loading={attachingProject}
             onClick={() => {
               setAttachError(null);
               setAttachDialogOpen(true);
@@ -776,13 +778,14 @@ export function ProjectPage({
           >
             GitHub Project 보드 연결
           </Button>
+          {attachError && !attachDialogOpen ? (
+            <p role="alert" className="m-0 text-[var(--color-error)]">
+              {attachError}
+            </p>
+          ) : null}
           <Dialog
             open={attachDialogOpen}
-            onOpenChange={(nextOpen) => {
-              if (!attachingProject) {
-                setAttachDialogOpen(nextOpen);
-              }
-            }}
+            onOpenChange={setAttachDialogOpen}
           >
             <DialogContent size="wide" aria-label="GitHub Project 보드 연결">
               <DialogHeader>

@@ -51,17 +51,20 @@ export function TabsList({
       cancelAnimationFrame(rafId);
       rafId = requestAnimationFrame(updateIndicator);
     };
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateIndicator);
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(scheduleIndicator);
     observer?.observe(list);
     list.querySelectorAll('[role="tab"]').forEach((tab) => observer?.observe(tab));
     list.addEventListener("scroll", scheduleIndicator, { passive: true });
-    window.addEventListener("resize", updateIndicator);
+    window.addEventListener("resize", scheduleIndicator);
 
     return () => {
       cancelAnimationFrame(rafId);
       observer?.disconnect();
       list.removeEventListener("scroll", scheduleIndicator);
-      window.removeEventListener("resize", updateIndicator);
+      window.removeEventListener("resize", scheduleIndicator);
     };
   }, [children, selectedIndex]);
 

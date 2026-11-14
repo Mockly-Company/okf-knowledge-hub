@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useQuery } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ActiveProjectProvider,
   useActiveProject,
@@ -13,7 +13,10 @@ import { TestQueryProvider } from "@/test/queryTestUtils";
 import { aiKeys } from "./queryKeys";
 import { AiSettingsPanel } from "./AiSettingsPanel";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("AiSettingsPanel", () => {
   it("creates repository shared rules from the template when missing and hides local paths", async () => {
@@ -146,6 +149,36 @@ describe("AiSettingsPanel", () => {
       await screen.findByText("허브 공통 규칙을 불러오지 못했습니다."),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("/secret/path/AGENTS.md");
+  });
+
+  it("shows repository shared rules error state separately from unset without offering overwrite template", async () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const gateway = new FakeAiGateway();
+    gateway.resolveAgentsMd = async () => {
+      throw new Error("/secret/repo/.okf/AGENTS.md permission denied");
+    };
+    render(
+      <TestQueryProvider>
+        <AiSettingsPanel gateway={gateway} />
+      </TestQueryProvider>,
+    );
+
+    const repoSection = await screen.findByRole("region", {
+      name: "저장소 공통 규칙",
+    });
+    expect(
+      await within(repoSection).findByText("저장소 공통 규칙을 불러오지 못했습니다."),
+    ).toBeInTheDocument();
+    expect(
+      within(repoSection).queryByRole("button", { name: "템플릿으로 만들기" }),
+    ).toBeNull();
+    expect(within(repoSection).queryByText("미설정")).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      "/secret/repo/.okf/AGENTS.md",
+    );
+    expect(consoleErrorSpy).toHaveBeenCalled();
   });
 
   it("scopes repository shared rules query per active workspace so switching workspaces refreshes the preview", async () => {
