@@ -113,4 +113,29 @@ describe("TauriPersonalDashboardGateway", () => {
     expect(result.failures[0]?.scope).toBe("board");
     expect(result.totalUnreadCount).toBe(2);
   });
+
+  it("drops non-integer or non-positive dependsOn values while preserving valid integers (S27)", async () => {
+    const baseTask = {
+      workspaceId: "ws-1",
+      projectNumber: 1,
+      status: "ready",
+      layer: "frontend",
+    };
+    const invokeMock = vi.fn().mockResolvedValue({
+      viewerLogin: "YoonDongGeun",
+      tasks: [
+        { ...baseTask, issueNumber: 1, title: "float", url: "https://e.t/1", dependsOn: 74.5 },
+        { ...baseTask, issueNumber: 2, title: "zero", url: "https://e.t/2", dependsOn: 0 },
+        { ...baseTask, issueNumber: 3, title: "neg", url: "https://e.t/3", dependsOn: -2 },
+        { ...baseTask, issueNumber: 4, title: "valid", url: "https://e.t/4", dependsOn: 74 },
+      ],
+      notifications: [],
+      failures: [],
+    });
+
+    const gateway = new TauriPersonalDashboardGateway(invokeMock);
+    const result = await gateway.getPersonalDashboard();
+
+    expect(result.tasks.map((t) => t.dependsOn)).toEqual([null, null, null, 74]);
+  });
 });

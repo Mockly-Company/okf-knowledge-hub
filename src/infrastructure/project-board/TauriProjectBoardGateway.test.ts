@@ -400,8 +400,8 @@ describe("TauriProjectBoardGateway", () => {
             layer: "frontend",
             status: "ready",
             kind: "작업",
-            createdAt: "2026-11-14T01:00:00Z",
-            updatedAt: 12345,
+            createdAt: "  2026-11-14T01:00:00Z  ",
+            updatedAt: "   ",
             children: [
               {
                 number: 11,
@@ -410,6 +410,7 @@ describe("TauriProjectBoardGateway", () => {
                 layer: "frontend",
                 status: "backlog",
                 kind: "작업",
+                updatedAt: 12345,
                 children: [],
               },
             ],

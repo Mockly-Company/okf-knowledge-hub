@@ -56,7 +56,10 @@ export function PersonalDashboardProvider({
   const connection = useOptionalWorkspaceConnection();
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
   const pendingSyncByKeyRef = useRef<
-    Map<string, { forceSync: boolean; retryWorkspaceId: string | null }>
+    Map<
+      string,
+      { token: symbol; forceSync: boolean; retryWorkspaceId: string | null }
+    >
   >(new Map());
 
   const workspacesKey = useMemo(() => {
@@ -121,12 +124,21 @@ export function PersonalDashboardProvider({
       if (!enabled) {
         return;
       }
-      pendingSyncByKeyRef.current.set(JSON.stringify(queryKey), options);
+      const serializedKey = JSON.stringify(queryKey);
+      const token = Symbol();
+      pendingSyncByKeyRef.current.clear();
+      pendingSyncByKeyRef.current.set(serializedKey, { token, ...options });
       queryClient.removeQueries({
         queryKey: personalDashboardKeys.all,
         type: "inactive",
       });
-      await queryClient.refetchQueries({ queryKey, exact: true });
+      try {
+        await queryClient.refetchQueries({ queryKey, exact: true });
+      } finally {
+        if (pendingSyncByKeyRef.current.get(serializedKey)?.token === token) {
+          pendingSyncByKeyRef.current.delete(serializedKey);
+        }
+      }
     },
     [enabled, queryClient, queryKey],
   );

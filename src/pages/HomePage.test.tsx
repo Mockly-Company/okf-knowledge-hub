@@ -812,4 +812,82 @@ describe("HomePage (내 대시보드)", () => {
     await user.click(screen.getByRole("button", { name: "닫기" }));
     expect(screen.queryByText("읽음 처리 실패")).toBeNull();
   });
+
+  it("cleans up pendingSyncByKey when refetch settles or fails without consuming it (S28)", async () => {
+    const user = userEvent.setup();
+    const queryClient = createTestQueryClient();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    const gateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      tasks: [makeTask({ issueNumber: 74, title: "내 작업" })],
+    });
+    const getSpy = vi.spyOn(gateway, "getPersonalDashboard");
+
+    function Probe() {
+      const ctx = useOptionalPersonalDashboard();
+      return (
+        <div>
+          <button type="button" onClick={() => void ctx?.refresh().catch(() => undefined)}>
+            force-refresh
+          </button>
+          <button type="button" onClick={() => ctx?.setAssigneeFilter("*")}>
+            filter-all
+          </button>
+          <button type="button" onClick={() => ctx?.setAssigneeFilter(null)}>
+            filter-me
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/home"]}>
+          <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+            <ActiveProjectProvider
+              projectGateway={FakeProjectBoardGateway.empty()}
+              docsRepositoryGateway={docsRepoGateway}
+            >
+              <PersonalDashboardProvider gateway={gateway}>
+                <Probe />
+              </PersonalDashboardProvider>
+            </ActiveProjectProvider>
+          </WorkspaceConnectionProvider>
+        </MemoryRouter>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(1));
+
+    // Simulate refetchQueries failing before queryFn reads the pending key
+    const refetchSpy = vi
+      .spyOn(queryClient, "refetchQueries")
+      .mockRejectedValueOnce(new Error("aborted"));
+    await user.click(screen.getByRole("button", { name: "force-refresh" }));
+    refetchSpy.mockRestore();
+
+    // Switch away and back to the exact original key, then invalidate; must not replay stale forceSync: true
+    await user.click(screen.getByRole("button", { name: "filter-all" }));
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "filter-me" }));
+    await act(async () => {
+      await queryClient.invalidateQueries();
+    });
+    await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(3));
+    expect(getSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({ assigneeFilter: null, forceSync: false }),
+    );
+  });
 });

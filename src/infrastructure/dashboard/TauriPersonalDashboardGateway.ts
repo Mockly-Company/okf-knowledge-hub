@@ -92,7 +92,11 @@ function normalizeTasks(raw: unknown): DashboardTaskItem[] {
       layer: layer as BoardLayer,
       kind: asNonEmptyString(record.kind),
       dependsOn:
-        typeof record.dependsOn === "number" ? record.dependsOn : null,
+        typeof record.dependsOn === "number" &&
+        Number.isInteger(record.dependsOn) &&
+        record.dependsOn > 0
+          ? record.dependsOn
+          : null,
       predecessorDone: Boolean(record.predecessorDone),
       readyToStart: Boolean(record.readyToStart),
       isNew: Boolean(record.isNew),
