@@ -311,9 +311,14 @@ function RouterIssueDeepLinkSync({
         onSelectIssueNumber(issueNumber, found);
       }
     }
-    const next = new URLSearchParams(searchParams);
-    next.delete("issue");
-    setSearchParams(next, { replace: true });
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("issue");
+        return next;
+      },
+      { replace: true },
+    );
   }, [ready, issues, searchParams, setSearchParams, onSelectIssueNumber]);
 
   return null;

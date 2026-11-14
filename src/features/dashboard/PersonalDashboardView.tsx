@@ -56,7 +56,10 @@ function PersonalDashboardInner({
   const dashboardContext = useOptionalPersonalDashboard();
   const activeProject = useOptionalActiveProject();
   const [page, setPage] = useState(0);
-  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{
+    title: string;
+    message: string;
+  } | null>(null);
 
   const dashboard = dashboardContext?.dashboard ?? null;
   const isLoading = dashboardContext?.isLoading ?? false;
@@ -129,21 +132,39 @@ function PersonalDashboardInner({
       if (!activeProject || activeProject.activeWorkspaceId === workspaceId) {
         return true;
       }
-      setSwitchError(null);
+      setActionError(null);
       try {
         await activeProject.selectWorkspace(workspaceId);
         return true;
       } catch (err) {
-        setSwitchError(
-          err instanceof Error
-            ? err.message
-            : "워크스페이스를 전환하지 못했습니다.",
-        );
+        setActionError({
+          title: "워크스페이스 전환 실패",
+          message:
+            err instanceof Error
+              ? err.message
+              : "워크스페이스를 전환하지 못했습니다.",
+        });
         return false;
       }
     },
     [activeProject],
   );
+
+  const handleMarkSeen = async () => {
+    if (!dashboardContext) return;
+    setActionError(null);
+    try {
+      await dashboardContext.markSeen();
+    } catch (err) {
+      setActionError({
+        title: "읽음 처리 실패",
+        message:
+          err instanceof Error
+            ? err.message
+            : "모든 항목을 읽음으로 표시하지 못했습니다.",
+      });
+    }
+  };
 
   const handleOpenTask = async (task: DashboardTaskItem) => {
     const ok = await switchWorkspaceIfNeeded(task.workspaceId);
@@ -203,7 +224,7 @@ function PersonalDashboardInner({
                   type="button"
                   variant="secondary"
                   disabled={isMarkingSeen}
-                  onClick={() => void dashboardContext?.markSeen()}
+                  onClick={() => void handleMarkSeen()}
                 >
                   모두 읽음
                 </Button>
@@ -226,7 +247,7 @@ function PersonalDashboardInner({
           }
         />
 
-        {switchError ? (
+        {actionError ? (
           <StatusFeedback
             variant="banner"
             tone="error"
@@ -235,14 +256,14 @@ function PersonalDashboardInner({
               <Button
                 type="button"
                 variant="ghost"
-                onClick={() => setSwitchError(null)}
+                onClick={() => setActionError(null)}
               >
                 닫기
               </Button>
             }
           >
-            <StatusFeedbackTitle>워크스페이스 전환 실패</StatusFeedbackTitle>
-            <StatusFeedbackDescription>{switchError}</StatusFeedbackDescription>
+            <StatusFeedbackTitle>{actionError.title}</StatusFeedbackTitle>
+            <StatusFeedbackDescription>{actionError.message}</StatusFeedbackDescription>
           </StatusFeedback>
         ) : null}
 

@@ -84,26 +84,21 @@ function normalizeTasks(raw: unknown): DashboardTaskItem[] {
         asNonEmptyString(record.projectTitle) ??
         asNonEmptyString(record.workspaceTitle) ??
         "",
-      repositoryFullName:
-        typeof record.repositoryFullName === "string"
-          ? record.repositoryFullName
-          : null,
+      repositoryFullName: asNonEmptyString(record.repositoryFullName),
       issueNumber,
       title,
       url,
       status: status as BoardStatus,
       layer: layer as BoardLayer,
-      kind: typeof record.kind === "string" ? record.kind : null,
+      kind: asNonEmptyString(record.kind),
       dependsOn:
         typeof record.dependsOn === "number" ? record.dependsOn : null,
       predecessorDone: Boolean(record.predecessorDone),
       readyToStart: Boolean(record.readyToStart),
       isNew: Boolean(record.isNew),
       assignees: normalizeBoardAssignees(record.assignees),
-      createdAt:
-        typeof record.createdAt === "string" ? record.createdAt : null,
-      updatedAt:
-        typeof record.updatedAt === "string" ? record.updatedAt : null,
+      createdAt: asNonEmptyString(record.createdAt),
+      updatedAt: asNonEmptyString(record.updatedAt),
     });
   }
   return tasks;
@@ -145,14 +140,10 @@ function normalizeNotifications(raw: unknown): DashboardNotificationItem[] {
       kind: kind as DashboardNotificationKind,
       prNumber,
       title,
-      summary: typeof record.summary === "string" ? record.summary : title,
-      authorLogin:
-        typeof record.authorLogin === "string" ? record.authorLogin : "",
+      summary: asNonEmptyString(record.summary) ?? title,
+      authorLogin: asNonEmptyString(record.authorLogin) ?? "",
       url,
-      primaryDocPath:
-        typeof record.primaryDocPath === "string"
-          ? record.primaryDocPath
-          : null,
+      primaryDocPath: asNonEmptyString(record.primaryDocPath),
       hasCompanionHtml: Boolean(record.hasCompanionHtml),
       timestamp,
       isNew: Boolean(record.isNew),

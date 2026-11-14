@@ -752,4 +752,64 @@ describe("HomePage (내 대시보드)", () => {
     expect(screen.getByRole("heading", { level: 1, name: "내 작업" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "프로젝트 요약" })).toBeInTheDocument();
   });
+
+  it("shows an actionable error banner when markSeen rejects (S24)", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      tasks: [
+        makeTask({
+          workspaceId: "PVT_alpha",
+          workspaceTitle: "Alpha Project",
+          issueNumber: 101,
+          title: "New Task",
+          isNew: true,
+        }),
+      ],
+    });
+    vi.spyOn(dashboardGateway, "markDashboardSeen").mockRejectedValueOnce(
+      new Error("mark seen boom"),
+    );
+
+    render(
+      <TestQueryProvider>
+        <MemoryRouter initialEntries={["/home"]}>
+          <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+            <ActiveProjectProvider
+              projectGateway={FakeProjectBoardGateway.empty()}
+              docsRepositoryGateway={docsRepoGateway}
+            >
+              <PersonalDashboardProvider gateway={dashboardGateway}>
+                <HomePage />
+              </PersonalDashboardProvider>
+            </ActiveProjectProvider>
+          </WorkspaceConnectionProvider>
+        </MemoryRouter>
+      </TestQueryProvider>,
+    );
+
+    const markSeenButton = await screen.findByRole("button", { name: "모두 읽음" });
+    await user.click(markSeenButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("읽음 처리 실패")).toBeInTheDocument();
+      expect(screen.getByText("mark seen boom")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "닫기" }));
+    expect(screen.queryByText("읽음 처리 실패")).toBeNull();
+  });
 });

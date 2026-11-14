@@ -1747,4 +1747,56 @@ describe("ProjectPage project switching", () => {
     const drawer = await screen.findByRole("dialog", { name: "지연 로드 딥링크 백로그" });
     expect(drawer).toBeVisible();
   });
+
+  it("clears ?issue= via functional setSearchParams updater without clobbering sibling search updates (S23)", async () => {
+    const { MemoryRouter, useEffect: reactUseEffect, useSearchParams, useLocation } =
+      await import("react-router-dom").then(async (rr) => {
+        const react = await import("react");
+        return { ...rr, useEffect: react.useEffect };
+      });
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 77,
+        title: "기능 업데이트 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/77",
+        status: "ready",
+        layer: "frontend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "YoonDongGeun" }],
+        children: [],
+      },
+    ]);
+
+    function SiblingUpdater() {
+      const [, setSearchParams] = useSearchParams();
+      const location = useLocation();
+      reactUseEffect(() => {
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.set("sibling", "kept");
+            return next;
+          },
+          { replace: true },
+        );
+      }, [setSearchParams]);
+      return <span data-testid="search-state">{location.search}</span>;
+    }
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=77"]}>
+        <SiblingUpdater />
+        <ProjectPage gateway={gateway} />
+      </MemoryRouter>,
+    );
+
+    const drawer = await screen.findByRole("dialog", { name: "기능 업데이트 백로그" });
+    expect(drawer).toBeVisible();
+    await waitFor(() => {
+      const searchText = screen.getByTestId("search-state").textContent ?? "";
+      expect(searchText).toContain("sibling=kept");
+      expect(searchText).not.toContain("issue=");
+    });
+  });
 });
