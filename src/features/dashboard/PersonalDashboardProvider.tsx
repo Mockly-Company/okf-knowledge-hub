@@ -180,6 +180,12 @@ export function PersonalDashboardProvider({
     },
   });
 
+  const isMarkingSeen = markSeenMutation.isPending;
+  const markDashboardSeen = markSeenMutation.mutateAsync;
+  const markSeen = useCallback(async () => {
+    await markDashboardSeen();
+  }, [markDashboardSeen]);
+
   const unreadCount = useMemo(() => {
     if (!query.data) return 0;
     return query.data.totalUnreadCount;
@@ -190,20 +196,19 @@ export function PersonalDashboardProvider({
       dashboard: query.data ?? null,
       isLoading: query.isLoading,
       isFetching: query.isFetching,
-      isMarkingSeen: markSeenMutation.isPending,
+      isMarkingSeen,
       error: query.error ? toError(query.error) : null,
       assigneeFilter,
       setAssigneeFilter,
       unreadCount,
       refresh,
       retryWorkspace,
-      markSeen: async () => {
-        await markSeenMutation.mutateAsync();
-      },
+      markSeen,
     }),
     [
       assigneeFilter,
-      markSeenMutation,
+      isMarkingSeen,
+      markSeen,
       query.data,
       query.error,
       query.isFetching,

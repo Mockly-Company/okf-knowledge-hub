@@ -101,11 +101,12 @@ function RouterPrDeepLinkSync({
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
+  const prParam = searchParams.get("pr");
+
   useEffect(() => {
     if (!ready) return;
-    const raw = searchParams.get("pr");
-    if (!raw) return;
-    const prNumber = Number(raw);
+    if (!prParam) return;
+    const prNumber = Number(prParam);
     if (Number.isInteger(prNumber) && prNumber > 0 && canOpenPrNumber(prNumber)) {
       onOpenPr(prNumber);
     }
@@ -119,7 +120,7 @@ function RouterPrDeepLinkSync({
       },
       { replace: true },
     );
-  }, [ready, canOpenPrNumber, searchParams, setSearchParams, onOpenPr]);
+  }, [ready, prParam, canOpenPrNumber, setSearchParams, onOpenPr]);
 
   return null;
 }

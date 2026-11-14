@@ -1631,7 +1631,7 @@ describe("ProjectPage project switching", () => {
     // 4. 빈 필터 결과 상태에서 필터 초기화 동작 (시작 가능만 보기 + 미배정 -> #72는 선행 #71 대기로 비어있음)
     await user.click(screen.getByRole("checkbox", { name: "시작 가능만 보기" }));
     expect(
-      await screen.findByText("선택한 담당자에게 배정된 열린 작업이 없습니다."),
+      await screen.findByText("선택한 필터 조건에 맞는 열린 작업이 없습니다."),
     ).toBeVisible();
     await user.click(screen.getByRole("button", { name: "필터 초기화" }));
     await waitFor(() => {

@@ -1126,7 +1126,15 @@ export function ProjectPage({
                 className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
               >
                 <p className="m-0 text-[var(--color-text-muted)]">
-                  선택한 담당자에게 배정된 열린 작업이 없습니다.
+                  {filter === "all" &&
+                  !readyOnly &&
+                  assigneeFilter !== ASSIGNEE_FILTER_UNASSIGNED
+                    ? hideDone
+                      ? "선택한 담당자에게 배정된 열린 작업이 없습니다."
+                      : "선택한 담당자에게 배정된 작업이 없습니다."
+                    : hideDone
+                      ? "선택한 필터 조건에 맞는 열린 작업이 없습니다."
+                      : "선택한 필터 조건에 맞는 작업이 없습니다."}
                 </p>
                 <Button
                   type="button"
