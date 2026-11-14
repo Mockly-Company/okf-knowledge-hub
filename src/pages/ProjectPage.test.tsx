@@ -1675,4 +1675,30 @@ describe("ProjectPage project switching", () => {
     });
     expect(mineCheckbox).toBeDisabled();
   });
+
+  it("ignores nonexistent ?issue= deep link instead of opening a drawer", async () => {
+    const { MemoryRouter } = await import("react-router-dom");
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 70,
+        title: "존재하는 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/70",
+        status: "ready",
+        layer: "planning",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "alice" }],
+        children: [],
+      },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=9999"]}>
+        <ProjectPage gateway={gateway} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/#70 존재하는 백로그/);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
 });

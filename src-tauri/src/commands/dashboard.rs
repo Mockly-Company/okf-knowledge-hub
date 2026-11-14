@@ -631,6 +631,29 @@ struct WorkspaceFetchOutcome {
     docs_result: Option<Result<Vec<DashboardNotificationItem>, DashboardWorkspaceFailure>>,
 }
 
+fn join_error_outcome(idx: usize, workspace: HubWorkspace) -> WorkspaceFetchOutcome {
+    let board_result = workspace.project.as_ref().map(|_| {
+        Err(AppError::new(
+            ErrorCode::GithubUnavailable,
+            "워크스페이스 대시보드 동기화 작업이 중단되었습니다.",
+        ))
+    });
+    let docs_result = workspace.docs_repository.as_ref().map(|_| {
+        Err(DashboardWorkspaceFailure {
+            workspace_id: workspace.id.clone(),
+            workspace_title: workspace.title.clone(),
+            scope: DashboardFailureScope::Docs,
+            message: "워크스페이스 문서 알림 동기화 작업이 중단되었습니다.".to_owned(),
+        })
+    });
+    WorkspaceFetchOutcome {
+        idx,
+        workspace,
+        board_result,
+        docs_result,
+    }
+}
+
 pub(crate) fn sort_dashboard_items(
     tasks: &mut Vec<DashboardTaskItem>,
     notifications: &mut Vec<DashboardNotificationItem>,
@@ -810,31 +833,7 @@ pub async fn get_personal_dashboard(
             Err(err) => {
                 eprintln!("dashboard workspace task failed: {err:?}");
                 if let Some((idx, workspace)) = task_workspaces.remove(&err.id()) {
-                    let board_result = workspace.project.as_ref().map(|_| {
-                        Err(AppError::new(
-                            ErrorCode::GithubUnavailable,
-                            "워크스페이스 대시보드 동기화 작업이 중단되었습니다.",
-                        ))
-                    });
-                    let docs_result = if board_result.is_none() {
-                        workspace.docs_repository.as_ref().map(|_| {
-                            Err(DashboardWorkspaceFailure {
-                                workspace_id: workspace.id.clone(),
-                                workspace_title: workspace.title.clone(),
-                                scope: DashboardFailureScope::Docs,
-                                message: "워크스페이스 문서 알림 동기화 작업이 중단되었습니다."
-                                    .to_owned(),
-                            })
-                        })
-                    } else {
-                        None
-                    };
-                    outcomes.push(WorkspaceFetchOutcome {
-                        idx,
-                        workspace,
-                        board_result,
-                        docs_result,
-                    });
+                    outcomes.push(join_error_outcome(idx, workspace));
                 }
             }
         }
@@ -1295,5 +1294,19 @@ mod tests {
         assert_eq!(nums, vec![3, 2, 1]);
         let pr_nums: Vec<u64> = notifs.iter().map(|n| n.pr_number).collect();
         assert_eq!(pr_nums, vec![2, 1]);
+    }
+
+    #[test]
+    fn join_error_outcome_reports_both_board_and_docs_failures_when_present() {
+        let ws = sample_workspace("okf", "OkHub");
+        let outcome = super::join_error_outcome(0, ws);
+        assert!(matches!(outcome.board_result, Some(Err(_))));
+        assert!(matches!(
+            outcome.docs_result,
+            Some(Err(DashboardWorkspaceFailure {
+                scope: DashboardFailureScope::Docs,
+                ..
+            }))
+        ));
     }
 }

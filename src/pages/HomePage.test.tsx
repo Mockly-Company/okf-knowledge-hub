@@ -555,9 +555,24 @@ describe("HomePage (내 대시보드)", () => {
     await screen.findByText("#74 내 미확인 백로그");
     expect(screen.getByTestId("sidebar-unread-count")).toHaveTextContent("2");
 
-    // 앨리스(미확인 작업 0건) 필터로 바꿔도 전역 사이드바 unreadCount는 내 작업 1건 + 문서 알림 1건 = 2를 유지
+    // 앨리스 필터 로딩 중에도 placeholderData 덕분에 unreadCount가 0으로 깜빡이지 않는다(S9)
+    let resolveFiltered!: () => void;
+    const filteredGate = new Promise<void>((resolve) => {
+      resolveFiltered = resolve;
+    });
+    const origGet = gateway.getPersonalDashboard.bind(gateway);
+    vi.spyOn(gateway, "getPersonalDashboard").mockImplementation(async (opts) => {
+      if (opts?.assigneeFilter === "alice") {
+        await filteredGate;
+      }
+      return origGet(opts);
+    });
+
     await user.click(screen.getByRole("combobox", { name: "담당자 보기" }));
     await user.click(await screen.findByRole("option", { name: "@alice (앨리스)" }));
+    expect(screen.getByTestId("sidebar-unread-count")).toHaveTextContent("2");
+
+    resolveFiltered();
     await screen.findByText("#90 앨리스 읽은 백로그");
     expect(screen.getByTestId("sidebar-unread-count")).toHaveTextContent("2");
 

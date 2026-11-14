@@ -85,6 +85,16 @@ export function PersonalDashboardProvider({
     queryKey,
     enabled,
     staleTime: 30_000,
+    // 같은 워크스페이스·사용자에서 필터만 바꿀 때는 이전 데이터를 유지해
+    // totalUnreadCount 배지가 잠시 0으로 깜빡이지 않게 한다.
+    placeholderData: (previousData, previousQuery) =>
+      personalDashboardKeys.hasSameScope(
+        previousQuery?.queryKey,
+        workspacesKey,
+        viewerLogin,
+      )
+        ? previousData
+        : undefined,
     queryFn: async () => {
       const pending = nextSyncOptionsRef.current;
       nextSyncOptionsRef.current = null;
@@ -107,9 +117,9 @@ export function PersonalDashboardProvider({
         forceSync: false,
         retryWorkspaceId: workspaceId,
       };
-      await query.refetch();
+      await queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
     },
-    [query],
+    [queryClient],
   );
 
   const markSeenMutation = useMutation({

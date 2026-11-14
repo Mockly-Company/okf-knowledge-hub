@@ -304,7 +304,9 @@ function RouterIssueDeepLinkSync({
     const issueNumber = Number(raw);
     if (Number.isInteger(issueNumber) && issueNumber > 0) {
       const found = findIssueByNumber(issues, issueNumber);
-      onSelectIssueNumber(issueNumber, found);
+      if (found) {
+        onSelectIssueNumber(issueNumber, found);
+      }
     }
     const next = new URLSearchParams(searchParams);
     next.delete("issue");
