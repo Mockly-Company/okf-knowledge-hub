@@ -1,5 +1,7 @@
 import { FilePlus2 } from "lucide-react";
-import { lazy, Suspense, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +12,7 @@ import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
 import { PlanningPrReviewSection } from "@/features/documents/components/PlanningPrReviewPanel";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
+import { documentsKeys } from "@/features/documents/queryKeys";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import {
@@ -33,6 +36,122 @@ const DocumentDraftEditor = lazy(() =>
     (module) => ({ default: module.DocumentDraftEditor }),
   ),
 );
+
+function DocumentsDeepLinkSync({
+  ready,
+  selectedPath,
+  showDocumentsHome,
+  selectDocument,
+}: {
+  ready: boolean;
+  selectedPath: string | null;
+  showDocumentsHome: () => void;
+  selectDocument: (path: string) => void;
+}) {
+  const { state, listDocsPullRequests } = useDocuments();
+  const sessionId = state.activeSessionId;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const prParam = searchParams.get("pr");
+  const docParam = searchParams.get("doc");
+  const lastConsumedDocRef = useRef<string | null>(null);
+  const parsedPrNumber = prParam ? Number(prParam) : Number.NaN;
+  const hasPositivePrNumber =
+    Number.isInteger(parsedPrNumber) && parsedPrNumber > 0;
+
+  const pullRequestsQuery = useQuery({
+    queryKey: documentsKeys.pullRequests(sessionId ?? "inactive"),
+    queryFn: () => listDocsPullRequests(),
+    enabled:
+      ready && sessionId !== null && Boolean(prParam) && hasPositivePrNumber,
+    staleTime: 15_000,
+  });
+
+  const prListSettled =
+    pullRequestsQuery.status === "success" && !pullRequestsQuery.isFetching;
+  const prExists =
+    hasPositivePrNumber &&
+    prListSettled &&
+    (pullRequestsQuery.data ?? []).some(
+      (pr) => pr.number === parsedPrNumber,
+    );
+  const prConfirmedMissing = hasPositivePrNumber && prListSettled && !prExists;
+  const prConfirmedValid = hasPositivePrNumber && prListSettled && prExists;
+
+  useEffect(() => {
+    if (!ready || sessionId === null || !prParam) return;
+    if (!hasPositivePrNumber || prConfirmedMissing) {
+      // 잘못되었거나 존재하지 않는 ?pr=은 열려 있던 문서나 동반 ?doc=을 지우지 않고 ?pr=만 비운다(M9, M10, S37).
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("pr");
+          return next;
+        },
+        { replace: true },
+      );
+      return;
+    }
+    if (!prListSettled) {
+      return;
+    }
+    if (selectedPath !== null) {
+      showDocumentsHome();
+    }
+  }, [
+    ready,
+    sessionId,
+    prParam,
+    hasPositivePrNumber,
+    prListSettled,
+    prConfirmedMissing,
+    selectedPath,
+    showDocumentsHome,
+    setSearchParams,
+  ]);
+
+  useEffect(() => {
+    if (!docParam) {
+      lastConsumedDocRef.current = null;
+      return;
+    }
+    if (!ready) return;
+    if (prParam) {
+      // 유효한 PR 딥링크가 확정된 경우에만 ?doc=을 비우고, 미확정·무효 ?pr= 동안에는 보존한다(S21, S37).
+      if (prConfirmedValid) {
+        lastConsumedDocRef.current = null;
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.delete("doc");
+            return next;
+          },
+          { replace: true },
+        );
+      }
+      return;
+    }
+    if (lastConsumedDocRef.current === docParam) return;
+    lastConsumedDocRef.current = docParam;
+    selectDocument(docParam);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("doc");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [
+    prParam,
+    docParam,
+    ready,
+    prConfirmedValid,
+    setSearchParams,
+    selectDocument,
+  ]);
+
+  return null;
+}
 
 export function DocumentsPage({
   headerActions,
@@ -78,6 +197,16 @@ export function DocumentsPage({
     pullRequestNumber: number;
     pullRequestUrl: string;
   } | null>(null);
+  const inRouter = useInRouterContext();
+  const deepLinkSync = inRouter ? (
+    <DocumentsDeepLinkSync
+      ready={state.status === "ready"}
+      selectedPath={state.selectedPath}
+      showDocumentsHome={showDocumentsHome}
+      selectDocument={selectDocument}
+    />
+  ) : null;
+
   // provider 밖(단위 테스트·스토리)에서는 null이므로 배너를 숨긴다.
   const activeProject = useOptionalActiveProject();
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
@@ -274,6 +403,7 @@ export function DocumentsPage({
   if (state.selectedPath !== null) {
     return (
       <section className="documents-page documents-page--reader" aria-labelledby="documents-title">
+        {deepLinkSync}
         <h1 id="documents-title" className="sr-only">Documents</h1>
         {activeWorkspace && !docsMissing ? (
           <WorkspaceContextBar
@@ -334,6 +464,7 @@ export function DocumentsPage({
 
   return (
     <section className="documents-page" aria-labelledby="documents-title">
+      {deepLinkSync}
       <PageHeader
         titleId="documents-title"
         title="Documents"

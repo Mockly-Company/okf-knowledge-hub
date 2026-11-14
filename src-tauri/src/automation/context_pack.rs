@@ -377,6 +377,9 @@ mod tests {
             priority: None,
             depends_on,
             sub_issues: Vec::new(),
+            assignees: Vec::new(),
+            created_at: None,
+            updated_at: None,
         }
     }
 

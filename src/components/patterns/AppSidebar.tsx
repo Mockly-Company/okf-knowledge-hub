@@ -2,6 +2,7 @@ import {
   ChevronsUpDown,
   FolderGit2,
   FolderOpen,
+  LayoutDashboard,
   PanelLeftClose,
   Plus,
   Settings,
@@ -17,6 +18,7 @@ import {
 } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
+import { useOptionalPersonalDashboard } from "@/features/dashboard/PersonalDashboardProvider";
 import { Button, IconButton } from "@/components/ui/button";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
 import {
@@ -105,10 +107,10 @@ export function AppSidebar({
   } = useDocuments();
   const { account } = useWorkspaceConnection();
   const activeProject = useOptionalActiveProject();
+  const dashboard = useOptionalPersonalDashboard();
   const isWorkAliasPath =
     location.pathname === "/work" ||
     location.pathname.startsWith("/work/");
-  const isRootDocumentsAlias = location.pathname === "/";
 
   // 실패한 아바타 URL을 기억한다. 계정·URL이 바뀌면 자연히 다시 시도한다.
   const [failedAvatarUrl, setFailedAvatarUrl] = useState<string | null>(null);
@@ -127,6 +129,10 @@ export function AppSidebar({
 
   const currentWorkspace = activeProject?.activeWorkspace ?? null;
   const workspaces = activeProject?.workspaces ?? [];
+  const isRootDocumentsAlias = location.pathname === "/" && workspaces.length === 0;
+  const isRootDashboardAlias = location.pathname === "/" && workspaces.length > 0;
+  const unreadDashboardCount =
+    account.status === "authenticated" && dashboard ? dashboard.unreadCount : 0;
 
   const subscribeCounts = useCallback(
     (listener: () => void) =>
@@ -173,6 +179,37 @@ export function AppSidebar({
       </div>
 
       <div className="app-sidebar__section app-sidebar__section--primary">
+        <div className="px-[var(--space-1)] pb-[var(--space-2)]">
+          <NavLink
+            to="/home"
+            end
+            className={({ isActive }) =>
+              cn(
+                "app-sidebar__link",
+                (isActive || isRootDashboardAlias) &&
+                  "app-sidebar__link--active",
+              )
+            }
+          >
+            <LayoutDashboard aria-hidden="true" strokeWidth={1.75} />
+            <span className="flex-1">내 대시보드</span>
+            {unreadDashboardCount > 0 ? (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-primary-soft)] px-[var(--space-2)] py-0.5 text-[11px] font-[number:var(--font-weight-control)] text-[var(--color-primary-text)] tabular-nums"
+                >
+                  {unreadDashboardCount > 99 ? "99+" : unreadDashboardCount}
+                </span>
+                <span className="sr-only">
+                  {unreadDashboardCount > 99
+                    ? ", 새 알림 99개 이상"
+                    : `, 새 알림 ${unreadDashboardCount}개`}
+                </span>
+              </>
+            ) : null}
+          </NavLink>
+        </div>
         {activeProject ? (
           <div
             role="group"

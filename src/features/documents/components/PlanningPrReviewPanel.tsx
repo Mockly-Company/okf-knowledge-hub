@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ExternalLink, GitPullRequest, ArrowLeft, Check } from "lucide-react";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -89,6 +90,45 @@ function DiffCell({
   );
 }
 
+function RouterPrDeepLinkSync({
+  ready,
+  canOpenPrNumber,
+  onOpenPr,
+}: {
+  ready: boolean;
+  canOpenPrNumber: (prNumber: number) => boolean;
+  onOpenPr: (prNumber: number) => void;
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const prParam = searchParams.get("pr");
+
+  useEffect(() => {
+    if (!ready) return;
+    if (!prParam) return;
+    const prNumber = Number(prParam);
+    const matchedPr =
+      Number.isInteger(prNumber) && prNumber > 0 && canOpenPrNumber(prNumber);
+    if (matchedPr) {
+      onOpenPr(prNumber);
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("pr");
+        // 유효한 PR을 실제로 여는 경우에만 같은 커밋의 ?doc= 정리를 함께 보장한다(S21, S37).
+        if (matchedPr) {
+          next.delete("doc");
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  }, [ready, prParam, canOpenPrNumber, setSearchParams, onOpenPr]);
+
+  return null;
+}
+
 export function PlanningPrReviewSection() {
   const {
     state,
@@ -99,6 +139,8 @@ export function PlanningPrReviewSection() {
   } = useDocuments();
   const sessionId = state.activeSessionId;
   const ready = state.status === "ready" && sessionId !== null;
+  const inRouter = useInRouterContext();
+  const prevRepoRef = useRef(state.repositoryFullName);
 
   const [selectedPrNumber, setSelectedPrNumber] = useState<number | null>(null);
   const [selectedDocPath, setSelectedDocPath] = useState<string | null>(null);
@@ -125,6 +167,8 @@ export function PlanningPrReviewSection() {
   });
 
   useEffect(() => {
+    if (prevRepoRef.current === state.repositoryFullName) return;
+    prevRepoRef.current = state.repositoryFullName;
     setSelectedPrNumber(null);
     setSelectedDocPath(null);
     setApproveError(null);
@@ -163,13 +207,13 @@ export function PlanningPrReviewSection() {
     );
   }, [activeDoc]);
 
-  const handleOpenPr = (number: number) => {
+  const handleOpenPr = useCallback((number: number) => {
     setSelectedPrNumber(number);
     setSelectedDocPath(null);
     setReviewComment("");
     setApproveError(null);
     setApprovalNotice(null);
-  };
+  }, []);
 
   const handleApproveAndMerge = async () => {
     if (selectedPrNumber === null || approving) return;
@@ -202,17 +246,37 @@ export function PlanningPrReviewSection() {
     }
   };
 
-  if (!ready) return null;
+  // 목록 조회가 성공해 최신 상태가 확정된 뒤에만 ?pr= 딥링크를 소비/정리한다(M11).
+  const prListSettled =
+    ready && !pullRequestsQuery.isFetching && pullRequestsQuery.isSuccess;
+  const canOpenPrNumber = useCallback(
+    (prNumber: number) =>
+      pullRequestsQuery.isSuccess &&
+      openPullRequests.some((pr) => pr.number === prNumber),
+    [openPullRequests, pullRequestsQuery.isSuccess],
+  );
+
+  const deepLinkSync = inRouter ? (
+    <RouterPrDeepLinkSync
+      ready={prListSettled}
+      canOpenPrNumber={canOpenPrNumber}
+      onOpenPr={handleOpenPr}
+    />
+  ) : null;
+
+  if (!ready) return deepLinkSync;
   if (
     openPullRequests.length === 0 &&
     selectedPrNumber === null &&
     !approvalNotice
   ) {
-    return null;
+    return deepLinkSync;
   }
 
   return (
-    <section
+    <>
+      {deepLinkSync}
+      <section
       className="planning-pr-section"
       aria-label="열린 기획 PR 검토 및 승인"
     >
@@ -516,6 +580,7 @@ export function PlanningPrReviewSection() {
           )}
         </div>
       )}
-    </section>
+      </section>
+    </>
   );
 }

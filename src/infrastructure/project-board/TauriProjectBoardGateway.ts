@@ -24,6 +24,7 @@ import {
   issueKey,
   normalizeDependsOn,
 } from "@/features/project-board/boardUtils";
+import { normalizeBoardAssignees } from "@/features/project-board/assigneeFilter";
 
 type InvokeDesktop = <T>(
   command: string,
@@ -31,6 +32,12 @@ type InvokeDesktop = <T>(
 ) => Promise<T>;
 
 const invokeDesktop: InvokeDesktop = (command, args) => invoke(command, args);
+
+function asNonEmptyString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
 
 export class TauriProjectBoardGateway implements ProjectBoardGateway {
   constructor(
@@ -351,9 +358,12 @@ function normalizeIssue(
       return {
         ...issue,
         children: [],
-        kind: typeof issue.kind === "string" ? issue.kind : null,
+        kind: asNonEmptyString(issue.kind),
         dependsOn: normalizeDependsOn(issue.dependsOn),
         childrenTruncated: hasChildren,
+        assignees: normalizeBoardAssignees(issue.assignees),
+        createdAt: asNonEmptyString(issue.createdAt),
+        updatedAt: asNonEmptyString(issue.updatedAt),
       };
     }
     if (depth > MAX_ISSUE_TREE_DEPTH) {
@@ -373,9 +383,12 @@ function normalizeIssue(
       return {
         ...issue,
         children: [],
-        kind: typeof issue.kind === "string" ? issue.kind : null,
+        kind: asNonEmptyString(issue.kind),
         dependsOn: normalizeDependsOn(issue.dependsOn),
         childrenTruncated: hasChildren,
+        assignees: normalizeBoardAssignees(issue.assignees),
+        createdAt: asNonEmptyString(issue.createdAt),
+        updatedAt: asNonEmptyString(issue.updatedAt),
       };
     }
     const children: BoardIssue[] = [];
@@ -394,12 +407,15 @@ function normalizeIssue(
     return {
       ...issue,
       children,
-      kind: typeof issue.kind === "string" ? issue.kind : null,
+      kind: asNonEmptyString(issue.kind),
       dependsOn: normalizeDependsOn(issue.dependsOn),
       // 백엔드가 세운 절단 플래그는 그대로 유지한다. 무조건 false로 두면
       // 실제 절단이 있었는데도 표시가 사라진다. 오염된 비불리언 값만 false로
       // 정규화해 구 캐시의 이상치가 다음 세대에 남지 않게 한다.
       childrenTruncated: issue.childrenTruncated === true,
+      assignees: normalizeBoardAssignees(issue.assignees),
+      createdAt: asNonEmptyString(issue.createdAt),
+      updatedAt: asNonEmptyString(issue.updatedAt),
     };
   } finally {
     release();

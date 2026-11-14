@@ -1551,4 +1551,252 @@ describe("ProjectPage project switching", () => {
     });
     clearPendingAiLaunch();
   });
+
+  it("shows assignee badges, filters by 내 담당만 보기 and 담당자 필터, and resets empty filter state", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 70,
+        title: "내 담당 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/70",
+        status: "ready",
+        layer: "frontend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "hyeeun" }],
+        children: [],
+      },
+      {
+        number: 71,
+        title: "동료 담당 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/71",
+        status: "ready",
+        layer: "backend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "alice" }, { login: "bob" }],
+        children: [],
+      },
+      {
+        number: 72,
+        title: "담당자 없는 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/72",
+        status: "backlog",
+        layer: "design",
+        kind: "작업",
+        dependsOn: 71,
+        assignees: [],
+        children: [],
+      },
+    ]);
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+
+    render(
+      <WorkspaceConnectionProvider gateway={workspaceGateway}>
+        <ProjectPage gateway={gateway} />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await screen.findByText(/#70 내 담당 백로그/);
+    expect(screen.getByText("@hyeeun")).toBeInTheDocument();
+    expect(screen.getByText("@alice 외 1")).toBeInTheDocument();
+    expect(screen.getByText("미배정")).toBeInTheDocument();
+
+    // 1. 내 담당만 보기 체크박스 토글 -> @hyeeun만 남는다
+    const mineCheckbox = screen.getByRole("checkbox", { name: "내 담당만 보기" });
+    expect(mineCheckbox).not.toBeDisabled();
+    await user.click(mineCheckbox);
+
+    await waitFor(() => {
+      expect(screen.getByText(/#70 내 담당 백로그/)).toBeInTheDocument();
+      expect(screen.queryByText(/#71 동료 담당 백로그/)).toBeNull();
+      expect(screen.queryByText(/#72 담당자 없는 백로그/)).toBeNull();
+    });
+
+    // 2. 영역별 뷰로 전환해도 필터 적용, 내 담당 필터 해제 + 미배정 필터 확인
+    await user.click(screen.getByRole("button", { name: "영역별" }));
+    expect(screen.getByText("내 담당 백로그")).toBeInTheDocument();
+    expect(screen.queryByText("동료 담당 백로그")).toBeNull();
+
+    // 3. 담당자 필터 드롭다운으로 미배정 선택 -> 72만 표시
+    await user.click(screen.getByRole("combobox", { name: "담당자 필터" }));
+    await user.click(await screen.findByRole("option", { name: "미배정" }));
+    await waitFor(() => {
+      expect(screen.getByText("담당자 없는 백로그")).toBeInTheDocument();
+      expect(screen.queryByText("내 담당 백로그")).toBeNull();
+      expect(screen.queryByText("동료 담당 백로그")).toBeNull();
+    });
+    expect(mineCheckbox).not.toBeChecked();
+
+    // 4. 빈 필터 결과 상태에서 필터 초기화 동작 (시작 가능만 보기 + 미배정 -> #72는 선행 #71 대기로 비어있음)
+    await user.click(screen.getByRole("checkbox", { name: "시작 가능만 보기" }));
+    expect(
+      await screen.findByText("선택한 필터 조건에 맞는 열린 작업이 없습니다."),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "필터 초기화" }));
+    await waitFor(() => {
+      expect(screen.getByText("내 담당 백로그")).toBeInTheDocument();
+      expect(screen.getByText("동료 담당 백로그")).toBeInTheDocument();
+    });
+  });
+
+  it("disables 내 담당만 보기 when signed out and auto-opens issue drawer from /project?issue=", async () => {
+    const user = userEvent.setup();
+    const { MemoryRouter } = await import("react-router-dom");
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 70,
+        title: "딥링크 대상 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/70",
+        status: "ready",
+        layer: "planning",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "alice" }],
+        children: [],
+      },
+    ]);
+    const workspaceGateway = FakeWorkspaceConnectionGateway.disconnected();
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=70"]}>
+        <WorkspaceConnectionProvider gateway={workspaceGateway}>
+          <ProjectPage gateway={gateway} />
+        </WorkspaceConnectionProvider>
+      </MemoryRouter>,
+    );
+
+    const drawer = await screen.findByRole("dialog", { name: "딥링크 대상 백로그" });
+    expect(drawer).toBeVisible();
+
+    await user.click(within(drawer).getByRole("button", { name: "상세 닫기" }));
+    const mineCheckbox = await screen.findByRole("checkbox", {
+      name: "내 담당만 보기",
+    });
+    expect(mineCheckbox).toBeDisabled();
+  });
+
+  it("ignores nonexistent ?issue= deep link instead of opening a drawer", async () => {
+    const { MemoryRouter } = await import("react-router-dom");
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 70,
+        title: "존재하는 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/70",
+        status: "ready",
+        layer: "planning",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "alice" }],
+        children: [],
+      },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=9999"]}>
+        <ProjectPage gateway={gateway} />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText(/#70 존재하는 백로그/);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("preserves ?issue= deep link while board is loading and opens drawer once ready", async () => {
+    const { MemoryRouter } = await import("react-router-dom");
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 77,
+        title: "지연 로드 딥링크 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/77",
+        status: "ready",
+        layer: "frontend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "YoonDongGeun" }],
+        children: [],
+      },
+    ]);
+    let resolveSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => {
+      resolveSync = resolve;
+    });
+    const origGet = gateway.getProjectBoard.bind(gateway);
+    const origSync = gateway.syncProjectBoard.bind(gateway);
+    // 첫 get은 캐시 없음(issues=[], fetchedAt=null) -> sync 완료까지 보드 로딩 유지
+    vi.spyOn(gateway, "getProjectBoard").mockResolvedValueOnce({
+      issues: [],
+      fetchedAt: null,
+      skipped: 0,
+      truncated: false,
+    });
+    vi.spyOn(gateway, "syncProjectBoard").mockImplementationOnce(async () => {
+      await syncGate;
+      return origSync();
+    });
+    void origGet;
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=77"]}>
+        <ProjectPage gateway={gateway} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    resolveSync();
+    const drawer = await screen.findByRole("dialog", { name: "지연 로드 딥링크 백로그" });
+    expect(drawer).toBeVisible();
+  });
+
+  it("clears ?issue= via functional setSearchParams updater without clobbering sibling search updates (S23)", async () => {
+    const { MemoryRouter, useEffect: reactUseEffect, useSearchParams, useLocation } =
+      await import("react-router-dom").then(async (rr) => {
+        const react = await import("react");
+        return { ...rr, useEffect: react.useEffect };
+      });
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 77,
+        title: "기능 업데이트 백로그",
+        url: "https://github.com/Acme-Org/acme-web/issues/77",
+        status: "ready",
+        layer: "frontend",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "YoonDongGeun" }],
+        children: [],
+      },
+    ]);
+
+    function SiblingUpdater() {
+      const [, setSearchParams] = useSearchParams();
+      const location = useLocation();
+      reactUseEffect(() => {
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.set("sibling", "kept");
+            return next;
+          },
+          { replace: true },
+        );
+      }, [setSearchParams]);
+      return <span data-testid="search-state">{location.search}</span>;
+    }
+
+    render(
+      <MemoryRouter initialEntries={["/project?issue=77"]}>
+        <SiblingUpdater />
+        <ProjectPage gateway={gateway} />
+      </MemoryRouter>,
+    );
+
+    const drawer = await screen.findByRole("dialog", { name: "기능 업데이트 백로그" });
+    expect(drawer).toBeVisible();
+    await waitFor(() => {
+      const searchText = screen.getByTestId("search-state").textContent ?? "";
+      expect(searchText).toContain("sibling=kept");
+      expect(searchText).not.toContain("issue=");
+    });
+  });
 });

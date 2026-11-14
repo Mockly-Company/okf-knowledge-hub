@@ -7,11 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { DocumentsProvider } from "@/features/documents/DocumentsProvider";
 import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
+import { PersonalDashboardProvider } from "@/features/dashboard/PersonalDashboardProvider";
 import { terminalStoreFor } from "@/features/ai/TerminalSessionStore";
 import type { HubWorkspace } from "@/features/docs-repository/DocsRepositoryGateway";
 import { FakeAiGateway } from "@/test/FakeAiGateway";
 import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
+import { FakePersonalDashboardGateway } from "@/test/FakePersonalDashboardGateway";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
@@ -177,6 +179,7 @@ describe("AppSidebar", () => {
     const user = userEvent.setup();
     renderSidebar(FakeWorkspaceConnectionGateway.connected(), "/documents");
 
+    await user.tab();
     await user.tab();
     await user.tab();
 
@@ -534,5 +537,154 @@ describe("AppSidebar workspace switcher", () => {
         screen.queryByText(/다른 워크스페이스 AI 실행 중/),
       ).not.toBeInTheDocument(),
     );
+  });
+
+  it("pins 내 대시보드 above the workspace switcher with an unread NEW count badge", async () => {
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "hyeeun",
+      tasks: [
+        {
+          workspaceId: projectWorkspace.id,
+          workspaceTitle: "Mockly Board",
+          projectOwner: "Mockly-Company",
+          projectNumber: 1,
+          projectTitle: "Mockly Board",
+          repositoryFullName: "Mockly-Company/okf-knowledge-hub",
+          issueNumber: 74,
+          title: "대시보드 구현",
+          url: "https://github.com/Mockly-Company/okf-knowledge-hub/issues/74",
+          status: "ready",
+          layer: "frontend",
+          kind: "작업",
+          dependsOn: null,
+          predecessorDone: true,
+          readyToStart: true,
+          isNew: true,
+          assignees: [{ login: "hyeeun" }],
+          createdAt: "2026-11-14T01:00:00Z",
+          updatedAt: "2026-11-14T06:00:00Z",
+        },
+      ],
+      notifications: [
+        {
+          id: "n1",
+          workspaceId: projectWorkspace.id,
+          workspaceTitle: "Mockly Board",
+          repositoryFullName: "Mockly-Company/okf-docs",
+          kind: "open_pr",
+          prNumber: 12,
+          title: "docs: 기획 변경",
+          summary: "변경 요약",
+          authorLogin: "alice",
+          url: "https://github.com/Mockly-Company/okf-docs/pull/12",
+          primaryDocPath: "docs/spec.md",
+          hasCompanionHtml: true,
+          timestamp: "2026-11-14T07:00:00Z",
+          isNew: true,
+        },
+      ],
+    });
+
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [projectWorkspace];
+    docsRepoGateway.activeWorkspaceId = projectWorkspace.id;
+
+    const view = render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+          <ActiveProjectProvider
+            projectGateway={FakeProjectBoardGateway.empty()}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <PersonalDashboardProvider gateway={dashboardGateway}>
+              <DocumentsProvider gateway={new FakeDocumentsGateway()}>
+                <MemoryRouter initialEntries={["/home"]}>
+                  <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />
+                </MemoryRouter>
+              </DocumentsProvider>
+            </PersonalDashboardProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    const dashboardLink = await screen.findByRole("link", {
+      name: /^내 대시보드/,
+    });
+    expect(dashboardLink).toHaveAttribute("href", "/home");
+    expect(dashboardLink).toHaveAttribute("aria-current", "page");
+    await waitFor(() => {
+      expect(within(dashboardLink).getByText("2")).toBeVisible();
+      expect(dashboardLink).toHaveAccessibleName("내 대시보드, 새 알림 2개");
+    });
+
+    const switcher = await screen.findByRole("button", {
+      name: /^워크스페이스 전환/,
+    });
+    // `내 대시보드` 링크가 DOM 상에서 워크스페이스 전환기보다 먼저 위치해야 한다
+    expect(
+      dashboardLink.compareDocumentPosition(switcher) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    const a11y = await axe.run(view.container);
+    expect(a11y.violations).toEqual([]);
+  });
+
+  it("caps visual unread badge at 99+ and matches screen-reader announcement", async () => {
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "hyeeun",
+      tasks: Array.from({ length: 105 }, (_, index) => ({
+        workspaceId: projectWorkspace.id,
+        workspaceTitle: "Mockly Board",
+        projectOwner: "Mockly-Company",
+        projectNumber: 1,
+        projectTitle: "Mockly Board",
+        repositoryFullName: "Mockly-Company/okf-knowledge-hub",
+        issueNumber: index + 1,
+        title: `대시보드 작업 ${index + 1}`,
+        url: `https://github.com/Mockly-Company/okf-knowledge-hub/issues/${index + 1}`,
+        status: "ready",
+        layer: "frontend",
+        kind: "작업",
+        dependsOn: null,
+        predecessorDone: true,
+        readyToStart: true,
+        isNew: true,
+        assignees: [{ login: "hyeeun" }],
+        createdAt: "2026-11-14T01:00:00Z",
+        updatedAt: "2026-11-14T06:00:00Z",
+      })),
+    });
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    docsRepoGateway.workspaces = [projectWorkspace];
+    docsRepoGateway.activeWorkspaceId = projectWorkspace.id;
+
+    render(
+      <TestQueryProvider>
+        <WorkspaceConnectionProvider gateway={FakeWorkspaceConnectionGateway.connected()}>
+          <ActiveProjectProvider
+            projectGateway={FakeProjectBoardGateway.empty()}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <PersonalDashboardProvider gateway={dashboardGateway}>
+              <DocumentsProvider gateway={new FakeDocumentsGateway()}>
+                <MemoryRouter initialEntries={["/home"]}>
+                  <AppSidebar collapseButtonRef={createRef()} onCollapse={() => {}} />
+                </MemoryRouter>
+              </DocumentsProvider>
+            </PersonalDashboardProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    const dashboardLink = await screen.findByRole("link", {
+      name: /^내 대시보드/,
+    });
+    await waitFor(() => {
+      expect(within(dashboardLink).getByText("99+")).toBeVisible();
+      expect(dashboardLink).toHaveAccessibleName("내 대시보드, 새 알림 99개 이상");
+    });
   });
 });

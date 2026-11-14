@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod code_repositories;
+pub mod dashboard;
 pub mod docs_repository;
 pub mod documents;
 pub mod project_board;

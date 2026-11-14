@@ -12,11 +12,12 @@ use crate::auth::model::{AccessToken, GithubUserSummary};
 use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    parse_depends_on, CreateProjectIssueInput, CreatePullRequestInput, CreatedProjectIssue,
-    DocsPullRequestSummary, DraftPullRequest, DraftPullRequestRequest, GithubProjectFieldOption,
-    GithubProjectItem, GithubProjectListItem, GithubProjectSchema, GithubProjectSingleSelectField,
-    GithubProjectSummary, GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page,
-    PullRequestChangedFile, UpdateProjectItemInput, UpdatedProjectItem,
+    parse_depends_on, BoardAssignee, CreateProjectIssueInput, CreatePullRequestInput,
+    CreatedProjectIssue, DocsPullRequestSummary, DraftPullRequest, DraftPullRequestRequest,
+    GithubProjectFieldOption, GithubProjectItem, GithubProjectListItem, GithubProjectSchema,
+    GithubProjectSingleSelectField, GithubProjectSummary, GithubRepositoryDetail,
+    GithubRepositorySummary, GithubSubIssue, Page, PullRequestChangedFile, UpdateProjectItemInput,
+    UpdatedProjectItem,
 };
 use crate::project_board::model::{BoardStatus, ProjectOwnerScope};
 
@@ -245,11 +246,33 @@ struct GithubProjectItemContent {
     /// 본문의 `이전 단계: #N` 줄을 읽어 선행 이슈를 정한다.
     #[serde(default)]
     body: Option<String>,
+    #[serde(rename = "createdAt", default)]
+    created_at: Option<String>,
+    #[serde(rename = "updatedAt", default)]
+    updated_at: Option<String>,
     #[serde(default)]
     repository: Option<GithubContentRepository>,
     labels: Option<GithubProjectLabelConnection>,
+    #[serde(default)]
+    assignees: Option<GithubProjectAssigneeConnection>,
     #[serde(rename = "subIssues", default)]
     sub_issues: Option<GithubSubIssuesConnection>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectAssigneeConnection {
+    #[serde(default)]
+    nodes: Vec<Option<GithubProjectAssigneeNode>>,
+}
+
+#[derive(Deserialize)]
+struct GithubProjectAssigneeNode {
+    #[serde(default)]
+    login: Option<String>,
+    #[serde(rename = "avatarUrl", default)]
+    avatar_url: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -398,6 +421,12 @@ struct GithubPullRequestAuthorResponse {
     login: String,
 }
 
+fn parse_rfc3339_timestamp(raw: &str) -> Option<i64> {
+    time::OffsetDateTime::parse(raw.trim(), &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(|dt| dt.unix_timestamp())
+}
+
 #[derive(Deserialize)]
 struct GithubPullRequestResponse {
     number: u64,
@@ -411,6 +440,8 @@ struct GithubPullRequestResponse {
     mergeable: Option<bool>,
     #[serde(default)]
     updated_at: String,
+    #[serde(default)]
+    merged_at: Option<String>,
     user: GithubPullRequestAuthorResponse,
     head: GithubPullRequestRefResponse,
     base: GithubPullRequestRefResponse,
@@ -431,6 +462,7 @@ impl GithubPullRequestResponse {
             is_draft: self.draft,
             mergeable: self.mergeable,
             updated_at: self.updated_at,
+            merged_at: self.merged_at,
         }
     }
 }
@@ -588,7 +620,7 @@ fn project_permission_error() -> AppError {
 /// `sub_issues_query`로 이어서 가져온다.
 fn project_items_query(root: &str) -> String {
     format!(
-        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{id content{{__typename ... on Issue{{id number title url body repository{{nameWithOwner}} labels(first:100){{nodes{{name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url body repository{{nameWithOwner}} labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
+        "query($login:String!,$number:Int!,$after:String){{{root}(login:$login){{projectV2(number:$number){{items(first:100,after:$after){{pageInfo{{hasNextPage endCursor}}nodes{{id content{{__typename ... on Issue{{id number title url body createdAt updatedAt repository{{nameWithOwner}} labels(first:100){{nodes{{name}}}} assignees(first:20){{nodes{{login avatarUrl name}}}} subIssues(first:{SUB_ISSUES_FIRST}){{pageInfo{{hasNextPage endCursor}}nodes{{number title url}}}}}} ... on PullRequest{{number title url body repository{{nameWithOwner}} labels(first:100){{nodes{{name}}}}}}}}fieldValues(first:100){{nodes{{__typename ... on ProjectV2ItemFieldSingleSelectValue{{name field{{... on ProjectV2SingleSelectField{{name}}}}}}}}}}}}}}}}}}}}",
     )
 }
 
@@ -1222,6 +1254,40 @@ impl GithubHttpClient {
                     .repository
                     .and_then(|repo| repo.name_with_owner)
                     .filter(|name| !name.trim().is_empty());
+                let assignees: Vec<BoardAssignee> = content
+                    .assignees
+                    .map(|conn| {
+                        conn.nodes
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|node| {
+                                let login = node.login?.trim().to_owned();
+                                if login.is_empty() {
+                                    return None;
+                                }
+                                Some(BoardAssignee {
+                                    login,
+                                    avatar_url: node
+                                        .avatar_url
+                                        .map(|u| u.trim().to_owned())
+                                        .filter(|u| !u.is_empty()),
+                                    name: node
+                                        .name
+                                        .map(|n| n.trim().to_owned())
+                                        .filter(|n| !n.is_empty()),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let created_at = content
+                    .created_at
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+                let updated_at = content
+                    .updated_at
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
                 items.push(GithubProjectItem {
                     item_id: node.id.filter(|id| !id.trim().is_empty()),
                     content_id: content.id.filter(|id| !id.trim().is_empty()),
@@ -1237,6 +1303,9 @@ impl GithubHttpClient {
                     priority,
                     depends_on,
                     sub_issues,
+                    assignees,
+                    created_at,
+                    updated_at,
                 });
             }
             // 5페이지·500개를 넘기면 나머지는 버린다. 잘림·누락 수는 호출자가 노출한다.
@@ -1533,6 +1602,55 @@ impl GithubHttpClient {
             .into_iter()
             .map(GithubPullRequestResponse::into_public)
             .collect())
+    }
+
+    pub async fn list_recent_merged_pull_requests(
+        &self,
+        repository_full_name: &str,
+        since_unix_secs: i64,
+    ) -> Result<Vec<DocsPullRequestSummary>, AppError> {
+        const MERGED_PR_PAGE_SIZE: usize = 100;
+        const MAX_MERGED_PR_PAGES: usize = 5;
+
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let per_page_str = MERGED_PR_PAGE_SIZE.to_string();
+        let mut merged = Vec::new();
+        for page in 1..=MAX_MERGED_PR_PAGES {
+            let page_str = page.to_string();
+            let items: Vec<GithubPullRequestResponse> = self
+                .get_json(
+                    &["repos", owner, name, "pulls"],
+                    &[
+                        ("state", "closed".to_owned()),
+                        ("sort", "updated".to_owned()),
+                        ("direction", "desc".to_owned()),
+                        ("per_page", per_page_str.clone()),
+                        ("page", page_str),
+                    ],
+                    HttpFailureContext::Repository,
+                )
+                .await?;
+            let page_len = items.len();
+            let mut reached_cutoff = false;
+            for pr in items {
+                if parse_rfc3339_timestamp(&pr.updated_at).is_some_and(|ts| ts < since_unix_secs) {
+                    // updated 내림차순 응답이므로 기준 시각 이전부터는 이후 페이지에도 최근 머지가 없다.
+                    reached_cutoff = true;
+                }
+                if pr
+                    .merged_at
+                    .as_deref()
+                    .and_then(parse_rfc3339_timestamp)
+                    .is_some_and(|ts| ts >= since_unix_secs)
+                {
+                    merged.push(pr.into_public());
+                }
+            }
+            if reached_cutoff || page_len < MERGED_PR_PAGE_SIZE {
+                break;
+            }
+        }
+        Ok(merged)
     }
 
     pub async fn get_pull_request(
@@ -3794,5 +3912,121 @@ mod tests {
         assert!(bodies[7].contains("\"OPT_back\""));
         assert!(bodies[8].contains("\"OPT_task\""));
         assert!(bodies[11].contains("\"OPT_progress\""));
+    }
+
+    #[tokio::test]
+    async fn project_items_include_assignees_timestamps_and_recent_merged_prs() {
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"data":{"organization":{"projectV2":{"items":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"PVTI_1","content":{"__typename":"Issue","id":"I_1","number":74,"title":"[프론트엔드] 대시보드","url":"https://github.com/Acme-Org/acme-web/issues/74","body":"본문","createdAt":"2026-11-10T01:00:00Z","updatedAt":"2026-11-14T02:00:00Z","repository":{"nameWithOwner":"Acme-Org/acme-web"},"labels":{"nodes":[{"name":"frontend"}]},"assignees":{"nodes":[{"login":"YoonDongGeun","avatarUrl":"https://avatars.githubusercontent.com/u/1?v=4","name":"DongGeun Yoon"}]},"subIssues":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}},"fieldValues":{"nodes":[{"__typename":"ProjectV2ItemFieldSingleSelectValue","name":"Ready","field":{"name":"Status"}}]}}]}}}}}"#,
+            ),
+            response(
+                200,
+                r###"[
+                    {"number":16,"title":"docs: 대시보드 설계","body":"## 이번 변경 요약\n- `내 대시보드` 화면 명세 추가\n","html_url":"https://github.com/Acme-Org/acme-docs/pull/16","draft":false,"updated_at":"2026-11-14T05:00:00Z","merged_at":"2026-11-14T05:00:00Z","user":{"login":"alice"},"head":{"ref":"docs/dashboard","sha":"sha16"},"base":{"ref":"main","sha":"sha0"}},
+                    {"number":15,"title":"docs: 닫힌 초안","body":"","html_url":"https://github.com/Acme-Org/acme-docs/pull/15","draft":true,"updated_at":"2026-11-14T04:00:00Z","merged_at":null,"user":{"login":"alice"},"head":{"ref":"docs/closed","sha":"sha15"},"base":{"ref":"main","sha":"sha0"}},
+                    {"number":10,"title":"docs: 2주전 머지","body":"## 이번 변경 요약\n- 예전 변경\n","html_url":"https://github.com/Acme-Org/acme-docs/pull/10","draft":false,"updated_at":"2026-10-20T05:00:00Z","merged_at":"2026-10-20T05:00:00Z","user":{"login":"alice"},"head":{"ref":"docs/old","sha":"sha10"},"base":{"ref":"main","sha":"sha0"}}
+                ]"###,
+            ),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let (items, _, _) = service
+            .list_project_items(ProjectOwnerScope::Organization, "Acme-Org", 1)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].created_at.as_deref(), Some("2026-11-10T01:00:00Z"));
+        assert_eq!(items[0].updated_at.as_deref(), Some("2026-11-14T02:00:00Z"));
+        assert_eq!(items[0].assignees.len(), 1);
+        assert_eq!(items[0].assignees[0].login, "YoonDongGeun");
+        assert_eq!(
+            items[0].assignees[0].avatar_url.as_deref(),
+            Some("https://avatars.githubusercontent.com/u/1?v=4")
+        );
+        assert_eq!(items[0].assignees[0].name.as_deref(), Some("DongGeun Yoon"));
+
+        let cutoff = time::OffsetDateTime::parse(
+            "2026-11-07T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp();
+        let merged = service
+            .list_recent_merged_pull_requests("Acme-Org/acme-docs", cutoff)
+            .await
+            .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].number, 16);
+        assert_eq!(merged[0].merged_at.as_deref(), Some("2026-11-14T05:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn list_recent_merged_pull_requests_paginates_past_100_items_until_cutoff() {
+        let mut page1 = Vec::new();
+        for n in 2..=101 {
+            page1.push(serde_json::json!({
+                "number": n,
+                "title": format!("docs: closed #{n}"),
+                "body": "",
+                "html_url": format!("https://github.com/Acme-Org/acme-docs/pull/{n}"),
+                "draft": false,
+                "updated_at": "2026-11-14T01:00:00Z",
+                "merged_at": null,
+                "user": { "login": "alice" },
+                "head": { "ref": "docs/a", "sha": "sha" },
+                "base": { "ref": "main", "sha": "base" }
+            }));
+        }
+        let page2 = serde_json::json!([
+            {
+                "number": 201,
+                "title": "docs: 2페이지 최근 머지",
+                "body": "## 이번 변경 요약\n- 페이지2\n",
+                "html_url": "https://github.com/Acme-Org/acme-docs/pull/201",
+                "draft": false,
+                "updated_at": "2026-11-10T01:00:00Z",
+                "merged_at": "2026-11-10T01:00:00Z",
+                "user": { "login": "alice" },
+                "head": { "ref": "docs/p2", "sha": "sha201" },
+                "base": { "ref": "main", "sha": "base" }
+            },
+            {
+                "number": 10,
+                "title": "docs: cutoff 이전",
+                "body": "",
+                "html_url": "https://github.com/Acme-Org/acme-docs/pull/10",
+                "draft": false,
+                "updated_at": "2026-10-20T05:00:00Z",
+                "merged_at": "2026-10-20T05:00:00Z",
+                "user": { "login": "alice" },
+                "head": { "ref": "docs/old", "sha": "sha10" },
+                "base": { "ref": "main", "sha": "base" }
+            }
+        ]);
+
+        let transport = RecordingTransport::with_responses(vec![
+            response(200, &serde_json::to_string(&page1).unwrap()),
+            response(200, &page2.to_string()),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let cutoff = time::OffsetDateTime::parse(
+            "2026-11-07T00:00:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap()
+        .unix_timestamp();
+        let merged = service
+            .list_recent_merged_pull_requests("Acme-Org/acme-docs", cutoff)
+            .await
+            .unwrap();
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].number, 201);
+        let reqs = transport.requests();
+        assert_eq!(reqs.len(), 2);
+        assert!(reqs[0].url.contains("per_page=100") && reqs[0].url.contains("page=1"));
+        assert!(reqs[1].url.contains("per_page=100") && reqs[1].url.contains("page=2"));
     }
 }

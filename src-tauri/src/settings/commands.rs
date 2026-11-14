@@ -29,6 +29,53 @@ fn set_display_density_inner(services: &AppServices, density: DisplayDensity) ->
     services.local_settings.set_display_density(density)
 }
 
+#[tauri::command]
+pub fn get_dashboard_last_seen_at(state: State<'_, AppServices>) -> CommandResult<Option<String>> {
+    state.local_settings.load_dashboard_last_seen_at()
+}
+
+#[tauri::command]
+pub fn mark_dashboard_seen(
+    state: State<'_, AppServices>,
+    timestamp: Option<String>,
+) -> CommandResult<String> {
+    mark_dashboard_seen_inner(&state, timestamp)
+}
+
+pub(crate) fn mark_dashboard_seen_inner(
+    services: &AppServices,
+    timestamp: Option<String>,
+) -> CommandResult<String> {
+    let ts = match timestamp
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(value) => {
+            if crate::commands::dashboard::parse_rfc3339_unix(Some(value)).is_none() {
+                return Err(AppError::new(
+                    ErrorCode::LocalSettingsUnavailable,
+                    "잘못된 확인 시각 형식입니다.",
+                )
+                .with_recovery(RecoveryAction::Retry));
+            }
+            value.to_owned()
+        }
+        None => time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::LocalSettingsUnavailable,
+                    "현재 시각을 기록하지 못했습니다.",
+                )
+            })?,
+    };
+    services
+        .local_settings
+        .set_dashboard_last_seen_at(Some(&ts))?;
+    Ok(ts)
+}
+
 const AGENTS_MD_LIMIT_BYTES: usize = 200 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -1322,5 +1369,29 @@ mod tests {
         assert!(rules.contains("# 작업 컨텍스트 팩 — #63 [디자인] 화면명세서 작성"));
         assert!(rules.contains("팀 문서 규칙: 2벌(.md+.html) 유지"));
         assert!(rules.contains("절대 원칙 (코드 구현 금지)"));
+    }
+
+    #[test]
+    fn mark_dashboard_seen_rejects_invalid_rfc3339_and_preserves_previous_value() {
+        let settings = LocalSettingsService::new(MemoryStore::default());
+        let services = AppServices::new(settings);
+
+        let saved =
+            super::mark_dashboard_seen_inner(&services, Some(" 2026-11-14T08:00:00Z ".to_owned()))
+                .unwrap();
+        assert_eq!(saved, "2026-11-14T08:00:00Z");
+
+        let err =
+            super::mark_dashboard_seen_inner(&services, Some("not-a-valid-timestamp".to_owned()))
+                .unwrap_err();
+        assert_eq!(err.code, ErrorCode::LocalSettingsUnavailable);
+        assert_eq!(
+            services
+                .local_settings
+                .load_dashboard_last_seen_at()
+                .unwrap()
+                .as_deref(),
+            Some("2026-11-14T08:00:00Z")
+        );
     }
 }
