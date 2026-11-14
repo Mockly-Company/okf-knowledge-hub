@@ -60,5 +60,6 @@ export interface PersonalDashboardResult {
   readyTaskCount: number;
   notifications: DashboardNotificationItem[];
   unreadNotificationCount: number;
+  totalUnreadCount: number;
   failures: DashboardWorkspaceFailure[];
 }

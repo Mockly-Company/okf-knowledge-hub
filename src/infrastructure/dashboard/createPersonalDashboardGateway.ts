@@ -11,6 +11,7 @@ class UnavailablePersonalDashboardGateway implements PersonalDashboardGateway {
       unreadNewCount: 0,
       readyTaskCount: 0,
       unreadNotificationCount: 0,
+      totalUnreadCount: 0,
       assigneeOptions: [],
       tasks: [],
       notifications: [],

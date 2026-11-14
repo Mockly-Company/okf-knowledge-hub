@@ -50,25 +50,31 @@ export class TauriPersonalDashboardGateway implements PersonalDashboardGateway {
     const tasks = normalizeTasks(raw?.tasks);
     const notifications = normalizeNotifications(raw?.notifications);
     const failures = normalizeFailures(raw?.failures);
+    const unreadNewCount =
+      typeof raw?.unreadNewCount === "number"
+        ? raw.unreadNewCount
+        : tasks.filter((t) => t.isNew).length;
+    const unreadNotificationCount =
+      typeof raw?.unreadNotificationCount === "number"
+        ? raw.unreadNotificationCount
+        : notifications.filter((n) => n.isNew).length;
     return {
       viewerLogin: typeof raw?.viewerLogin === "string" ? raw.viewerLogin : null,
       fetchedAt: typeof raw?.fetchedAt === "string" ? raw.fetchedAt : new Date().toISOString(),
       lastSeenAt: typeof raw?.lastSeenAt === "string" ? raw.lastSeenAt : null,
       assigneeOptions: normalizeBoardAssignees(raw?.assigneeOptions),
       tasks,
-      unreadNewCount:
-        typeof raw?.unreadNewCount === "number"
-          ? raw.unreadNewCount
-          : tasks.filter((t) => t.isNew).length,
+      unreadNewCount,
       readyTaskCount:
         typeof raw?.readyTaskCount === "number"
           ? raw.readyTaskCount
           : tasks.filter((t) => t.readyToStart).length,
       notifications,
-      unreadNotificationCount:
-        typeof raw?.unreadNotificationCount === "number"
-          ? raw.unreadNotificationCount
-          : notifications.filter((n) => n.isNew).length,
+      unreadNotificationCount,
+      totalUnreadCount:
+        typeof raw?.totalUnreadCount === "number"
+          ? raw.totalUnreadCount
+          : unreadNewCount + unreadNotificationCount,
       failures,
     };
   }

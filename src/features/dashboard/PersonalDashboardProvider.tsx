@@ -115,8 +115,8 @@ export function PersonalDashboardProvider({
   const markSeenMutation = useMutation({
     mutationFn: () => gateway.markDashboardSeen(),
     onSuccess: (seenAt) => {
-      queryClient.setQueryData<PersonalDashboardResult | undefined>(
-        queryKey,
+      queryClient.setQueriesData<PersonalDashboardResult | undefined>(
+        { queryKey: personalDashboardKeys.all },
         (current) =>
           current
             ? {
@@ -124,6 +124,7 @@ export function PersonalDashboardProvider({
                 lastSeenAt: seenAt,
                 unreadNewCount: 0,
                 unreadNotificationCount: 0,
+                totalUnreadCount: 0,
                 tasks: current.tasks.map((task) => ({ ...task, isNew: false })),
                 notifications: current.notifications.map((item) => ({
                   ...item,
@@ -137,7 +138,7 @@ export function PersonalDashboardProvider({
 
   const unreadCount = useMemo(() => {
     if (!query.data) return 0;
-    return query.data.unreadNewCount + query.data.unreadNotificationCount;
+    return query.data.totalUnreadCount;
   }, [query.data]);
 
   const value = useMemo<PersonalDashboardContextValue>(

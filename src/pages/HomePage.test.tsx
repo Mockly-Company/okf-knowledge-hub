@@ -4,7 +4,10 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import { ActiveProjectProvider } from "@/features/active-project/ActiveProjectProvider";
-import { PersonalDashboardProvider } from "@/features/dashboard/PersonalDashboardProvider";
+import {
+  PersonalDashboardProvider,
+  useOptionalPersonalDashboard,
+} from "@/features/dashboard/PersonalDashboardProvider";
 import { PersonalDashboardView } from "@/features/dashboard/PersonalDashboardView";
 import type {
   DashboardNotificationItem,
@@ -481,6 +484,86 @@ describe("HomePage (내 대시보드)", () => {
       assigneeFilter: null,
       forceSync: true,
       retryWorkspaceId: null,
+    });
+  });
+
+  it("keeps sidebar unreadCount stable when switching assigneeFilter and clears across views on markSeen", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const connectionGateway = FakeWorkspaceConnectionGateway.connected();
+    if (connectionGateway.authState.status === "authenticated") {
+      connectionGateway.authState = {
+        status: "authenticated",
+        user: {
+          ...connectionGateway.authState.user,
+          login: "YoonDongGeun",
+        },
+      };
+    }
+    const gateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      assigneeOptions: [
+        { login: "YoonDongGeun", name: "윤동근" },
+        { login: "alice", name: "앨리스" },
+      ],
+      tasks: [
+        makeTask({
+          issueNumber: 74,
+          title: "내 미확인 백로그",
+          assignees: [{ login: "YoonDongGeun" }],
+          isNew: true,
+        }),
+        makeTask({
+          issueNumber: 90,
+          title: "앨리스 읽은 백로그",
+          assignees: [{ login: "alice" }],
+          isNew: false,
+        }),
+      ],
+      notifications: [
+        makeNotification({
+          id: "open_pr:PVT_alpha:18",
+          prNumber: 18,
+          isNew: true,
+        }),
+      ],
+    });
+
+    function SidebarUnreadProbe() {
+      const ctx = useOptionalPersonalDashboard();
+      return <span data-testid="sidebar-unread-count">{ctx?.unreadCount ?? 0}</span>;
+    }
+
+    render(
+      <TestQueryProvider>
+        <MemoryRouter initialEntries={["/"]}>
+          <WorkspaceConnectionProvider gateway={connectionGateway}>
+            <ActiveProjectProvider
+              projectGateway={FakeProjectBoardGateway.empty()}
+              docsRepositoryGateway={docsRepoGateway}
+            >
+              <PersonalDashboardProvider gateway={gateway}>
+                <SidebarUnreadProbe />
+                <PersonalDashboardView />
+              </PersonalDashboardProvider>
+            </ActiveProjectProvider>
+          </WorkspaceConnectionProvider>
+        </MemoryRouter>
+      </TestQueryProvider>,
+    );
+
+    await screen.findByText("#74 내 미확인 백로그");
+    expect(screen.getByTestId("sidebar-unread-count")).toHaveTextContent("2");
+
+    // 앨리스(미확인 작업 0건) 필터로 바꿔도 전역 사이드바 unreadCount는 내 작업 1건 + 문서 알림 1건 = 2를 유지
+    await user.click(screen.getByRole("combobox", { name: "담당자 보기" }));
+    await user.click(await screen.findByRole("option", { name: "@alice (앨리스)" }));
+    await screen.findByText("#90 앨리스 읽은 백로그");
+    expect(screen.getByTestId("sidebar-unread-count")).toHaveTextContent("2");
+
+    await user.click(screen.getByRole("button", { name: "모두 읽음" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("sidebar-unread-count")).toHaveTextContent("0");
     });
   });
 });

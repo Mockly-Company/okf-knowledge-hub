@@ -72,8 +72,18 @@ export class FakePersonalDashboardGateway implements PersonalDashboardGateway {
     });
 
     const unreadNewCount = filteredTasks.filter((t) => t.isNew).length;
+    const viewerUnreadNewCount = this.viewerLogin
+      ? this.tasks.filter(
+          (task) =>
+            task.isNew &&
+            task.assignees.some(
+              (a) => a.login.toLowerCase() === this.viewerLogin!.toLowerCase(),
+            ),
+        ).length
+      : 0;
     const readyTaskCount = filteredTasks.filter((t) => t.readyToStart).length;
     const unreadNotificationCount = this.notifications.filter((n) => n.isNew).length;
+    const totalUnreadCount = viewerUnreadNewCount + unreadNotificationCount;
 
     return {
       viewerLogin: this.viewerLogin,
@@ -85,6 +95,7 @@ export class FakePersonalDashboardGateway implements PersonalDashboardGateway {
       readyTaskCount,
       notifications: this.notifications,
       unreadNotificationCount,
+      totalUnreadCount,
       failures: this.failures,
     };
   }

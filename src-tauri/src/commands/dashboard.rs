@@ -34,6 +34,7 @@ pub struct PersonalDashboardResult {
     pub ready_task_count: u32,
     pub notifications: Vec<DashboardNotificationItem>,
     pub unread_notification_count: u32,
+    pub total_unread_count: u32,
     pub failures: Vec<DashboardWorkspaceFailure>,
 }
 
@@ -373,6 +374,7 @@ fn walk_collect_tasks(
     by_repo_and_num: &HashMap<(String, u64), BoardStatus>,
     by_unique_num: &HashMap<u64, Option<BoardStatus>>,
     filter: &DashboardFilter<'_>,
+    viewer_unread_new_count: &mut u32,
     tasks: &mut Vec<DashboardTaskItem>,
 ) {
     if depth > MAX_BOARD_DEPTH {
@@ -383,55 +385,59 @@ fn walk_collect_tasks(
         if !key.is_empty() && !visited.insert(key) {
             continue;
         }
-        if issue.status != BoardStatus::Done
-            && matches_target_assignee(issue, filter.viewer_login, filter.assignee_filter)
-        {
-            let repo_from_url = infer_repository_full_name_from_url(&issue.url);
-            let predecessor_done = match issue.depends_on {
-                None => true,
-                Some(dep) => {
-                    let pred_status = repo_from_url
-                        .as_deref()
-                        .and_then(|repo| {
-                            by_repo_and_num
-                                .get(&(repo.to_ascii_lowercase(), dep))
-                                .copied()
-                        })
-                        .or_else(|| by_unique_num.get(&dep).copied().flatten());
-                    pred_status == Some(BoardStatus::Done)
-                }
-            };
-            let ready_to_start = matches!(issue.status, BoardStatus::Backlog | BoardStatus::Ready)
-                && predecessor_done;
+        if issue.status != BoardStatus::Done {
             let timestamp = issue.updated_at.as_deref().or(issue.created_at.as_deref());
             let is_new = is_timestamp_new(timestamp, filter.last_seen_at, filter.now_unix);
+            if is_new && matches_target_assignee(issue, filter.viewer_login, None) {
+                *viewer_unread_new_count += 1;
+            }
+            if matches_target_assignee(issue, filter.viewer_login, filter.assignee_filter) {
+                let repo_from_url = infer_repository_full_name_from_url(&issue.url);
+                let predecessor_done = match issue.depends_on {
+                    None => true,
+                    Some(dep) => {
+                        let pred_status = repo_from_url
+                            .as_deref()
+                            .and_then(|repo| {
+                                by_repo_and_num
+                                    .get(&(repo.to_ascii_lowercase(), dep))
+                                    .copied()
+                            })
+                            .or_else(|| by_unique_num.get(&dep).copied().flatten());
+                        pred_status == Some(BoardStatus::Done)
+                    }
+                };
+                let ready_to_start =
+                    matches!(issue.status, BoardStatus::Backlog | BoardStatus::Ready)
+                        && predecessor_done;
 
-            tasks.push(DashboardTaskItem {
-                workspace_id: workspace.id.clone(),
-                workspace_title: workspace.title.clone(),
-                project_owner: project_owner.to_owned(),
-                project_number,
-                project_title: project_title.to_owned(),
-                repository_full_name: repo_from_url.or_else(|| {
-                    workspace
-                        .docs_repository
-                        .as_ref()
-                        .map(|d| d.full_name.clone())
-                }),
-                issue_number: issue.number,
-                title: issue.title.clone(),
-                url: issue.url.clone(),
-                status: issue.status,
-                layer: issue.layer,
-                kind: issue.kind.clone(),
-                depends_on: issue.depends_on,
-                predecessor_done,
-                ready_to_start,
-                is_new,
-                assignees: issue.assignees.clone(),
-                created_at: issue.created_at.clone(),
-                updated_at: issue.updated_at.clone(),
-            });
+                tasks.push(DashboardTaskItem {
+                    workspace_id: workspace.id.clone(),
+                    workspace_title: workspace.title.clone(),
+                    project_owner: project_owner.to_owned(),
+                    project_number,
+                    project_title: project_title.to_owned(),
+                    repository_full_name: repo_from_url.or_else(|| {
+                        workspace
+                            .docs_repository
+                            .as_ref()
+                            .map(|d| d.full_name.clone())
+                    }),
+                    issue_number: issue.number,
+                    title: issue.title.clone(),
+                    url: issue.url.clone(),
+                    status: issue.status,
+                    layer: issue.layer,
+                    kind: issue.kind.clone(),
+                    depends_on: issue.depends_on,
+                    predecessor_done,
+                    ready_to_start,
+                    is_new,
+                    assignees: issue.assignees.clone(),
+                    created_at: issue.created_at.clone(),
+                    updated_at: issue.updated_at.clone(),
+                });
+            }
         }
         if !issue.children.is_empty() {
             walk_collect_tasks(
@@ -445,6 +451,7 @@ fn walk_collect_tasks(
                 by_repo_and_num,
                 by_unique_num,
                 filter,
+                viewer_unread_new_count,
                 tasks,
             );
         }
@@ -456,6 +463,7 @@ pub(crate) fn collect_workspace_tasks(
     board: &ProjectBoard,
     filter: &DashboardFilter<'_>,
     discovered_assignees: &mut BTreeMap<String, BoardAssignee>,
+    viewer_unread_new_count: &mut u32,
     tasks: &mut Vec<DashboardTaskItem>,
 ) {
     let Some(project) = workspace.project.as_ref() else {
@@ -485,6 +493,7 @@ pub(crate) fn collect_workspace_tasks(
         &by_repo_and_num,
         &by_unique_num,
         filter,
+        viewer_unread_new_count,
         tasks,
     );
 }
@@ -591,8 +600,13 @@ async fn fetch_workspace_docs_notifications(
     }
     let mut files_by_idx: HashMap<usize, Vec<PullRequestChangedFile>> = HashMap::new();
     while let Some(joined) = file_tasks.join_next().await {
-        if let Ok((idx, files)) = joined {
-            files_by_idx.insert(idx, files);
+        match joined {
+            Ok((idx, files)) => {
+                files_by_idx.insert(idx, files);
+            }
+            Err(err) => {
+                eprintln!("dashboard pr files task failed: {err:?}");
+            }
         }
     }
 
@@ -725,15 +739,19 @@ pub async fn get_personal_dashboard(
     assignee_filter: Option<String>,
     retry_workspace_id: Option<String>,
 ) -> CommandResult<PersonalDashboardResult> {
-    let _access = state.acquire_authenticated_command().await?;
-    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    // 인증 가드는 서비스 핸들 복제와 로컬 설정 조회 직후 즉시 해제해 네트워크 병렬 fetch 동안 락 경합을 막는다.
+    let (github, workspaces, last_seen_at) = {
+        let _access = state.acquire_authenticated_command().await?;
+        let github = state.github.clone().ok_or_else(service_unavailable)?;
+        let workspaces = state.local_settings.load_hub_workspaces()?;
+        let last_seen_at = state.local_settings.load_dashboard_last_seen_at()?;
+        (github, workspaces, last_seen_at)
+    };
     let cache_root = resolve_project_board_cache_root(&app)?;
     let viewer = github.current_user().await?;
     let viewer_login = viewer.login.trim().to_owned();
     let viewer_avatar = viewer.avatar_url.trim().to_owned();
 
-    let workspaces = state.local_settings.load_hub_workspaces()?;
-    let last_seen_at = state.local_settings.load_dashboard_last_seen_at()?;
     let (now_unix, fetched_at) = now_utc_pair();
     let force_all = force_sync.unwrap_or(false);
     let retry_target = retry_workspace_id
@@ -771,21 +789,54 @@ pub async fn get_personal_dashboard(
         now_unix,
         semaphore: Arc::new(tokio::sync::Semaphore::new(WORKSPACE_FETCH_CONCURRENCY)),
     });
+    let mut task_workspaces: HashMap<tokio::task::Id, (usize, HubWorkspace)> = HashMap::new();
     let mut join_set = tokio::task::JoinSet::new();
     for (idx, workspace) in workspaces.into_iter().enumerate() {
         let should_sync = force_all || retry_target == Some(workspace.id.as_str());
-        join_set.spawn(fetch_workspace_dashboard(
+        let workspace_meta = workspace.clone();
+        let abort_handle = join_set.spawn(fetch_workspace_dashboard(
             idx,
             workspace,
             should_sync,
             Arc::clone(&ctx),
         ));
+        task_workspaces.insert(abort_handle.id(), (idx, workspace_meta));
     }
 
     let mut outcomes = Vec::new();
-    while let Some(joined) = join_set.join_next().await {
-        if let Ok(outcome) = joined {
-            outcomes.push(outcome);
+    while let Some(joined) = join_set.join_next_with_id().await {
+        match joined {
+            Ok((_id, outcome)) => outcomes.push(outcome),
+            Err(err) => {
+                eprintln!("dashboard workspace task failed: {err:?}");
+                if let Some((idx, workspace)) = task_workspaces.remove(&err.id()) {
+                    let board_result = workspace.project.as_ref().map(|_| {
+                        Err(AppError::new(
+                            ErrorCode::GithubUnavailable,
+                            "워크스페이스 대시보드 동기화 작업이 중단되었습니다.",
+                        ))
+                    });
+                    let docs_result = if board_result.is_none() {
+                        workspace.docs_repository.as_ref().map(|_| {
+                            Err(DashboardWorkspaceFailure {
+                                workspace_id: workspace.id.clone(),
+                                workspace_title: workspace.title.clone(),
+                                scope: DashboardFailureScope::Docs,
+                                message: "워크스페이스 문서 알림 동기화 작업이 중단되었습니다."
+                                    .to_owned(),
+                            })
+                        })
+                    } else {
+                        None
+                    };
+                    outcomes.push(WorkspaceFetchOutcome {
+                        idx,
+                        workspace,
+                        board_result,
+                        docs_result,
+                    });
+                }
+            }
         }
     }
     outcomes.sort_by_key(|o| o.idx);
@@ -793,6 +844,7 @@ pub async fn get_personal_dashboard(
     let mut tasks: Vec<DashboardTaskItem> = Vec::new();
     let mut notifications: Vec<DashboardNotificationItem> = Vec::new();
     let mut failures: Vec<DashboardWorkspaceFailure> = Vec::new();
+    let mut viewer_unread_new_count: u32 = 0;
 
     for outcome in outcomes {
         if let Some(board_result) = outcome.board_result {
@@ -803,6 +855,7 @@ pub async fn get_personal_dashboard(
                         &board,
                         &filter,
                         &mut discovered_assignees,
+                        &mut viewer_unread_new_count,
                         &mut tasks,
                     );
                 }
@@ -829,6 +882,7 @@ pub async fn get_personal_dashboard(
     let unread_new_count = tasks.iter().filter(|t| t.is_new).count() as u32;
     let ready_task_count = tasks.iter().filter(|t| t.ready_to_start).count() as u32;
     let unread_notification_count = notifications.iter().filter(|n| n.is_new).count() as u32;
+    let total_unread_count = viewer_unread_new_count + unread_notification_count;
 
     Ok(PersonalDashboardResult {
         viewer_login: (!viewer_login.is_empty()).then_some(viewer_login),
@@ -840,6 +894,7 @@ pub async fn get_personal_dashboard(
         ready_task_count,
         notifications,
         unread_notification_count,
+        total_unread_count,
         failures,
     })
 }
@@ -1007,10 +1062,19 @@ mod tests {
             now_unix,
         };
         let mut discovered = BTreeMap::new();
+        let mut viewer_unread = 0;
         let mut tasks = Vec::new();
-        collect_workspace_tasks(&ws, &board, &filter, &mut discovered, &mut tasks);
+        collect_workspace_tasks(
+            &ws,
+            &board,
+            &filter,
+            &mut discovered,
+            &mut viewer_unread,
+            &mut tasks,
+        );
 
         assert_eq!(tasks.len(), 2);
+        assert_eq!(viewer_unread, 1);
         let t74 = tasks.iter().find(|t| t.issue_number == 74).unwrap();
         assert!(t74.is_new);
         assert!(t74.predecessor_done);
@@ -1032,14 +1096,38 @@ mod tests {
         };
         let mut all_tasks = Vec::new();
         let mut discovered_all = BTreeMap::new();
+        let mut viewer_unread_all = 0;
         collect_workspace_tasks(
             &ws,
             &board,
             &filter_all,
             &mut discovered_all,
+            &mut viewer_unread_all,
             &mut all_tasks,
         );
         assert_eq!(all_tasks.len(), 3);
+        assert_eq!(viewer_unread_all, 1);
+
+        let filter_teammate = DashboardFilter {
+            viewer_login: Some("YoonDongGeun"),
+            assignee_filter: Some("teammate"),
+            last_seen_at: Some("2026-11-14T05:00:00Z"),
+            now_unix,
+        };
+        let mut teammate_tasks = Vec::new();
+        let mut discovered_teammate = BTreeMap::new();
+        let mut viewer_unread_teammate = 0;
+        collect_workspace_tasks(
+            &ws,
+            &board,
+            &filter_teammate,
+            &mut discovered_teammate,
+            &mut viewer_unread_teammate,
+            &mut teammate_tasks,
+        );
+        assert_eq!(teammate_tasks.len(), 1);
+        assert_eq!(teammate_tasks[0].issue_number, 78);
+        assert_eq!(viewer_unread_teammate, 1);
     }
 
     #[test]
