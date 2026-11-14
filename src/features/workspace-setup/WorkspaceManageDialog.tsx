@@ -1,5 +1,5 @@
-import { FolderGit2, SquareKanban, Trash2, Unlink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { FolderGit2, SquareKanban, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
@@ -13,9 +13,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StatusFeedback } from "@/components/ui/status-feedback";
+import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import { aiKeys } from "@/features/ai/queryKeys";
-import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
+import type {
+  DocsRepositoryGateway,
+  HubWorkspace,
+} from "@/features/docs-repository/DocsRepositoryGateway";
 import {
   WorkspaceDocsRepositoryPicker,
   currentDocsRepositoryKey,
@@ -24,13 +28,6 @@ import {
   type ProjectRepositoryGateway,
 } from "@/features/docs-repository/ProjectDocsRepository";
 import { useOptionalDocuments } from "@/features/documents/DocumentsProvider";
-import type { ResolvedGithubProject } from "@/features/project-board/model";
-import { ProjectPickerList } from "./ProjectPickerList";
-
-export type WorkspaceManageInitialView =
-  | "overview"
-  | "attach-project"
-  | "change-docs";
 
 function describeManageError(error: unknown): string {
   if (error instanceof Error && error.message.trim() !== "") {
@@ -48,119 +45,165 @@ function describeManageError(error: unknown): string {
   return "워크스페이스 설정을 변경하지 못했습니다.";
 }
 
+function formatWorkspaceTabLabel(
+  workspace: HubWorkspace,
+  isInUse: boolean,
+): string {
+  const baseLabel = workspace.project
+    ? workspace.title
+    : `${workspace.title} (문서 전용)`;
+  return isInUse ? `${baseLabel} · 사용 중` : baseLabel;
+}
+
 export function WorkspaceManageDialog({
   open,
   onOpenChange,
-  initialView = "overview",
   docsRepositoryGateway = sharedDocsRepositoryGateway,
   repositoryGateway = sharedRepositoryGateway,
 }: {
   open: boolean;
   onOpenChange(open: boolean): void;
-  initialView?: WorkspaceManageInitialView;
   docsRepositoryGateway?: DocsRepositoryGateway;
   repositoryGateway?: ProjectRepositoryGateway;
 }) {
   const activeProject = useActiveProject();
   const documents = useOptionalDocuments();
   const queryClient = useQueryClient();
-  const workspace = activeProject.activeWorkspace;
 
-  const [editingProject, setEditingProject] = useState(
-    initialView === "attach-project",
-  );
-  const [editingDocs, setEditingDocs] = useState(initialView === "change-docs");
+  const workspaces = activeProject.workspaces;
+  const activeWorkspaceId =
+    activeProject.activeWorkspaceId ?? activeProject.activeWorkspace?.id ?? null;
+
+  const [selectedTabId, setSelectedTabId] = useState<string | null>(null);
+  const [editingDocs, setEditingDocs] = useState(false);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const workspaceId = workspace?.id ?? null;
+  const wasOpenRef = useRef(false);
+  const tabRefs = useRef(new Map<string, HTMLButtonElement | null>());
 
   useEffect(() => {
-    if (open && workspaceId === null) {
+    if (open && !activeProject.isListing && workspaces.length === 0) {
       onOpenChange(false);
-      return;
     }
-    if (open) {
-      setEditingProject(initialView === "attach-project");
-      setEditingDocs(initialView === "change-docs");
+  }, [activeProject.isListing, onOpenChange, open, workspaces.length]);
+
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      setSelectedTabId(activeWorkspaceId ?? workspaces[0]?.id ?? null);
+      setEditingDocs(false);
       setConfirmingRemove(false);
       setActionError(null);
     }
-  }, [initialView, onOpenChange, open, workspaceId]);
+    wasOpenRef.current = open;
+  }, [activeWorkspaceId, open, workspaces]);
 
-  if (!workspace) {
+  const selectedWorkspace =
+    (selectedTabId
+      ? workspaces.find((item) => item.id === selectedTabId)
+      : undefined) ??
+    (activeWorkspaceId
+      ? workspaces.find((item) => item.id === activeWorkspaceId)
+      : undefined) ??
+    workspaces[0] ??
+    null;
+
+  if (!selectedWorkspace) {
     return null;
   }
 
-  const otherLinkedProjectIds = activeProject.workspaces
-    .filter((item) => item.id !== workspace.id)
-    .flatMap((item) => (item.project ? [item.project.id] : []));
+  const selectTab = (nextId: string) => {
+    setSelectedTabId(nextId);
+    setEditingDocs(false);
+    setConfirmingRemove(false);
+    setActionError(null);
+  };
 
-  const refreshAll = async () => {
+  const refreshActiveContext = async () => {
     await queryClient.invalidateQueries({ queryKey: currentDocsRepositoryKey });
     await queryClient.invalidateQueries({ queryKey: aiKeys.agentsMd });
     documents?.retrySession();
   };
 
-  const handleAttachProject = async (project: ResolvedGithubProject) => {
-    setBusy(true);
-    setActionError(null);
-    try {
-      await activeProject.attachProjectToWorkspace(workspace.id, project);
-      setEditingProject(false);
-    } catch (error) {
-      setActionError(describeManageError(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleDetachProject = async () => {
-    setBusy(true);
-    setActionError(null);
-    try {
-      await activeProject.detachProjectFromWorkspace(workspace.id);
-      setEditingProject(false);
-      await refreshAll();
-    } catch (error) {
-      setActionError(describeManageError(error));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleRemoveWorkspace = async () => {
+    const targetId = selectedWorkspace.id;
+    const removedIndex = workspaces.findIndex((item) => item.id === targetId);
+    const remaining = workspaces.filter((item) => item.id !== targetId);
+    const wasActive = targetId === activeWorkspaceId;
+
     setBusy(true);
     setActionError(null);
     try {
-      await activeProject.removeWorkspace(workspace.id);
-      await refreshAll();
-      onOpenChange(false);
+      await activeProject.removeWorkspace(targetId);
+      if (wasActive) {
+        await refreshActiveContext();
+      }
+      setEditingDocs(false);
+      setConfirmingRemove(false);
+
+      if (remaining.length === 0) {
+        onOpenChange(false);
+        return;
+      }
+
+      const clampedIndex = Math.min(Math.max(removedIndex, 0), remaining.length - 1);
+      const nextId = wasActive ? remaining[0]!.id : remaining[clampedIndex]!.id;
+      setSelectedTabId(nextId);
+      requestAnimationFrame(() => {
+        tabRefs.current.get(nextId)?.focus();
+      });
     } catch (error) {
       setActionError(describeManageError(error));
     } finally {
       setBusy(false);
     }
   };
+
+  const tabId = `workspace-manage-tab-${selectedWorkspace.id}`;
+  const panelId = `workspace-manage-panel-${selectedWorkspace.id}`;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent size="wide" aria-label="워크스페이스 설정">
         <DialogHeader>
           <div className="grid gap-[var(--space-1)]">
-            <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-              <DialogTitle>워크스페이스 설정 · {workspace.title}</DialogTitle>
-              <StatusBadge tone={workspace.project ? "info" : "neutral"}>
-                {workspace.project ? "Project + 문서" : "문서 전용"}
-              </StatusBadge>
-            </div>
+            <DialogTitle>워크스페이스 설정</DialogTitle>
             <DialogDescription>
-              이 워크스페이스의 GitHub Project 보드와 소속 문서 저장소 연결을 관리합니다.
+              연결된 프로젝트별 문서 저장소를 바꾸거나 워크스페이스 연결을 해제합니다.
             </DialogDescription>
           </div>
           <DialogCloseButton label="닫기" />
         </DialogHeader>
+
+        <TabsList
+          aria-label="연결된 워크스페이스 목록"
+          className="gap-[var(--space-5)] overflow-x-auto pb-0.5"
+        >
+          {workspaces.map((workspace) => {
+            const isSelected = workspace.id === selectedWorkspace.id;
+            const isInUse = workspace.id === activeWorkspaceId;
+            return (
+              <TabsTrigger
+                key={workspace.id}
+                ref={(el) => {
+                  if (el) {
+                    tabRefs.current.set(workspace.id, el);
+                  } else {
+                    tabRefs.current.delete(workspace.id);
+                  }
+                }}
+                id={`workspace-manage-tab-${workspace.id}`}
+                aria-controls={isSelected ? panelId : undefined}
+                selected={isSelected}
+                className="shrink-0 whitespace-nowrap"
+                onClick={() => selectTab(workspace.id)}
+              >
+                {formatWorkspaceTabLabel(workspace, isInUse)}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
 
         <DialogBody className="grid gap-[var(--space-4)] pt-[var(--space-2)]">
           {actionError ? (
@@ -169,10 +212,15 @@ export function WorkspaceManageDialog({
             </StatusFeedback>
           ) : null}
 
-          {workspace.project ? (
+          <div
+            role="tabpanel"
+            id={panelId}
+            aria-labelledby={tabId}
+            className="grid gap-[var(--space-4)]"
+          >
             <section
-              aria-label="상위 GitHub Project 설정"
-              className="grid gap-[var(--space-4)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-4)]"
+              aria-label="선택된 Project"
+              className="grid gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-4)]"
             >
               <div className="flex flex-wrap items-start justify-between gap-[var(--space-3)]">
                 <div className="flex items-start gap-[var(--space-2)]">
@@ -184,236 +232,121 @@ export function WorkspaceManageDialog({
                   <div className="grid gap-[var(--space-1)]">
                     <div className="flex flex-wrap items-center gap-[var(--space-2)]">
                       <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                        상위 GitHub Project
+                        선택된 Project
                       </strong>
-                      <StatusBadge tone="info">
-                        {`${workspace.project.owner} #${workspace.project.number}`}
-                      </StatusBadge>
+                      {selectedWorkspace.project ? (
+                        <StatusBadge tone="info">
+                          {`${selectedWorkspace.project.owner} #${selectedWorkspace.project.number}`}
+                        </StatusBadge>
+                      ) : (
+                        <StatusBadge tone="neutral">문서 전용</StatusBadge>
+                      )}
                     </div>
                     <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-                      {workspace.project.title} · 문서 저장소를 소유하는 상위 프로젝트 보드입니다.
+                      {selectedWorkspace.project
+                        ? selectedWorkspace.project.title
+                        : "문서 전용 워크스페이스 · 연결된 GitHub Project가 없습니다."}
                     </span>
                   </div>
                 </div>
+              </div>
+            </section>
+
+            <section
+              aria-label="문서 저장소"
+              className="grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-4)]"
+            >
+              <div className="flex flex-wrap items-start justify-between gap-[var(--space-3)]">
+                <div className="flex items-start gap-[var(--space-2)]">
+                  <FolderGit2
+                    aria-hidden="true"
+                    strokeWidth={1.75}
+                    className="mt-0.5 shrink-0 text-[var(--color-text-muted)]"
+                  />
+                  <div className="grid gap-[var(--space-1)]">
+                    <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+                      문서 저장소
+                    </strong>
+                    <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+                      {selectedWorkspace.docsRepository
+                        ? selectedWorkspace.docsRepository.fullName
+                        : "아직 연결된 문서 저장소가 없습니다."}
+                    </span>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={busy}
+                  onClick={() => setEditingDocs((prev) => !prev)}
+                >
+                  {editingDocs
+                    ? "선택 닫기"
+                    : selectedWorkspace.docsRepository
+                      ? "저장소 변경"
+                      : "문서 저장소 선택"}
+                </Button>
+              </div>
+
+              {editingDocs ? (
+                <div className="border-t border-[var(--color-border)] pt-[var(--space-3)]">
+                  <WorkspaceDocsRepositoryPicker
+                    key={selectedWorkspace.id}
+                    workspaceId={selectedWorkspace.id}
+                    preferredOwner={selectedWorkspace.project?.owner ?? null}
+                    gateway={docsRepositoryGateway}
+                    repositoryGateway={repositoryGateway}
+                    onDone={() => setEditingDocs(false)}
+                  />
+                </div>
+              ) : null}
+            </section>
+
+            <section
+              aria-label="워크스페이스 제거"
+              className="flex flex-wrap items-center justify-between gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] p-[var(--space-4)]"
+            >
+              <div className="grid gap-[var(--space-1)]">
+                <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+                  워크스페이스 연결 해제
+                </strong>
+                <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+                  앱 목록에서만 연결을 해제하며, GitHub의 원본 Project와 저장소 데이터는 삭제되지 않습니다.
+                </span>
+              </div>
+              {confirmingRemove ? (
                 <div className="flex flex-wrap gap-[var(--space-2)]">
                   <Button
                     type="button"
                     variant="secondary"
                     disabled={busy}
-                    onClick={() => setEditingProject((prev) => !prev)}
+                    onClick={() => setConfirmingRemove(false)}
                   >
-                    {editingProject ? "선택 닫기" : "다른 Project로 변경"}
+                    취소
                   </Button>
                   <Button
                     type="button"
-                    variant="secondary"
+                    variant="destructive"
                     disabled={busy}
-                    onClick={() => void handleDetachProject()}
+                    loading={busy}
+                    onClick={() => void handleRemoveWorkspace()}
                   >
-                    <Unlink aria-hidden="true" strokeWidth={1.75} />
-                    보드만 연결 해제
+                    연결 해제 확인
                   </Button>
                 </div>
-              </div>
-
-              {editingProject ? (
-                <div className="border-t border-[var(--color-border)] pt-[var(--space-3)]">
-                  <ProjectPickerList
-                    disabledProjectIds={otherLinkedProjectIds}
-                    busy={busy}
-                    onSelectProject={(project) => void handleAttachProject(project)}
-                  />
-                </div>
-              ) : null}
-
-              <div
-                role="group"
-                aria-label="소속 문서 저장소 설정"
-                className="ml-[var(--space-3)] grid gap-[var(--space-3)] rounded-[var(--radius-md)] border border-[var(--color-border)] border-l-2 border-l-[var(--color-border-strong)] bg-[var(--color-surface)] p-[var(--space-4)]"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-[var(--space-3)]">
-                  <div className="flex items-start gap-[var(--space-2)]">
-                    <FolderGit2
-                      aria-hidden="true"
-                      strokeWidth={1.75}
-                      className="mt-0.5 shrink-0 text-[var(--color-text-muted)]"
-                    />
-                    <div className="grid gap-[var(--space-1)]">
-                      <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                        └ 소속 문서 저장소
-                      </strong>
-                      <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-                        {workspace.docsRepository
-                          ? workspace.docsRepository.fullName
-                          : "아직 연결된 문서 저장소가 없습니다"}
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => setEditingDocs((prev) => !prev)}
-                  >
-                    {editingDocs
-                      ? "선택 닫기"
-                      : workspace.docsRepository
-                        ? "다른 저장소로 변경"
-                        : "문서 저장소 선택"}
-                  </Button>
-                </div>
-
-                {editingDocs ? (
-                  <div className="border-t border-[var(--color-border)] pt-[var(--space-3)]">
-                    <WorkspaceDocsRepositoryPicker
-                      workspaceId={workspace.id}
-                      preferredOwner={workspace.project.owner}
-                      gateway={docsRepositoryGateway}
-                      repositoryGateway={repositoryGateway}
-                      onDone={() => setEditingDocs(false)}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            </section>
-          ) : (
-            <>
-              <section
-                aria-label="상위 GitHub Project 미연결"
-                className="grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)]"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-[var(--space-3)]">
-                  <div className="flex items-start gap-[var(--space-2)]">
-                    <SquareKanban
-                      aria-hidden="true"
-                      strokeWidth={1.75}
-                      className="mt-0.5 shrink-0 text-[var(--color-text-muted)]"
-                    />
-                    <div className="grid gap-[var(--space-1)]">
-                      <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                        상위 GitHub Project 미연결
-                      </strong>
-                      <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-                        연결된 상위 GitHub Project가 없습니다. 보드를 연결하면 아래 문서 저장소가 해당 Project의 소속 저장소로 편입됩니다.
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => setEditingProject((prev) => !prev)}
-                  >
-                    {editingProject ? "선택 닫기" : "GitHub Project 보드 연결"}
-                  </Button>
-                </div>
-
-                {editingProject ? (
-                  <div className="border-t border-[var(--color-border)] pt-[var(--space-3)]">
-                    <ProjectPickerList
-                      disabledProjectIds={otherLinkedProjectIds}
-                      busy={busy}
-                      onSelectProject={(project) => void handleAttachProject(project)}
-                    />
-                  </div>
-                ) : null}
-              </section>
-
-              <section
-                aria-label="단독 문서 저장소 설정"
-                className="grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-4)]"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-[var(--space-3)]">
-                  <div className="flex items-start gap-[var(--space-2)]">
-                    <FolderGit2
-                      aria-hidden="true"
-                      strokeWidth={1.75}
-                      className="mt-0.5 shrink-0 text-[var(--color-text-muted)]"
-                    />
-                    <div className="grid gap-[var(--space-1)]">
-                      <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                        단독 문서 저장소
-                      </strong>
-                      <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-                        {workspace.docsRepository
-                          ? workspace.docsRepository.fullName
-                          : "아직 연결된 문서 저장소가 없습니다"}
-                      </span>
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    disabled={busy}
-                    onClick={() => setEditingDocs((prev) => !prev)}
-                  >
-                    {editingDocs
-                      ? "선택 닫기"
-                      : workspace.docsRepository
-                        ? "다른 저장소로 변경"
-                        : "문서 저장소 선택"}
-                  </Button>
-                </div>
-
-                {editingDocs ? (
-                  <div className="border-t border-[var(--color-border)] pt-[var(--space-3)]">
-                    <WorkspaceDocsRepositoryPicker
-                      workspaceId={workspace.id}
-                      preferredOwner={null}
-                      gateway={docsRepositoryGateway}
-                      repositoryGateway={repositoryGateway}
-                      onDone={() => setEditingDocs(false)}
-                    />
-                  </div>
-                ) : null}
-              </section>
-            </>
-          )}
-
-          <section
-            aria-label="워크스페이스 제거"
-            className="flex flex-wrap items-center justify-between gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] p-[var(--space-4)]"
-          >
-            <div className="grid gap-[var(--space-1)]">
-              <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
-                워크스페이스 연결 해제
-              </strong>
-              <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-                앱 목록에서만 연결을 해제하며, GitHub의 원본 Project와 저장소 데이터는 삭제되지 않습니다.
-              </span>
-            </div>
-            {confirmingRemove ? (
-              <div className="flex flex-wrap gap-[var(--space-2)]">
+              ) : (
                 <Button
                   type="button"
                   variant="secondary"
                   disabled={busy}
-                  onClick={() => setConfirmingRemove(false)}
+                  onClick={() => setConfirmingRemove(true)}
                 >
-                  취소
+                  <Trash2 aria-hidden="true" strokeWidth={1.75} />
+                  워크스페이스 연결 해제
                 </Button>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={busy}
-                  loading={busy}
-                  onClick={() => void handleRemoveWorkspace()}
-                >
-                  연결 해제 확인
-                </Button>
-              </div>
-            ) : (
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={busy}
-                onClick={() => setConfirmingRemove(true)}
-              >
-                <Trash2 aria-hidden="true" strokeWidth={1.75} />
-                워크스페이스 연결 해제
-              </Button>
-            )}
-          </section>
+              )}
+            </section>
+          </div>
         </DialogBody>
       </DialogContent>
     </Dialog>

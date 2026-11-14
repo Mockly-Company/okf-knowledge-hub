@@ -43,9 +43,8 @@ const detail: ProjectBoardIssueDetail = {
 };
 
 describe("ProjectIssueDrawer", () => {
-  it("renders blocked predecessor badge, linked docs, and triggers derive & AI actions", async () => {
+  it("renders blocked predecessor badge, linked docs, omits manual creation/derive buttons, and triggers AI action", async () => {
     const user = userEvent.setup();
-    const onDerive = vi.fn();
     const onStartWithAi = vi.fn();
 
     render(
@@ -59,7 +58,6 @@ describe("ProjectIssueDrawer", () => {
         readiness={{ state: "blocked", waitingOn: 41 }}
         isUpdating={false}
         updateError={null}
-        onDeriveBacklog={onDerive}
         onStartWithAi={onStartWithAi}
       />,
     );
@@ -67,9 +65,12 @@ describe("ProjectIssueDrawer", () => {
     expect(screen.getByText("선행 #41 대기")).toBeVisible();
     expect(screen.getByText("docs/design/payment-modal.md")).toBeVisible();
     expect(screen.getByText(".md 단독")).toBeVisible();
-
-    await user.click(screen.getByRole("button", { name: "하위 백로그 파생" }));
-    expect(onDerive).toHaveBeenCalledWith(issue, detail);
+    expect(
+      screen.queryByRole("button", { name: "하위 백로그 파생" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "하위 이슈 추가" }),
+    ).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "AI로 작업 시작" }));
     expect(onStartWithAi).toHaveBeenCalledWith(issue, detail);
@@ -100,7 +101,6 @@ describe("ProjectIssueDrawer", () => {
         readiness={{ state: "ready", waitingOn: null }}
         isUpdating={false}
         updateError={null}
-        onDeriveBacklog={vi.fn()}
         onStartWithAi={vi.fn()}
       />,
     );

@@ -296,10 +296,12 @@ describe("AppSidebar workspace switcher", () => {
       name: /^워크스페이스 전환/,
     });
     expect(switcher).toHaveAccessibleName(
-      "워크스페이스 전환, 현재 Mockly Board (└ 문서 · Mockly-Company/Mockly)",
+      "워크스페이스 전환, 현재 Mockly Board (문서 · Mockly-Company/Mockly)",
     );
+    expect(screen.getByText("선택된 Project")).toBeInTheDocument();
     expect(switcher).toHaveTextContent("Mockly Board");
-    expect(switcher).toHaveTextContent("└ 문서 · Mockly-Company/Mockly");
+    expect(switcher).toHaveTextContent("문서 · Mockly-Company/Mockly");
+    expect(switcher.textContent).not.toContain("└");
 
     const result = await axe.run(view.container);
     expect(result.violations).toEqual([]);
@@ -325,10 +327,11 @@ describe("AppSidebar workspace switcher", () => {
       name: /^워크스페이스 전환/,
     });
     expect(switcher).toHaveAccessibleName(
-      "워크스페이스 전환, 현재 New Project (└ 문서 저장소 연결 필요)",
+      "워크스페이스 전환, 현재 New Project (문서 저장소 연결 필요)",
     );
     expect(switcher).toHaveTextContent("New Project");
-    expect(switcher).toHaveTextContent("└ 문서 저장소 연결 필요");
+    expect(switcher).toHaveTextContent("문서 저장소 연결 필요");
+    expect(switcher.textContent).not.toContain("└");
   });
 
   it("switches workspaces from the dropdown menu and surfaces errors on failure", async () => {

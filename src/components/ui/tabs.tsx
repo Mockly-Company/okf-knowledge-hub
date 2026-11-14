@@ -40,20 +40,31 @@ export function TabsList({
       const listRect = list.getBoundingClientRect();
       const tabRect = selectedTab.getBoundingClientRect();
       setIndicator({
-        left: tabRect.left - listRect.left,
+        left: tabRect.left - listRect.left + list.scrollLeft,
         width: tabRect.width,
       });
     };
 
     updateIndicator();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateIndicator);
+    let rafId = 0;
+    const scheduleIndicator = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(updateIndicator);
+    };
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(scheduleIndicator);
     observer?.observe(list);
     list.querySelectorAll('[role="tab"]').forEach((tab) => observer?.observe(tab));
-    window.addEventListener("resize", updateIndicator);
+    list.addEventListener("scroll", scheduleIndicator, { passive: true });
+    window.addEventListener("resize", scheduleIndicator);
 
     return () => {
+      cancelAnimationFrame(rafId);
       observer?.disconnect();
-      window.removeEventListener("resize", updateIndicator);
+      list.removeEventListener("scroll", scheduleIndicator);
+      window.removeEventListener("resize", scheduleIndicator);
     };
   }, [children, selectedIndex]);
 

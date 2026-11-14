@@ -91,8 +91,6 @@ export const OpenWithLinkedDocsAndPr: Story = {
     isUpdating: false,
     updateError: null,
     onUpdateField: () => {},
-    onAddSubIssue: () => {},
-    onDeriveBacklog: () => {},
     onStartWithAi: () => {},
   },
 };

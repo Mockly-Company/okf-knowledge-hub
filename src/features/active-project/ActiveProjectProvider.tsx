@@ -278,10 +278,12 @@ export function ActiveProjectProvider({
       alignedStoredRef.current = true;
       setGuardSelectError(null);
       if (snapshot.activeWorkspaceId) {
+        activeWorkspaceIdRef.current = snapshot.activeWorkspaceId;
         setActiveWorkspaceId(snapshot.activeWorkspaceId);
         rememberLastActiveProjectId(snapshot.activeWorkspaceId);
         setDocsMissing(!snapshot.activeDocsConnected);
       } else {
+        activeWorkspaceIdRef.current = null;
         setActiveWorkspaceId(null);
         forgetLastActiveProjectId();
         setDocsMissing(false);
@@ -312,9 +314,16 @@ export function ActiveProjectProvider({
             item.id === workspace.id ? workspace : item,
           )
         : [...filteredWorkspaces, workspace];
-      const nextActiveId = options.makeActive
-        ? workspace.id
-        : (prev?.activeWorkspaceId ?? nextWorkspaces[0]?.id ?? null);
+      const fallbackId =
+        prev?.activeWorkspaceId ?? activeWorkspaceIdRef.current ?? null;
+      const nextActiveId =
+        options.makeActive ||
+        (options.replaceId !== undefined && fallbackId === options.replaceId)
+          ? workspace.id
+          : fallbackId !== null &&
+              nextWorkspaces.some((item) => item.id === fallbackId)
+            ? fallbackId
+            : (nextWorkspaces[0]?.id ?? null);
       const nextActiveWorkspace =
         nextWorkspaces.find((item) => item.id === nextActiveId) ?? null;
       const nextActiveDocsConnected =
@@ -390,6 +399,7 @@ export function ActiveProjectProvider({
     },
     onSuccess: ({ workspaceId, missing, docsRepository }) => {
       userClearedRef.current = false;
+      activeWorkspaceIdRef.current = workspaceId;
       setActiveWorkspaceId(workspaceId);
       rememberLastActiveProjectId(workspaceId);
       setDocsMissing(missing);
@@ -417,6 +427,7 @@ export function ActiveProjectProvider({
 
   const clearActiveProject = useCallback(() => {
     userClearedRef.current = true;
+    activeWorkspaceIdRef.current = null;
     setActiveWorkspaceId(null);
     setDocsMissing(false);
     setGuardSelectError(null);

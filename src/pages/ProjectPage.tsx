@@ -1,24 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useInRouterContext, useNavigate } from "react-router-dom";
-import { Plus, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormField } from "@/components/patterns/FormField";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Select } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogBody,
+  DialogCloseButton,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { setPendingAiLaunch } from "@/features/ai/pendingAiLaunch";
 import type {
   ProjectBoardGateway,
   ProjectBoardIssueDetail,
   UpdateBoardItemInput,
 } from "@/features/project-board/ProjectBoardGateway";
-import {
-  BacklogDeriveDialog,
-  type BacklogDeriveSource,
-} from "@/features/project-board/BacklogDeriveDialog";
-import { CreateBoardIssueDialog } from "@/features/project-board/CreateBoardIssueDialog";
 import { ProjectIssueDrawer } from "@/features/project-board/ProjectIssueDrawer";
 import {
   buildIssueReadinessIndex,
@@ -33,6 +35,7 @@ import {
   type BoardIssue,
   type BoardLayer,
   type ProjectBoard,
+  type ResolvedGithubProject,
 } from "@/features/project-board/model";
 import {
   LEGACY_BOARD_ID,
@@ -54,7 +57,7 @@ import {
   type ProjectRepositoryGateway,
 } from "@/features/docs-repository/ProjectDocsRepository";
 import { WorkspaceContextBar } from "@/features/workspace-setup/WorkspaceContextBar";
-import { WorkspaceManageDialog } from "@/features/workspace-setup/WorkspaceManageDialog";
+import { ProjectPickerList } from "@/features/workspace-setup/ProjectPickerList";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 
 type LayerFilter = "all" | BoardLayer;
@@ -313,25 +316,17 @@ function findIssueByNumber(
 }
 
 function BoardColumn({
-  layerId,
   layerName,
   statusName,
   issues,
-  canAddIssue,
-  canCreateIssues,
   readinessIndex,
   onSelectIssue,
-  onOpenCreateIssue,
 }: {
-  layerId: BoardLayer;
   layerName: string;
   statusName: string;
   issues: BoardIssue[];
-  canAddIssue: boolean;
-  canCreateIssues: boolean;
   readinessIndex: IssueReadinessIndex | null;
   onSelectIssue: (issue: BoardIssue) => void;
-  onOpenCreateIssue: (layer: BoardLayer) => void;
 }) {
   return (
     <section
@@ -403,26 +398,6 @@ function BoardColumn({
             );
           })
         )}
-        {canAddIssue ? (
-          <div className="grid min-h-28 place-items-center rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)] text-center">
-            <div className="grid justify-items-center gap-[var(--space-2)]">
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!canCreateIssues}
-                onClick={() => onOpenCreateIssue(layerId)}
-              >
-                <Plus aria-hidden="true" strokeWidth={1.75} />
-                새 Issue
-              </Button>
-              <p className="m-0 text-[length:var(--font-meta-size)] leading-[var(--font-meta-line)] text-[var(--color-text-muted)]">
-                {canCreateIssues
-                  ? "연결된 저장소에 이슈를 만들고 보드에 즉시 등록합니다."
-                  : "GitHub Project와 Iteration을 연결하면 만들 수 있습니다."}
-              </p>
-            </div>
-          </div>
-        ) : null}
       </div>
     </section>
   );
@@ -504,22 +479,14 @@ export function ProjectPage({
   const [view, setView] = useState<BoardView>("tree");
   const [hideDone, setHideDone] = useState(true);
   const [readyOnly, setReadyOnly] = useState(false);
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [attachDialogOpen, setAttachDialogOpen] = useState(false);
+  const [attachingProject, setAttachingProject] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const [selectedIssueNumber, setSelectedIssueNumber] = useState<number | null>(
     null,
   );
   const [selectedIssueFallback, setSelectedIssueFallback] =
     useState<BoardIssue | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createDefaultLayer, setCreateDefaultLayer] =
-    useState<BoardLayer>("planning");
-  const [createParentIssue, setCreateParentIssue] = useState<{
-    number: number;
-    repositoryFullName: string | null;
-  } | null>(null);
-  const [deriveSource, setDeriveSource] = useState<BacklogDeriveSource | null>(
-    null,
-  );
   const [navigateTarget, setNavigateTarget] = useState<string | null>(null);
 
   const workspaceResetKey = `${activeWorkspace?.id ?? "none"}::${queryProjectId ?? "none"}`;
@@ -528,15 +495,36 @@ export function ProjectPage({
     setView("tree");
     setHideDone(true);
     setReadyOnly(false);
-    setManageDialogOpen(false);
+    setAttachDialogOpen(false);
+    setAttachingProject(false);
+    setAttachError(null);
     setSelectedIssueNumber(null);
     setSelectedIssueFallback(null);
-    setCreateDialogOpen(false);
-    setCreateParentIssue(null);
-    setDeriveSource(null);
   }, [workspaceResetKey]);
 
-  const canCreateIssues = Boolean(gateway.createBoardIssues);
+  const linkedProjectIds = useMemo(() => {
+    const workspaces = activeProject?.workspaces ?? [];
+    return workspaces.flatMap((workspace) =>
+      workspace.project ? [workspace.project.id] : [],
+    );
+  }, [activeProject?.workspaces]);
+
+  const handleAttachProject = async (project: ResolvedGithubProject) => {
+    if (!activeProject || !activeWorkspace || attachingProject) {
+      return;
+    }
+    setAttachingProject(true);
+    setAttachError(null);
+    try {
+      await activeProject.attachProjectToWorkspace(activeWorkspace.id, project);
+      setAttachDialogOpen(false);
+    } catch (error) {
+      setAttachError(describeBoardError(error));
+    } finally {
+      setAttachingProject(false);
+    }
+  };
+
   const selectedIssue = useMemo(() => {
     if (selectedIssueNumber === null) {
       return null;
@@ -546,15 +534,6 @@ export function ProjectPage({
       selectedIssueFallback
     );
   }, [board, selectedIssueNumber, selectedIssueFallback]);
-
-  const writableReposQuery = useQuery({
-    queryKey: ["project-board", "writable-repos", workspaceResetKey],
-    queryFn: () => gateway.listWritableRepositories?.() ?? Promise.resolve([]),
-    enabled:
-      !isUnlinked &&
-      Boolean(gateway.listWritableRepositories) &&
-      (createDialogOpen || deriveSource !== null),
-  });
 
   const selectedRepoHint = selectedIssue
     ? inferRepositoryFullNameFromUrl(selectedIssue.url)
@@ -612,33 +591,6 @@ export function ProjectPage({
       void issueDetailQuery.refetch();
     },
   });
-
-  const handleCreateIssues = async (
-    items: Parameters<NonNullable<ProjectBoardGateway["createBoardIssues"]>>[0],
-  ) => {
-    if (!gateway.createBoardIssues) {
-      return;
-    }
-    const result = await gateway.createBoardIssues(items);
-    if (queryProjectId !== null) {
-      queryClient.setQueryData(
-        projectBoardKeys.board(queryProjectId),
-        result.board,
-      );
-    }
-    if (selectedIssueNumber !== null) {
-      void issueDetailQuery.refetch();
-    }
-  };
-
-  const openCreateDialog = (
-    layer: BoardLayer = "planning",
-    parent: { number: number; repositoryFullName: string | null } | null = null,
-  ) => {
-    setCreateDefaultLayer(layer);
-    setCreateParentIssue(parent);
-    setCreateDialogOpen(true);
-  };
 
   const handleStartWithAi = (
     issue: BoardIssue,
@@ -780,16 +732,6 @@ export function ProjectPage({
                 "아직 불러오지 않음"
               )}
             </span>
-            {!isUnlinked && canCreateIssues ? (
-              <Button
-                type="button"
-                variant="primary"
-                onClick={() => openCreateDialog("planning", null)}
-              >
-                <Plus aria-hidden="true" strokeWidth={1.75} />
-                새 이슈 / Epic
-              </Button>
-            ) : null}
             <Button
               type="button"
               variant="secondary"
@@ -800,13 +742,6 @@ export function ProjectPage({
               <RefreshCw aria-hidden="true" strokeWidth={1.75} />
               새로고침
             </Button>
-            <div className="w-64 max-w-full">
-              <FormField label="Iteration">
-                <Select disabled defaultValue="none">
-                  <option value="none">현재 Iteration 없음</option>
-                </Select>
-              </FormField>
-            </div>
           </div>
         }
       />
@@ -834,17 +769,52 @@ export function ProjectPage({
           <Button
             type="button"
             variant="primary"
-            onClick={() => setManageDialogOpen(true)}
+            disabled={attachingProject}
+            loading={attachingProject}
+            onClick={() => {
+              setAttachError(null);
+              setAttachDialogOpen(true);
+            }}
           >
             GitHub Project 보드 연결
           </Button>
-          <WorkspaceManageDialog
-            open={manageDialogOpen}
-            onOpenChange={setManageDialogOpen}
-            initialView="attach-project"
-            docsRepositoryGateway={docsRepositoryGateway}
-            repositoryGateway={repositoryGateway}
-          />
+          {attachError && !attachDialogOpen ? (
+            <p role="alert" className="m-0 text-[var(--color-error)]">
+              {attachError}
+            </p>
+          ) : null}
+          <Dialog
+            open={attachDialogOpen}
+            onOpenChange={setAttachDialogOpen}
+          >
+            <DialogContent size="wide" aria-label="GitHub Project 보드 연결">
+              <DialogHeader>
+                <div className="min-w-0">
+                  <DialogTitle>GitHub Project 보드 연결</DialogTitle>
+                  <DialogDescription>
+                    {activeWorkspace.docsRepository
+                      ? `${activeWorkspace.docsRepository.fullName} 문서 저장소와 연결할 GitHub Project 보드를 선택하세요.`
+                      : "이 워크스페이스에 연결할 GitHub Project 보드를 선택하세요."}
+                  </DialogDescription>
+                </div>
+                <DialogCloseButton label="GitHub Project 보드 연결 닫기" />
+              </DialogHeader>
+              <DialogBody className="mt-[var(--space-4)] grid gap-[var(--space-3)]">
+                {attachError ? (
+                  <p role="alert" className="m-0 text-[var(--color-error)]">
+                    {attachError}
+                  </p>
+                ) : null}
+                <ProjectPickerList
+                  disabledProjectIds={linkedProjectIds}
+                  busy={attachingProject}
+                  onSelectProject={(project) => {
+                    void handleAttachProject(project);
+                  }}
+                />
+              </DialogBody>
+            </DialogContent>
+          </Dialog>
         </section>
       ) : isUnlinked ? (
         <div className="mt-[var(--space-4)] grid justify-items-start gap-[var(--space-3)]">
@@ -875,7 +845,7 @@ export function ProjectPage({
 
       {isUnlinked || board === null ? null : (
         <>
-          {view === "layers" ? (
+          {board.issues.length > 0 && view === "layers" ? (
             <div
               className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
               role="group"
@@ -910,46 +880,48 @@ export function ProjectPage({
             </p>
           ) : null}
 
-          <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
-            <div className="flex flex-wrap items-center gap-[var(--space-3)]">
-              <div
-                className="flex flex-wrap gap-[var(--space-2)]"
-                role="group"
-                aria-label="보드 보기 방식"
-              >
-                <Button
-                  type="button"
-                  variant={view === "layers" ? "primary" : "secondary"}
-                  aria-pressed={view === "layers"}
-                  onClick={() => setView("layers")}
+          {board.issues.length > 0 ? (
+            <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
+              <div className="flex flex-wrap items-center gap-[var(--space-3)]">
+                <div
+                  className="flex flex-wrap gap-[var(--space-2)]"
+                  role="group"
+                  aria-label="보드 보기 방식"
                 >
-                  영역별
-                </Button>
-                <Button
-                  type="button"
-                  variant={view === "tree" ? "primary" : "secondary"}
-                  aria-pressed={view === "tree"}
-                  onClick={() => setView("tree")}
-                >
-                  계층별
-                </Button>
+                  <Button
+                    type="button"
+                    variant={view === "layers" ? "primary" : "secondary"}
+                    aria-pressed={view === "layers"}
+                    onClick={() => setView("layers")}
+                  >
+                    영역별
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={view === "tree" ? "primary" : "secondary"}
+                    aria-pressed={view === "tree"}
+                    onClick={() => setView("tree")}
+                  >
+                    계층별
+                  </Button>
+                </div>
+                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                  <Checkbox
+                    checked={hideDone}
+                    onChange={(event) => setHideDone(event.target.checked)}
+                  />
+                  완료 항목 숨기기
+                </label>
+                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                  <Checkbox
+                    checked={readyOnly}
+                    onChange={(event) => setReadyOnly(event.target.checked)}
+                  />
+                  시작 가능만 보기
+                </label>
               </div>
-              <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
-                <Checkbox
-                  checked={hideDone}
-                  onChange={(event) => setHideDone(event.target.checked)}
-                />
-                완료 항목 숨기기
-              </label>
-              <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
-                <Checkbox
-                  checked={readyOnly}
-                  onChange={(event) => setReadyOnly(event.target.checked)}
-                />
-                시작 가능만 보기
-              </label>
             </div>
-          </div>
+          ) : null}
           {board && (board.truncated || walkCapped || treeCapped) ? (
             <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
               보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈
@@ -980,7 +952,23 @@ export function ProjectPage({
             </div>
           ) : null}
           {!isUnlinked && board ? (
-            view === "tree" ? (
+            board.issues.length === 0 ? (
+              <section
+                aria-label="빈 보드 안내"
+                className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
+              >
+                <p className="m-0 text-[var(--color-text-muted)]">
+                  아직 등록된 백로그가 없습니다. AI 화면에서 구현하고 싶은 아이디어를 이야기하면 PRD·화면명세서와 담당자별 백로그가 자동으로 준비됩니다.
+                </p>
+                <Button asChild variant="primary">
+                  {inRouterContext ? (
+                    <Link to="/ai">AI에서 시작하기</Link>
+                  ) : (
+                    <a href="#/ai">AI에서 시작하기</a>
+                  )}
+                </Button>
+              </section>
+            ) : view === "tree" ? (
               <ProjectTree
                 issues={treeIssues}
                 readinessIndex={readinessIndex}
@@ -1006,20 +994,14 @@ export function ProjectPage({
                   {BOARD_STATUSES.map(({ id, name }) => (
                     <BoardColumn
                       key={id}
-                      layerId={layer.id}
                       layerName={layer.name}
                       statusName={name}
                       issues={groupedIssues.get(`${layer.id}:${id}`) ?? EMPTY_ISSUES}
-                      canAddIssue={id === "backlog"}
-                      canCreateIssues={canCreateIssues}
                       readinessIndex={readinessIndex}
                       onSelectIssue={(issue) => {
                         setSelectedIssueFallback(issue);
                         setSelectedIssueNumber(issue.number);
                       }}
-                      onOpenCreateIssue={(targetLayer) =>
-                        openCreateDialog(targetLayer, null)
-                      }
                     />
                   ))}
                 </div>
@@ -1074,61 +1056,8 @@ export function ProjectPage({
                 })
             : undefined
         }
-        onAddSubIssue={
-          canCreateIssues
-            ? (issue, repo) =>
-                openCreateDialog(
-                  issue.layer === "planning" ? "backend" : issue.layer,
-                  { number: issue.number, repositoryFullName: repo },
-                )
-            : undefined
-        }
-        onDeriveBacklog={
-          canCreateIssues
-            ? (issue, detail) => {
-                setDeriveSource({
-                  kind: "issue",
-                  issueNumber: issue.number,
-                  title: issue.title,
-                  layer: issue.layer,
-                  repositoryFullName:
-                    detail?.repositoryFullName ??
-                    inferRepositoryFullNameFromUrl(issue.url),
-                  priority: detail?.priority ?? null,
-                  documentPath: detail?.linkedDocuments[0]?.path ?? null,
-                });
-              }
-            : undefined
-        }
         onStartWithAi={handleStartWithAi}
       />
-
-      {canCreateIssues ? (
-        <>
-          <CreateBoardIssueDialog
-            open={createDialogOpen}
-            onOpenChange={setCreateDialogOpen}
-            repositories={writableReposQuery.data ?? []}
-            defaultLayer={createDefaultLayer}
-            defaultParentIssueNumber={createParentIssue?.number ?? null}
-            defaultParentIssueRepository={
-              createParentIssue?.repositoryFullName ?? null
-            }
-            onSubmit={handleCreateIssues}
-          />
-          <BacklogDeriveDialog
-            open={deriveSource !== null}
-            onOpenChange={(open) => {
-              if (!open) {
-                setDeriveSource(null);
-              }
-            }}
-            source={deriveSource}
-            repositories={writableReposQuery.data ?? []}
-            onSubmit={handleCreateIssues}
-          />
-        </>
-      ) : null}
 
       {inRouterContext && navigateTarget ? (
         <RouterRedirect

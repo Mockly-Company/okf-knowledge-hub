@@ -1,7 +1,7 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useQuery } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ActiveProjectProvider,
   useActiveProject,
@@ -13,10 +13,13 @@ import { TestQueryProvider } from "@/test/queryTestUtils";
 import { aiKeys } from "./queryKeys";
 import { AiSettingsPanel } from "./AiSettingsPanel";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 describe("AiSettingsPanel", () => {
-  it("creates AGENTS.md from the template when missing and shows the preview", async () => {
+  it("creates repository shared rules from the template when missing and hides local paths", async () => {
     const gateway = new FakeAiGateway();
     gateway.agentsMdExists = false;
     const user = userEvent.setup();
@@ -29,15 +32,23 @@ describe("AiSettingsPanel", () => {
     const createButton = await screen.findByRole("button", {
       name: "템플릿으로 만들기",
     });
+    const repoSection = screen.getByRole("region", { name: "저장소 공통 규칙" });
+    expect(screen.getByText("저장소 공통 규칙")).toBeInTheDocument();
+    expect(within(repoSection).getByText("미설정")).toBeInTheDocument();
     expect(
-      screen.getByText(/\.okf\/AGENTS\.md를 만들면/),
+      screen.getByText(
+        "아직 저장소 공통 규칙이 없습니다. 기본 템플릿으로 만들면 이 저장소의 AI 작업 규칙으로 사용됩니다.",
+      ),
     ).toBeInTheDocument();
 
     await user.click(createButton);
 
     expect(
-      await screen.findByLabelText("AGENTS.md 미리보기"),
+      await screen.findByLabelText("저장소 공통 규칙 미리보기"),
     ).toBeInTheDocument();
+    expect(within(repoSection).getByText("적용 중")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("/work/mockly-knowledge");
+    expect(document.body.textContent).not.toContain(".okf/AGENTS.md");
     expect(gateway.creates).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "템플릿으로 만들기" })).toBeNull();
   });
@@ -109,7 +120,7 @@ describe("AiSettingsPanel", () => {
     expect(screen.queryByLabelText("명령 템플릿")).toBeNull();
   });
 
-  it("shows the app AGENTS.md hub rules with a 10-line preview", async () => {
+  it("shows the app hub rules with a 10-line preview without exposing local file paths", async () => {
     const gateway = new FakeAiGateway();
     render(
       <TestQueryProvider>
@@ -118,12 +129,59 @@ describe("AiSettingsPanel", () => {
     );
 
     expect(await screen.findByText("허브 공통 규칙")).toBeInTheDocument();
-    expect(await screen.findByText("/app/AGENTS.md")).toBeInTheDocument();
-    const preview = await screen.findByLabelText("앱 AGENTS.md 미리보기");
+    const preview = await screen.findByLabelText("허브 공통 규칙 미리보기");
     expect(preview.textContent?.split("\n").length).toBeLessThanOrEqual(10);
+    expect(document.body.textContent).not.toContain("/app/AGENTS.md");
   });
 
-  it("scopes AGENTS.md query per active workspace so switching workspaces refreshes the preview", async () => {
+  it("shows fallback message when hub shared rules fail to load without leaking paths", async () => {
+    const gateway = new FakeAiGateway();
+    gateway.resolveAppAgentsMd = async () => {
+      throw new Error("/secret/path/AGENTS.md failed");
+    };
+    render(
+      <TestQueryProvider>
+        <AiSettingsPanel gateway={gateway} />
+      </TestQueryProvider>,
+    );
+
+    expect(
+      await screen.findByText("허브 공통 규칙을 불러오지 못했습니다."),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("/secret/path/AGENTS.md");
+  });
+
+  it("shows repository shared rules error state separately from unset without offering overwrite template", async () => {
+    const consoleErrorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => {});
+    const gateway = new FakeAiGateway();
+    gateway.resolveAgentsMd = async () => {
+      throw new Error("/secret/repo/.okf/AGENTS.md permission denied");
+    };
+    render(
+      <TestQueryProvider>
+        <AiSettingsPanel gateway={gateway} />
+      </TestQueryProvider>,
+    );
+
+    const repoSection = await screen.findByRole("region", {
+      name: "저장소 공통 규칙",
+    });
+    expect(
+      await within(repoSection).findByText("저장소 공통 규칙을 불러오지 못했습니다."),
+    ).toBeInTheDocument();
+    expect(
+      within(repoSection).queryByRole("button", { name: "템플릿으로 만들기" }),
+    ).toBeNull();
+    expect(within(repoSection).queryByText("미설정")).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      "/secret/repo/.okf/AGENTS.md",
+    );
+    expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+
+  it("scopes repository shared rules query per active workspace so switching workspaces refreshes the preview", async () => {
     localStorage.clear();
     const user = userEvent.setup();
     const gateway = new FakeAiGateway();
@@ -176,18 +234,18 @@ describe("AiSettingsPanel", () => {
     await waitFor(() =>
       expect(screen.getByTestId("active-ws")).toHaveTextContent("repo:R_a"),
     );
-    await waitFor(() =>
-      expect(
-        screen.getByText(/\/work\/docs-a\/\.okf\/AGENTS\.md/),
-      ).toBeInTheDocument(),
-    );
+    expect(
+      await screen.findByLabelText("저장소 공통 규칙 미리보기"),
+    ).toHaveTextContent("# Alpha 규칙");
+    expect(document.body.textContent).not.toContain("/work/docs-a");
 
     await user.click(screen.getByRole("button", { name: "Beta로 전환" }));
 
     await waitFor(() =>
       expect(
-        screen.getByText(/\/work\/docs-b\/\.okf\/AGENTS\.md/),
-      ).toBeInTheDocument(),
+        screen.getByLabelText("저장소 공통 규칙 미리보기"),
+      ).toHaveTextContent("# Beta 규칙"),
     );
+    expect(document.body.textContent).not.toContain("/work/docs-b");
   });
 });
