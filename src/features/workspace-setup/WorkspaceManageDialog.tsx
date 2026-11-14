@@ -194,7 +194,7 @@ export function WorkspaceManageDialog({
                   }
                 }}
                 id={`workspace-manage-tab-${workspace.id}`}
-                aria-controls={`workspace-manage-panel-${workspace.id}`}
+                aria-controls={isSelected ? panelId : undefined}
                 selected={isSelected}
                 className="shrink-0 whitespace-nowrap"
                 onClick={() => selectTab(workspace.id)}

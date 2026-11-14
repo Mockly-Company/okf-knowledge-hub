@@ -46,15 +46,21 @@ export function TabsList({
     };
 
     updateIndicator();
+    let rafId = 0;
+    const scheduleIndicator = () => {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(updateIndicator);
+    };
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updateIndicator);
     observer?.observe(list);
     list.querySelectorAll('[role="tab"]').forEach((tab) => observer?.observe(tab));
-    list.addEventListener("scroll", updateIndicator, { passive: true });
+    list.addEventListener("scroll", scheduleIndicator, { passive: true });
     window.addEventListener("resize", updateIndicator);
 
     return () => {
+      cancelAnimationFrame(rafId);
       observer?.disconnect();
-      list.removeEventListener("scroll", updateIndicator);
+      list.removeEventListener("scroll", scheduleIndicator);
       window.removeEventListener("resize", updateIndicator);
     };
   }, [children, selectedIndex]);

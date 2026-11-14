@@ -65,6 +65,12 @@ export function AiSettingsPanel({
     }
   }, [configQuery.data]);
 
+  useEffect(() => {
+    if (appAgentsQuery.isError && appAgentsQuery.error) {
+      console.error("[ai-settings] app agents md load failed", appAgentsQuery.error);
+    }
+  }, [appAgentsQuery.isError, appAgentsQuery.error]);
+
   const saveMutation = useMutation({
     mutationFn: () => gateway.setConfig(cliCommand),
     onSuccess: () => {
@@ -230,9 +236,13 @@ export function AiSettingsPanel({
           >
             {previewLines(appAgentsContent, 10)}
           </pre>
+        ) : appAgentsQuery.isError ? (
+          <StatusFeedback variant="field" tone="error">
+            허브 공통 규칙을 불러오지 못했습니다.
+          </StatusFeedback>
         ) : (
           <p className="m-0 text-[var(--color-text-muted)]">
-            허브 공통 규칙을 불러오지 못했습니다.
+            허브 공통 규칙이 아직 설정되지 않았습니다.
           </p>
         )}
       </section>
