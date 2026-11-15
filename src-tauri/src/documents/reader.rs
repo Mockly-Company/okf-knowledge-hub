@@ -1063,7 +1063,7 @@ mod tests {
         fs::write(repo_real.join("docs/regular.md"), "# Regular").unwrap();
         fs::write(
             repo_real.join("docs/regular.html"),
-            r#"<html><head><link rel="stylesheet" href="../_assets/okf-doc.css" /></head><body>Regular</body></html>"#,
+            r#"<html><head><link rel="stylesheet" href="_assets/okf-doc.css" /></head><body>Regular</body></html>"#,
         )
         .unwrap();
         fs::write(repo_real.join("docs/escaped.md"), "# Escaped").unwrap();
@@ -1073,6 +1073,14 @@ mod tests {
         let outside = TempDir::new().unwrap();
         let escaped_html = outside.path().join("escaped.html");
         fs::write(&escaped_html, "<html>escaped</html>").unwrap();
+
+        let direct_reader = DocumentReader::new(&repo_real, &["docs".to_owned()]).unwrap();
+        let direct_regular = direct_reader.read_document("docs/regular.md").unwrap();
+        assert!(direct_regular
+            .companion_html
+            .expect("direct companion html")
+            .html
+            .contains("body { color: #171923; }"));
 
         let repo_alias = parent.path().join("alias-repo");
         if !try_create_dir_symlink(&repo_real, &repo_alias) {
