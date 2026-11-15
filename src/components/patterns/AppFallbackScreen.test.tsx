@@ -68,4 +68,69 @@ describe("AppFallbackScreen", () => {
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  it("masks GitHub/API tokens and local paths while suppressing unstructured secret leaks", () => {
+    const onGoHome = vi.fn();
+    const { rerender } = render(
+      <AppFallbackScreen
+        kind="error"
+        detail="GitHub request failed with ghp_abc123XYZ and gho_oauth456 and github_pat_11AA_zz and sk-proj-999"
+        onGoHome={onGoHome}
+      />,
+    );
+
+    expect(screen.queryByText(/ghp_abc123XYZ/)).toBeNull();
+    expect(screen.queryByText(/gho_oauth456/)).toBeNull();
+    expect(screen.queryByText(/github_pat_11AA_zz/)).toBeNull();
+    expect(screen.queryByText(/sk-proj-999/)).toBeNull();
+    expect(
+      screen.getByText(
+        "GitHub request failed with [REDACTED] and [REDACTED] and [REDACTED] and [REDACTED]",
+      ),
+    ).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="Callback error at /callback?token=topsecret42 with Authorization: Bearer bearersecret99 and api_key=myapikey77"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.queryByText(/topsecret42/)).toBeNull();
+    expect(screen.queryByText(/bearersecret99/)).toBeNull();
+    expect(screen.queryByText(/myapikey77/)).toBeNull();
+    expect(
+      screen.getByText(
+        "Callback error at /callback?token=[REDACTED] with Authorization: [REDACTED] and api_key=[REDACTED]",
+      ),
+    ).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="Unexpected failure at C:\\Users\\alice\\repo\\secret-file.ts"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.queryByText(/C:\\Users\\alice/)).toBeNull();
+    expect(screen.getByText("Unexpected failure at [REDACTED]")).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="Token leak rawUnprefixedSecret999"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.queryByText(/rawUnprefixedSecret999/)).toBeNull();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="Failed while opening task-12"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.getByText("Failed while opening task-12")).toBeVisible();
+  });
 });

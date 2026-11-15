@@ -134,11 +134,24 @@ describe("document-taxonomy", () => {
     ]);
   });
 
-  it("treats agents.md and .okf/ paths as auxiliary documents alongside index/log/readme", () => {
+  it("treats agents.md, reserved .html, and .okf/ paths (with ./ or backslashes) as auxiliary documents", () => {
     expect(isAuxiliaryDocument(makeDoc("AGENTS.md"))).toBe(true);
     expect(isAuxiliaryDocument(makeDoc("docs/AGENTS.md"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("AGENTS.html"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("docs/index.html"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("./docs/readme.html"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("././docs/log.html"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc(".\\docs\\INDEX.HTML", { fileName: "INDEX.HTML" }))).toBe(true);
     expect(isAuxiliaryDocument(makeDoc(".okf/guides/setup.md"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("./.okf/guides/setup.md"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("/./.OKF/templates/human-view.html"))).toBe(true);
     expect(isAuxiliaryDocument(makeDoc("docs/domains/documents/prd.md"))).toBe(false);
+
+    expect(classifyDocumentCategory(makeDoc("AGENTS.html"))).toBe("reference");
+    expect(classifyDocumentCategory(makeDoc("./docs/index.html"))).toBe("reference");
+    expect(
+      classifyDocumentCategory(makeDoc("./docs/domains/documents/screen-spec.html")),
+    ).toBe("screen_spec");
 
     const grouped = groupDocumentsByDomain([
       makeDoc("docs/AGENTS.md"),
@@ -148,6 +161,17 @@ describe("document-taxonomy", () => {
       "docs/prd.md",
       "docs/AGENTS.md",
     ]);
+  });
+
+  it("strips ./ prefixes in resolveDocumentDomain while preserving mixed-case folder names", () => {
+    expect(
+      resolveDocumentDomain(makeDoc("./docs/domains/MyFeature/prd.md")),
+    ).toEqual({
+      key: "myfeature",
+      label: "MyFeature",
+      folderPath: "docs/domains/MyFeature",
+      isExplicitDomain: true,
+    });
   });
 
   it("keeps canonical domain folders when mixed with root docs and clears conflicting non-canonical folders", () => {

@@ -1316,8 +1316,17 @@ pub(crate) struct GroupedPrDocTarget {
     pub status: String,
 }
 
+fn normalize_pr_doc_path(path: &str) -> String {
+    let replaced = path.trim().replace('\\', "/");
+    let mut clean = replaced.trim_start_matches('/');
+    while let Some(stripped) = clean.strip_prefix("./") {
+        clean = stripped.trim_start_matches('/');
+    }
+    clean.to_owned()
+}
+
 fn is_auxiliary_pr_doc(path: &str) -> bool {
-    let norm = path.replace('\\', "/");
+    let norm = normalize_pr_doc_path(path);
     let file_name = norm.rsplit('/').next().unwrap_or(&norm);
     crate::documents::reader::is_reserved_markdown_path(&norm, file_name)
         || crate::documents::reader::is_reserved_html_path(&norm, file_name)
@@ -1328,7 +1337,7 @@ pub(crate) fn group_planning_pr_document_targets(
 ) -> Vec<GroupedPrDocTarget> {
     let mut targets: Vec<GroupedPrDocTarget> = Vec::new();
     for file in files {
-        let norm_path = file.filename.trim().replace('\\', "/");
+        let norm_path = normalize_pr_doc_path(&file.filename);
         if let Some((stem, ext)) = norm_path.rsplit_once('.') {
             if ext.eq_ignore_ascii_case("md") {
                 let is_aux = is_auxiliary_pr_doc(&norm_path);
@@ -1343,7 +1352,15 @@ pub(crate) fn group_planning_pr_document_targets(
                         status: file.status.clone(),
                     });
                 }
-            } else if ext.eq_ignore_ascii_case("html") && !is_auxiliary_pr_doc(&norm_path) {
+            } else if ext.eq_ignore_ascii_case("html") {
+                // 의도적 제외: `.okf/` 하위 HTML 템플릿(예: `.okf/templates/human-view.html`)은 대응 정본 `.md`가 없고,
+                // `index/log/readme/agents.html` 등 예약 보조 문서는 PR 리뷰 패널에서 동반 HTML 미리보기 대상이 아니다
+                // (`dashboard::pick_primary_doc`과 동일 정책). 따라서 단독 보조 `.html` 변경에 대해 변경되지 않았거나
+                // 존재하지 않는 `md_path`(`html_path: None`)를 합성하면 `get_docs_pull_request_detail`에서 빈 Diff 카드가
+                // 만들어지므로 건너뛴다. 보조 문서는 정본 `.md`가 변경된 경우에만 위 `md` 분기에서 목록에 포함된다.
+                if is_auxiliary_pr_doc(&norm_path) {
+                    continue;
+                }
                 let paired_md = format!("{stem}.md");
                 if let Some(existing) = targets.iter_mut().find(|t| t.md_path == paired_md) {
                     existing.html_path = Some(norm_path);
@@ -3873,5 +3890,32 @@ mod tests {
         assert_eq!(grouped[1].html_path, None);
         assert_eq!(grouped[2].md_path, "docs/log.md");
         assert_eq!(grouped[2].html_path, None);
+    }
+
+    #[test]
+    fn ignores_standalone_auxiliary_html_only_changes() {
+        use crate::github::model::PullRequestChangedFile;
+        // 보조 `.html` 단독 변경(예: `.okf/` 템플릿, `index/agents/readme/log.html`)은
+        // 대응 정본 `.md` 변경 없이는 PR 문서 목록에 합성 카드를 만들지 않는다.
+        let files = vec![
+            PullRequestChangedFile {
+                filename: "docs/index.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "./.OKF/templates/human-view.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "AGENTS.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+        ];
+
+        let grouped = super::group_planning_pr_document_targets(&files);
+        assert!(grouped.is_empty());
     }
 }

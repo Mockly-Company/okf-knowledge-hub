@@ -52,9 +52,17 @@ const secretMarkers = [
   "authorization",
   "password",
   "secret",
-  "ghu_",
-  "ghr_",
+  "client_secret",
+  "private_key",
+  "api_key",
+  "api-key",
+  "apikey",
+  "x-api-key",
+  "bearer ",
 ];
+
+const secretTokenPrefixPattern =
+  /(?:^|[^a-z0-9])(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-|sk-[a-z0-9_-]{6,})/i;
 
 function createOperationId(): string {
   return crypto.randomUUID();
@@ -64,6 +72,7 @@ function containsPrivateValue(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
     secretMarkers.some((marker) => normalized.includes(marker)) ||
+    secretTokenPrefixPattern.test(value) ||
     /(?:^|\s)\/(?:users|home|private|var|tmp)\//i.test(value) ||
     /[a-z]:\\/i.test(value) ||
     normalized.includes("search.sqlite3") ||

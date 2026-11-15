@@ -361,8 +361,13 @@ fn is_reserved_stem(file_name: &str, ext: &str) -> bool {
 }
 
 fn is_reserved_path_for_ext(relative_path: &str, file_name: &str, ext: &str) -> bool {
-    let norm = relative_path.replace('\\', "/");
-    norm.get(..5)
+    let replaced = relative_path.trim().replace('\\', "/");
+    let mut clean = replaced.trim_start_matches('/');
+    while let Some(stripped) = clean.strip_prefix("./") {
+        clean = stripped.trim_start_matches('/');
+    }
+    clean
+        .get(..5)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(".okf/"))
         || is_reserved_stem(file_name, ext)
 }

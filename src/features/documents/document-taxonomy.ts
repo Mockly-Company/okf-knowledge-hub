@@ -1,4 +1,4 @@
-import type { DocumentSummary } from "./model";
+import { normalizeDocumentPath, type DocumentSummary } from "./model";
 
 export type DocumentCategory =
   | "prd"
@@ -39,15 +39,22 @@ const FRIENDLY_DOMAIN_LABELS: Record<string, string> = {
   general: "공통 · 일반",
 };
 
-const RESERVED_FILE_NAMES = new Set([
-  "index.md",
-  "log.md",
-  "readme.md",
-  "agents.md",
-]);
+const RESERVED_STEMS = new Set(["index", "log", "readme", "agents"]);
+const RESERVED_EXTENSIONS = new Set(["md", "html"]);
 
 function normalizePortablePath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return normalizeDocumentPath(path)
+    .replace(/^(?:\/+|\.\/)+/, "")
+    .replace(/\/+$/, "");
+}
+
+function isReservedDocumentFileName(fileName: string): boolean {
+  const trimmed = fileName.trim().toLowerCase();
+  const dotIndex = trimmed.lastIndexOf(".");
+  if (dotIndex <= 0) return false;
+  const stem = trimmed.slice(0, dotIndex);
+  const ext = trimmed.slice(dotIndex + 1);
+  return RESERVED_STEMS.has(stem) && RESERVED_EXTENSIONS.has(ext);
 }
 
 export function isAuxiliaryDocument(
@@ -57,8 +64,11 @@ export function isAuxiliaryDocument(
   if (normalizedPath.startsWith(".okf/")) {
     return true;
   }
-  const fileName = doc.fileName || normalizedPath.split("/").pop() || "";
-  return RESERVED_FILE_NAMES.has(fileName.trim().toLowerCase());
+  const rawFileName =
+    normalizePortablePath(doc.fileName || "").split("/").pop() ||
+    normalizedPath.split("/").pop() ||
+    "";
+  return isReservedDocumentFileName(rawFileName);
 }
 
 function classifyByDocType(docType: string | null | undefined): DocumentCategory | null {
@@ -122,20 +132,21 @@ export function classifyDocumentCategory(
     normalizedPath.split("/").pop() ||
     ""
   ).toLowerCase();
+  const canonicalFileName = fileName.replace(/\.html$/i, ".md");
 
   if (
-    fileName === "screen-spec.md" ||
-    fileName.endsWith("-screen-spec.md") ||
-    fileName === "screens.md" ||
+    canonicalFileName === "screen-spec.md" ||
+    canonicalFileName.endsWith("-screen-spec.md") ||
+    canonicalFileName === "screens.md" ||
     normalizedPath.startsWith("docs/screens/")
   ) {
     return "screen_spec";
   }
 
   if (
-    fileName === "prd.md" ||
-    fileName.endsWith("-prd.md") ||
-    fileName.includes("product-spec")
+    canonicalFileName === "prd.md" ||
+    canonicalFileName.endsWith("-prd.md") ||
+    canonicalFileName.includes("product-spec")
   ) {
     return "prd";
   }
@@ -145,7 +156,7 @@ export function classifyDocumentCategory(
     normalizedPath.startsWith("docs/adr/") ||
     normalizedPath.startsWith("docs/decisions/") ||
     normalizedPath.startsWith("docs/superpowers/") ||
-    fileName.startsWith("adr-")
+    canonicalFileName.startsWith("adr-")
   ) {
     return "adr";
   }
@@ -153,8 +164,8 @@ export function classifyDocumentCategory(
   if (
     normalizedPath.startsWith("docs/user-guide/") ||
     normalizedPath.startsWith("docs/development/") ||
-    fileName.includes("guide") ||
-    fileName === "getting-started.md"
+    canonicalFileName.includes("guide") ||
+    canonicalFileName === "getting-started.md"
   ) {
     return "guide";
   }

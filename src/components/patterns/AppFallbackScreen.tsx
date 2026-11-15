@@ -13,31 +13,81 @@ export interface AppFallbackScreenProps {
   onRetry?: () => void;
 }
 
-const SECRET_MARKERS = [
+const RESIDUAL_SECRET_MARKERS = [
   "access_token",
   "refresh_token",
+  "id_token",
+  "auth_token",
   "device_code",
+  "client_secret",
+  "private_key",
   "authorization",
   "password",
+  "passwd",
   "secret",
-  "ghu_",
-  "ghr_",
+  "api_key",
+  "api-key",
+  "apikey",
+  "x-api-key",
   "bearer ",
+  "token",
 ];
 
-function sanitizeDetail(detail: string | null | undefined): string | null {
+const RESIDUAL_PREFIX_PATTERN =
+  /(?:^|[^a-z0-9])(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-|sk-)/i;
+
+function maskSensitivePatterns(input: string): string {
+  return (
+    input
+      // URL userinfo credentials: https://user:token@github.com/...
+      .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@")
+      // Windows local paths: C:\Users\alice\...
+      .replace(/[a-z]:\\[^\s"'`)]+/gi, "[REDACTED]")
+      // POSIX sensitive local paths: /Users/alice/..., /home/..., /private/..., /var/..., /tmp/...
+      .replace(
+        /(^|[\s("'`])\/(?:users|home|private|var|tmp)\/[^\s)"'`]+/gi,
+        "$1[REDACTED]",
+      )
+      // Authorization headers: Authorization: Bearer xxx / authorization=token xxx
+      .replace(
+        /\b(authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?[^\s,;'"`)]+/gi,
+        "$1[REDACTED]",
+      )
+      // Standalone Bearer scheme: Bearer xxx
+      .replace(/\b(bearer\s+)[^\s,;'"`)]+/gi, "$1[REDACTED]")
+      // Known token prefixes (GitHub classic/OAuth/App/PAT, GitLab, Slack, OpenAI/API sk-, JWT)
+      .replace(
+        /(^|[^a-z0-9])(?:gh[pousr]_[a-z0-9_]*|github_pat_[a-z0-9_]*|glpat-[a-z0-9_-]*|xox[baprs]-[a-z0-9-]*|sk-[a-z0-9_-]+|eyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+)/gi,
+        "$1[REDACTED]",
+      )
+      // Key=value or key: value assignments (including query params like ?token=xyz or api_key: xyz)
+      .replace(
+        /\b(access_token|refresh_token|id_token|auth_token|device_code|client_secret|private_key|x-api-key|api[-_]?key|password|passwd|secret|token)(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,&;'"`)]+)/gi,
+        "$1$2[REDACTED]",
+      )
+  );
+}
+
+export function sanitizeDetail(detail: string | null | undefined): string | null {
   if (!detail) return null;
   const trimmed = detail.trim();
   if (!trimmed) return null;
-  const lower = trimmed.toLowerCase();
-  const hasSecret = SECRET_MARKERS.some((marker) => lower.includes(marker));
-  const hasLocalPath =
-    /[a-z]:\\/i.test(trimmed) ||
-    /(?:^|\s)\/(?:users|home|private|var|tmp)\//i.test(trimmed);
-  if (hasSecret || hasLocalPath) {
+
+  const masked = maskSensitivePatterns(trimmed);
+  const remainder = masked
+    .replace(
+      /(?:\b[a-z0-9_-]+\s*[:=]\s*|\b(?:bearer|authorization)\s*:?\s*)?\[REDACTED\]/gi,
+      "",
+    )
+    .toLowerCase();
+
+  if (
+    RESIDUAL_SECRET_MARKERS.some((marker) => remainder.includes(marker)) ||
+    RESIDUAL_PREFIX_PATTERN.test(remainder)
+  ) {
     return null;
   }
-  return trimmed;
+  return masked;
 }
 
 const DEFAULT_COPY: Record<
