@@ -64,3 +64,17 @@ export interface PersonalDashboardResult {
   totalUnreadCount: number;
   failures: DashboardWorkspaceFailure[];
 }
+
+export function isDashboardTimestampNew(
+  timestamp: string,
+  lastSeenAt: string | null | undefined,
+  nowMs: number = Date.now(),
+): boolean {
+  const itemMs = Date.parse(timestamp);
+  if (!Number.isFinite(itemMs)) return false;
+  const lastSeenMs = lastSeenAt ? Date.parse(lastSeenAt) : Number.NaN;
+  if (Number.isFinite(lastSeenMs)) {
+    return itemMs > lastSeenMs;
+  }
+  return itemMs >= nowMs - 7 * 86_400 * 1000;
+}

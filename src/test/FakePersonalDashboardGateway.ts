@@ -2,11 +2,12 @@ import type {
   GetPersonalDashboardOptions,
   PersonalDashboardGateway,
 } from "@/features/dashboard/PersonalDashboardGateway";
-import type {
-  DashboardNotificationItem,
-  DashboardTaskItem,
-  DashboardWorkspaceFailure,
-  PersonalDashboardResult,
+import {
+  isDashboardTimestampNew,
+  type DashboardNotificationItem,
+  type DashboardTaskItem,
+  type DashboardWorkspaceFailure,
+  type PersonalDashboardResult,
 } from "@/features/dashboard/model";
 import type { BoardAssignee } from "@/features/project-board/model";
 
@@ -124,16 +125,12 @@ export class FakePersonalDashboardGateway implements PersonalDashboardGateway {
       if (checked) {
         return { ...item, isChecked: true, isNew: false };
       }
-      const itemMs = Date.parse(item.timestamp);
-      const lastSeenMs = this.lastSeenAt ? Date.parse(this.lastSeenAt) : Number.NaN;
       const refMs = Date.parse(this.fetchedAt);
-      const restoredNew = Number.isFinite(itemMs)
-        ? Number.isFinite(lastSeenMs)
-          ? itemMs > lastSeenMs
-          : Number.isFinite(refMs)
-            ? itemMs >= refMs - 7 * 86_400 * 1000
-            : true
-        : false;
+      const restoredNew = isDashboardTimestampNew(
+        item.timestamp,
+        this.lastSeenAt,
+        Number.isFinite(refMs) ? refMs : Date.now(),
+      );
       return { ...item, isChecked: false, isNew: restoredNew };
     });
   }

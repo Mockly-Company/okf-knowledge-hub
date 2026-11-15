@@ -276,19 +276,19 @@ describe("DocumentSearch", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { level: 3, name: "Documents (문서)" })).toBeVisible();
-    expect(screen.getByRole("heading", { level: 3, name: "Dashboard (대시보드)" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: "Documents (문서)" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: "Dashboard (대시보드)" })).toBeVisible();
     expect(screen.getByText("HTML")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "docs/domains/documents 폴더에 새 문서" }));
     expect(onNewDocumentInFolder).toHaveBeenCalledWith("docs/domains/documents");
 
     await user.click(screen.getByRole("button", { name: "문서 유형별" }));
-    expect(screen.getByRole("heading", { level: 3, name: "기획 · PRD" })).toBeVisible();
-    expect(screen.getByRole("heading", { level: 3, name: "화면명세" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: "기획 · PRD" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 2, name: "화면명세" })).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "전체 목록" }));
-    expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "가이드" }));
     expect(screen.getByText("선택한 분류에 해당하는 문서가 없습니다.")).toBeVisible();

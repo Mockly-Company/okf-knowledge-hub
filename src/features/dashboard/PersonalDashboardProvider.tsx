@@ -12,7 +12,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { PersonalDashboardGateway } from "./PersonalDashboardGateway";
-import type { PersonalDashboardResult } from "./model";
+import {
+  isDashboardTimestampNew,
+  type PersonalDashboardResult,
+} from "./model";
 import { personalDashboardKeys } from "./queryKeys";
 
 export interface PersonalDashboardContextValue {
@@ -216,18 +219,10 @@ export function PersonalDashboardProvider({
             if (variables.checked) {
               return { ...item, isChecked: true, isNew: false };
             }
-            const itemMs = Date.parse(item.timestamp);
-            const lastSeenMs = current.lastSeenAt
-              ? Date.parse(current.lastSeenAt)
-              : Number.NaN;
-            const fetchedMs = Date.parse(current.fetchedAt);
-            const restoredNew = Number.isFinite(itemMs)
-              ? Number.isFinite(lastSeenMs)
-                ? itemMs > lastSeenMs
-                : Number.isFinite(fetchedMs)
-                  ? itemMs >= fetchedMs - 7 * 86_400 * 1000
-                  : true
-              : false;
+            const restoredNew = isDashboardTimestampNew(
+              item.timestamp,
+              current.lastSeenAt,
+            );
             return { ...item, isChecked: false, isNew: restoredNew };
           });
           const prevUnreadNotif = current.unreadNotificationCount;
@@ -241,6 +236,9 @@ export function PersonalDashboardProvider({
           };
         },
       );
+      if (!variables.checked) {
+        void queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
+      }
     },
   });
 

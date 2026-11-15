@@ -34,8 +34,11 @@ export const Home: Story = {
     await expect(newDocument).toHaveFocus();
     await userEvent.tab();
     await expect(
-      canvas.getByRole("button", { name: /지도 검색 API 계약/ }),
+      canvas.getByRole("button", { name: "도메인별" }),
     ).toHaveFocus();
+    await expect(
+      canvas.getByRole("button", { name: /지도 검색 API 계약/ }),
+    ).toBeVisible();
     newDocument.focus();
     await expect(newDocument).toHaveFocus();
     await userEvent.keyboard("{Enter}");

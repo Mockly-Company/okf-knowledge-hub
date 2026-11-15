@@ -39,7 +39,12 @@ const FRIENDLY_DOMAIN_LABELS: Record<string, string> = {
   general: "공통 · 일반",
 };
 
-const RESERVED_FILE_NAMES = new Set(["index.md", "log.md", "readme.md"]);
+const RESERVED_FILE_NAMES = new Set([
+  "index.md",
+  "log.md",
+  "readme.md",
+  "agents.md",
+]);
 
 function normalizePortablePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
@@ -48,8 +53,11 @@ function normalizePortablePath(path: string): string {
 export function isAuxiliaryDocument(
   doc: Pick<DocumentSummary, "fileName" | "path">,
 ): boolean {
-  const fileName =
-    doc.fileName || normalizePortablePath(doc.path).split("/").pop() || "";
+  const normalizedPath = normalizePortablePath(doc.path).toLowerCase();
+  if (normalizedPath.startsWith(".okf/")) {
+    return true;
+  }
+  const fileName = doc.fileName || normalizedPath.split("/").pop() || "";
   return RESERVED_FILE_NAMES.has(fileName.trim().toLowerCase());
 }
 

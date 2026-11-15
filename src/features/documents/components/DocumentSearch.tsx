@@ -10,6 +10,7 @@ import {
   DOCUMENT_CATEGORY_ORDER,
   groupDocumentsByCategory,
   groupDocumentsByDomain,
+  isAuxiliaryDocument,
   type DocumentCategoryFilter,
   type DocumentGroup,
   type DocumentGroupMode,
@@ -136,10 +137,13 @@ export function DocumentSearch({
   const renderResultRow = (item: DocumentSummary | SearchResult) => {
     const result = "matchField" in item ? item : null;
     const summary = "matchField" in item ? documentByPath.get(item.path) : item;
-    const category = classifyDocumentCategory(
-      summary ?? { path: item.path, fileName: item.path.split("/").pop() ?? item.path },
-    );
-    const hasCompanionHtml = Boolean(summary?.hasCompanionHtml);
+    const docRef = summary ?? {
+      path: item.path,
+      fileName: item.path.split("/").pop() ?? item.path,
+    };
+    const category = classifyDocumentCategory(docRef);
+    const hasCompanionHtml =
+      Boolean(summary?.hasCompanionHtml) && !isAuxiliaryDocument(docRef);
 
     return (
       <li key={item.path}>
@@ -282,37 +286,40 @@ export function DocumentSearch({
           )
         ) : !isSearching && groupMode !== "flat" ? (
           <div className="document-search__groups">
-            {groupedDocuments.map((group) => (
-              <section
-                key={group.key}
-                className="document-search__group"
-                aria-label={group.label}
-              >
-                <div className="document-search__group-header">
-                  <div className="document-search__group-heading">
-                    <h3>{group.label}</h3>
-                    <span className="document-search__group-count">
-                      {`${group.documents.length}건`}
-                    </span>
+            {groupedDocuments.map((group) => {
+              const folderPath = group.folderPath;
+              return (
+                <section
+                  key={group.key}
+                  className="document-search__group"
+                  aria-label={group.label}
+                >
+                  <div className="document-search__group-header">
+                    <div className="document-search__group-heading">
+                      <h2>{group.label}</h2>
+                      <span className="document-search__group-count">
+                        {`${group.documents.length}건`}
+                      </span>
+                    </div>
+                    {groupMode === "domain" &&
+                    folderPath &&
+                    onNewDocumentInFolder ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="document-search__group-action"
+                        aria-label={`${folderPath} 폴더에 새 문서`}
+                        onClick={() => onNewDocumentInFolder(folderPath)}
+                      >
+                        <FilePlus2 aria-hidden="true" />
+                        폴더에 새 문서
+                      </Button>
+                    ) : null}
                   </div>
-                  {groupMode === "domain" &&
-                  group.folderPath &&
-                  onNewDocumentInFolder ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="document-search__group-action"
-                      aria-label={`${group.folderPath} 폴더에 새 문서`}
-                      onClick={() => onNewDocumentInFolder(group.folderPath!)}
-                    >
-                      <FilePlus2 aria-hidden="true" />
-                      폴더에 새 문서
-                    </Button>
-                  ) : null}
-                </div>
-                <ul>{group.documents.map((doc) => renderResultRow(doc))}</ul>
-              </section>
-            ))}
+                  <ul>{group.documents.map((doc) => renderResultRow(doc))}</ul>
+                </section>
+              );
+            })}
           </div>
         ) : (
           <ul>{items.map((item) => renderResultRow(item))}</ul>

@@ -1033,10 +1033,10 @@ describe("DocumentsPage", () => {
     );
 
     expect(
-      await screen.findByRole("heading", { level: 3, name: "Documents (문서)" }),
+      await screen.findByRole("heading", { level: 2, name: "Documents (문서)" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("heading", { level: 3, name: "Dashboard (대시보드)" }),
+      screen.getByRole("heading", { level: 2, name: "Dashboard (대시보드)" }),
     ).toBeVisible();
 
     await user.click(

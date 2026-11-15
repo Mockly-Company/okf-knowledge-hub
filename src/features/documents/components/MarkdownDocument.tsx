@@ -2,6 +2,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react";
@@ -27,6 +28,10 @@ import { MermaidBlock } from "./MermaidBlock";
 const markdownSanitizeSchema = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "mark", "details", "summary"],
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "tel"],
+  },
   attributes: {
     ...defaultSchema.attributes,
     mark: ["dataSearchMatch"],
@@ -205,7 +210,7 @@ function safeMarkdownUrl(documentPath: string, url: string): string {
   const value = url.trim();
   if (!value) return "#";
   if (value.startsWith("#")) return value;
-  if (/^(https?|mailto):/i.test(value)) return value;
+  if (/^(https?|mailto|tel):/i.test(value)) return value;
   return resolveRepositoryPath(documentPath, value) ? value : "#";
 }
 
@@ -414,8 +419,13 @@ export function MarkdownDocument({
 }: MarkdownDocumentProps) {
   const { selectDocument, readAsset, openExternal, copyText, state } = useDocuments();
   const articleRef = useRef<HTMLElement>(null);
+  const [unsupportedLinkNotice, setUnsupportedLinkNotice] = useState<string | null>(null);
   const searchMatch = state.selectedSearchMatch;
   const bodySearchQuery = searchMatch?.matchField === "body" ? searchMatch.matchText : "";
+
+  useEffect(() => {
+    setUnsupportedLinkNotice(null);
+  }, [document.summary.path, document.markdown]);
   const remarkPlugins = useMemo(
     () => [
       remarkGfm,
@@ -503,14 +513,30 @@ export function MarkdownDocument({
           }
           return <span className="markdown-document__unsupported-link">지원하지 않는 파일 링크입니다: {children}</span>;
         }
-        if (/^(https?|mailto):/i.test(value)) {
+        if (/^(https?|mailto|tel):/i.test(value)) {
           return (
             <a
               {...props}
               href={value}
               onClick={(event) => {
                 event.preventDefault();
+                setUnsupportedLinkNotice(null);
                 void openExternal(value);
+              }}
+            >
+              {children}
+            </a>
+          );
+        }
+        if (value.startsWith("#") && value.length > 1) {
+          return (
+            <a
+              {...props}
+              href={value}
+              onClick={(event) => {
+                event.preventDefault();
+                setUnsupportedLinkNotice(null);
+                scrollToMarkdownFragment(articleRef.current, value.slice(1));
               }}
             >
               {children}
@@ -521,11 +547,10 @@ export function MarkdownDocument({
           <a
             {...props}
             href={value}
+            title="이 문서에서 열 수 없는 링크입니다"
             onClick={(event) => {
               event.preventDefault();
-              if (value.startsWith("#")) {
-                scrollToMarkdownFragment(articleRef.current, value.slice(1));
-              }
+              setUnsupportedLinkNotice("이 문서에서 열 수 없는 링크입니다.");
             }}
           >
             {children}
@@ -629,6 +654,11 @@ export function MarkdownDocument({
           <p>{document.summary.path}</p>
         </header>
       )}
+      {unsupportedLinkNotice ? (
+        <p role="status" className="markdown-document__unsupported-link">
+          {unsupportedLinkNotice}
+        </p>
+      ) : null}
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}

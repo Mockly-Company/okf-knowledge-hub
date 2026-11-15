@@ -178,7 +178,8 @@ impl DocumentReader {
         file_name: &str,
         markdown_modified_ms: i64,
     ) -> (Option<CompanionHtml>, HtmlSyncStatus) {
-        if is_reserved_markdown_file(file_name) {
+        let relative_path = portable_path(&self.repository_root, markdown_path);
+        if is_reserved_markdown_path(&relative_path, file_name) {
             return (None, HtmlSyncStatus::NotApplicable);
         }
         let candidate = markdown_path.with_extension("html");
@@ -349,7 +350,17 @@ fn inject_csp_meta(html: &str) -> String {
 }
 
 pub(crate) fn is_reserved_markdown_file(file_name: &str) -> bool {
-    file_name == "index.md" || file_name == "log.md" || file_name.eq_ignore_ascii_case("README.md")
+    file_name.eq_ignore_ascii_case("index.md")
+        || file_name.eq_ignore_ascii_case("log.md")
+        || file_name.eq_ignore_ascii_case("readme.md")
+        || file_name.eq_ignore_ascii_case("agents.md")
+}
+
+pub(crate) fn is_reserved_markdown_path(relative_path: &str, file_name: &str) -> bool {
+    let norm = relative_path.replace('\\', "/");
+    norm.get(..5)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(".okf/"))
+        || is_reserved_markdown_file(file_name)
 }
 
 fn extract_html_attr<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {

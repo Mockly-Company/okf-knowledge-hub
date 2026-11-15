@@ -3,6 +3,7 @@ import {
   classifyDocumentCategory,
   groupDocumentsByCategory,
   groupDocumentsByDomain,
+  isAuxiliaryDocument,
   resolveDocumentDomain,
 } from "./document-taxonomy";
 import type { DocumentSummary } from "./model";
@@ -121,6 +122,22 @@ describe("document-taxonomy", () => {
       "adr",
       "guide",
       "reference",
+    ]);
+  });
+
+  it("treats agents.md and .okf/ paths as auxiliary documents alongside index/log/readme", () => {
+    expect(isAuxiliaryDocument(makeDoc("AGENTS.md"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("docs/AGENTS.md"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc(".okf/guides/setup.md"))).toBe(true);
+    expect(isAuxiliaryDocument(makeDoc("docs/domains/documents/prd.md"))).toBe(false);
+
+    const grouped = groupDocumentsByDomain([
+      makeDoc("docs/AGENTS.md"),
+      makeDoc("docs/prd.md", { docType: "Product Spec" }),
+    ]);
+    expect(grouped[0]?.documents.map((doc) => doc.path)).toEqual([
+      "docs/prd.md",
+      "docs/AGENTS.md",
     ]);
   });
 });

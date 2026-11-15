@@ -510,4 +510,24 @@ describe("MarkdownDocument", () => {
       scroll.mockRestore();
     }
   });
+
+  it("opens tel: links externally and reports an inline status notice when an unsupported relative link is clicked", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderMarkdown(
+      "[전화 문의](tel:02-1234-5678) [escape](../../../outside.md)",
+    );
+
+    const telLink = screen.getByRole("link", { name: "전화 문의" });
+    expect(telLink).toHaveAttribute("href", "tel:02-1234-5678");
+    await user.click(telLink);
+    expect(gateway.calls).toContainEqual({
+      method: "openExternal",
+      args: ["tel:02-1234-5678"],
+    });
+
+    await user.click(screen.getByRole("link", { name: "escape" }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "이 문서에서 열 수 없는 링크입니다.",
+    );
+  });
 });

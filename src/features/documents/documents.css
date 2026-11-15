@@ -859,7 +859,7 @@
   gap: var(--space-2);
 }
 
-.document-search__group-heading h3 {
+.document-search__group-heading h2 {
   margin: 0;
   color: var(--color-text-strong);
   font-size: var(--font-ui-size);
