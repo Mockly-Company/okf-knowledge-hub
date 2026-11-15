@@ -1001,6 +1001,7 @@ mod tests {
     #[test]
     fn identity_mismatches_preserve_invalid_database_and_create_clean_cache() {
         for (case, key, value) in [
+            ("next_version", "index_version", "3"),
             ("version", "index_version", "999"),
             (
                 "workspace",
@@ -1046,7 +1047,7 @@ mod tests {
         let path = temp.path().join("search.sqlite3");
         drop(DocumentCache::open(&path, workspace_id()).unwrap());
 
-        for invalid_version in ["998", "999"] {
+        for invalid_version in ["3", "998", "999"] {
             let connection = rusqlite::Connection::open(&path).unwrap();
             connection
                 .execute(
@@ -1067,7 +1068,7 @@ mod tests {
                     .to_string_lossy()
                     .starts_with("search.invalid-"))
                 .count(),
-            2
+            3
         );
     }
 

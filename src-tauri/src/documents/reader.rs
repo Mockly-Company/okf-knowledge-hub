@@ -178,12 +178,18 @@ impl DocumentReader {
         file_name: &str,
         markdown_modified_ms: i64,
     ) -> (Option<CompanionHtml>, HtmlSyncStatus) {
-        let relative_path = portable_path(&self.repository_root, markdown_path);
+        let Ok(canonical_root) = self.repository_root.canonicalize() else {
+            return (None, HtmlSyncStatus::Missing);
+        };
+        let canonical_markdown = markdown_path
+            .canonicalize()
+            .unwrap_or_else(|_| markdown_path.to_path_buf());
+        let relative_path = portable_path(&canonical_root, &canonical_markdown);
         if is_reserved_markdown_path(&relative_path, file_name) {
             return (None, HtmlSyncStatus::NotApplicable);
         }
         let Some((canonical, metadata)) =
-            resolve_companion_html(&self.repository_root, markdown_path)
+            resolve_companion_html(&canonical_root, &canonical_markdown)
         else {
             return (None, HtmlSyncStatus::Missing);
         };
@@ -194,7 +200,7 @@ impl DocumentReader {
             return (None, HtmlSyncStatus::Missing);
         };
         let html_modified_ms = modified_at_unix_ms(&metadata);
-        let html = self.inline_local_stylesheets(&canonical, &raw_html);
+        let html = self.inline_local_stylesheets(&canonical_root, &canonical, &raw_html);
         // Allow 5s tolerance for git checkout/fast-forward mtime jitter.
         let sync_status = if html_modified_ms.saturating_add(5_000) >= markdown_modified_ms {
             HtmlSyncStatus::InSync
@@ -203,7 +209,7 @@ impl DocumentReader {
         };
         (
             Some(CompanionHtml {
-                path: portable_path(&self.repository_root, &canonical),
+                path: portable_path(&canonical_root, &canonical),
                 html,
                 modified_at_unix_ms: html_modified_ms,
             }),
@@ -211,7 +217,12 @@ impl DocumentReader {
         )
     }
 
-    fn inline_local_stylesheets(&self, html_path: &Path, raw_html: &str) -> String {
+    fn inline_local_stylesheets(
+        &self,
+        canonical_root: &Path,
+        html_path: &Path,
+        raw_html: &str,
+    ) -> String {
         let Some(parent_dir) = html_path.parent() else {
             return inject_csp_meta(raw_html);
         };
@@ -219,8 +230,8 @@ impl DocumentReader {
             let css_candidate = parent_dir.join(clean_href);
             let canonical_css = css_candidate.canonicalize().ok()?;
             let metadata = fs::metadata(&canonical_css).ok()?;
-            if !canonical_css.starts_with(&self.repository_root)
-                || is_git_path(&self.repository_root, &canonical_css)
+            if !canonical_css.starts_with(canonical_root)
+                || is_git_path(canonical_root, &canonical_css)
                 || !metadata.is_file()
                 || !is_extension(&canonical_css, "css")
                 || metadata.len() > MAX_ASSET_BYTES
@@ -366,37 +377,53 @@ pub(crate) fn validate_companion_html_path(
     Some((canonical, metadata))
 }
 
-pub(crate) fn sort_companion_html_candidates(candidates: &mut [PathBuf]) {
+pub(crate) fn lower_stem_key(path: &Path) -> Option<String> {
+    path.file_stem()
+        .map(|stem| stem.to_string_lossy().to_lowercase())
+}
+
+pub(crate) fn sort_companion_html_candidates(
+    candidates: &mut [PathBuf],
+    preferred_stem: Option<&OsStr>,
+) {
     candidates.sort_by(|left, right| {
-        let left_exact = left.extension().and_then(OsStr::to_str) == Some("html");
-        let right_exact = right.extension().and_then(OsStr::to_str) == Some("html");
-        right_exact
-            .cmp(&left_exact)
+        let left_exact_stem = preferred_stem.is_some_and(|stem| left.file_stem() == Some(stem));
+        let right_exact_stem = preferred_stem.is_some_and(|stem| right.file_stem() == Some(stem));
+        let left_exact_ext = left.extension().and_then(OsStr::to_str) == Some("html");
+        let right_exact_ext = right.extension().and_then(OsStr::to_str) == Some("html");
+        right_exact_stem
+            .cmp(&left_exact_stem)
+            .then_with(|| right_exact_ext.cmp(&left_exact_ext))
             .then_with(|| left.file_name().cmp(&right.file_name()))
     });
 }
 
 pub(crate) fn resolve_companion_html(
-    canonical_root: &Path,
+    repository_root: &Path,
     markdown_path: &Path,
 ) -> Option<(PathBuf, fs::Metadata)> {
+    let canonical_root = repository_root.canonicalize().ok()?;
     if let Some(found) =
-        validate_companion_html_path(canonical_root, &markdown_path.with_extension("html"))
+        validate_companion_html_path(&canonical_root, &markdown_path.with_extension("html"))
     {
         return Some(found);
     }
     let parent = markdown_path.parent()?;
     let stem = markdown_path.file_stem()?;
+    let target_key = stem.to_string_lossy().to_lowercase();
     let mut candidates: Vec<PathBuf> = fs::read_dir(parent)
         .ok()?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.file_stem() == Some(stem) && is_extension(path, "html"))
+        .filter(|path| {
+            lower_stem_key(path).as_deref() == Some(target_key.as_str())
+                && is_extension(path, "html")
+        })
         .collect();
-    sort_companion_html_candidates(&mut candidates);
+    sort_companion_html_candidates(&mut candidates, Some(stem));
     candidates
         .into_iter()
-        .find_map(|candidate| validate_companion_html_path(canonical_root, &candidate))
+        .find_map(|candidate| validate_companion_html_path(&canonical_root, &candidate))
 }
 
 pub(crate) fn normalize_portable_doc_path(path: &str) -> String {
@@ -911,6 +938,11 @@ mod tests {
                 "docs/product/UPPER.HTML",
                 "<html><body>Upper HTML</body></html>",
             ),
+            ("docs/product/lower-stem.md", "# Lower Stem"),
+            (
+                "docs/product/LOWER-STEM.HTML",
+                "<html><body>Mismatched Stem</body></html>",
+            ),
         ]);
         let reader = reader(&repo);
 
@@ -928,6 +960,16 @@ mod tests {
             .path
             .eq_ignore_ascii_case("docs/product/UPPER.HTML"));
         assert!(upper_companion.html.contains("Upper HTML"));
+
+        let mismatched = reader.read_document("docs/product/lower-stem.md").unwrap();
+        assert_eq!(mismatched.html_sync_status, HtmlSyncStatus::InSync);
+        let mismatched_companion = mismatched
+            .companion_html
+            .expect("case-insensitive stem companion html");
+        assert!(mismatched_companion
+            .path
+            .eq_ignore_ascii_case("docs/product/LOWER-STEM.HTML"));
+        assert!(mismatched_companion.html.contains("Mismatched Stem"));
 
         let missing = reader.read_document("docs/product/only-md.md").unwrap();
         assert_eq!(missing.html_sync_status, HtmlSyncStatus::Missing);
@@ -980,6 +1022,150 @@ mod tests {
         assert!(html.contains(".ok { font-weight: 700; }"));
         assert!(!html.contains("should-not-inline"));
         assert!(html.contains("http-equiv=\"Content-Security-Policy\""));
+    }
+
+    #[test]
+    fn sort_companion_html_candidates_prefers_exact_stem_then_lowercase_html_extension() {
+        use std::ffi::OsStr;
+        use std::path::PathBuf;
+
+        let mut candidates = vec![
+            PathBuf::from("docs/SPEC.HTML"),
+            PathBuf::from("docs/SPEC.html"),
+            PathBuf::from("docs/spec.HTML"),
+            PathBuf::from("docs/spec.html"),
+        ];
+        super::sort_companion_html_candidates(&mut candidates, Some(OsStr::new("spec")));
+
+        let ordered: Vec<String> = candidates
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            ordered,
+            ["spec.html", "spec.HTML", "SPEC.html", "SPEC.HTML"]
+        );
+    }
+
+    #[test]
+    fn load_companion_html_canonicalizes_symlinked_repository_root() {
+        use super::super::contract::HtmlSyncStatus;
+
+        let parent = TempDir::new().unwrap();
+        let repo_real = parent.path().join("real-repo");
+        fs::create_dir_all(repo_real.join("docs/_assets")).unwrap();
+        fs::create_dir_all(repo_real.join(".git")).unwrap();
+        fs::write(
+            repo_real.join("docs/_assets/okf-doc.css"),
+            "body { color: #171923; }",
+        )
+        .unwrap();
+        fs::write(repo_real.join("docs/regular.md"), "# Regular").unwrap();
+        fs::write(
+            repo_real.join("docs/regular.html"),
+            r#"<html><head><link rel="stylesheet" href="../_assets/okf-doc.css" /></head><body>Regular</body></html>"#,
+        )
+        .unwrap();
+        fs::write(repo_real.join("docs/escaped.md"), "# Escaped").unwrap();
+        fs::write(repo_real.join("docs/git-linked.md"), "# Git Linked").unwrap();
+        fs::write(repo_real.join(".git/internal.html"), "<html>git</html>").unwrap();
+
+        let outside = TempDir::new().unwrap();
+        let escaped_html = outside.path().join("escaped.html");
+        fs::write(&escaped_html, "<html>escaped</html>").unwrap();
+
+        let repo_alias = parent.path().join("alias-repo");
+        if !try_create_dir_symlink(&repo_real, &repo_alias) {
+            return;
+        }
+        assert!(try_create_file_symlink(
+            &escaped_html,
+            &repo_real.join("docs/escaped.html"),
+        ));
+        assert!(try_create_file_symlink(
+            &repo_real.join(".git/internal.html"),
+            &repo_real.join("docs/git-linked.html"),
+        ));
+
+        let alias_reader = DocumentReader::new(&repo_alias, &["docs".to_owned()]).unwrap();
+        let regular = alias_reader.read_document("docs/regular.md").unwrap();
+        assert_eq!(regular.html_sync_status, HtmlSyncStatus::InSync);
+        let companion = regular
+            .companion_html
+            .expect("canonicalized root companion html");
+        assert_eq!(companion.path, "docs/regular.html");
+        assert!(companion.html.contains("body { color: #171923; }"));
+        assert_eq!(
+            alias_reader
+                .read_document("docs/escaped.md")
+                .unwrap()
+                .html_sync_status,
+            HtmlSyncStatus::Missing
+        );
+        assert_eq!(
+            alias_reader
+                .read_document("docs/git-linked.md")
+                .unwrap()
+                .html_sync_status,
+            HtmlSyncStatus::Missing
+        );
+
+        let uncanonical_reader = DocumentReader {
+            repository_root: repo_alias.clone(),
+            document_roots: vec![repo_real.join("docs")],
+        };
+        let (uncanon_companion, uncanon_status) = uncanonical_reader.load_companion_html(
+            &repo_alias.join("docs/regular.md"),
+            "regular.md",
+            0,
+        );
+        assert_eq!(uncanon_status, HtmlSyncStatus::InSync);
+        let uncanon_companion =
+            uncanon_companion.expect("load_companion_html handles symlink root");
+        assert_eq!(uncanon_companion.path, "docs/regular.html");
+        assert!(uncanon_companion.html.contains("body { color: #171923; }"));
+        assert_eq!(
+            uncanonical_reader
+                .load_companion_html(&repo_alias.join("docs/escaped.md"), "escaped.md", 0)
+                .1,
+            HtmlSyncStatus::Missing
+        );
+        assert_eq!(
+            uncanonical_reader
+                .load_companion_html(&repo_alias.join("docs/git-linked.md"), "git-linked.md", 0)
+                .1,
+            HtmlSyncStatus::Missing
+        );
+    }
+
+    #[cfg(unix)]
+    fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(original, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        match std::os::windows::fs::symlink_file(original, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("unexpected windows symlink failure: {error}"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn try_create_dir_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(original, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn try_create_dir_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        match std::os::windows::fs::symlink_dir(original, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("unexpected windows dir symlink failure: {error}"),
+        }
     }
 
     fn fixture_repo(files: &[(&str, &str)]) -> TempDir {

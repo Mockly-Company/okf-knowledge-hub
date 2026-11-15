@@ -74,7 +74,7 @@ function containsPrivateValue(value: string): boolean {
     secretMarkers.some((marker) => normalized.includes(marker)) ||
     secretTokenPrefixPattern.test(value) ||
     /(?:^|[^a-z0-9])\/(?:users|home|private|var|tmp)\//i.test(value) ||
-    /[a-z]:\\/i.test(value) ||
+    /(?:^|[^a-z0-9])(?:\\\\\?\\)?[a-z]:[\\/]/i.test(value) ||
     normalized.includes("search.sqlite3") ||
     normalized.includes("document-search")
   );

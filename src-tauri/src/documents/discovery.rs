@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::BufReader;
 use std::path::{Component, Path, PathBuf};
@@ -11,8 +11,8 @@ use crate::error::{AppError, ErrorCode};
 use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry};
 use super::frontmatter::parse_document_reader;
 use super::reader::{
-    is_reserved_markdown_path, resolve_companion_html, sort_companion_html_candidates,
-    validate_companion_html_path,
+    is_reserved_markdown_path, lower_stem_key, resolve_companion_html,
+    sort_companion_html_candidates, validate_companion_html_path,
 };
 
 pub fn discover_documents(
@@ -102,24 +102,24 @@ fn discover_directory(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| document_path_error(directory, error.to_string()))?;
 
-    // 디렉터리 스캔 결과를 stem별로 1회 색인해 대소문자 구분 FS의 .HTML/.Html 변형도 추가 read_dir 없이 판별한다.
-    let mut html_candidates_by_stem: HashMap<OsString, Vec<PathBuf>> = HashMap::new();
+    // 디렉터리 스캔 결과를 소문자 stem별로 1회 색인해 대소문자 구분 FS의 .HTML/.Html·상대 stem 대소문자 변형도 추가 read_dir 없이 판별한다.
+    let mut html_candidates_by_stem: HashMap<String, Vec<PathBuf>> = HashMap::new();
     for entry in &entries {
         if entry.file_name() == OsStr::new(".git") {
             continue;
         }
         let entry_path = entry.path();
         if is_html(&entry_path) {
-            if let Some(stem) = entry_path.file_stem() {
+            if let Some(stem_key) = lower_stem_key(&entry_path) {
                 html_candidates_by_stem
-                    .entry(stem.to_os_string())
+                    .entry(stem_key)
                     .or_default()
                     .push(entry_path);
             }
         }
     }
     for bucket in html_candidates_by_stem.values_mut() {
-        sort_companion_html_candidates(bucket);
+        sort_companion_html_candidates(bucket, None);
     }
 
     for entry in entries {
@@ -150,9 +150,8 @@ fn discover_directory(
             )?);
         } else if metadata.is_file() && is_markdown(&canonical_path) {
             let sibling_candidates = (canonical_path.parent() == Some(directory)).then(|| {
-                canonical_path
-                    .file_stem()
-                    .and_then(|stem| html_candidates_by_stem.get(stem))
+                lower_stem_key(&canonical_path)
+                    .and_then(|key| html_candidates_by_stem.get(&key))
                     .map(Vec::as_slice)
                     .unwrap_or(&[])
             });
@@ -228,10 +227,7 @@ fn summarize_document(
 }
 
 fn has_valid_companion_html(repository_root: &Path, markdown_path: &Path) -> bool {
-    let Ok(canonical_root) = repository_root.canonicalize() else {
-        return false;
-    };
-    resolve_companion_html(&canonical_root, markdown_path).is_some()
+    resolve_companion_html(repository_root, markdown_path).is_some()
 }
 
 fn is_markdown(path: &Path) -> bool {
@@ -523,6 +519,8 @@ mod tests {
             ("docs/SPEC.HTML", "<html>SPEC</html>"),
             ("docs/Mixed.md", "# mixed"),
             ("docs/Mixed.Html", "<html>Mixed</html>"),
+            ("docs/lower-stem.md", "# lower"),
+            ("docs/LOWER-STEM.HTML", "<html>UPPER STEM</html>"),
             ("docs/index.md", "# index"),
             ("docs/index.html", "<html>index</html>"),
             ("docs/linked.md", "# linked"),
@@ -560,6 +558,7 @@ mod tests {
         assert!(has_html("docs/regular.md"));
         assert!(has_html("docs/SPEC.MD"));
         assert!(has_html("docs/Mixed.md"));
+        assert!(has_html("docs/lower-stem.md"));
         assert!(super::has_valid_companion_html(
             repo.path(),
             &repo.path().join("docs/SPEC.MD"),
@@ -567,6 +566,10 @@ mod tests {
         assert!(super::has_valid_companion_html(
             repo.path(),
             &repo.path().join("docs/Mixed.md"),
+        ));
+        assert!(super::has_valid_companion_html(
+            repo.path(),
+            &repo.path().join("docs/lower-stem.md"),
         ));
         assert!(!has_html("docs/index.md"));
         assert!(!has_html("docs/escaped.md"));

@@ -118,6 +118,31 @@ describe("AppFallbackScreen", () => {
     rerender(
       <AppFallbackScreen
         kind="error"
+        detail="Unexpected failure at C:/Users/alice/repo/secret-file.ts"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.queryByText(/C:\/Users\/alice/)).toBeNull();
+    expect(screen.getByText("Unexpected failure at [REDACTED]")).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail={'error path=D:/Users/alice/secret.ts and file:///C:/Users/alice/id_rsa and "E:/tmp/crash.log"'}
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.queryByText(/Users\/alice/)).toBeNull();
+    expect(screen.queryByText(/E:\/tmp/)).toBeNull();
+    expect(
+      screen.getByText(
+        'error path=[REDACTED] and file:///[REDACTED] and "[REDACTED]"',
+      ),
+    ).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
         detail="Token leak rawUnprefixedSecret999"
         onGoHome={onGoHome}
       />,

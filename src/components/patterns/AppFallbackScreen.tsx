@@ -41,8 +41,8 @@ function maskSensitivePatterns(input: string): string {
     input
       // URL userinfo credentials: https://user:token@github.com/...
       .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@")
-      // Windows local paths: C:\Users\alice\...
-      .replace(/[a-z]:\\[^\s"'`)]+/gi, "[REDACTED]")
+      // Windows local paths: C:\Users\alice\..., C:/Users/alice/..., path=D:/..., file:///C:/...
+      .replace(/(^|[^a-z0-9])(?:\\\\\?\\)?[a-z]:[\\/][^\s)"'`,;&]+/gi, "$1[REDACTED]")
       // POSIX sensitive local paths: /Users/alice/..., path=/Users/alice/..., file:///private/..., "/home/..."
       .replace(
         /(^|[^a-z0-9])\/(?:users|home|private|var|tmp)\/[^\s)"'`,;&]+/gi,
