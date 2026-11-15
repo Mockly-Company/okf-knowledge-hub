@@ -5,19 +5,22 @@ import {
   useNavigate,
   useSearchParams,
 } from "react-router-dom";
-import { RefreshCw } from "lucide-react";
+import { RefreshCw, Users } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectOption } from "@/components/ui/select";
+import { StatusFeedback } from "@/components/ui/status-feedback";
+import { Tooltip } from "@/components/ui/tooltip";
 import {
   Dialog,
   DialogBody,
   DialogCloseButton,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -28,6 +31,11 @@ import type {
   UpdateBoardItemInput,
 } from "@/features/project-board/ProjectBoardGateway";
 import { ProjectIssueDrawer } from "@/features/project-board/ProjectIssueDrawer";
+import { TeamAssigneeSettingsDialog } from "@/features/project-board/TeamAssigneeSettingsDialog";
+import {
+  classifyIssueOwnership,
+  formatAssigneeHandles,
+} from "@/features/project-board/teamAssignees";
 import {
   buildIssueReadinessIndex,
   filterTreeToReadyOnly,
@@ -42,6 +50,8 @@ import {
   type BoardLayer,
   type ProjectBoard,
   type ResolvedGithubProject,
+  type WorkspaceTeamAssignees,
+  type WorkspaceTeamAssigneesSnapshot,
 } from "@/features/project-board/model";
 import {
   LEGACY_BOARD_ID,
@@ -454,6 +464,32 @@ function BoardColumn({
   );
 }
 
+type AiStartConfirmState =
+  | {
+      mode: "other";
+      issue: BoardIssue;
+      detail: ProjectBoardIssueDetail | null;
+      assigneeLogins: string[];
+    }
+  | {
+      mode: "unassigned";
+      issue: BoardIssue;
+      detail: ProjectBoardIssueDetail | null;
+      viewerLogin: string;
+    };
+
+function describeAssignSelfError(error: unknown): string {
+  const message =
+    typeof error === "object" && error !== null && "message" in error
+      ? String((error as { message: unknown }).message)
+      : null;
+  const text = typeof error === "string" && error.trim() ? error : null;
+  const cause = errorDetail(error, "reason") ?? message ?? text;
+  return cause
+    ? `담당자를 배정하지 못했습니다. (원인: ${cause})`
+    : "담당자를 배정하지 못했습니다.";
+}
+
 type BoardView = "layers" | "tree";
 
 export function ProjectPage({
@@ -565,7 +601,124 @@ export function ProjectPage({
     setAttachError(null);
     setSelectedIssueNumber(null);
     setSelectedIssueFallback(null);
+    setTeamSettingsOpen(false);
+    setTeamSaveToast(null);
+    setAiStartConfirm(null);
+    setAssignAndStartError(null);
   }, [workspaceResetKey]);
+
+  const [teamSettingsOpen, setTeamSettingsOpen] = useState(false);
+  const [teamSaveToast, setTeamSaveToast] = useState<string | null>(null);
+  const [aiStartConfirm, setAiStartConfirm] =
+    useState<AiStartConfirmState | null>(null);
+  const [assignAndStartError, setAssignAndStartError] = useState<string | null>(
+    null,
+  );
+  const cancelAiConfirmButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (!teamSaveToast) {
+      return;
+    }
+    const timer = window.setTimeout(() => setTeamSaveToast(null), 5000);
+    return () => window.clearTimeout(timer);
+  }, [teamSaveToast]);
+
+  const teamAssigneesQuery = useQuery<WorkspaceTeamAssigneesSnapshot>({
+    queryKey: projectBoardKeys.teamAssignees(workspaceResetKey),
+    queryFn: () => gateway.getWorkspaceTeamAssignees!(),
+    enabled: !isUnlinked && Boolean(gateway.getWorkspaceTeamAssignees),
+  });
+
+  const refreshTeamMembersMutation = useMutation({
+    mutationFn: () => gateway.getWorkspaceTeamAssignees!({ forceRefresh: true }),
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData(
+        projectBoardKeys.teamAssignees(workspaceResetKey),
+        snapshot,
+      );
+    },
+  });
+
+  const saveTeamAssigneesMutation = useMutation({
+    mutationFn: (assignees: WorkspaceTeamAssignees) =>
+      gateway.saveWorkspaceTeamAssignees!(assignees),
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData(
+        projectBoardKeys.teamAssignees(workspaceResetKey),
+        snapshot,
+      );
+      setTeamSettingsOpen(false);
+      setTeamSaveToast("담당 설정을 저장했습니다.");
+    },
+  });
+
+  const teamAssigneesSnapshot = teamAssigneesQuery.data ?? null;
+  const effectiveViewerLogin =
+    viewerLogin ?? teamAssigneesSnapshot?.viewerLogin ?? null;
+  const isTeamAssigneesInitialLoading =
+    !isUnlinked &&
+    Boolean(gateway.getWorkspaceTeamAssignees) &&
+    teamAssigneesQuery.isPending &&
+    !teamAssigneesSnapshot;
+  const teamSettingsDisabled =
+    isUnlinked ||
+    !gateway.getWorkspaceTeamAssignees ||
+    isTeamAssigneesInitialLoading ||
+    (!teamAssigneesQuery.isError &&
+      (!teamAssigneesSnapshot ||
+        !teamAssigneesSnapshot.canWriteDocsRepository ||
+        !teamAssigneesSnapshot.docsRepositoryFullName));
+  const teamSettingsNoPermissionTooltip =
+    !isTeamAssigneesInitialLoading && teamSettingsDisabled;
+
+  const assignToSelfMutation = useMutation({
+    mutationFn: async (input: {
+      issueNumber: number;
+      repositoryFullName: string | null;
+    }) => {
+      if (!gateway.assignIssueToSelf) {
+        throw new Error("담당자 배정 기능이 연결되지 않았습니다.");
+      }
+      return gateway.assignIssueToSelf(input);
+    },
+    onSuccess: (freshBoard, input) => {
+      if (queryProjectId !== null) {
+        queryClient.setQueryData(
+          projectBoardKeys.board(queryProjectId),
+          freshBoard,
+        );
+      }
+      const updatedIssue = findIssueByNumber(
+        freshBoard.issues,
+        input.issueNumber,
+      );
+      if (updatedIssue?.assignees !== undefined) {
+        queryClient.setQueriesData<ProjectBoardIssueDetail>(
+          {
+            queryKey: [
+              "project-board",
+              "issue-detail",
+              workspaceResetKey,
+              input.issueNumber,
+            ],
+          },
+          (previous) =>
+            previous
+              ? { ...previous, assignees: updatedIssue.assignees }
+              : previous,
+        );
+      }
+      void queryClient.invalidateQueries({
+        queryKey: [
+          "project-board",
+          "issue-detail",
+          workspaceResetKey,
+          input.issueNumber,
+        ],
+      });
+    },
+  });
 
   const linkedProjectIds = useMemo(() => {
     const workspaces = activeProject?.workspaces ?? [];
@@ -657,13 +810,11 @@ export function ProjectPage({
     },
   });
 
-  const handleStartWithAi = (
+  const launchAiForIssue = (
     issue: BoardIssue,
     detail: ProjectBoardIssueDetail | null,
+    overrideBoard?: ProjectBoard,
   ) => {
-    if (issue.layer === "backend" || issue.layer === "frontend") {
-      return;
-    }
     const repoFullName =
       detail?.repositoryFullName ?? inferRepositoryFullNameFromUrl(issue.url);
     const firstDoc = detail?.linkedDocuments[0]?.path ?? null;
@@ -677,16 +828,24 @@ export function ProjectPage({
       layer: issue.layer,
       targetDescription: `문서 저장소 격리 worktree (${resolveLayerName(issue.layer)} — PRD·화면명세서 작성 전용, 코드 구현 비수행)`,
     });
+    const latestBoard =
+      overrideBoard ??
+      (queryProjectId !== null
+        ? queryClient.getQueryData<ProjectBoard>(
+            projectBoardKeys.board(queryProjectId),
+          )
+        : undefined) ??
+      board;
     if (
       queryProjectId !== null &&
-      board &&
+      latestBoard &&
       (issue.status === "backlog" || issue.status === "ready")
     ) {
       queryClient.setQueryData<ProjectBoard>(
         projectBoardKeys.board(queryProjectId),
         {
-          ...board,
-          issues: patchIssueInTree(board.issues, issue.number, {
+          ...latestBoard,
+          issues: patchIssueInTree(latestBoard.issues, issue.number, {
             status: "in_progress",
           }),
         },
@@ -695,6 +854,75 @@ export function ProjectPage({
     setSelectedIssueNumber(null);
     if (inRouterContext) {
       setNavigateTarget("/ai");
+    }
+  };
+
+  const handleStartWithAi = (
+    issue: BoardIssue,
+    detail: ProjectBoardIssueDetail | null,
+  ) => {
+    if (issue.layer === "backend" || issue.layer === "frontend") {
+      return;
+    }
+    const effectiveAssignees =
+      detail?.assignees !== undefined
+        ? detail.assignees
+        : (issue.assignees ?? []);
+    const ownership = classifyIssueOwnership(
+      effectiveAssignees,
+      effectiveViewerLogin,
+    );
+    if (ownership.kind === "self" || ownership.kind === "unknown") {
+      launchAiForIssue(issue, detail);
+      return;
+    }
+    assignToSelfMutation.reset();
+    setAssignAndStartError(null);
+    if (ownership.kind === "other") {
+      setAiStartConfirm({
+        mode: "other",
+        issue,
+        detail,
+        assigneeLogins: ownership.assigneeLogins,
+      });
+      return;
+    }
+    if (effectiveViewerLogin) {
+      setAiStartConfirm({
+        mode: "unassigned",
+        issue,
+        detail,
+        viewerLogin: effectiveViewerLogin,
+      });
+    }
+  };
+
+  const handleAssignAndStart = async (
+    confirm: Extract<AiStartConfirmState, { mode: "unassigned" }>,
+  ) => {
+    setAssignAndStartError(null);
+    const repoFullName =
+      confirm.detail?.repositoryFullName ??
+      inferRepositoryFullNameFromUrl(confirm.issue.url) ??
+      null;
+    try {
+      const freshBoard = await assignToSelfMutation.mutateAsync({
+        issueNumber: confirm.issue.number,
+        repositoryFullName: repoFullName,
+      });
+      const updatedIssue =
+        findIssueByNumber(freshBoard.issues, confirm.issue.number) ??
+        confirm.issue;
+      const updatedDetail = confirm.detail
+        ? {
+            ...confirm.detail,
+            assignees: updatedIssue.assignees ?? confirm.detail.assignees,
+          }
+        : null;
+      setAiStartConfirm(null);
+      launchAiForIssue(updatedIssue, updatedDetail, freshBoard);
+    } catch (error) {
+      setAssignAndStartError(describeAssignSelfError(error));
     }
   };
 
@@ -844,6 +1072,29 @@ export function ProjectPage({
                 "아직 불러오지 않음"
               )}
             </span>
+            <Tooltip
+              content="문서 저장소 쓰기 권한이 필요합니다"
+              disabled={!teamSettingsNoPermissionTooltip}
+            >
+              <span
+                tabIndex={teamSettingsNoPermissionTooltip ? 0 : undefined}
+                className="inline-flex"
+              >
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={teamSettingsDisabled}
+                  onClick={() => {
+                    saveTeamAssigneesMutation.reset();
+                    refreshTeamMembersMutation.reset();
+                    setTeamSettingsOpen(true);
+                  }}
+                >
+                  <Users aria-hidden="true" strokeWidth={1.75} />
+                  담당 설정
+                </Button>
+              </span>
+            </Tooltip>
             <Button
               type="button"
               variant="secondary"
@@ -1224,6 +1475,7 @@ export function ProjectPage({
               : "필드 변경에 실패했습니다."
             : null
         }
+        viewerLogin={effectiveViewerLogin}
         onRetryDetail={() => {
           void issueDetailQuery.refetch();
         }}
@@ -1239,6 +1491,125 @@ export function ProjectPage({
         onStartWithAi={handleStartWithAi}
       />
 
+      <Dialog
+        open={aiStartConfirm !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !assignToSelfMutation.isPending) {
+            setAiStartConfirm(null);
+            setAssignAndStartError(null);
+          }
+        }}
+      >
+        {aiStartConfirm ? (
+          <DialogContent
+            aria-label={
+              aiStartConfirm.mode === "other"
+                ? "다른 사람의 백로그입니다"
+                : "담당자가 없습니다"
+            }
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              cancelAiConfirmButtonRef.current?.focus();
+            }}
+          >
+            <DialogHeader>
+              <div className="min-w-0 flex-1">
+                <DialogTitle>
+                  {aiStartConfirm.mode === "other"
+                    ? "다른 사람의 백로그입니다"
+                    : "담당자가 없습니다"}
+                </DialogTitle>
+                <DialogDescription>
+                  {aiStartConfirm.mode === "other"
+                    ? `#${aiStartConfirm.issue.number}는 ${formatAssigneeHandles(aiStartConfirm.assigneeLogins)} 담당입니다. 그래도 작업을 시작할까요?`
+                    : `#${aiStartConfirm.issue.number}를 나(@${aiStartConfirm.viewerLogin})에게 배정하고 시작할까요?`}
+                </DialogDescription>
+              </div>
+              <DialogCloseButton
+                label="확인 대화상자 닫기"
+                disabled={assignToSelfMutation.isPending}
+              />
+            </DialogHeader>
+
+            {aiStartConfirm.mode === "unassigned" && assignAndStartError ? (
+              <DialogBody className="mt-[var(--space-4)]">
+                <StatusFeedback variant="banner" tone="error">
+                  {assignAndStartError}
+                </StatusFeedback>
+              </DialogBody>
+            ) : null}
+
+            <DialogFooter className="mt-[var(--space-4)]">
+              {aiStartConfirm.mode === "other" ? (
+                <>
+                  <Button
+                    ref={cancelAiConfirmButtonRef}
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setAiStartConfirm(null);
+                      setAssignAndStartError(null);
+                    }}
+                  >
+                    취소
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    onClick={() => {
+                      const target = aiStartConfirm;
+                      setAiStartConfirm(null);
+                      launchAiForIssue(target.issue, target.detail);
+                    }}
+                  >
+                    그래도 시작
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    ref={cancelAiConfirmButtonRef}
+                    type="button"
+                    variant="ghost"
+                    disabled={assignToSelfMutation.isPending}
+                    onClick={() => {
+                      setAiStartConfirm(null);
+                      setAssignAndStartError(null);
+                    }}
+                  >
+                    취소
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={assignToSelfMutation.isPending}
+                    onClick={() => {
+                      const target = aiStartConfirm;
+                      setAiStartConfirm(null);
+                      setAssignAndStartError(null);
+                      launchAiForIssue(target.issue, target.detail);
+                    }}
+                  >
+                    배정 없이 시작
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="primary"
+                    disabled={assignToSelfMutation.isPending}
+                    loading={assignToSelfMutation.isPending}
+                    onClick={() => {
+                      void handleAssignAndStart(aiStartConfirm);
+                    }}
+                  >
+                    나에게 배정하고 시작
+                  </Button>
+                </>
+              )}
+            </DialogFooter>
+          </DialogContent>
+        ) : null}
+      </Dialog>
+
       {inRouterContext ? (
         <RouterIssueDeepLinkSync
           ready={!isUnlinked && board !== null && !boardLoading && !isFetchingBoard && !isSyncingBoard}
@@ -1252,6 +1623,57 @@ export function ProjectPage({
           to={navigateTarget}
           onNavigated={() => setNavigateTarget(null)}
         />
+      ) : null}
+
+      <TeamAssigneeSettingsDialog
+        open={teamSettingsOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) {
+            saveTeamAssigneesMutation.reset();
+          }
+          setTeamSettingsOpen(nextOpen);
+        }}
+        snapshot={teamAssigneesSnapshot}
+        isLoading={
+          teamAssigneesQuery.isPending &&
+          Boolean(gateway.getWorkspaceTeamAssignees)
+        }
+        fetchError={
+          teamAssigneesQuery.isError
+            ? describeBoardError(teamAssigneesQuery.error)
+            : refreshTeamMembersMutation.isError
+              ? describeBoardError(refreshTeamMembersMutation.error)
+              : null
+        }
+        isRefreshing={
+          refreshTeamMembersMutation.isPending || teamAssigneesQuery.isFetching
+        }
+        isSaving={saveTeamAssigneesMutation.isPending}
+        saveError={
+          saveTeamAssigneesMutation.isError
+            ? "담당 설정을 저장하지 못했습니다."
+            : null
+        }
+        onRefreshMembers={() => {
+          if (!gateway.getWorkspaceTeamAssignees) {
+            return;
+          }
+          refreshTeamMembersMutation.mutate();
+        }}
+        onSave={async (assignees) => {
+          if (!gateway.saveWorkspaceTeamAssignees) {
+            return;
+          }
+          await saveTeamAssigneesMutation.mutateAsync(assignees);
+        }}
+      />
+
+      {teamSaveToast ? (
+        <div className="fixed right-[var(--space-4)] bottom-[var(--space-4)] z-50 w-max max-w-[min(420px,calc(100vw-32px))]">
+          <StatusFeedback variant="toast" tone="success">
+            {teamSaveToast}
+          </StatusFeedback>
+        </div>
       ) : null}
     </section>
   );

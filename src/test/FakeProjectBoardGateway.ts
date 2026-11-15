@@ -12,10 +12,13 @@ import type {
   ProjectWritableRepository,
 } from "@/features/project-board/backlogDerivation";
 import type {
+  BoardAssignee,
   BoardIssue,
   ProjectBoard,
   ProjectList,
   ResolvedGithubProject,
+  WorkspaceTeamAssignees,
+  WorkspaceTeamAssigneesSnapshot,
 } from "@/features/project-board/model";
 
 export class FakeProjectBoardGateway implements ProjectBoardGateway {
@@ -36,7 +39,35 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
       }
     | { method: "createBoardIssues"; items: CreateBoardIssueInput[] }
     | { method: "updateBoardItem"; request: UpdateBoardItemInput }
+    | { method: "getWorkspaceTeamAssignees"; forceRefresh?: boolean }
+    | {
+        method: "saveWorkspaceTeamAssignees";
+        assignees: WorkspaceTeamAssignees;
+      }
+    | {
+        method: "assignIssueToSelf";
+        issueNumber: number;
+        repositoryFullName?: string | null;
+      }
   > = [];
+
+  viewerLogin: string | null = null;
+  docsRepositoryFullName: string | null = "Acme-Org/acme-docs";
+  canWriteDocsRepository = true;
+  teamMembers: BoardAssignee[] = [
+    { login: "alice", avatarUrl: null, name: "가람" },
+    { login: "bob", avatarUrl: null, name: "민수" },
+  ];
+  teamAssignees: WorkspaceTeamAssignees = {
+    planning: [],
+    design: [],
+    frontend: [],
+    backend: [],
+  };
+  memberFetchFailed = false;
+  saveTeamAssigneesError: Error | null = null;
+  getTeamAssigneesError: Error | null = null;
+  assignIssueToSelfError: Error | null = null;
 
   writableRepositories: ProjectWritableRepository[] = [
     {
@@ -361,6 +392,120 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
           request.priority !== undefined
             ? request.priority
             : existingDetail.priority,
+      });
+    }
+    return this.board;
+  }
+
+  async getWorkspaceTeamAssignees(options?: {
+    forceRefresh?: boolean;
+  }): Promise<WorkspaceTeamAssigneesSnapshot> {
+    this.calls.push({
+      method: "getWorkspaceTeamAssignees",
+      forceRefresh: options?.forceRefresh,
+    });
+    if (this.getTeamAssigneesError) {
+      throw this.getTeamAssigneesError;
+    }
+    const known = new Set(this.teamMembers.map((m) => m.login.toLowerCase()));
+    const allConfigured = [
+      ...this.teamAssignees.planning,
+      ...this.teamAssignees.design,
+      ...this.teamAssignees.frontend,
+      ...this.teamAssignees.backend,
+    ];
+    const staleLogins = Array.from(
+      new Set(allConfigured.filter((login) => !known.has(login.toLowerCase()))),
+    );
+    return {
+      viewerLogin: this.viewerLogin,
+      docsRepositoryFullName: this.docsRepositoryFullName,
+      canWriteDocsRepository: this.canWriteDocsRepository,
+      members: this.teamMembers,
+      assignees: {
+        planning: [...this.teamAssignees.planning],
+        design: [...this.teamAssignees.design],
+        frontend: [...this.teamAssignees.frontend],
+        backend: [...this.teamAssignees.backend],
+      },
+      staleLogins: this.memberFetchFailed && this.teamMembers.length === 0 ? [] : staleLogins,
+      memberFetchFailed: this.memberFetchFailed,
+      fetchedAt: "2026-11-15T00:00:00Z",
+    };
+  }
+
+  async saveWorkspaceTeamAssignees(
+    assignees: WorkspaceTeamAssignees,
+  ): Promise<WorkspaceTeamAssigneesSnapshot> {
+    this.calls.push({ method: "saveWorkspaceTeamAssignees", assignees });
+    if (!this.canWriteDocsRepository || !this.docsRepositoryFullName) {
+      throw new Error("문서 저장소 쓰기 권한이 필요합니다.");
+    }
+    if (this.saveTeamAssigneesError) {
+      throw this.saveTeamAssigneesError;
+    }
+    this.teamAssignees = {
+      planning: [...assignees.planning],
+      design: [...assignees.design],
+      frontend: [...assignees.frontend],
+      backend: [...assignees.backend],
+    };
+    return this.getWorkspaceTeamAssignees();
+  }
+
+  async assignIssueToSelf(input: {
+    issueNumber: number;
+    repositoryFullName?: string | null;
+  }): Promise<ProjectBoard> {
+    this.calls.push({
+      method: "assignIssueToSelf",
+      issueNumber: input.issueNumber,
+      repositoryFullName: input.repositoryFullName ?? null,
+    });
+    if (this.assignIssueToSelfError) {
+      throw this.assignIssueToSelfError;
+    }
+    const login = this.viewerLogin ?? "alice";
+    const matchedMember = this.teamMembers.find(
+      (m) => m.login.toLowerCase() === login.toLowerCase(),
+    );
+    const selfAssignee: BoardAssignee = matchedMember ?? {
+      login,
+      avatarUrl: null,
+      name: null,
+    };
+    const updateAssignees = (nodes: BoardIssue[]): BoardIssue[] =>
+      nodes.map((node) => {
+        const nextChildren =
+          node.children.length > 0 ? updateAssignees(node.children) : [];
+        if (node.number !== input.issueNumber) {
+          return nextChildren === node.children
+            ? node
+            : { ...node, children: nextChildren };
+        }
+        const existing = node.assignees ?? [];
+        const hasSelf = existing.some(
+          (a) => a.login.toLowerCase() === login.toLowerCase(),
+        );
+        return {
+          ...node,
+          assignees: hasSelf ? existing : [...existing, selfAssignee],
+          children: nextChildren,
+        };
+      });
+    this.board = {
+      ...this.board,
+      issues: updateAssignees(this.board.issues),
+    };
+    const detail = this.issueDetails.get(input.issueNumber);
+    if (detail) {
+      const existing = detail.assignees ?? [];
+      const hasSelf = existing.some(
+        (a) => a.login.toLowerCase() === login.toLowerCase(),
+      );
+      this.issueDetails.set(input.issueNumber, {
+        ...detail,
+        assignees: hasSelf ? existing : [...existing, selfAssignee],
       });
     }
     return this.board;

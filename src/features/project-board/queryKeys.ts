@@ -13,4 +13,6 @@ export const projectBoardKeys = {
   boards: ["projectBoard", "board"] as const,
   board: (projectId: string | null) =>
     ["projectBoard", "board", projectId] as const,
+  teamAssignees: (workspaceKey: string) =>
+    ["project-board", "team-assignees", workspaceKey] as const,
 };

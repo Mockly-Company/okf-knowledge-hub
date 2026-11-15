@@ -10,6 +10,11 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import {
+  clearPendingAiLaunch,
+  getPendingAiLaunch,
+} from "@/features/ai/pendingAiLaunch";
 import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeDocsRepositoryGateway } from "@/test/FakeDocsRepositoryGateway";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
@@ -1798,5 +1803,274 @@ describe("ProjectPage project switching", () => {
       expect(searchText).toContain("sibling=kept");
       expect(searchText).not.toContain("issue=");
     });
+  });
+
+  it("renders 담당 설정 left of 새로고침, saves assignees with toast, and disables with tooltip without docs write permission (#77)", async () => {
+    const user = userEvent.setup();
+    const readonlyGateway = FakeProjectBoardGateway.empty();
+    readonlyGateway.canWriteDocsRepository = false;
+    let releaseTeamAssignees!: () => void;
+    const teamAssigneesGate = new Promise<void>((resolve) => {
+      releaseTeamAssignees = resolve;
+    });
+    const originalGetTeamAssignees =
+      readonlyGateway.getWorkspaceTeamAssignees.bind(readonlyGateway);
+    readonlyGateway.getWorkspaceTeamAssignees = async (forceRefresh) => {
+      await teamAssigneesGate;
+      return originalGetTeamAssignees(forceRefresh);
+    };
+
+    const readonlyView = render(<ProjectPage gateway={readonlyGateway} />);
+    const disabledSettingsBtn = await screen.findByRole("button", {
+      name: "담당 설정",
+    });
+    const refreshBtn = screen.getByRole("button", { name: "새로고침" });
+    expect(
+      disabledSettingsBtn.compareDocumentPosition(refreshBtn) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(disabledSettingsBtn).toBeDisabled();
+    expect(disabledSettingsBtn.parentElement).not.toHaveAttribute("tabindex");
+    await user.hover(disabledSettingsBtn.parentElement!);
+    expect(
+      screen.queryByRole("tooltip", {
+        name: "문서 저장소 쓰기 권한이 필요합니다",
+      }),
+    ).toBeNull();
+    await user.unhover(disabledSettingsBtn.parentElement!);
+
+    releaseTeamAssignees();
+    await waitFor(() => {
+      expect(disabledSettingsBtn).toBeDisabled();
+      expect(disabledSettingsBtn.parentElement).toHaveAttribute(
+        "tabindex",
+        "0",
+      );
+    });
+    disabledSettingsBtn.parentElement?.focus();
+    expect(
+      await screen.findByRole("tooltip", {
+        name: "문서 저장소 쓰기 권한이 필요합니다",
+      }),
+    ).toBeVisible();
+    readonlyView.unmount();
+
+    const writableGateway = FakeProjectBoardGateway.empty();
+    writableGateway.teamMembers = [
+      { login: "alice", name: "앨리스" },
+      { login: "bob", name: "밥" },
+    ];
+    render(<ProjectPage gateway={writableGateway} />);
+
+    const settingsBtn = await screen.findByRole("button", { name: "담당 설정" });
+    await waitFor(() => expect(settingsBtn).toBeEnabled());
+    await user.click(settingsBtn);
+
+    const dialog = await screen.findByRole("dialog", { name: "담당 설정" });
+    const aliceRow = within(dialog).getByRole("listitem", { name: /@alice/i });
+    await user.click(within(aliceRow).getByRole("button", { name: "기획" }));
+    await user.click(within(dialog).getByRole("button", { name: "저장" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "담당 설정" }),
+      ).toBeNull();
+    });
+    expect(
+      await screen.findByText("담당 설정을 저장했습니다."),
+    ).toBeVisible();
+    expect(writableGateway.calls).toContainEqual({
+      method: "saveWorkspaceTeamAssignees",
+      assignees: {
+        planning: ["alice"],
+        design: [],
+        frontend: [],
+        backend: [],
+      },
+    });
+  });
+
+  it("starts self issues immediately, warns before other-assigned issues with 취소 focused, and offers self-assignment on unassigned issues (#77)", async () => {
+    const user = userEvent.setup();
+    clearPendingAiLaunch();
+
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 30,
+        title: "[기획] 본인 담당 백로그",
+        url: "https://github.com/Acme-Org/acme-docs/issues/30",
+        status: "ready",
+        layer: "planning",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "Alice" }],
+        children: [],
+      },
+      {
+        number: 31,
+        title: "[디자인] 타인 담당 백로그",
+        url: "https://github.com/Acme-Org/acme-docs/issues/31",
+        status: "ready",
+        layer: "design",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [{ login: "bob" }],
+        children: [],
+      },
+      {
+        number: 32,
+        title: "[기획] 미배정 백로그",
+        url: "https://github.com/Acme-Org/acme-docs/issues/32",
+        status: "ready",
+        layer: "planning",
+        kind: "작업",
+        dependsOn: null,
+        assignees: [],
+        children: [],
+      },
+    ]);
+    gateway.viewerLogin = "alice";
+
+    const renderBoardRouter = () =>
+      render(
+        <MemoryRouter initialEntries={["/project"]}>
+          <Routes>
+            <Route path="/project" element={<ProjectPage gateway={gateway} />} />
+            <Route path="/ai" element={<div>AI_ROUTE_LAUNCHED</div>} />
+          </Routes>
+        </MemoryRouter>,
+      );
+
+    // 1. Self-assigned issue launches immediately without confirmation
+    const view1 = renderBoardRouter();
+    await user.click(await screen.findByRole("button", { name: "#30 상세 보기" }));
+    const selfDrawer = await screen.findByRole("dialog", {
+      name: "[기획] 본인 담당 백로그",
+    });
+    expect(within(selfDrawer).queryByText(/담당 백로그입니다\./)).toBeNull();
+    await user.click(within(selfDrawer).getByRole("button", { name: "AI로 작업 시작" }));
+    expect(await screen.findByText("AI_ROUTE_LAUNCHED")).toBeVisible();
+    expect(getPendingAiLaunch()?.request.issueNumber).toBe(30);
+    view1.unmount();
+    clearPendingAiLaunch();
+
+    // 2. Other-assigned issue warns, focuses 취소 initially, cancel preserves board, 그래도 시작 launches without assigning
+    const view2 = renderBoardRouter();
+    await user.click(await screen.findByRole("button", { name: "#31 상세 보기" }));
+    const otherDrawer = await screen.findByRole("dialog", {
+      name: "[디자인] 타인 담당 백로그",
+    });
+    expect(within(otherDrawer).getByText("@bob 담당 백로그입니다.")).toBeVisible();
+    await user.click(within(otherDrawer).getByRole("button", { name: "AI로 작업 시작" }));
+
+    const otherConfirm = await screen.findByRole("dialog", {
+      name: "다른 사람의 백로그입니다",
+    });
+    expect(
+      within(otherConfirm).getByText(
+        "#31는 @bob 담당입니다. 그래도 작업을 시작할까요?",
+      ),
+    ).toBeVisible();
+    const cancelOtherBtn = within(otherConfirm).getByRole("button", { name: "취소" });
+    await waitFor(() => expect(cancelOtherBtn).toHaveFocus());
+    await user.click(cancelOtherBtn);
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "다른 사람의 백로그입니다" }),
+      ).toBeNull();
+    });
+    expect(screen.queryByText("AI_ROUTE_LAUNCHED")).toBeNull();
+
+    // Re-trigger and click 그래도 시작
+    const otherDrawerAfterCancel = await screen.findByRole("dialog", {
+      name: "[디자인] 타인 담당 백로그",
+    });
+    await user.click(
+      within(otherDrawerAfterCancel).getByRole("button", { name: "AI로 작업 시작" }),
+    );
+    const otherConfirm2 = await screen.findByRole("dialog", {
+      name: "다른 사람의 백로그입니다",
+    });
+    await user.click(within(otherConfirm2).getByRole("button", { name: "그래도 시작" }));
+    expect(await screen.findByText("AI_ROUTE_LAUNCHED")).toBeVisible();
+    expect(
+      gateway.calls.some((call) => call.method === "assignIssueToSelf"),
+    ).toBe(false);
+    view2.unmount();
+    clearPendingAiLaunch();
+
+    // 3. Unassigned issue: 배정 없이 시작 launches without assigning
+    const view3 = renderBoardRouter();
+    await user.click(await screen.findByRole("button", { name: "#32 상세 보기" }));
+    const unassignedDrawer = await screen.findByRole("dialog", {
+      name: "[기획] 미배정 백로그",
+    });
+    expect(
+      within(unassignedDrawer).getByText("담당자가 없는 백로그입니다."),
+    ).toBeVisible();
+    await user.click(
+      within(unassignedDrawer).getByRole("button", { name: "AI로 작업 시작" }),
+    );
+    const unassignedConfirm = await screen.findByRole("dialog", {
+      name: "담당자가 없습니다",
+    });
+    expect(
+      within(unassignedConfirm).getByText(
+        "#32를 나(@alice)에게 배정하고 시작할까요?",
+      ),
+    ).toBeVisible();
+    await waitFor(() => {
+      expect(
+        within(unassignedConfirm).getByRole("button", { name: "취소" }),
+      ).toHaveFocus();
+    });
+    await user.click(
+      within(unassignedConfirm).getByRole("button", { name: "배정 없이 시작" }),
+    );
+    expect(await screen.findByText("AI_ROUTE_LAUNCHED")).toBeVisible();
+    expect(
+      gateway.calls.some((call) => call.method === "assignIssueToSelf"),
+    ).toBe(false);
+    view3.unmount();
+    clearPendingAiLaunch();
+
+    // 4. Unassigned issue: 나에게 배정하고 시작 handles error then succeeds + updates cache
+    gateway.assignIssueToSelfError = new Error("권한 부족");
+    const view4 = renderBoardRouter();
+    await user.click(await screen.findByRole("button", { name: "#32 상세 보기" }));
+    const drawer4 = await screen.findByRole("dialog", {
+      name: "[기획] 미배정 백로그",
+    });
+    await user.click(within(drawer4).getByRole("button", { name: "AI로 작업 시작" }));
+    const confirm4 = await screen.findByRole("dialog", {
+      name: "담당자가 없습니다",
+    });
+    await user.click(
+      within(confirm4).getByRole("button", { name: "나에게 배정하고 시작" }),
+    );
+    expect(await within(confirm4).findByRole("alert")).toHaveTextContent(
+      "권한 부족",
+    );
+    expect(screen.queryByText("AI_ROUTE_LAUNCHED")).toBeNull();
+
+    gateway.assignIssueToSelfError = null;
+    await user.click(
+      within(confirm4).getByRole("button", { name: "나에게 배정하고 시작" }),
+    );
+    expect(await screen.findByText("AI_ROUTE_LAUNCHED")).toBeVisible();
+    expect(gateway.calls).toContainEqual({
+      method: "assignIssueToSelf",
+      issueNumber: 32,
+      repositoryFullName: "acme-org/acme-docs",
+    });
+    expect(getPendingAiLaunch()?.request.issueNumber).toBe(32);
+    view4.unmount();
+
+    // 5. Re-opening board with updated cache shows @alice on #32 without waiting for network sync
+    const view5 = render(<ProjectPage gateway={gateway} />);
+    const detailBtn32 = await screen.findByRole("button", { name: "#32 상세 보기" });
+    const card32 = detailBtn32.closest("article, li")!;
+    expect(within(card32 as HTMLElement).getByText("@alice")).toBeVisible();
+    view5.unmount();
   });
 });

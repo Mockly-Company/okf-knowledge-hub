@@ -145,6 +145,7 @@ fn generated_workspace_content(
         },
         repositories: Vec::new(),
         github: None,
+        assignees: None,
         extra: Default::default(),
     };
     WorkspaceDocument { config }.to_yaml()

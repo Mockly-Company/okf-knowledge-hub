@@ -92,6 +92,7 @@ pub struct ActiveWorkspaceAiContext {
     pub docs_repository_full_name: Option<String>,
     pub project: Option<ActiveProjectRuleInfo>,
     pub code_repositories: Vec<LinkedCodeRepoRuleInfo>,
+    pub current_user_login: Option<String>,
 }
 
 pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
@@ -106,6 +107,17 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
     ];
     if let Some(title) = context.workspace_title.as_deref() {
         lines.push(format!("- 활성 워크스페이스: `{title}`"));
+    }
+    if let Some(login) = context
+        .current_user_login
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        lines.push(format!(
+            "- 현재 로그인한 GitHub 사용자: `@{}`",
+            login.trim_start_matches('@')
+        ));
     }
     match &context.project {
         Some(project) => {
@@ -704,5 +716,24 @@ mod tests {
 
         assert_eq!(outcome.status, AiTaskStatus::Cancelled);
         assert!(started.elapsed() < Duration::from_secs(15));
+    }
+
+    #[test]
+    fn active_context_rules_includes_current_user_login_when_present() {
+        let with_login = ActiveWorkspaceAiContext {
+            current_user_login: Some("  YoonCarrot  ".to_owned()),
+            ..Default::default()
+        };
+        let rules = active_context_rules(&with_login);
+        assert!(
+            rules.contains("- 현재 로그인한 GitHub 사용자: `@YoonCarrot`"),
+            "missing login rule line: {rules}"
+        );
+
+        let without_login = ActiveWorkspaceAiContext::default();
+        assert!(
+            !active_context_rules(&without_login).contains("현재 로그인한 GitHub 사용자"),
+            "unexpected login rule line when login missing"
+        );
     }
 }

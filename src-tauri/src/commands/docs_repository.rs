@@ -207,11 +207,13 @@ pub async fn pull_docs_repository(
     let access_token = auth.valid_access_token().await?;
     let git = state.repository_git.clone();
     let remote_url = format!("https://github.com/{full_name}.git");
-    tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         git.fast_forward_default_branch(&directory, &remote_url, access_token)
     })
     .await
-    .map_err(|_| pull_unavailable())?
+    .map_err(|_| pull_unavailable())??;
+    crate::commands::project_board::spawn_warm_workspace_team_members_cache(&state);
+    Ok(outcome)
 }
 
 fn pull_unavailable() -> AppError {

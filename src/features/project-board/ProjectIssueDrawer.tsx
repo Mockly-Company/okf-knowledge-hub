@@ -14,7 +14,12 @@ import {
 } from "@/components/ui/dialog";
 import { dialogOverlayClassName } from "@/components/ui/dialog-styles";
 import { Select } from "@/components/ui/select";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import { IssueAssigneeBadge } from "./IssueAssigneeBadge";
+import {
+  classifyIssueOwnership,
+  formatAssigneeHandles,
+} from "./teamAssignees";
 import {
   BOARD_LAYERS,
   BOARD_STATUSES,
@@ -43,6 +48,7 @@ export interface ProjectIssueDrawerProps {
   readiness: IssueReadiness | null;
   isUpdating: boolean;
   updateError: string | null;
+  viewerLogin?: string | null;
   onRetryDetail?: () => void;
   onUpdateField?: (patch: Omit<UpdateBoardItemInput, "issueNumber">) => void;
   onStartWithAi?: (
@@ -61,6 +67,7 @@ export function ProjectIssueDrawer({
   readiness,
   isUpdating,
   updateError,
+  viewerLogin = null,
   onRetryDetail,
   onUpdateField,
   onStartWithAi,
@@ -79,6 +86,7 @@ export function ProjectIssueDrawer({
     detail?.assignees !== undefined
       ? detail.assignees
       : (issue?.assignees ?? []);
+  const ownership = classifyIssueOwnership(effectiveAssignees, viewerLogin);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -136,6 +144,17 @@ export function ProjectIssueDrawer({
               </DialogHeader>
 
               <DialogBody className="mt-[var(--space-4)] grid content-start gap-[var(--space-5)] pr-[var(--space-1)]">
+                {ownership.kind === "other" ? (
+                  <StatusFeedback variant="banner" tone="warning">
+                    {formatAssigneeHandles(ownership.assigneeLogins)} 담당
+                    백로그입니다.
+                  </StatusFeedback>
+                ) : ownership.kind === "unassigned" ? (
+                  <StatusFeedback variant="banner" tone="info">
+                    담당자가 없는 백로그입니다.
+                  </StatusFeedback>
+                ) : null}
+
                 {onUpdateField ? (
                   <section
                     aria-label="필드 빠른 변경"

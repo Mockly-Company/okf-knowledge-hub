@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -345,6 +345,16 @@ struct GithubProjectLookupError {
     message: String,
 }
 
+#[derive(Deserialize, Default)]
+struct GithubRepositoryPermissionsResponse {
+    #[serde(default)]
+    admin: Option<bool>,
+    #[serde(default)]
+    maintain: Option<bool>,
+    #[serde(default)]
+    push: Option<bool>,
+}
+
 #[derive(Deserialize)]
 struct GithubRepositoryResponse {
     node_id: String,
@@ -353,6 +363,8 @@ struct GithubRepositoryResponse {
     owner: GithubRepositoryOwnerResponse,
     default_branch: Option<String>,
     clone_url: String,
+    #[serde(default)]
+    permissions: Option<GithubRepositoryPermissionsResponse>,
 }
 
 impl GithubRepositoryResponse {
@@ -385,6 +397,30 @@ impl GithubRepositoryResponse {
 #[derive(Deserialize)]
 struct GithubRepositoryOwnerResponse {
     login: String,
+}
+
+#[derive(Deserialize)]
+struct GithubRestUserResponse {
+    login: String,
+    #[serde(default)]
+    node_id: Option<String>,
+    #[serde(default)]
+    avatar_url: Option<String>,
+    #[serde(rename = "type", default)]
+    user_type: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubIssueAssigneesResponse {
+    #[serde(default)]
+    assignees: Vec<GithubRestAssigneeResponse>,
+}
+
+#[derive(Deserialize)]
+struct GithubRestAssigneeResponse {
+    login: String,
+    #[serde(default)]
+    avatar_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1054,6 +1090,301 @@ impl GithubHttpClient {
             )
             .await?;
         ensure_repository_identity(response.into_detail(), expected_repository_id)
+    }
+
+    pub async fn viewer_can_push_repository(&self, full_name: &str) -> Result<bool, AppError> {
+        let (owner, name) = split_repository_full_name(full_name)?;
+        let response: GithubRepositoryResponse = self
+            .get_json(&["repos", owner, name], &[], HttpFailureContext::Repository)
+            .await?;
+        if let Some(permissions) = response.permissions {
+            return Ok(permissions.admin.unwrap_or(false)
+                || permissions.maintain.unwrap_or(false)
+                || permissions.push.unwrap_or(false));
+        }
+
+        let query =
+            "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){viewerPermission}}";
+        let data = self
+            .graphql_value(query, json!({ "owner": owner, "name": name }))
+            .await?;
+        let permission = data
+            .get("repository")
+            .and_then(|repo| repo.get("viewerPermission"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        Ok(matches!(permission, "ADMIN" | "MAINTAIN" | "WRITE"))
+    }
+
+    pub async fn list_assignable_team_members(
+        &self,
+        repository_full_names: &[String],
+        org_login: Option<&str>,
+    ) -> Result<Vec<BoardAssignee>, AppError> {
+        const PER_PAGE: usize = 100;
+        const MAX_PAGES: u32 = 10;
+
+        #[derive(Clone)]
+        struct RawMember {
+            login: String,
+            node_id: Option<String>,
+            avatar_url: Option<String>,
+            name: Option<String>,
+        }
+
+        fn trim_non_empty(value: Option<String>) -> Option<String> {
+            value
+                .map(|raw| raw.trim().to_owned())
+                .filter(|trimmed| !trimmed.is_empty())
+        }
+
+        fn record_users(
+            users: Vec<GithubRestUserResponse>,
+            members: &mut Vec<RawMember>,
+            by_login: &mut HashMap<String, usize>,
+        ) {
+            for user in users {
+                let login = user.login.trim().to_owned();
+                if login.is_empty()
+                    || user
+                        .user_type
+                        .as_deref()
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("Bot"))
+                    || login.to_ascii_lowercase().ends_with("[bot]")
+                {
+                    continue;
+                }
+                let node_id = trim_non_empty(user.node_id);
+                let avatar_url = trim_non_empty(user.avatar_url);
+                let key = login.to_ascii_lowercase();
+                if let Some(&existing_index) = by_login.get(&key) {
+                    if members[existing_index].node_id.is_none() {
+                        members[existing_index].node_id = node_id;
+                    }
+                    if members[existing_index].avatar_url.is_none() {
+                        members[existing_index].avatar_url = avatar_url;
+                    }
+                } else {
+                    by_login.insert(key, members.len());
+                    members.push(RawMember {
+                        login,
+                        node_id,
+                        avatar_url,
+                        name: None,
+                    });
+                }
+            }
+        }
+
+        let mut seen_repos = HashSet::new();
+        let mut unique_repos = Vec::new();
+        for repo in repository_full_names {
+            let trimmed = repo.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if seen_repos.insert(trimmed.to_ascii_lowercase()) {
+                unique_repos.push(trimmed.to_owned());
+            }
+        }
+
+        let mut raw_members: Vec<RawMember> = Vec::new();
+        let mut by_login: HashMap<String, usize> = HashMap::new();
+
+        for (index, repo_full_name) in unique_repos.iter().enumerate() {
+            let (owner, name) = match split_repository_full_name(repo_full_name) {
+                Ok(parts) => parts,
+                Err(error) => {
+                    if index == 0 {
+                        return Err(error);
+                    }
+                    continue;
+                }
+            };
+            for page in 1..=MAX_PAGES {
+                let result: Result<Vec<GithubRestUserResponse>, AppError> = self
+                    .get_json(
+                        &["repos", owner, name, "assignees"],
+                        &[
+                            ("per_page", PER_PAGE.to_string()),
+                            ("page", page.to_string()),
+                        ],
+                        HttpFailureContext::Repository,
+                    )
+                    .await;
+                let users = match result {
+                    Ok(items) => items,
+                    Err(error) => {
+                        if index == 0 {
+                            return Err(error);
+                        }
+                        break;
+                    }
+                };
+                let count = users.len();
+                record_users(users, &mut raw_members, &mut by_login);
+                if count < PER_PAGE {
+                    break;
+                }
+            }
+        }
+
+        if let Some(org) = org_login.map(str::trim).filter(|s| !s.is_empty()) {
+            for page in 1..=MAX_PAGES {
+                let result: Result<Vec<GithubRestUserResponse>, AppError> = self
+                    .get_json(
+                        &["orgs", org, "members"],
+                        &[
+                            ("per_page", PER_PAGE.to_string()),
+                            ("page", page.to_string()),
+                        ],
+                        HttpFailureContext::Repository,
+                    )
+                    .await;
+                let Ok(users) = result else {
+                    break;
+                };
+                let count = users.len();
+                record_users(users, &mut raw_members, &mut by_login);
+                if count < PER_PAGE {
+                    break;
+                }
+            }
+        }
+
+        let mut seen_node_ids = HashSet::new();
+        let mut node_ids = Vec::new();
+        for member in &raw_members {
+            if let Some(id) = member.node_id.as_deref() {
+                if seen_node_ids.insert(id.to_owned()) {
+                    node_ids.push(id.to_owned());
+                }
+            }
+        }
+
+        const ENRICH_QUERY: &str =
+            "query($ids:[ID!]!){nodes(ids:$ids){... on User{login name avatarUrl}}}";
+        for chunk in node_ids.chunks(50) {
+            if let Ok(data) = self
+                .graphql_value(ENRICH_QUERY, json!({ "ids": chunk }))
+                .await
+            {
+                if let Some(nodes) = data.get("nodes").and_then(serde_json::Value::as_array) {
+                    for node in nodes {
+                        let Some(login) = node
+                            .get("login")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        else {
+                            continue;
+                        };
+                        let Some(&member_index) = by_login.get(&login.to_ascii_lowercase()) else {
+                            continue;
+                        };
+                        if let Some(name) = node
+                            .get("name")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            raw_members[member_index].name = Some(name.to_owned());
+                        }
+                        if let Some(avatar_url) = node
+                            .get("avatarUrl")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            raw_members[member_index].avatar_url = Some(avatar_url.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut assignees: Vec<BoardAssignee> = raw_members
+            .into_iter()
+            .map(|member| BoardAssignee {
+                login: member.login,
+                avatar_url: member.avatar_url,
+                name: member.name,
+            })
+            .collect();
+        assignees.sort_by(|a, b| {
+            let a_display = a.name.as_deref().unwrap_or(&a.login).to_lowercase();
+            let b_display = b.name.as_deref().unwrap_or(&b.login).to_lowercase();
+            a_display
+                .cmp(&b_display)
+                .then_with(|| a.login.to_lowercase().cmp(&b.login.to_lowercase()))
+                .then_with(|| a.login.cmp(&b.login))
+        });
+        Ok(assignees)
+    }
+
+    pub async fn add_issue_assignees(
+        &self,
+        repository_full_name: &str,
+        issue_number: u64,
+        logins: &[String],
+    ) -> Result<Vec<BoardAssignee>, AppError> {
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let mut seen_logins = HashSet::new();
+        let cleaned_logins: Vec<String> = logins
+            .iter()
+            .map(|login| login.trim().trim_start_matches('@').to_owned())
+            .filter(|login| !login.is_empty() && seen_logins.insert(login.to_ascii_lowercase()))
+            .collect();
+        if cleaned_logins.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "배정할 담당자가 없습니다.",
+            ));
+        }
+        let issue_number_str = issue_number.to_string();
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &[
+                    "repos",
+                    owner,
+                    name,
+                    "issues",
+                    &issue_number_str,
+                    "assignees",
+                ],
+                &[],
+                Some(json!({ "assignees": cleaned_logins })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        let parsed: GithubIssueAssigneesResponse =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        Ok(parsed
+            .assignees
+            .into_iter()
+            .filter_map(|item| {
+                let login = item.login.trim().to_owned();
+                if login.is_empty() {
+                    return None;
+                }
+                let avatar_url = item
+                    .avatar_url
+                    .map(|raw| raw.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+                Some(BoardAssignee {
+                    login,
+                    avatar_url,
+                    name: None,
+                })
+            })
+            .collect())
     }
 
     pub async fn resolve_project(
@@ -4028,5 +4359,136 @@ mod tests {
         assert_eq!(reqs.len(), 2);
         assert!(reqs[0].url.contains("per_page=100") && reqs[0].url.contains("page=1"));
         assert!(reqs[1].url.contains("per_page=100") && reqs[1].url.contains("page=2"));
+    }
+
+    #[tokio::test]
+    async fn viewer_can_push_repository_checks_rest_permissions_and_graphql_fallback() {
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"node_id":"R_1","name":"docs","full_name":"Acme-Org/docs","owner":{"login":"Acme-Org"},"default_branch":"main","clone_url":"https://github.com/Acme-Org/docs.git","permissions":{"admin":false,"maintain":false,"push":true,"triage":true,"pull":true}}"#,
+            ),
+            response(
+                200,
+                r#"{"node_id":"R_2","name":"readonly","full_name":"Acme-Org/readonly","owner":{"login":"Acme-Org"},"default_branch":"main","clone_url":"https://github.com/Acme-Org/readonly.git","permissions":{"admin":false,"maintain":false,"push":false,"triage":false,"pull":true}}"#,
+            ),
+            response(
+                200,
+                r#"{"node_id":"R_3","name":"fallback","full_name":"Acme-Org/fallback","owner":{"login":"Acme-Org"},"default_branch":"main","clone_url":"https://github.com/Acme-Org/fallback.git"}"#,
+            ),
+            response(
+                200,
+                r#"{"data":{"repository":{"viewerPermission":"WRITE"}}}"#,
+            ),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport);
+
+        assert!(service
+            .viewer_can_push_repository("Acme-Org/docs")
+            .await
+            .unwrap());
+        assert!(!service
+            .viewer_can_push_repository("Acme-Org/readonly")
+            .await
+            .unwrap());
+        assert!(service
+            .viewer_can_push_repository("Acme-Org/fallback")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn list_assignable_team_members_combines_repo_assignees_and_org_members_and_enriches_names(
+    ) {
+        let transport = RecordingTransport::with_responses(vec![
+            // GET /repos/Acme-Org/docs/assignees?per_page=100&page=1
+            response(
+                200,
+                r#"[
+                    {"login":"bob","node_id":"U_bob","avatar_url":"https://avatars.example/bob","type":"User"},
+                    {"login":"dependabot[bot]","node_id":"B_1","avatar_url":"https://avatars.example/bot","type":"Bot"}
+                ]"#,
+            ),
+            // GET /orgs/Acme-Org/members?per_page=100&page=1
+            response(
+                200,
+                r#"[
+                    {"login":"alice","node_id":"U_alice","avatar_url":"https://avatars.example/alice","type":"User"},
+                    {"login":"Bob","node_id":"U_bob","avatar_url":"https://avatars.example/bob","type":"User"}
+                ]"#,
+            ),
+            // GraphQL nodes(ids) enrichment
+            response(
+                200,
+                r#"{"data":{"nodes":[
+                    {"login":"bob","name":"밥","avatarUrl":"https://avatars.example/bob-hd"},
+                    {"login":"alice","name":"가람","avatarUrl":"https://avatars.example/alice"}
+                ]}}"#,
+            ),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let members = service
+            .list_assignable_team_members(&["Acme-Org/docs".into()], Some("Acme-Org"))
+            .await
+            .unwrap();
+
+        assert_eq!(members.len(), 2);
+        // Sorted by name ("가람" < "밥")
+        assert_eq!(members[0].login, "alice");
+        assert_eq!(members[0].name.as_deref(), Some("가람"));
+        assert_eq!(members[1].login, "bob");
+        assert_eq!(members[1].name.as_deref(), Some("밥"));
+        assert_eq!(
+            members[1].avatar_url.as_deref(),
+            Some("https://avatars.example/bob-hd")
+        );
+
+        let reqs = transport.requests();
+        assert_eq!(reqs.len(), 3);
+        assert!(reqs[0].url.contains("/repos/Acme-Org/docs/assignees"));
+        assert!(reqs[1].url.contains("/orgs/Acme-Org/members"));
+        assert!(reqs[2].url.ends_with("/graphql"));
+    }
+
+    #[tokio::test]
+    async fn add_issue_assignees_posts_logins_and_returns_updated_assignees() {
+        let transport = RecordingTransport::with_responses(vec![response(
+            201,
+            r#"{"assignees":[{"login":"YoonCarrot","avatar_url":"https://avatars.example/yc"}]}"#,
+        )]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let updated = service
+            .add_issue_assignees("Acme-Org/acme-web", 77, &["YoonCarrot".into()])
+            .await
+            .unwrap();
+
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0].login, "YoonCarrot");
+        let reqs = transport.requests();
+        assert_eq!(reqs[0].method, HttpMethod::Post);
+        assert_eq!(
+            reqs[0].url,
+            "https://api.example.test/repos/Acme-Org/acme-web/issues/77/assignees"
+        );
+        assert_eq!(
+            reqs[0].body,
+            Some(serde_json::json!({ "assignees": ["YoonCarrot"] }))
+        );
+    }
+
+    #[tokio::test]
+    async fn add_issue_assignees_rejects_empty_logins_without_network_call() {
+        let transport = RecordingTransport::with_responses(Vec::new());
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let err = service
+            .add_issue_assignees("Acme-Org/acme-web", 77, &["  ".into(), "@".into()])
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::WorkspaceInvalid);
+        assert!(transport.requests().is_empty());
     }
 }

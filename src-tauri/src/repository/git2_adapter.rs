@@ -349,20 +349,150 @@ impl GitRepositoryPort for Git2RepositoryAdapter {
         approved_remote_url: &str,
         access_token: AccessToken,
     ) -> Result<(), AppError> {
+        let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
+        self.push_refspec(root, &refspec, approved_remote_url, access_token)
+            .map_err(|_| push_error(branch))
+    }
+
+    fn commit_file_on_branch(
+        &self,
+        root: &Path,
+        base_branch: &str,
+        target_branch: &str,
+        relative_path: &str,
+        content: &str,
+        message: &str,
+        identity: &RepositoryIdentity,
+    ) -> Result<String, AppError> {
         let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
+        let base_ref_name = format!("refs/heads/{}", base_branch.trim());
+        let parent_commit = repository
+            .find_reference(&base_ref_name)
+            .and_then(|reference| reference.peel_to_commit())
+            .or_else(|_| repository.head().and_then(|head| head.peel_to_commit()))
+            .map_err(|_| repository_git_error("기준 commit을 읽지 못했습니다."))?;
+        let parent_tree = parent_commit
+            .tree()
+            .map_err(|_| repository_git_error("기준 tree를 읽지 못했습니다."))?;
+
+        // ODB가 연결된 handle을 쓰되 `index.write()`는 호출하지 않아 작업트리의 index는 건드리지 않는다.
+        let mut index = repository
+            .index()
+            .map_err(|_| repository_git_error("격리된 Git index를 만들지 못했습니다."))?;
+        index
+            .read_tree(&parent_tree)
+            .map_err(|_| repository_git_error("기준 tree를 복제하지 못했습니다."))?;
+
+        let clean_rel = relative_path.trim().trim_start_matches('/').to_owned();
+        if clean_rel.is_empty() {
+            return Err(repository_git_error("저장소 내 파일 경로가 비어 있습니다."));
+        }
+        let entry = IndexEntry {
+            ctime: IndexTime::new(0, 0),
+            mtime: IndexTime::new(0, 0),
+            dev: 0,
+            ino: 0,
+            mode: 0o100644,
+            uid: 0,
+            gid: 0,
+            file_size: 0,
+            id: Oid::zero(),
+            flags: 0,
+            flags_extended: 0,
+            path: clean_rel.as_bytes().to_vec(),
+        };
+        index
+            .add_frombuffer(&entry, content.as_bytes())
+            .map_err(|_| repository_git_error("변경 blob을 만들지 못했습니다."))?;
+        let tree_oid = index
+            .write_tree_to(&repository)
+            .map_err(|_| repository_git_error("변경 tree를 만들지 못했습니다."))?;
+        let tree = repository
+            .find_tree(tree_oid)
+            .map_err(|_| repository_git_error("변경 tree를 읽지 못했습니다."))?;
+
+        let email = format!(
+            "{}+{}@users.noreply.github.com",
+            identity.database_id, identity.login
+        );
+        let signature = Signature::now(&identity.login, &email)
+            .map_err(|_| repository_git_error("Git 작성자 정보를 만들지 못했습니다."))?;
+        let commit_oid = repository
+            .commit(
+                None,
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &[&parent_commit],
+            )
+            .map_err(|_| repository_git_error("branch commit을 만들지 못했습니다."))?;
+        let target_ref_name = format!("refs/heads/{}", target_branch.trim());
+        repository
+            .reference(&target_ref_name, commit_oid, true, message)
+            .map_err(|_| repository_git_error("임시 branch를 기록하지 못했습니다."))?;
+        Ok(commit_oid.to_string())
+    }
+
+    fn push_refspec(
+        &self,
+        root: &Path,
+        refspec: &str,
+        approved_remote_url: &str,
+        access_token: AccessToken,
+    ) -> Result<(), AppError> {
+        let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
+        let rejected = Arc::new(std::sync::Mutex::new(None::<String>));
+        let rejected_in_callback = rejected.clone();
         let mut callbacks = RemoteCallbacks::new();
         let remote_url = approved_remote_url.to_owned();
         let callback_approved_url = remote_url.clone();
         callbacks.credentials(move |url, _username, _allowed| {
             credential_for_approved_remote(url, &callback_approved_url, &access_token)
         });
+        callbacks.push_update_reference(move |_refname, status| {
+            if let Some(reason) = status {
+                if let Ok(mut guard) = rejected_in_callback.lock() {
+                    *guard = Some(reason.to_owned());
+                }
+                return Err(git2::Error::from_str(reason));
+            }
+            Ok(())
+        });
         let mut options = PushOptions::new();
         options.remote_callbacks(callbacks);
-        let refspec = format!("refs/heads/{branch}:refs/heads/{branch}");
         repository
             .remote_anonymous(&remote_url)
-            .and_then(|mut remote| remote.push(&[&refspec], Some(&mut options)))
-            .map_err(|_| push_error(branch))
+            .and_then(|mut remote| remote.push(&[refspec], Some(&mut options)))
+            .map_err(|_| push_error(refspec))?;
+        if rejected
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .is_some()
+        {
+            return Err(push_error(refspec));
+        }
+        Ok(())
+    }
+
+    fn delete_local_branch(&self, root: &Path, branch: &str) -> Result<(), AppError> {
+        let repository = Repository::open(root).map_err(|_| repository_path_error(root))?;
+        let target_ref = format!("refs/heads/{}", branch.trim());
+        let is_head = repository
+            .head()
+            .ok()
+            .and_then(|head| head.name().map(str::to_owned))
+            .is_some_and(|head_name| head_name == target_ref);
+        if is_head {
+            return Ok(());
+        }
+        if let Ok(mut reference) = repository.find_reference(&target_ref) {
+            reference
+                .delete()
+                .map_err(|_| repository_git_error("임시 branch를 정리하지 못했습니다."))?;
+        }
+        Ok(())
     }
 
     fn checkout_initialization(
@@ -1773,5 +1903,86 @@ mod tests {
             .unwrap()
             .file_type()
             .is_symlink());
+    }
+
+    #[test]
+    fn commit_file_on_branch_push_refspec_and_delete_local_branch_leave_working_tree_untouched() {
+        let bare_dir = tempfile::tempdir().unwrap();
+        let bare = Repository::init_bare(bare_dir.path()).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let repository = Repository::init(directory.path()).unwrap();
+        fs::create_dir_all(directory.path().join(".okf")).unwrap();
+        commit_file(&repository, ".okf/workspace.yml", "schema_version: 1\n");
+        let default_branch = repository.head().unwrap().shorthand().unwrap().to_owned();
+        let original_head = repository.head().unwrap().target().unwrap();
+        let original_index_tree = repository.index().unwrap().write_tree().unwrap();
+        drop(repository);
+
+        let bare_url = url::Url::from_directory_path(bare.path())
+            .unwrap()
+            .to_string();
+        let tok = || AccessToken::from_secret(SecretString::new("secret".into()));
+
+        // Seed bare remote with default branch
+        Git2RepositoryAdapter
+            .push_refspec(
+                directory.path(),
+                &format!("refs/heads/{default_branch}:refs/heads/{default_branch}"),
+                &bare_url,
+                tok(),
+            )
+            .unwrap();
+
+        let commit_oid = Git2RepositoryAdapter
+            .commit_file_on_branch(
+                directory.path(),
+                &default_branch,
+                "chore/okf-assignees-test",
+                ".okf/workspace.yml",
+                "schema_version: 1\nassignees:\n  planning: alice\n",
+                "chore(okf): update assignees",
+                &identity("alice"),
+            )
+            .unwrap();
+        assert!(!commit_oid.is_empty());
+
+        // Working tree, HEAD, and on-disk index stay untouched
+        assert_eq!(
+            fs::read_to_string(directory.path().join(".okf/workspace.yml")).unwrap(),
+            "schema_version: 1\n"
+        );
+        let reopened = Repository::open(directory.path()).unwrap();
+        assert_eq!(reopened.head().unwrap().target(), Some(original_head));
+        assert_eq!(
+            reopened.index().unwrap().write_tree().unwrap(),
+            original_index_tree
+        );
+        drop(reopened);
+
+        // Push temp branch to remote default branch
+        Git2RepositoryAdapter
+            .push_refspec(
+                directory.path(),
+                &format!("refs/heads/chore/okf-assignees-test:refs/heads/{default_branch}"),
+                &bare_url,
+                tok(),
+            )
+            .unwrap();
+        assert_eq!(
+            bare.find_reference(&format!("refs/heads/{default_branch}"))
+                .unwrap()
+                .target()
+                .unwrap()
+                .to_string(),
+            commit_oid
+        );
+
+        Git2RepositoryAdapter
+            .delete_local_branch(directory.path(), "chore/okf-assignees-test")
+            .unwrap();
+        let reopened = Repository::open(directory.path()).unwrap();
+        assert!(reopened
+            .find_reference("refs/heads/chore/okf-assignees-test")
+            .is_err());
     }
 }

@@ -5,6 +5,8 @@ import type {
   ProjectBoard,
   ProjectList,
   ResolvedGithubProject,
+  WorkspaceTeamAssignees,
+  WorkspaceTeamAssigneesSnapshot,
 } from "./model";
 import type {
   CreateBoardIssueInput,
@@ -112,4 +114,17 @@ export interface ProjectBoardGateway {
   ): Promise<CreateBoardIssuesResult>;
   /** 보드 카드 Status·영역·타입·Priority 변경 후 최신 보드 반환. */
   updateBoardItem?(request: UpdateBoardItemInput): Promise<ProjectBoard>;
+  /** 워크스페이스 팀 멤버 · `.okf/workspace.yml` 역할별 담당 설정 조회. */
+  getWorkspaceTeamAssignees?(options?: {
+    forceRefresh?: boolean;
+  }): Promise<WorkspaceTeamAssigneesSnapshot>;
+  /** `.okf/workspace.yml` `assignees` 저장(커밋·push/PR 머지) 후 최신 스냅샷 반환. */
+  saveWorkspaceTeamAssignees?(
+    assignees: WorkspaceTeamAssignees,
+  ): Promise<WorkspaceTeamAssigneesSnapshot>;
+  /** 담당자 없는 백로그를 현재 로그인 사용자에게 배정하고 최신 보드 반환. */
+  assignIssueToSelf?(input: {
+    issueNumber: number;
+    repositoryFullName?: string | null;
+  }): Promise<ProjectBoard>;
 }

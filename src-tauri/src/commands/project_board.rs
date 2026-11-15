@@ -1,21 +1,30 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
+use crate::auth::model::{AccessToken, GithubUserSummary};
+use crate::auth::service::AuthService;
 use crate::automation::context_pack::{assemble_issue_context_pack, extract_referenced_doc_paths};
 use crate::automation::inject_depends_on_line;
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    CreateProjectIssueInput, CreatedProjectIssue, GithubProjectItem, GithubProjectSummary,
-    GithubSubIssue, UpdateProjectItemInput,
+    BoardAssignee, CreateProjectIssueInput, CreatePullRequestInput, CreatedProjectIssue,
+    DocsPullRequestSummary, GithubProjectItem, GithubProjectSummary, GithubSubIssue,
+    UpdateProjectItemInput,
 };
 use crate::project_board::{
     load_cached_board, parse_project_url, project_board_cache_file, project_board_cache_tmp_file,
     BoardIssue, BoardLayer, BoardStatus, GithubProjectList, ProjectBoard, ProjectOwnerScope,
     ResolvedGithubProject,
 };
-use crate::settings::model::{DocsRepository, LinkedProject};
+use crate::repository::model::RepositoryIdentity;
+use crate::repository::service::GitRepositoryPort;
+use crate::settings::model::{CachedTeamMembersEntry, DocsRepository, LinkedProject};
+use crate::settings::service::LocalSettingsService;
 use crate::state::AppServices;
-use crate::workspace::model::GithubProjectRef;
+use crate::workspace::model::{
+    normalize_assignee_logins, update_workspace_assignees_yaml, GithubProjectRef,
+    WorkspaceAssignees, WorkspaceDocument,
+};
 
 pub const PROJECT_BOARD_CACHE_DIR_NAME: &str = "project-board";
 
@@ -1302,6 +1311,869 @@ pub async fn update_project_board_item(
     sync_project_board_inner(&app, &state).await
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTeamAssigneesPayload {
+    #[serde(default)]
+    pub planning: Vec<String>,
+    #[serde(default)]
+    pub design: Vec<String>,
+    #[serde(default)]
+    pub frontend: Vec<String>,
+    #[serde(default)]
+    pub backend: Vec<String>,
+}
+
+impl WorkspaceTeamAssigneesPayload {
+    fn from_domain(domain: Option<&WorkspaceAssignees>) -> Self {
+        let Some(domain) = domain else {
+            return Self::default();
+        };
+        Self {
+            planning: normalize_assignee_logins(&domain.planning),
+            design: normalize_assignee_logins(&domain.design),
+            frontend: normalize_assignee_logins(&domain.frontend),
+            backend: normalize_assignee_logins(&domain.backend),
+        }
+    }
+
+    fn into_domain_with_extra(
+        self,
+        extra: indexmap::IndexMap<String, serde_yaml_ng::Value>,
+    ) -> WorkspaceAssignees {
+        WorkspaceAssignees {
+            planning: normalize_assignee_logins(&self.planning),
+            design: normalize_assignee_logins(&self.design),
+            frontend: normalize_assignee_logins(&self.frontend),
+            backend: normalize_assignee_logins(&self.backend),
+            extra,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTeamAssigneesSnapshot {
+    pub viewer_login: Option<String>,
+    pub docs_repository_full_name: Option<String>,
+    pub can_write_docs_repository: bool,
+    pub members: Vec<BoardAssignee>,
+    pub assignees: WorkspaceTeamAssigneesPayload,
+    pub stale_logins: Vec<String>,
+    pub member_fetch_failed: bool,
+    pub fetched_at: Option<String>,
+}
+
+#[async_trait::async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
+pub(crate) trait TeamAssigneesAuthPort: Send + Sync {
+    async fn viewer_principal(&self) -> Result<GithubUserSummary, AppError>;
+    async fn access_token(&self) -> Result<AccessToken, AppError>;
+}
+
+#[async_trait::async_trait]
+impl TeamAssigneesAuthPort for AuthService {
+    async fn viewer_principal(&self) -> Result<GithubUserSummary, AppError> {
+        self.authenticated_principal().await
+    }
+
+    async fn access_token(&self) -> Result<AccessToken, AppError> {
+        self.valid_access_token().await
+    }
+}
+
+#[async_trait::async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait adds must_use to its boxed Future return type"
+)]
+pub(crate) trait TeamAssigneesGithubPort: Send + Sync {
+    async fn viewer_can_push_repository(&self, full_name: &str) -> Result<bool, AppError>;
+    async fn list_assignable_team_members(
+        &self,
+        repository_full_names: &[String],
+        org_login: Option<&str>,
+    ) -> Result<Vec<BoardAssignee>, AppError>;
+    async fn create_pull_request(
+        &self,
+        input: &CreatePullRequestInput,
+    ) -> Result<DocsPullRequestSummary, AppError>;
+    async fn squash_merge_pull_request(
+        &self,
+        repository_full_name: &str,
+        number: u64,
+        commit_title: Option<&str>,
+        head_sha: Option<&str>,
+    ) -> Result<Option<String>, AppError>;
+    async fn add_issue_assignees(
+        &self,
+        repository_full_name: &str,
+        issue_number: u64,
+        logins: &[String],
+    ) -> Result<Vec<BoardAssignee>, AppError>;
+}
+
+#[async_trait::async_trait]
+impl TeamAssigneesGithubPort for crate::github::GithubService {
+    async fn viewer_can_push_repository(&self, full_name: &str) -> Result<bool, AppError> {
+        crate::github::GithubService::viewer_can_push_repository(self, full_name).await
+    }
+
+    async fn list_assignable_team_members(
+        &self,
+        repository_full_names: &[String],
+        org_login: Option<&str>,
+    ) -> Result<Vec<BoardAssignee>, AppError> {
+        crate::github::GithubService::list_assignable_team_members(
+            self,
+            repository_full_names,
+            org_login,
+        )
+        .await
+    }
+
+    async fn create_pull_request(
+        &self,
+        input: &CreatePullRequestInput,
+    ) -> Result<DocsPullRequestSummary, AppError> {
+        crate::github::GithubService::create_pull_request(self, input).await
+    }
+
+    async fn squash_merge_pull_request(
+        &self,
+        repository_full_name: &str,
+        number: u64,
+        commit_title: Option<&str>,
+        head_sha: Option<&str>,
+    ) -> Result<Option<String>, AppError> {
+        crate::github::GithubService::squash_merge_pull_request(
+            self,
+            repository_full_name,
+            number,
+            commit_title,
+            head_sha,
+        )
+        .await
+    }
+
+    async fn add_issue_assignees(
+        &self,
+        repository_full_name: &str,
+        issue_number: u64,
+        logins: &[String],
+    ) -> Result<Vec<BoardAssignee>, AppError> {
+        crate::github::GithubService::add_issue_assignees(
+            self,
+            repository_full_name,
+            issue_number,
+            logins,
+        )
+        .await
+    }
+}
+
+struct TeamAssigneeWorkspaceContext {
+    workspace_dir: Option<std::path::PathBuf>,
+    docs_repository_full_name: Option<String>,
+    repository_full_names: Vec<String>,
+    org_login: Option<String>,
+    assignees: WorkspaceTeamAssigneesPayload,
+    cache_key: String,
+}
+
+fn resolve_team_assignee_workspace(
+    settings: &LocalSettingsService,
+) -> Result<TeamAssigneeWorkspaceContext, AppError> {
+    let current = settings.load_current()?;
+    let active_hub = settings.load_active_hub_workspace()?;
+    let active_project = settings.load_active_project()?;
+
+    let connected_current = current
+        .as_ref()
+        .filter(|ws| ws.status == crate::settings::model::CurrentWorkspaceStatus::Connected);
+    let workspace_dir = connected_current
+        .map(|ws| ws.path.clone())
+        .filter(|path| path.is_dir());
+    let docs_repository_full_name = connected_current
+        .and_then(|ws| ws.repository.as_ref().map(|repo| repo.full_name.clone()))
+        .or_else(|| {
+            active_hub.as_ref().and_then(|ws| {
+                ws.docs_repository
+                    .as_ref()
+                    .map(|repo| repo.full_name.clone())
+            })
+        });
+
+    let mut assignees = WorkspaceTeamAssigneesPayload::default();
+    let mut manifest_id: Option<String> = None;
+    let mut repository_full_names = Vec::new();
+    if let Some(docs_repo) = docs_repository_full_name.as_deref() {
+        let trimmed = docs_repo.trim();
+        if !trimmed.is_empty() {
+            repository_full_names.push(trimmed.to_owned());
+        }
+    }
+
+    if let Some(dir) = workspace_dir.as_ref() {
+        let manifest_path = dir.join(".okf").join("workspace.yml");
+        if let Ok(raw) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(doc) = WorkspaceDocument::parse(&raw) {
+                let config = &doc.config;
+                manifest_id = Some(config.workspace.id.to_string());
+                assignees = WorkspaceTeamAssigneesPayload::from_domain(config.assignees.as_ref());
+                for repo in &config.repositories {
+                    let candidate = repo.github.full_name.trim();
+                    if !candidate.is_empty()
+                        && !repository_full_names
+                            .iter()
+                            .any(|existing| existing.eq_ignore_ascii_case(candidate))
+                    {
+                        repository_full_names.push(candidate.to_owned());
+                    }
+                }
+            }
+        }
+    }
+
+    let org_login = match active_project.as_ref() {
+        Some(project) if project.scope == ProjectOwnerScope::Organization => {
+            Some(project.owner.clone())
+        }
+        Some(_) => None,
+        None => docs_repository_full_name
+            .as_deref()
+            .and_then(|full| full.split('/').next())
+            .map(str::trim)
+            .filter(|owner| !owner.is_empty())
+            .map(str::to_owned),
+    };
+
+    let ws_identity = manifest_id
+        .or_else(|| {
+            workspace_dir
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "no-workspace".to_owned());
+    let cache_key = format!(
+        "{ws_identity}:{}",
+        docs_repository_full_name.as_deref().unwrap_or("local")
+    );
+
+    Ok(TeamAssigneeWorkspaceContext {
+        workspace_dir,
+        docs_repository_full_name,
+        repository_full_names,
+        org_login,
+        assignees,
+        cache_key,
+    })
+}
+
+fn compute_stale_logins(
+    assignees: &WorkspaceTeamAssigneesPayload,
+    members: &[BoardAssignee],
+    member_fetch_failed: bool,
+) -> Vec<String> {
+    if member_fetch_failed && members.is_empty() {
+        return Vec::new();
+    }
+    let known: std::collections::HashSet<String> = members
+        .iter()
+        .map(|member| member.login.to_ascii_lowercase())
+        .collect();
+    let all_configured = assignees
+        .planning
+        .iter()
+        .chain(assignees.design.iter())
+        .chain(assignees.frontend.iter())
+        .chain(assignees.backend.iter());
+    let mut seen_stale = std::collections::HashSet::new();
+    let mut stale = Vec::new();
+    for login in all_configured {
+        let lower = login.to_ascii_lowercase();
+        if !known.contains(&lower) && seen_stale.insert(lower) {
+            stale.push(login.clone());
+        }
+    }
+    stale
+}
+
+pub(crate) async fn get_workspace_team_assignees_inner(
+    settings: &LocalSettingsService,
+    auth: Option<&dyn TeamAssigneesAuthPort>,
+    github: Option<&dyn TeamAssigneesGithubPort>,
+    force_refresh: bool,
+) -> CommandResult<WorkspaceTeamAssigneesSnapshot> {
+    let viewer_login = match auth {
+        Some(port) => port.viewer_principal().await.ok().map(|user| user.login),
+        None => None,
+    };
+    let ctx = resolve_team_assignee_workspace_async(settings).await?;
+    let cache_key = ctx.cache_key.clone();
+    let cached = run_settings_blocking(settings, move |local_settings| {
+        local_settings.load_cached_team_members(&cache_key)
+    })
+    .await?;
+
+    let Some(docs_repo) = ctx.docs_repository_full_name.clone() else {
+        return Ok(WorkspaceTeamAssigneesSnapshot {
+            viewer_login,
+            docs_repository_full_name: None,
+            can_write_docs_repository: false,
+            members: Vec::new(),
+            assignees: ctx.assignees,
+            stale_logins: Vec::new(),
+            member_fetch_failed: false,
+            fetched_at: None,
+        });
+    };
+
+    if !force_refresh {
+        if let Some(entry) = cached.as_ref() {
+            if let Some(can_write) = entry.can_write_docs_repository {
+                let stale_logins = compute_stale_logins(&ctx.assignees, &entry.members, false);
+                return Ok(WorkspaceTeamAssigneesSnapshot {
+                    viewer_login,
+                    docs_repository_full_name: Some(docs_repo),
+                    can_write_docs_repository: can_write,
+                    members: entry.members.clone(),
+                    assignees: ctx.assignees,
+                    stale_logins,
+                    member_fetch_failed: false,
+                    fetched_at: entry.fetched_at.clone(),
+                });
+            }
+        }
+    }
+
+    let Some(github) = github else {
+        let (members, can_write, fetched_at) = match cached {
+            Some(entry) => (
+                entry.members,
+                entry.can_write_docs_repository.unwrap_or(false),
+                entry.fetched_at,
+            ),
+            None => (Vec::new(), false, None),
+        };
+        let stale_logins = compute_stale_logins(&ctx.assignees, &members, true);
+        return Ok(WorkspaceTeamAssigneesSnapshot {
+            viewer_login,
+            docs_repository_full_name: Some(docs_repo),
+            can_write_docs_repository: can_write,
+            members,
+            assignees: ctx.assignees,
+            stale_logins,
+            member_fetch_failed: true,
+            fetched_at,
+        });
+    };
+
+    let permission_result = github.viewer_can_push_repository(&docs_repo).await;
+    let members_result = github
+        .list_assignable_team_members(&ctx.repository_full_names, ctx.org_login.as_deref())
+        .await;
+
+    match members_result {
+        Ok(members) => {
+            let can_write = permission_result.unwrap_or_else(|_| {
+                cached
+                    .as_ref()
+                    .and_then(|entry| entry.can_write_docs_repository)
+                    .unwrap_or(false)
+            });
+            let fetched_at = fetched_now();
+            let entry = CachedTeamMembersEntry {
+                members: members.clone(),
+                can_write_docs_repository: Some(can_write),
+                fetched_at: fetched_at.clone(),
+            };
+            let cache_key = ctx.cache_key.clone();
+            let entry_to_save = entry.clone();
+            let _ = run_settings_blocking(settings, move |local_settings| {
+                local_settings.save_cached_team_members(&cache_key, &entry_to_save)
+            })
+            .await;
+            let stale_logins = compute_stale_logins(&ctx.assignees, &members, false);
+            Ok(WorkspaceTeamAssigneesSnapshot {
+                viewer_login,
+                docs_repository_full_name: Some(docs_repo),
+                can_write_docs_repository: can_write,
+                members,
+                assignees: ctx.assignees,
+                stale_logins,
+                member_fetch_failed: false,
+                fetched_at,
+            })
+        }
+        Err(_) => {
+            let cached_can_write = cached
+                .as_ref()
+                .and_then(|entry| entry.can_write_docs_repository)
+                .unwrap_or(false);
+            let can_write = permission_result.unwrap_or(cached_can_write);
+            let (members, fetched_at) = match cached {
+                Some(entry) => (entry.members, entry.fetched_at),
+                None => (Vec::new(), None),
+            };
+            let stale_logins = compute_stale_logins(&ctx.assignees, &members, true);
+            Ok(WorkspaceTeamAssigneesSnapshot {
+                viewer_login,
+                docs_repository_full_name: Some(docs_repo),
+                can_write_docs_repository: can_write,
+                members,
+                assignees: ctx.assignees,
+                stale_logins,
+                member_fetch_failed: true,
+                fetched_at,
+            })
+        }
+    }
+}
+
+pub(crate) fn spawn_warm_workspace_team_members_cache(services: &AppServices) {
+    let local_settings = services.local_settings.clone();
+    let auth = services.auth.clone();
+    let github = services.github.clone();
+    tauri::async_runtime::spawn(async move {
+        let auth_ref = auth
+            .as_deref()
+            .map(|auth| auth as &dyn TeamAssigneesAuthPort);
+        let github_ref = github
+            .as_deref()
+            .map(|github| github as &dyn TeamAssigneesGithubPort);
+        let _ =
+            get_workspace_team_assignees_inner(&local_settings, auth_ref, github_ref, true).await;
+    });
+}
+
+async fn resolve_team_assignee_workspace_async(
+    settings: &LocalSettingsService,
+) -> CommandResult<TeamAssigneeWorkspaceContext> {
+    let settings = settings.clone();
+    crate::commands::docs_repository::run_blocking(move || {
+        resolve_team_assignee_workspace(&settings)
+    })
+    .await
+}
+
+async fn run_settings_blocking<T, F>(
+    settings: &LocalSettingsService,
+    operation: F,
+) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&LocalSettingsService) -> CommandResult<T> + Send + 'static,
+{
+    let settings = settings.clone();
+    crate::commands::docs_repository::run_blocking(move || operation(&settings)).await
+}
+
+async fn run_git_blocking<T, F>(
+    git: &std::sync::Arc<dyn GitRepositoryPort>,
+    ws_dir: &std::path::Path,
+    operation: F,
+) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&dyn GitRepositoryPort, &std::path::Path) -> CommandResult<T> + Send + 'static,
+{
+    let git = std::sync::Arc::clone(git);
+    let ws_dir = ws_dir.to_path_buf();
+    crate::commands::docs_repository::run_blocking(move || operation(git.as_ref(), &ws_dir)).await
+}
+
+pub(crate) async fn save_workspace_team_assignees_inner(
+    settings: &LocalSettingsService,
+    auth: &dyn TeamAssigneesAuthPort,
+    github: &dyn TeamAssigneesGithubPort,
+    git: std::sync::Arc<dyn GitRepositoryPort>,
+    payload: WorkspaceTeamAssigneesPayload,
+) -> CommandResult<WorkspaceTeamAssigneesSnapshot> {
+    let ctx = resolve_team_assignee_workspace_async(settings).await?;
+    let ws_dir = ctx.workspace_dir.ok_or_else(|| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "연결된 문서 워크스페이스가 없습니다.",
+        )
+    })?;
+    let docs_repo = ctx.docs_repository_full_name.ok_or_else(|| {
+        AppError::new(
+            ErrorCode::GithubPermissionDenied,
+            "연결된 문서 저장소가 없어 담당 설정을 저장할 수 없습니다.",
+        )
+    })?;
+
+    if !github.viewer_can_push_repository(&docs_repo).await? {
+        return Err(AppError::new(
+            ErrorCode::GithubPermissionDenied,
+            "문서 저장소 쓰기 권한이 필요합니다.",
+        ));
+    }
+
+    let principal = auth.viewer_principal().await?;
+    let remote_url = format!("https://github.com/{docs_repo}.git");
+    let ff_token = auth.access_token().await.ok();
+    let temp_branch = format!("chore/okf-assignees-{}", uuid::Uuid::new_v4().simple());
+    let commit_message = "chore(okf): 팀 역할별 담당 설정 업데이트";
+
+    enum PrepareSaveOutcome {
+        Unchanged,
+        Committed {
+            base_branch: String,
+            normalized_payload: WorkspaceTeamAssigneesPayload,
+        },
+    }
+
+    let prepare_outcome = {
+        let remote_url_blocking = remote_url.clone();
+        let temp_branch_blocking = temp_branch.clone();
+        let principal_id = principal.id;
+        let principal_login = principal.login.clone();
+        run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+            if let Some(token) = ff_token {
+                let _ = git.fast_forward_default_branch(ws_dir, &remote_url_blocking, token);
+            }
+
+            let manifest_path = ws_dir.join(".okf").join("workspace.yml");
+            let raw_yaml = std::fs::read_to_string(&manifest_path).map_err(|_| {
+                AppError::new(
+                    ErrorCode::WorkspaceMissing,
+                    "`.okf/workspace.yml` 파일을 읽지 못했습니다.",
+                )
+            })?;
+
+            let existing_extra = WorkspaceDocument::parse(&raw_yaml)?
+                .config
+                .assignees
+                .map(|existing| existing.extra)
+                .unwrap_or_default();
+            let domain_raw = payload.into_domain_with_extra(existing_extra);
+            let normalized_payload = WorkspaceTeamAssigneesPayload::from_domain(Some(&domain_raw));
+            let updated_yaml = update_workspace_assignees_yaml(&raw_yaml, &domain_raw)?;
+
+            if updated_yaml == raw_yaml {
+                return Ok(PrepareSaveOutcome::Unchanged);
+            }
+
+            let snapshot_git = git.inspect(ws_dir)?;
+            let base_branch = snapshot_git
+                .default_branch
+                .filter(|b| !b.trim().is_empty())
+                .unwrap_or_else(|| "main".to_owned());
+
+            git.commit_file_on_branch(
+                ws_dir,
+                &base_branch,
+                &temp_branch_blocking,
+                ".okf/workspace.yml",
+                &updated_yaml,
+                commit_message,
+                &RepositoryIdentity {
+                    database_id: principal_id,
+                    login: principal_login,
+                },
+            )?;
+
+            Ok(PrepareSaveOutcome::Committed {
+                base_branch,
+                normalized_payload,
+            })
+        })
+        .await?
+    };
+
+    let (base_branch, normalized_payload) = match prepare_outcome {
+        PrepareSaveOutcome::Unchanged => {
+            return get_workspace_team_assignees_inner(settings, Some(auth), Some(github), false)
+                .await;
+        }
+        PrepareSaveOutcome::Committed {
+            base_branch,
+            normalized_payload,
+        } => (base_branch, normalized_payload),
+    };
+
+    let publish_result = async {
+        let direct_refspec = format!("refs/heads/{temp_branch}:refs/heads/{base_branch}");
+        let direct_token = auth.access_token().await?;
+        let remote_url_direct = remote_url.clone();
+        let direct_push = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+            git.push_refspec(ws_dir, &direct_refspec, &remote_url_direct, direct_token)
+        })
+        .await;
+        if direct_push.is_err() {
+            let temp_refspec = format!("refs/heads/{temp_branch}:refs/heads/{temp_branch}");
+            let branch_token = auth.access_token().await?;
+            let remote_url_branch = remote_url.clone();
+            run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+                git.push_refspec(ws_dir, &temp_refspec, &remote_url_branch, branch_token)
+            })
+            .await?;
+            let pr = github
+                .create_pull_request(&CreatePullRequestInput {
+                    repository_full_name: docs_repo.clone(),
+                    head: temp_branch.clone(),
+                    base: base_branch.clone(),
+                    title: commit_message.to_owned(),
+                    body: "OkHub 보드 담당 설정 변경사항 반영".to_owned(),
+                    draft: false,
+                })
+                .await?;
+            github
+                .squash_merge_pull_request(
+                    &docs_repo,
+                    pr.number,
+                    Some(&format!("{} (#{})", pr.title, pr.number)),
+                    Some(&pr.head_sha),
+                )
+                .await?;
+            if let Ok(delete_token) = auth.access_token().await {
+                let delete_refspec = format!(":refs/heads/{temp_branch}");
+                let remote_url_delete = remote_url.clone();
+                let _ = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+                    git.push_refspec(ws_dir, &delete_refspec, &remote_url_delete, delete_token)
+                })
+                .await;
+            }
+        }
+        Ok::<(), AppError>(())
+    }
+    .await;
+
+    let temp_branch_to_delete = temp_branch.clone();
+    let _ = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+        git.delete_local_branch(ws_dir, &temp_branch_to_delete)
+    })
+    .await;
+    publish_result?;
+
+    if let Ok(pull_token) = auth.access_token().await {
+        let remote_url_pull = remote_url.clone();
+        let _ = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+            git.fast_forward_default_branch(ws_dir, &remote_url_pull, pull_token)
+        })
+        .await;
+    }
+
+    let mut refreshed =
+        get_workspace_team_assignees_inner(settings, Some(auth), Some(github), false).await?;
+    refreshed.assignees = normalized_payload;
+    refreshed.stale_logins = compute_stale_logins(
+        &refreshed.assignees,
+        &refreshed.members,
+        refreshed.member_fetch_failed,
+    );
+    refreshed.can_write_docs_repository = true;
+    Ok(refreshed)
+}
+
+fn issue_repo_from_url(url: &str) -> Option<String> {
+    let after_scheme = url
+        .trim()
+        .strip_prefix("https://")
+        .or_else(|| url.trim().strip_prefix("http://"))?;
+    let mut parts = after_scheme.split('/');
+    let _host = parts.next()?;
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
+}
+
+fn find_issue_repo_recursive(
+    issues: &[BoardIssue],
+    issue_number: u64,
+    wanted_repo: Option<&str>,
+) -> Option<String> {
+    for issue in issues {
+        if issue.number == issue_number {
+            let repo = issue_repo_from_url(&issue.url);
+            let matches_repo = match wanted_repo {
+                Some(want) => repo
+                    .as_deref()
+                    .is_some_and(|actual| actual.eq_ignore_ascii_case(want)),
+                None => true,
+            };
+            if matches_repo {
+                return repo;
+            }
+        }
+        if let Some(found) = find_issue_repo_recursive(&issue.children, issue_number, wanted_repo) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn update_issue_assignees_recursive(
+    issues: &mut [BoardIssue],
+    issue_number: u64,
+    target_repo: &str,
+    assignees: &[BoardAssignee],
+) -> bool {
+    let mut updated = false;
+    for issue in issues {
+        let same_number = issue.number == issue_number;
+        let same_repo = issue_repo_from_url(&issue.url)
+            .is_some_and(|repo| repo.eq_ignore_ascii_case(target_repo));
+        if same_number && same_repo {
+            issue.assignees = assignees.to_vec();
+            updated = true;
+        }
+        if update_issue_assignees_recursive(
+            &mut issue.children,
+            issue_number,
+            target_repo,
+            assignees,
+        ) {
+            updated = true;
+        }
+    }
+    updated
+}
+
+pub(crate) async fn assign_board_issue_to_self_inner(
+    settings: &LocalSettingsService,
+    cache_root: &std::path::Path,
+    project: &GithubProjectRef,
+    auth: &dyn TeamAssigneesAuthPort,
+    github: &dyn TeamAssigneesGithubPort,
+    issue_number: u64,
+    repository_full_name: Option<&str>,
+) -> CommandResult<ProjectBoard> {
+    let principal = auth.viewer_principal().await?;
+    let mut board = load_board_with_migration(cache_root, project).await?;
+    let wanted_repo = repository_full_name
+        .map(str::trim)
+        .filter(|repo| !repo.is_empty());
+
+    let ctx = resolve_team_assignee_workspace_async(settings).await?;
+    let target_repo = wanted_repo
+        .map(str::to_owned)
+        .or_else(|| find_issue_repo_recursive(&board.issues, issue_number, None))
+        .or(ctx.docs_repository_full_name.clone())
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                format!("이슈 #{issue_number}의 저장소 정보를 확인할 수 없습니다."),
+            )
+        })?;
+
+    let mut updated_assignees = github
+        .add_issue_assignees(&target_repo, issue_number, &[principal.login])
+        .await?;
+
+    let cached_members_result = {
+        let cache_key = ctx.cache_key.clone();
+        run_settings_blocking(settings, move |local_settings| {
+            local_settings.load_cached_team_members(&cache_key)
+        })
+        .await
+    };
+    if let Ok(Some(cached_members)) = cached_members_result {
+        for assignee in &mut updated_assignees {
+            if assignee.name.is_none() {
+                if let Some(member) = cached_members
+                    .members
+                    .iter()
+                    .find(|m| m.login.eq_ignore_ascii_case(&assignee.login))
+                {
+                    assignee.name = member.name.clone();
+                    if assignee.avatar_url.is_none() {
+                        assignee.avatar_url = member.avatar_url.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    if update_issue_assignees_recursive(
+        &mut board.issues,
+        issue_number,
+        &target_repo,
+        &updated_assignees,
+    ) {
+        save_cached_board(cache_root, &board_cache_key(project), &board).await?;
+    }
+    Ok(board)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn get_workspace_team_assignees(
+    state: State<'_, AppServices>,
+    force_refresh: Option<bool>,
+) -> CommandResult<WorkspaceTeamAssigneesSnapshot> {
+    let _access = state.acquire_authenticated_command().await?;
+    let auth_ref = state
+        .auth
+        .as_deref()
+        .map(|auth| auth as &dyn TeamAssigneesAuthPort);
+    let github_ref = state
+        .github
+        .as_deref()
+        .map(|github| github as &dyn TeamAssigneesGithubPort);
+    get_workspace_team_assignees_inner(
+        &state.local_settings,
+        auth_ref,
+        github_ref,
+        force_refresh.unwrap_or(false),
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn save_workspace_team_assignees(
+    state: State<'_, AppServices>,
+    assignees: WorkspaceTeamAssigneesPayload,
+) -> CommandResult<WorkspaceTeamAssigneesSnapshot> {
+    let _access = state.acquire_authenticated_command().await?;
+    let auth = state.auth.clone().ok_or_else(service_unavailable)?;
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let git = state.repository_git.clone();
+    save_workspace_team_assignees_inner(
+        &state.local_settings,
+        auth.as_ref(),
+        github.as_ref(),
+        git,
+        assignees,
+    )
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn assign_board_issue_to_self(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    issue_number: u64,
+    repository_full_name: Option<String>,
+) -> CommandResult<ProjectBoard> {
+    let _access = state.acquire_authenticated_command().await?;
+    let auth = state.auth.clone().ok_or_else(service_unavailable)?;
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let project = load_linked_project(&state)?;
+    let cache_root = resolve_project_board_cache_root(&app)?;
+    let cached = load_board_with_migration(&cache_root, &project).await?;
+    if is_empty_board(&cached) {
+        let _ = sync_project_board_inner(&app, &state).await?;
+    }
+    assign_board_issue_to_self_inner(
+        &state.local_settings,
+        &cache_root,
+        &project,
+        auth.as_ref(),
+        github.as_ref(),
+        issue_number,
+        repository_full_name.as_deref(),
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1728,5 +2600,528 @@ mod tests {
         let board: crate::project_board::ProjectBoard = serde_json::from_str(legacy_json).unwrap();
         assert!(board.issues[0].assignees.is_empty());
         assert_eq!(board.issues[0].created_at, None);
+    }
+
+    mod team_assignees_commands {
+        use std::collections::HashMap;
+        use std::path::{Path, PathBuf};
+        use std::sync::{Arc, Mutex};
+
+        use async_trait::async_trait;
+        use secrecy::SecretString;
+
+        use crate::auth::model::{AccessToken, GithubUserSummary};
+        use crate::error::{AppError, ErrorCode};
+        use crate::github::model::{BoardAssignee, CreatePullRequestInput, DocsPullRequestSummary};
+        use crate::project_board::{BoardIssue, BoardLayer, BoardStatus, ProjectBoard};
+        use crate::repository::model::{
+            CommitOutcome, PullOutcome, RepositoryIdentity, RepositorySnapshot,
+        };
+        use crate::repository::service::{CloneProgressSink, GitRepositoryPort};
+        use crate::settings::model::KnowledgeRepository;
+        use crate::settings::service::{LocalSettingsService, LocalSettingsStore};
+        use crate::workspace::model::GithubProjectRef;
+        use crate::workspace::service::InitializationPreview;
+
+        use super::super::{
+            assign_board_issue_to_self_inner, get_workspace_team_assignees_inner,
+            save_workspace_team_assignees_inner, TeamAssigneesAuthPort, TeamAssigneesGithubPort,
+            WorkspaceTeamAssigneesPayload,
+        };
+
+        #[derive(Clone, Default)]
+        struct MemStore(Arc<Mutex<HashMap<String, String>>>);
+
+        impl LocalSettingsStore for MemStore {
+            fn read(&self, key: &str) -> Result<Option<String>, AppError> {
+                Ok(self.0.lock().unwrap().get(key).cloned())
+            }
+            fn write(&self, key: &str, value: &str) -> Result<(), AppError> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .insert(key.to_owned(), value.to_owned());
+                Ok(())
+            }
+            fn remove(&self, key: &str) -> Result<(), AppError> {
+                self.0.lock().unwrap().remove(key);
+                Ok(())
+            }
+        }
+
+        struct FakeAuth {
+            login: String,
+        }
+
+        #[async_trait]
+        impl TeamAssigneesAuthPort for FakeAuth {
+            async fn viewer_principal(&self) -> Result<GithubUserSummary, AppError> {
+                Ok(GithubUserSummary {
+                    id: 42,
+                    login: self.login.clone(),
+                    avatar_url: "https://avatars.example/viewer".into(),
+                })
+            }
+
+            async fn access_token(&self) -> Result<AccessToken, AppError> {
+                Ok(AccessToken::from_secret(SecretString::new(
+                    "gho_test_token".into(),
+                )))
+            }
+        }
+
+        #[derive(Default)]
+        struct FakeGithub {
+            can_push: Mutex<bool>,
+            members_result: Mutex<Option<Result<Vec<BoardAssignee>, AppError>>>,
+            created_prs: Mutex<Vec<CreatePullRequestInput>>,
+            merged_prs: Mutex<Vec<(String, u64)>>,
+            added_assignees: Mutex<Vec<(String, u64, Vec<String>)>>,
+        }
+
+        #[async_trait]
+        impl TeamAssigneesGithubPort for FakeGithub {
+            async fn viewer_can_push_repository(&self, _full_name: &str) -> Result<bool, AppError> {
+                Ok(*self.can_push.lock().unwrap())
+            }
+
+            async fn list_assignable_team_members(
+                &self,
+                _repository_full_names: &[String],
+                _org_login: Option<&str>,
+            ) -> Result<Vec<BoardAssignee>, AppError> {
+                self.members_result
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .unwrap_or_else(|| Ok(Vec::new()))
+            }
+
+            async fn create_pull_request(
+                &self,
+                input: &CreatePullRequestInput,
+            ) -> Result<DocsPullRequestSummary, AppError> {
+                self.created_prs.lock().unwrap().push(input.clone());
+                Ok(DocsPullRequestSummary {
+                    number: 99,
+                    title: input.title.clone(),
+                    body: input.body.clone(),
+                    html_url: format!("https://github.com/{}/pull/99", input.repository_full_name),
+                    author_login: "alice".into(),
+                    head_ref: input.head.clone(),
+                    head_sha: "abc123def".into(),
+                    base_ref: input.base.clone(),
+                    base_sha: "000111".into(),
+                    is_draft: false,
+                    mergeable: Some(true),
+                    updated_at: "2026-11-15T00:00:00Z".into(),
+                    merged_at: None,
+                })
+            }
+
+            async fn squash_merge_pull_request(
+                &self,
+                repository_full_name: &str,
+                number: u64,
+                _commit_title: Option<&str>,
+                _head_sha: Option<&str>,
+            ) -> Result<Option<String>, AppError> {
+                self.merged_prs
+                    .lock()
+                    .unwrap()
+                    .push((repository_full_name.to_owned(), number));
+                Ok(Some("mergedsha".into()))
+            }
+
+            async fn add_issue_assignees(
+                &self,
+                repository_full_name: &str,
+                issue_number: u64,
+                logins: &[String],
+            ) -> Result<Vec<BoardAssignee>, AppError> {
+                self.added_assignees.lock().unwrap().push((
+                    repository_full_name.to_owned(),
+                    issue_number,
+                    logins.to_vec(),
+                ));
+                Ok(logins
+                    .iter()
+                    .map(|login| BoardAssignee {
+                        login: login.clone(),
+                        avatar_url: Some("https://avatars.example/viewer".into()),
+                        name: None,
+                    })
+                    .collect())
+            }
+        }
+
+        #[derive(Default)]
+        struct MockGit {
+            fail_direct_push: bool,
+            commits: Mutex<Vec<(String, String)>>,
+            pushed_refspecs: Mutex<Vec<String>>,
+            deleted_branches: Mutex<Vec<String>>,
+            fast_forwards: Mutex<usize>,
+        }
+
+        impl GitRepositoryPort for MockGit {
+            fn inspect(&self, path: &Path) -> Result<RepositorySnapshot, AppError> {
+                Ok(RepositorySnapshot {
+                    root: path.to_path_buf(),
+                    head_oid: Some("0000000000000000000000000000000000000001".into()),
+                    default_branch: Some("main".into()),
+                    is_dirty: false,
+                    has_content: true,
+                    remote_url: Some("https://github.com/Acme-Org/acme-docs.git".into()),
+                    fingerprint: "mock-fingerprint".into(),
+                })
+            }
+
+            fn clone_repository(
+                &self,
+                _clean_remote_url: &str,
+                _target: &Path,
+                _access_token: AccessToken,
+                _progress: Arc<dyn CloneProgressSink>,
+            ) -> Result<RepositorySnapshot, AppError> {
+                unreachable!()
+            }
+
+            fn commit_initialization(
+                &self,
+                _root: &Path,
+                _preview: &InitializationPreview,
+                _identity: &RepositoryIdentity,
+            ) -> Result<CommitOutcome, AppError> {
+                unreachable!()
+            }
+
+            fn verify_initialization_commit(
+                &self,
+                _root: &Path,
+                _preview: &InitializationPreview,
+                _outcome: &CommitOutcome,
+                _identity: &RepositoryIdentity,
+            ) -> Result<(), AppError> {
+                unreachable!()
+            }
+
+            fn fast_forward_default_branch(
+                &self,
+                _path: &Path,
+                _clean_remote_url: &str,
+                _access_token: AccessToken,
+            ) -> Result<PullOutcome, AppError> {
+                *self.fast_forwards.lock().unwrap() += 1;
+                Ok(PullOutcome::UpToDate)
+            }
+
+            fn push_branch(
+                &self,
+                _root: &Path,
+                _branch: &str,
+                _approved_remote_url: &str,
+                _access_token: AccessToken,
+            ) -> Result<(), AppError> {
+                Ok(())
+            }
+
+            fn commit_file_on_branch(
+                &self,
+                _root: &Path,
+                _base_branch: &str,
+                target_branch: &str,
+                _relative_path: &str,
+                content: &str,
+                _message: &str,
+                _identity: &RepositoryIdentity,
+            ) -> Result<String, AppError> {
+                self.commits
+                    .lock()
+                    .unwrap()
+                    .push((target_branch.to_owned(), content.to_owned()));
+                Ok("deadbeef".into())
+            }
+
+            fn push_refspec(
+                &self,
+                _root: &Path,
+                refspec: &str,
+                _approved_remote_url: &str,
+                _access_token: AccessToken,
+            ) -> Result<(), AppError> {
+                self.pushed_refspecs
+                    .lock()
+                    .unwrap()
+                    .push(refspec.to_owned());
+                if self.fail_direct_push && refspec.ends_with(":refs/heads/main") {
+                    return Err(AppError::new(ErrorCode::PushFailed, "protected branch"));
+                }
+                Ok(())
+            }
+
+            fn delete_local_branch(&self, _root: &Path, branch: &str) -> Result<(), AppError> {
+                self.deleted_branches
+                    .lock()
+                    .unwrap()
+                    .push(branch.to_owned());
+                Ok(())
+            }
+
+            fn checkout_initialization(
+                &self,
+                _root: &Path,
+                _preview: &InitializationPreview,
+                _outcome: &CommitOutcome,
+            ) -> Result<(), AppError> {
+                unreachable!()
+            }
+
+            fn origin_url(&self, _root: &Path) -> Result<String, AppError> {
+                Ok("https://github.com/Acme-Org/acme-docs.git".into())
+            }
+
+            fn attempt_directory(&self, root: &Path) -> Result<PathBuf, AppError> {
+                Ok(root.join(".git/okhub"))
+            }
+
+            fn remote_branch_oid(
+                &self,
+                _root: &Path,
+                _branch: &str,
+                _approved_remote_url: &str,
+                _access_token: AccessToken,
+            ) -> Result<Option<String>, AppError> {
+                Ok(None)
+            }
+        }
+
+        fn setup_workspace(yaml: &str) -> (tempfile::TempDir, LocalSettingsService) {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(temp.path().join(".okf")).unwrap();
+            std::fs::write(temp.path().join(".okf").join("workspace.yml"), yaml).unwrap();
+            let settings = LocalSettingsService::new(MemStore::default());
+            settings
+                .set_current_for_repository(
+                    temp.path(),
+                    KnowledgeRepository {
+                        id: "R_docs".into(),
+                        full_name: "Acme-Org/acme-docs".into(),
+                    },
+                )
+                .unwrap();
+            (temp, settings)
+        }
+
+        #[tokio::test]
+        async fn get_workspace_team_assignees_reports_members_stale_logins_and_offline_cache_fallback(
+        ) {
+            let (_temp, settings) = setup_workspace(
+                "schema_version: 1\nworkspace:\n  id: 00000000-0000-0000-0000-000000000001\n  name: Acme\ndocuments:\n  roots:\n    - path: docs\nassignees:\n  planning:\n    - alice\n    - ghost-user\n  design: Alice\n",
+            );
+            let auth = FakeAuth {
+                login: "alice".into(),
+            };
+            let github = FakeGithub {
+                can_push: Mutex::new(true),
+                members_result: Mutex::new(Some(Ok(vec![BoardAssignee {
+                    login: "alice".into(),
+                    avatar_url: Some("https://avatars.example/alice".into()),
+                    name: Some("가람".into()),
+                }]))),
+                ..Default::default()
+            };
+
+            let snap =
+                get_workspace_team_assignees_inner(&settings, Some(&auth), Some(&github), true)
+                    .await
+                    .unwrap();
+            assert_eq!(snap.viewer_login.as_deref(), Some("alice"));
+            assert_eq!(
+                snap.docs_repository_full_name.as_deref(),
+                Some("Acme-Org/acme-docs")
+            );
+            assert!(snap.can_write_docs_repository);
+            assert!(!snap.member_fetch_failed);
+            assert_eq!(snap.members.len(), 1);
+            assert_eq!(snap.stale_logins, vec!["ghost-user".to_owned()]);
+            assert_eq!(snap.assignees.planning, vec!["alice", "ghost-user"]);
+            assert_eq!(snap.assignees.design, vec!["Alice"]);
+
+            // Subsequent fetch failure retains cached members + sets member_fetch_failed = true
+            *github.members_result.lock().unwrap() = Some(Err(AppError::new(
+                ErrorCode::GithubUnavailable,
+                "network error",
+            )));
+            let fallback =
+                get_workspace_team_assignees_inner(&settings, Some(&auth), Some(&github), true)
+                    .await
+                    .unwrap();
+            assert!(fallback.member_fetch_failed);
+            assert_eq!(fallback.members.len(), 1);
+            assert_eq!(fallback.members[0].login, "alice");
+            assert_eq!(fallback.stale_logins, vec!["ghost-user".to_owned()]);
+        }
+
+        #[tokio::test]
+        async fn save_workspace_team_assignees_rejects_without_push_permission_and_falls_back_to_pr_merge(
+        ) {
+            let initial_yaml = "# team note\nschema_version: 1\nworkspace:\n  id: 00000000-0000-0000-0000-000000000001\n  name: Acme\ndocuments:\n  roots:\n    - path: docs\n";
+            let (_temp, settings) = setup_workspace(initial_yaml);
+            let auth = FakeAuth {
+                login: "alice".into(),
+            };
+            let github = FakeGithub {
+                can_push: Mutex::new(false),
+                members_result: Mutex::new(Some(Ok(vec![BoardAssignee {
+                    login: "alice".into(),
+                    avatar_url: None,
+                    name: Some("가람".into()),
+                }]))),
+                ..Default::default()
+            };
+            let git = std::sync::Arc::new(MockGit {
+                fail_direct_push: true,
+                ..Default::default()
+            });
+
+            let payload = WorkspaceTeamAssigneesPayload {
+                planning: vec!["alice".into()],
+                design: vec![],
+                frontend: vec!["bob".into(), "carol".into()],
+                backend: vec![],
+            };
+
+            let denied = save_workspace_team_assignees_inner(
+                &settings,
+                &auth,
+                &github,
+                git.clone(),
+                payload.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(denied.code, ErrorCode::GithubPermissionDenied);
+
+            *github.can_push.lock().unwrap() = true;
+            *github.members_result.lock().unwrap() = Some(Ok(vec![BoardAssignee {
+                login: "alice".into(),
+                avatar_url: None,
+                name: Some("가람".into()),
+            }]));
+
+            let saved = save_workspace_team_assignees_inner(
+                &settings,
+                &auth,
+                &github,
+                git.clone(),
+                payload,
+            )
+            .await
+            .unwrap();
+
+            let commits = git.commits.lock().unwrap();
+            assert_eq!(commits.len(), 1);
+            assert!(commits[0].1.starts_with("# team note\n"));
+            assert!(
+                commits[0].1.contains(r#"planning: "alice""#),
+                "{}",
+                commits[0].1
+            );
+            assert!(
+                commits[0].1.contains(r#"frontend: ["bob", "carol"]"#),
+                "{}",
+                commits[0].1
+            );
+            let parsed = crate::workspace::model::WorkspaceDocument::parse(&commits[0].1).unwrap();
+            assert_eq!(parsed.config.assignees.unwrap().planning, vec!["alice"]);
+            assert_eq!(github.created_prs.lock().unwrap().len(), 1);
+            assert_eq!(
+                github.merged_prs.lock().unwrap().as_slice(),
+                &[("Acme-Org/acme-docs".to_owned(), 99)]
+            );
+            assert_eq!(git.deleted_branches.lock().unwrap().len(), 1);
+            assert_eq!(saved.assignees.planning, vec!["alice"]);
+        }
+
+        #[tokio::test]
+        async fn assign_board_issue_to_self_updates_cached_board_recursively() {
+            let (_temp, settings) = setup_workspace(
+                "schema_version: 1\nworkspace:\n  id: 00000000-0000-0000-0000-000000000001\n  name: Acme\ndocuments:\n  roots:\n    - path: docs\n",
+            );
+            let cache_root = tempfile::tempdir().unwrap();
+            let project = GithubProjectRef {
+                id: "PVT_1".into(),
+                owner: "Acme-Org".into(),
+                number: 3,
+                scope: Some(crate::project_board::ProjectOwnerScope::Organization),
+                extra: Default::default(),
+            };
+            let initial_board = ProjectBoard {
+                issues: vec![BoardIssue {
+                    number: 10,
+                    title: "[에픽]".into(),
+                    url: "https://github.com/Acme-Org/acme-docs/issues/10".into(),
+                    layer: BoardLayer::Planning,
+                    status: BoardStatus::Backlog,
+                    children: vec![BoardIssue {
+                        number: 77,
+                        title: "[기획] 작업".into(),
+                        url: "https://github.com/Acme-Org/acme-docs/issues/77".into(),
+                        layer: BoardLayer::Planning,
+                        status: BoardStatus::Backlog,
+                        children: vec![],
+                        kind: Some("작업".into()),
+                        depends_on: None,
+                        children_truncated: false,
+                        assignees: vec![],
+                        created_at: None,
+                        updated_at: None,
+                    }],
+                    kind: Some("기능".into()),
+                    depends_on: None,
+                    children_truncated: false,
+                    assignees: vec![],
+                    created_at: None,
+                    updated_at: None,
+                }],
+                fetched_at: Some("2026-11-15T00:00:00Z".into()),
+                skipped: 0,
+                truncated: false,
+            };
+            super::super::save_cached_board(
+                cache_root.path(),
+                &super::super::board_cache_key(&project),
+                &initial_board,
+            )
+            .await
+            .unwrap();
+
+            let auth = FakeAuth {
+                login: "YoonCarrot".into(),
+            };
+            let github = FakeGithub::default();
+            let updated_board = assign_board_issue_to_self_inner(
+                &settings,
+                cache_root.path(),
+                &project,
+                &auth,
+                &github,
+                77,
+                None,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                updated_board.issues[0].children[0].assignees[0].login,
+                "YoonCarrot"
+            );
+            let added = github.added_assignees.lock().unwrap();
+            assert_eq!(added.len(), 1);
+            assert_eq!(added[0].0, "Acme-Org/acme-docs");
+            assert_eq!(added[0].1, 77);
+            assert_eq!(added[0].2, vec!["YoonCarrot"]);
+        }
     }
 }

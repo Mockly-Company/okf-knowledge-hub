@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::settings::model::{
-    CurrentWorkspace, CurrentWorkspaceStatus, DisplayDensity, DocsRepository, HubWorkspace,
-    KnowledgeRepository, LinkedProject, PendingInitializationContext,
+    CachedTeamMembersEntry, CurrentWorkspace, CurrentWorkspaceStatus, DisplayDensity,
+    DocsRepository, HubWorkspace, KnowledgeRepository, LinkedProject, PendingInitializationContext,
 };
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
@@ -20,6 +20,7 @@ pub const PROJECT_DOCS_REPOSITORIES_KEY: &str = "project-docs-repositories";
 pub const HUB_WORKSPACES_KEY: &str = "hub-workspaces";
 pub const ACTIVE_HUB_WORKSPACE_KEY: &str = "active-hub-workspace-id";
 pub const CODE_REPOSITORY_PATHS_KEY: &str = "code-repository-paths";
+pub const TEAM_MEMBERS_CACHE_KEY: &str = "okhub.team_members_cache";
 const INVALIDATED_PENDING_INITIALIZATION: &str = r#"{"state":"invalidated"}"#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -834,6 +835,34 @@ impl LocalSettingsService {
             Some(trimmed) => self.store.write(DASHBOARD_LAST_SEEN_AT_KEY, trimmed),
             None => self.store.remove(DASHBOARD_LAST_SEEN_AT_KEY),
         }
+    }
+
+    pub fn load_cached_team_members(
+        &self,
+        cache_key: &str,
+    ) -> Result<Option<CachedTeamMembersEntry>, AppError> {
+        let normalized_key = cache_key.trim();
+        if normalized_key.is_empty() {
+            return Ok(None);
+        }
+        let entries: BTreeMap<String, CachedTeamMembersEntry> =
+            self.read_json(TEAM_MEMBERS_CACHE_KEY)?;
+        Ok(entries.get(normalized_key).cloned())
+    }
+
+    pub fn save_cached_team_members(
+        &self,
+        cache_key: &str,
+        entry: &CachedTeamMembersEntry,
+    ) -> Result<(), AppError> {
+        let normalized_key = cache_key.trim();
+        if normalized_key.is_empty() {
+            return Ok(());
+        }
+        let mut entries: BTreeMap<String, CachedTeamMembersEntry> =
+            self.read_json(TEAM_MEMBERS_CACHE_KEY)?;
+        entries.insert(normalized_key.to_owned(), entry.clone());
+        self.write_json(TEAM_MEMBERS_CACHE_KEY, &entries)
     }
 
     pub fn load_pending_initialization(
@@ -1961,5 +1990,60 @@ mod tests {
 
         service.set_dashboard_last_seen_at(None).unwrap();
         assert_eq!(service.load_dashboard_last_seen_at().unwrap(), None);
+    }
+
+    #[test]
+    fn team_members_cache_persists_per_workspace_key_and_returns_none_when_absent() {
+        use crate::github::model::BoardAssignee;
+        use crate::settings::model::CachedTeamMembersEntry;
+
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store);
+
+        assert_eq!(
+            service
+                .load_cached_team_members("ws-1:Acme-Org/acme-docs")
+                .unwrap(),
+            None
+        );
+
+        let entry_one = CachedTeamMembersEntry {
+            members: vec![BoardAssignee {
+                login: "alice".to_owned(),
+                avatar_url: Some("https://avatars.example/alice".to_owned()),
+                name: Some("가람".to_owned()),
+            }],
+            can_write_docs_repository: Some(true),
+            fetched_at: Some("2026-11-15T03:00:00Z".to_owned()),
+        };
+        let entry_two = CachedTeamMembersEntry {
+            members: vec![BoardAssignee {
+                login: "bob".to_owned(),
+                avatar_url: None,
+                name: Some("민수".to_owned()),
+            }],
+            can_write_docs_repository: Some(false),
+            fetched_at: Some("2026-11-15T03:05:00Z".to_owned()),
+        };
+
+        service
+            .save_cached_team_members("ws-1:Acme-Org/acme-docs", &entry_one)
+            .unwrap();
+        service
+            .save_cached_team_members("ws-2:Other-Org/other-docs", &entry_two)
+            .unwrap();
+
+        assert_eq!(
+            service
+                .load_cached_team_members("ws-1:Acme-Org/acme-docs")
+                .unwrap(),
+            Some(entry_one)
+        );
+        assert_eq!(
+            service
+                .load_cached_team_members("ws-2:Other-Org/other-docs")
+                .unwrap(),
+            Some(entry_two)
+        );
     }
 }

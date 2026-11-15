@@ -81,6 +81,40 @@ pub(crate) trait GitRepositoryPort: Send + Sync {
         access_token: AccessToken,
     ) -> Result<(), AppError>;
 
+    #[allow(clippy::too_many_arguments)]
+    fn commit_file_on_branch(
+        &self,
+        _root: &Path,
+        _base_branch: &str,
+        _target_branch: &str,
+        _relative_path: &str,
+        _content: &str,
+        _message: &str,
+        _identity: &RepositoryIdentity,
+    ) -> Result<String, AppError> {
+        Err(AppError::new(
+            crate::error::ErrorCode::GithubUnavailable,
+            "문서 저장소 branch commit을 만들 수 없습니다.",
+        ))
+    }
+
+    fn push_refspec(
+        &self,
+        _root: &Path,
+        _refspec: &str,
+        _approved_remote_url: &str,
+        _access_token: AccessToken,
+    ) -> Result<(), AppError> {
+        Err(AppError::new(
+            crate::error::ErrorCode::PushFailed,
+            "변경사항을 GitHub로 push할 수 없습니다.",
+        ))
+    }
+
+    fn delete_local_branch(&self, _root: &Path, _branch: &str) -> Result<(), AppError> {
+        Ok(())
+    }
+
     fn checkout_initialization(
         &self,
         root: &Path,

@@ -240,7 +240,14 @@ async fn prepare_ai_terminal_async(
         return prepare_ai_terminal(services, tool, app_data_dir);
     };
     let workspace_dir = connected_workspace_dir(&services.local_settings)?;
-    let active_context = resolve_active_ai_context(services, &workspace_dir);
+    let mut active_context = resolve_active_ai_context(services, &workspace_dir);
+    if active_context.current_user_login.is_none() {
+        if let Some(auth) = services.auth.as_ref() {
+            if let Ok(principal) = auth.authenticated_principal().await {
+                active_context.current_user_login = Some(principal.login);
+            }
+        }
+    }
 
     if let Some(issue_number) = req.issue_number.filter(|n| *n > 0) {
         if let (Some(github), Ok(Some(project))) = (
@@ -653,11 +660,17 @@ pub(crate) fn resolve_active_ai_context(
         })
         .unwrap_or_default();
 
+    let current_user_login = services
+        .auth
+        .as_ref()
+        .and_then(|auth| auth.cached_principal_login());
+
     ai_runner::ActiveWorkspaceAiContext {
         workspace_title,
         docs_repository_full_name,
         project,
         code_repositories,
+        current_user_login,
     }
 }
 

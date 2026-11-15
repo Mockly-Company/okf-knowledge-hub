@@ -175,3 +175,46 @@ export const Flow: StoryObj<typeof meta> = {
     ).toBeVisible();
   },
 };
+
+const teamAssigneeGateway = (() => {
+  const gw = FakeProjectBoardGateway.withIssues(
+    [
+      {
+        number: 51,
+        title: "[기획] 팀 역할별 자동 배정 설정",
+        url: "https://github.com/Acme-Org/acme-docs/issues/51",
+        layer: "planning",
+        status: "ready",
+        children: [],
+        kind: "기능",
+        assignees: [{ login: "alice", name: "김기획" }],
+      },
+    ],
+    "2026-11-15T12:00:00+09:00",
+  );
+  gw.viewerLogin = "alice";
+  gw.teamMembers = [
+    { login: "alice", name: "김기획" },
+    { login: "bob", name: "이디자인" },
+    { login: "carol", name: "박프론트" },
+  ];
+  gw.teamAssignees = {
+    planning: ["alice"],
+    design: ["bob"],
+    frontend: [],
+    backend: [],
+  };
+  return gw;
+})();
+
+export const TeamAssigneeSettings: StoryObj<typeof meta> = {
+  render: () => (
+    <PageStoryFrame>
+      <ProjectPage gateway={teamAssigneeGateway} />
+    </PageStoryFrame>
+  ),
+  play: async ({ canvas }) => {
+    const button = await canvas.findByRole("button", { name: "담당 설정" });
+    await expect(button).toBeEnabled();
+  },
+};

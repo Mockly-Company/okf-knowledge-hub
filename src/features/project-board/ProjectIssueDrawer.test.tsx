@@ -159,4 +159,111 @@ describe("ProjectIssueDrawer", () => {
 
     expect(screen.getByText("미배정")).toBeVisible();
   });
+
+  it("shows top-of-body ownership banners for other and unassigned backlogs, including developer layers, and hides it for self or unknown viewer (#77)", () => {
+    const selfView = render(
+      <ProjectIssueDrawer
+        open
+        onOpenChange={() => {}}
+        issue={{
+          ...issue,
+          assignees: [{ login: "Alice" }, { login: "bob" }],
+        }}
+        detail={{
+          ...detail,
+          assignees: [{ login: "Alice" }, { login: "bob" }],
+        }}
+        isLoadingDetail={false}
+        detailError={null}
+        readiness={{ state: "ready", waitingOn: null }}
+        isUpdating={false}
+        updateError={null}
+        viewerLogin="alice"
+      />,
+    );
+    expect(screen.queryByText(/담당 백로그입니다\./)).toBeNull();
+    expect(screen.queryByText("담당자가 없는 백로그입니다.")).toBeNull();
+    selfView.unmount();
+
+    const otherView = render(
+      <ProjectIssueDrawer
+        open
+        onOpenChange={() => {}}
+        issue={{
+          ...issue,
+          assignees: [{ login: "bob" }, { login: "carol" }],
+        }}
+        detail={{
+          ...detail,
+          assignees: [{ login: "bob" }, { login: "carol" }],
+        }}
+        isLoadingDetail={false}
+        detailError={null}
+        readiness={{ state: "ready", waitingOn: null }}
+        isUpdating={false}
+        updateError={null}
+        viewerLogin="alice"
+      />,
+    );
+    expect(
+      screen.getByText("@bob, @carol 담당 백로그입니다."),
+    ).toBeVisible();
+    otherView.unmount();
+
+    const unassignedBackendView = render(
+      <ProjectIssueDrawer
+        open
+        onOpenChange={() => {}}
+        issue={{
+          ...issue,
+          layer: "backend",
+          title: "[백엔드] 결제 API",
+          assignees: [],
+        }}
+        detail={{
+          ...detail,
+          layer: "backend",
+          title: "[백엔드] 결제 API",
+          assignees: [],
+        }}
+        isLoadingDetail={false}
+        detailError={null}
+        readiness={{ state: "ready", waitingOn: null }}
+        isUpdating={false}
+        updateError={null}
+        viewerLogin="alice"
+        onStartWithAi={() => {}}
+      />,
+    );
+    expect(screen.getByText("담당자가 없는 백로그입니다.")).toBeVisible();
+    expect(
+      screen.getByText("개발자 구현 백로그 (OkHub 코드 구현 비수행)"),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "AI로 작업 시작" }),
+    ).toBeNull();
+    unassignedBackendView.unmount();
+
+    render(
+      <ProjectIssueDrawer
+        open
+        onOpenChange={() => {}}
+        issue={{
+          ...issue,
+          assignees: [{ login: "bob" }],
+        }}
+        detail={{
+          ...detail,
+          assignees: [{ login: "bob" }],
+        }}
+        isLoadingDetail={false}
+        detailError={null}
+        readiness={{ state: "ready", waitingOn: null }}
+        isUpdating={false}
+        updateError={null}
+        viewerLogin={null}
+      />,
+    );
+    expect(screen.queryByText(/담당 백로그입니다\./)).toBeNull();
+  });
 });

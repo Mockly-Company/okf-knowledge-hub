@@ -108,3 +108,23 @@ export type LinkedProject = ResolvedGithubProject & {
   docsRoot?: string;
   repoFullName?: string;
 };
+
+export type TeamRoleKey = "planning" | "design" | "frontend" | "backend";
+
+export interface WorkspaceTeamAssignees {
+  planning: string[];
+  design: string[];
+  frontend: string[];
+  backend: string[];
+}
+
+export interface WorkspaceTeamAssigneesSnapshot {
+  viewerLogin: string | null;
+  docsRepositoryFullName: string | null;
+  canWriteDocsRepository: boolean;
+  members: BoardAssignee[];
+  assignees: WorkspaceTeamAssignees;
+  staleLogins: string[];
+  memberFetchFailed: boolean;
+  fetchedAt: string | null;
+}

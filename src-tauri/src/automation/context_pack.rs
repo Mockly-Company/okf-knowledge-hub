@@ -429,6 +429,7 @@ mod tests {
                 full_name: "Acme-Org/acme-web".to_owned(),
                 local_path: Some("/work/acme-web".to_owned()),
             }],
+            current_user_login: Some("YoonCarrot".to_owned()),
         };
 
         let pack = assemble_issue_context_pack(&items[1], &items, Some(temp.path()), &ctx);
@@ -458,5 +459,12 @@ mod tests {
             Some(temp.path().display().to_string().as_str())
         );
         assert!(design_pack.markdown_summary.contains("화면명세서"));
+        assert!(
+            design_pack
+                .markdown_summary
+                .contains("현재 로그인한 GitHub 사용자: `@YoonCarrot`"),
+            "{}",
+            design_pack.markdown_summary
+        );
     }
 }

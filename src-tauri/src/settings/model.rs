@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::github::model::BoardAssignee;
 use crate::project_board::model::ProjectOwnerScope;
 use crate::workspace::service::WorkspaceSummary;
 use uuid::Uuid;
@@ -141,6 +142,17 @@ impl CurrentWorkspace {
             okf: false,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CachedTeamMembersEntry {
+    #[serde(default)]
+    pub members: Vec<BoardAssignee>,
+    #[serde(default)]
+    pub can_write_docs_repository: Option<bool>,
+    #[serde(default)]
+    pub fetched_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
