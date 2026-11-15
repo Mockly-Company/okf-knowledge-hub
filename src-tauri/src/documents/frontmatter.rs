@@ -22,14 +22,29 @@ pub(crate) fn parse_document_reader<R: BufRead>(
             title: fallback_title,
             document_id: None,
             frontmatter_status: FrontmatterStatus::Missing,
+            doc_type: None,
+            domain: None,
+            status: None,
         },
         FrontmatterRead::Invalid(error) => ParsedDocumentMetadata {
             title: fallback_title,
             document_id: None,
             frontmatter_status: FrontmatterStatus::Invalid { error },
+            doc_type: None,
+            domain: None,
+            status: None,
         },
         FrontmatterRead::Present(source) => parse_frontmatter(&source, fallback_title),
     }
+}
+
+fn optional_non_empty_str(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
 }
 
 fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMetadata {
@@ -45,6 +60,9 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
                         message: error.to_string(),
                     },
                 },
+                doc_type: None,
+                domain: None,
+                status: None,
             };
         }
     };
@@ -65,6 +83,9 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
         title,
         document_id,
         frontmatter_status: FrontmatterStatus::Valid,
+        doc_type: optional_non_empty_str(&value, "type"),
+        domain: optional_non_empty_str(&value, "domain"),
+        status: optional_non_empty_str(&value, "status"),
     }
 }
 
@@ -157,7 +178,7 @@ mod tests {
     #[test]
     fn frontmatter_title_precedes_filename_and_h1_is_not_a_title_fallback() {
         let metadata = parse_document(
-            "---\ntitle: API 계약\nokf_hub_id: 9df970bb-824b-4d26-b582-b34a8f0afc21\n---\n# 다른 H1\n",
+            "---\ntitle: API 계약\nokf_hub_id: 9df970bb-824b-4d26-b582-b34a8f0afc21\ntype: \"Product Spec\"\ndomain: \"documents\"\nstatus: \"approved\"\n---\n# 다른 H1\n",
             "map-api.md",
         );
         assert_eq!(metadata.title, "API 계약");
@@ -165,10 +186,16 @@ mod tests {
             metadata.document_id.unwrap().to_string(),
             "9df970bb-824b-4d26-b582-b34a8f0afc21"
         );
+        assert_eq!(metadata.doc_type.as_deref(), Some("Product Spec"));
+        assert_eq!(metadata.domain.as_deref(), Some("documents"));
+        assert_eq!(metadata.status.as_deref(), Some("approved"));
 
         let fallback = parse_document("# 본문의 H1\n", "map-api.md");
         assert_eq!(fallback.title, "map-api");
         assert_eq!(fallback.frontmatter_status, FrontmatterStatus::Missing);
+        assert_eq!(fallback.doc_type, None);
+        assert_eq!(fallback.domain, None);
+        assert_eq!(fallback.status, None);
     }
 
     #[test]

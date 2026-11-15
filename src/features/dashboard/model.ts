@@ -41,6 +41,7 @@ export interface DashboardNotificationItem {
   hasCompanionHtml: boolean;
   timestamp: string;
   isNew: boolean;
+  isChecked?: boolean;
 }
 
 export interface DashboardWorkspaceFailure {
@@ -62,4 +63,31 @@ export interface PersonalDashboardResult {
   unreadNotificationCount: number;
   totalUnreadCount: number;
   failures: DashboardWorkspaceFailure[];
+}
+
+export function isDashboardTimestampNew(
+  timestamp: string,
+  lastSeenAt: string | null | undefined,
+  nowMs: number = Date.now(),
+): boolean {
+  const itemMs = Date.parse(timestamp);
+  if (!Number.isFinite(itemMs)) return false;
+  const lastSeenMs = lastSeenAt ? Date.parse(lastSeenAt) : Number.NaN;
+  if (Number.isFinite(lastSeenMs)) {
+    return itemMs > lastSeenMs;
+  }
+  return itemMs >= nowMs - 7 * 86_400 * 1000;
+}
+
+export function isDashboardNotificationChecked(
+  itemTimestamp: string,
+  checkedTimestamp: string | null | undefined,
+): boolean {
+  if (!checkedTimestamp) return false;
+  const itemMs = Date.parse(itemTimestamp);
+  const checkedMs = Date.parse(checkedTimestamp);
+  if (Number.isFinite(itemMs) && Number.isFinite(checkedMs)) {
+    return checkedMs >= itemMs;
+  }
+  return checkedTimestamp.trim() === itemTimestamp.trim();
 }

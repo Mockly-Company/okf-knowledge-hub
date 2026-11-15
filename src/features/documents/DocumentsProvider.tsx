@@ -20,16 +20,17 @@ import {
   type DocumentsState,
   type SelectedDocumentVersion,
 } from "./documents-reducer";
-import type {
-  AppError,
-  ApproveAndMergeDocsPrResponse,
-  DocsPullRequestDetail,
-  DocsPullRequestSummary,
-  DocumentAsset,
-  DocumentEventEnvelope,
-  HistoryItem,
-  PublishDocumentDraftResponse,
-  SearchResult,
+import {
+  normalizeDocumentPath,
+  type AppError,
+  type ApproveAndMergeDocsPrResponse,
+  type DocsPullRequestDetail,
+  type DocsPullRequestSummary,
+  type DocumentAsset,
+  type DocumentEventEnvelope,
+  type HistoryItem,
+  type PublishDocumentDraftResponse,
+  type SearchResult,
 } from "./model";
 import {
   createInitialAuthoringState,
@@ -51,9 +52,17 @@ const secretMarkers = [
   "authorization",
   "password",
   "secret",
-  "ghu_",
-  "ghr_",
+  "client_secret",
+  "private_key",
+  "api_key",
+  "api-key",
+  "apikey",
+  "x-api-key",
+  "bearer ",
 ];
+
+const secretTokenPrefixPattern =
+  /(?:^|[^a-z0-9])(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-|sk-[a-z0-9_-]{6,})/i;
 
 function createOperationId(): string {
   return crypto.randomUUID();
@@ -63,8 +72,9 @@ function containsPrivateValue(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
     secretMarkers.some((marker) => normalized.includes(marker)) ||
-    /(?:^|\s)\/(?:users|home|private|var|tmp)\//i.test(value) ||
-    /[a-z]:\\/i.test(value) ||
+    secretTokenPrefixPattern.test(value) ||
+    /(?:^|[^a-z0-9])\/(?:users|home|private|var|tmp)\//i.test(value) ||
+    /(?:^|[^a-z0-9])(?:\\\\\?\\)?[a-z]:[\\/]/i.test(value) ||
     normalized.includes("search.sqlite3") ||
     normalized.includes("document-search")
   );
@@ -116,11 +126,15 @@ function sanitizedEvent(event: DocumentEventEnvelope): DocumentEventEnvelope {
 export interface DocumentsContextValue {
   state: DocumentsState;
   authoringState: DocumentAuthoringState;
+  preferredViewMode: "html" | "markdown" | null;
+  preferredViewTargetPath: string | null;
+  clearPreferredViewMode(expectedPath?: string): void;
   setSearchQuery(query: string): void;
   retrySearch(): void;
   selectDocument(
     path: string,
     searchMatch?: Pick<SearchResult, "matchField" | "matchText">,
+    preferredViewMode?: "html" | "markdown",
   ): void;
   showDocumentsHome(): void;
   retrySession(): void;
@@ -190,6 +204,25 @@ export function DocumentsProvider({
     }),
   );
   const [sessionAttempt, setSessionAttempt] = useState(0);
+  const [preferredViewPreference, setPreferredViewPreference] = useState<{
+    path: string;
+    mode: "html" | "markdown";
+  } | null>(null);
+  const preferredViewMode = preferredViewPreference?.mode ?? null;
+  const preferredViewTargetPath = preferredViewPreference?.path ?? null;
+  const clearPreferredViewMode = useCallback((expectedPath?: string) => {
+    setPreferredViewPreference((current) => {
+      if (!current) return null;
+      if (
+        expectedPath &&
+        current.path.toLowerCase() !==
+          normalizeDocumentPath(expectedPath).toLowerCase()
+      ) {
+        return current;
+      }
+      return null;
+    });
+  }, []);
   const [editorBaselines, setEditorBaselines] = useState<
     Record<string, string | null>
   >({});
@@ -574,6 +607,7 @@ export function DocumentsProvider({
     void (async () => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null || !(await flushCurrentEditor())) return;
+      setPreferredViewPreference(null);
       dispatchAuthoringAccepted({ type: "editorCloseRequested" });
       dispatchAccepted({ type: "documentsHomeRequested", sessionId });
     })();
@@ -940,17 +974,35 @@ export function DocumentsProvider({
     (
       path: string,
       searchMatch?: Pick<SearchResult, "matchField" | "matchText">,
+      nextPreferredViewMode?: "html" | "markdown",
     ) => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null) return;
+      const basePath = normalizeDocumentPath(path);
+      if (!basePath) return;
+      const isHtmlPath = /\.html$/i.test(basePath);
+      const normalizedPath = isHtmlPath
+        ? basePath.replace(/\.html$/i, ".md")
+        : basePath;
+      const resolvedViewMode =
+        nextPreferredViewMode ?? (isHtmlPath ? "html" : null);
       void (async () => {
         if (!(await flushCurrentEditor()) || stateRef.current.activeSessionId !== sessionId) return;
+        // view 파라미터(또는 .html 경로)가 없는 일반 선택에서는 이전 선호값을 물려받지 않도록 null로 초기화한다.
+        setPreferredViewPreference(
+          resolvedViewMode
+            ? {
+                path: normalizedPath,
+                mode: resolvedViewMode,
+              }
+            : null,
+        );
         dispatchAuthoringAccepted({ type: "editorCloseRequested" });
         dispatchAccepted({
           type: "documentSelectionRequested",
           sessionId,
           requestId: createId(),
-          path,
+          path: normalizedPath,
           searchMatch,
         });
       })();
@@ -959,10 +1011,12 @@ export function DocumentsProvider({
   );
 
   const retrySession = useCallback(() => {
+    setPreferredViewPreference(null);
     setSessionAttempt((attempt) => attempt + 1);
   }, []);
 
   const resetForWorkspaceSwitch = useCallback(() => {
+    setPreferredViewPreference(null);
     dispatchAuthoringAccepted({ type: "workspaceAuthoringReset" });
     dispatchAccepted({ type: "searchQueryChanged", query: "" });
     pendingWorkspaceResetRef.current = true;
@@ -1299,6 +1353,9 @@ export function DocumentsProvider({
     () => ({
       state,
       authoringState,
+      preferredViewMode,
+      preferredViewTargetPath,
+      clearPreferredViewMode,
       setSearchQuery,
       retrySearch,
       selectDocument,
@@ -1338,6 +1395,7 @@ export function DocumentsProvider({
       acceptHubConflict,
       approveAndMergeDocsPullRequest,
       authoringState,
+      clearPreferredViewMode,
       clearRecoverableError,
       closeDraftEditor,
       closeNewDocument,
@@ -1351,6 +1409,8 @@ export function DocumentsProvider({
       loadHistory,
       loadMoreHistory,
       openExternal,
+      preferredViewMode,
+      preferredViewTargetPath,
       publishDocumentDraft,
       readAsset,
       refresh,

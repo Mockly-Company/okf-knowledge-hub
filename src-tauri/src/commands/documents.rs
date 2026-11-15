@@ -1316,39 +1316,84 @@ pub(crate) struct GroupedPrDocTarget {
     pub status: String,
 }
 
+fn is_auxiliary_pr_doc(path: &str) -> bool {
+    let norm = crate::documents::reader::normalize_portable_doc_path(path);
+    let file_name = norm.rsplit('/').next().unwrap_or(&norm);
+    crate::documents::reader::is_reserved_markdown_path(&norm, file_name)
+        || crate::documents::reader::is_reserved_html_path(&norm, file_name)
+}
+
 pub(crate) fn group_planning_pr_document_targets(
     files: &[PullRequestChangedFile],
 ) -> Vec<GroupedPrDocTarget> {
     let mut targets: Vec<GroupedPrDocTarget> = Vec::new();
     for file in files {
-        let path = file.filename.trim();
-        if let Some(stem) = path.strip_suffix(".md") {
-            let companion = format!("{stem}.html");
-            if let Some(existing) = targets.iter_mut().find(|t| t.md_path == path) {
-                existing.status = file.status.clone();
-                existing.html_path = Some(companion);
-            } else {
-                targets.push(GroupedPrDocTarget {
-                    md_path: path.to_owned(),
-                    html_path: Some(companion),
-                    status: file.status.clone(),
-                });
-            }
-        } else if let Some(stem) = path.strip_suffix(".html") {
-            if !path.starts_with(".okf/templates/") {
+        let norm_path = crate::documents::reader::normalize_portable_doc_path(&file.filename);
+        if let Some((stem, ext)) = norm_path.rsplit_once('.') {
+            if ext.eq_ignore_ascii_case("md") {
+                let is_aux = is_auxiliary_pr_doc(&norm_path);
+                let companion = (!is_aux).then(|| format!("{stem}.html"));
+                if let Some(existing) = targets
+                    .iter_mut()
+                    .find(|t| t.md_path.eq_ignore_ascii_case(&norm_path))
+                {
+                    existing.md_path = norm_path;
+                    existing.status = file.status.clone();
+                    existing.html_path = if is_aux {
+                        None
+                    } else {
+                        existing.html_path.take().or(companion)
+                    };
+                } else {
+                    targets.push(GroupedPrDocTarget {
+                        md_path: norm_path,
+                        html_path: companion,
+                        status: file.status.clone(),
+                    });
+                }
+            } else if ext.eq_ignore_ascii_case("html") {
+                // `.okf/` 하위 HTML 파일(예: `.okf/templates/human-view.html`)은 문서가 아닌
+                // 내부 스캐폴딩 템플릿 자산이므로 그룹 목록에서 제외한다.
+                if crate::documents::reader::is_okf_path(&norm_path) {
+                    continue;
+                }
                 let paired_md = format!("{stem}.md");
-                if let Some(existing) = targets.iter_mut().find(|t| t.md_path == paired_md) {
-                    existing.html_path = Some(path.to_owned());
+                if is_auxiliary_pr_doc(&norm_path) {
+                    // `docs/index.html`, `AGENTS.html` 등 예약 보조 `.html` 단독 변경 PR이
+                    // 문서 목록에서 통째로 누락되지 않도록 동반 HTML 없이(`html_path: None`) `md_path` 폴백을 남긴다(S17).
+                    if !targets
+                        .iter()
+                        .any(|t| t.md_path.eq_ignore_ascii_case(&paired_md))
+                    {
+                        targets.push(GroupedPrDocTarget {
+                            md_path: paired_md,
+                            html_path: None,
+                            status: file.status.clone(),
+                        });
+                    }
+                    continue;
+                }
+                if let Some(existing) = targets
+                    .iter_mut()
+                    .find(|t| t.md_path.eq_ignore_ascii_case(&paired_md))
+                {
+                    existing.html_path = Some(norm_path);
                 } else {
                     targets.push(GroupedPrDocTarget {
                         md_path: paired_md,
-                        html_path: Some(path.to_owned()),
+                        html_path: Some(norm_path),
                         status: file.status.clone(),
                     });
                 }
             }
         }
     }
+    targets.sort_by(|a, b| {
+        is_auxiliary_pr_doc(&a.md_path)
+            .cmp(&is_auxiliary_pr_doc(&b.md_path))
+            .then_with(|| a.md_path.to_lowercase().cmp(&b.md_path.to_lowercase()))
+            .then_with(|| a.md_path.cmp(&b.md_path))
+    });
     targets
 }
 
@@ -3810,5 +3855,120 @@ mod tests {
             Some("docs/product/roadmap-v2.html")
         );
         assert_eq!(grouped[0].status, "modified");
+    }
+
+    #[test]
+    fn prioritizes_spec_documents_with_html_before_auxiliary_index_and_log_files() {
+        use crate::github::model::PullRequestChangedFile;
+        let files = vec![
+            PullRequestChangedFile {
+                filename: "docs/index.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/index.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "AGENTS.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: ".OKF/templates/human-view.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/product/zebra-spec.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/log.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/product/roadmap-v2.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/product/roadmap-v2.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+        ];
+
+        let grouped = super::group_planning_pr_document_targets(&files);
+        assert_eq!(grouped.len(), 5);
+        assert_eq!(grouped[0].md_path, "docs/product/roadmap-v2.md");
+        assert_eq!(
+            grouped[0].html_path.as_deref(),
+            Some("docs/product/roadmap-v2.html")
+        );
+        assert_eq!(grouped[1].md_path, "docs/product/zebra-spec.md");
+        assert_eq!(
+            grouped[1].html_path.as_deref(),
+            Some("docs/product/zebra-spec.html")
+        );
+        assert_eq!(grouped[2].md_path, "AGENTS.md");
+        assert_eq!(grouped[2].html_path, None);
+        assert_eq!(grouped[3].md_path, "docs/index.md");
+        assert_eq!(grouped[3].html_path, None);
+        assert_eq!(grouped[4].md_path, "docs/log.md");
+        assert_eq!(grouped[4].html_path, None);
+    }
+
+    #[test]
+    fn falls_back_to_md_without_html_for_standalone_auxiliary_html_and_ignores_okf_templates() {
+        use crate::github::model::PullRequestChangedFile;
+
+        let aux_only = vec![PullRequestChangedFile {
+            filename: "docs/index.html".into(),
+            status: "modified".into(),
+            previous_filename: None,
+        }];
+        let aux_grouped = super::group_planning_pr_document_targets(&aux_only);
+        assert_eq!(aux_grouped.len(), 1);
+        assert_eq!(aux_grouped[0].md_path, "docs/index.md");
+        assert_eq!(aux_grouped[0].html_path, None);
+        assert_eq!(aux_grouped[0].status, "modified");
+
+        let okf_only = vec![PullRequestChangedFile {
+            filename: "./.OKF/templates/human-view.html".into(),
+            status: "modified".into(),
+            previous_filename: None,
+        }];
+        assert!(super::group_planning_pr_document_targets(&okf_only).is_empty());
+
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path(
+                "docs//domains/./documents//prd.md"
+            ),
+            "docs/domains/documents/prd.md"
+        );
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path(
+                "/./.OKF//./templates//human-view.html/"
+            ),
+            ".OKF/templates/human-view.html"
+        );
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path("docs/../.okf/x.md"),
+            ".okf/x.md"
+        );
+        assert!(crate::documents::reader::is_okf_path("docs/../.okf/x.md"));
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path("../../../outside.md"),
+            ""
+        );
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path("docs/../../outside.md"),
+            ""
+        );
     }
 }

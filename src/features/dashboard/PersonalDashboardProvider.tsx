@@ -12,7 +12,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { PersonalDashboardGateway } from "./PersonalDashboardGateway";
-import type { PersonalDashboardResult } from "./model";
+import {
+  isDashboardNotificationChecked,
+  isDashboardTimestampNew,
+  type PersonalDashboardResult,
+} from "./model";
 import { personalDashboardKeys } from "./queryKeys";
 
 export interface PersonalDashboardContextValue {
@@ -27,6 +31,11 @@ export interface PersonalDashboardContextValue {
   refresh(): Promise<void>;
   retryWorkspace(workspaceId: string): Promise<void>;
   markSeen(): Promise<void>;
+  toggleNotificationChecked(
+    notificationId: string,
+    checked: boolean,
+    itemTimestamp: string,
+  ): Promise<void>;
 }
 
 const PersonalDashboardContext =
@@ -186,6 +195,66 @@ export function PersonalDashboardProvider({
     await markDashboardSeen();
   }, [markDashboardSeen]);
 
+  const checkNotificationMutation = useMutation({
+    mutationFn: ({
+      notificationId,
+      checked,
+      itemTimestamp,
+    }: {
+      notificationId: string;
+      checked: boolean;
+      itemTimestamp: string;
+    }) =>
+      gateway.setDashboardNotificationChecked(
+        notificationId,
+        checked,
+        itemTimestamp,
+      ),
+    onSuccess: (_data, variables) => {
+      queryClient.setQueriesData<PersonalDashboardResult | undefined>(
+        { queryKey: personalDashboardKeys.all },
+        (current) => {
+          if (!current) return current;
+          const fetchedMs = Date.parse(current.fetchedAt);
+          const fallbackNowMs = Number.isFinite(fetchedMs) ? fetchedMs : Date.now();
+          const nextNotifications = current.notifications.map((item) => {
+            if (item.id !== variables.notificationId) return item;
+            if (
+              variables.checked &&
+              isDashboardNotificationChecked(item.timestamp, variables.itemTimestamp)
+            ) {
+              return { ...item, isChecked: true, isNew: false };
+            }
+            const restoredNew = isDashboardTimestampNew(
+              item.timestamp,
+              current.lastSeenAt,
+              fallbackNowMs,
+            );
+            return { ...item, isChecked: false, isNew: restoredNew };
+          });
+          const prevUnreadNotif = current.unreadNotificationCount;
+          const nextUnreadNotif = nextNotifications.filter((n) => n.isNew).length;
+          const delta = nextUnreadNotif - prevUnreadNotif;
+          return {
+            ...current,
+            notifications: nextNotifications,
+            unreadNotificationCount: nextUnreadNotif,
+            totalUnreadCount: Math.max(0, current.totalUnreadCount + delta),
+          };
+        },
+      );
+      void queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
+    },
+  });
+
+  const mutateNotificationChecked = checkNotificationMutation.mutateAsync;
+  const toggleNotificationChecked = useCallback(
+    async (notificationId: string, checked: boolean, itemTimestamp: string) => {
+      await mutateNotificationChecked({ notificationId, checked, itemTimestamp });
+    },
+    [mutateNotificationChecked],
+  );
+
   const unreadCount = useMemo(() => {
     if (!query.data) return 0;
     return query.data.totalUnreadCount;
@@ -204,6 +273,7 @@ export function PersonalDashboardProvider({
       refresh,
       retryWorkspace,
       markSeen,
+      toggleNotificationChecked,
     }),
     [
       assigneeFilter,
@@ -215,6 +285,7 @@ export function PersonalDashboardProvider({
       query.isLoading,
       refresh,
       retryWorkspace,
+      toggleNotificationChecked,
       unreadCount,
     ],
   );

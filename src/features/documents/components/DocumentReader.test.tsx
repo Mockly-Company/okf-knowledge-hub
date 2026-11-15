@@ -4,8 +4,9 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { DocumentsProvider } from "../DocumentsProvider";
-import type { DocumentContent } from "../model";
+import { DocumentsProvider, useDocuments } from "../DocumentsProvider";
+import { DocumentReader } from "./DocumentReader";
+import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
@@ -521,5 +522,273 @@ describe("DocumentReader", () => {
     expect(
       await screen.findByText(/사람용 \.html 뷰가 \.md 원본보다 오래되었습니다/),
     ).toBeVisible();
+  });
+
+  it("switches to .md view and scrolls to the section when a right-hand TOC heading is clicked during .html preview", async () => {
+    const user = userEvent.setup();
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    try {
+      const doc: DocumentContent = {
+        ...invalidFrontmatterDocument(),
+        summary: {
+          ...invalidFrontmatterDocument().summary,
+          path: "docs/product/roadmap-v2.md",
+          fileName: "roadmap-v2.md",
+          title: "OkHub v2 로드맵",
+        },
+        markdown: "# OkHub v2 로드맵\n\n## 2026-11-14 변경\n\n상세 내용입니다.",
+        tableOfContents: [
+          { level: 1, title: "OkHub v2 로드맵", id: "okhub-v2-roadmap" },
+          { level: 2, title: "2026-11-14 변경", id: "2026-11-14-change" },
+        ],
+        companionHtml: {
+          path: "docs/product/roadmap-v2.html",
+          html: "<!doctype html><html><body><h1>로드맵 HTML</h1></body></html>",
+          modifiedAtUnixMs: 1_721_000_000_500,
+        },
+        htmlSyncStatus: "in_sync",
+      };
+
+      renderSelectedDocument(doc);
+
+      expect(
+        await screen.findByRole("tab", { name: "사람용 보기 (.html)" }),
+      ).toHaveAttribute("aria-selected", "true");
+
+      const tocNav = screen.getByRole("navigation", { name: "목차" });
+      await user.click(within(tocNav).getByRole("link", { name: "2026-11-14 변경" }));
+
+      expect(
+        await screen.findByRole("tab", { name: "원문 (.md)" }),
+      ).toHaveAttribute("aria-selected", "true");
+      expect(await screen.findByText("상세 내용입니다.")).toBeVisible();
+      await waitFor(() => {
+        const heading = document.getElementById("2026-11-14-change");
+        expect(heading).not.toBeNull();
+        expect(scroll.mock.instances).toContain(heading);
+      });
+    } finally {
+      scroll.mockRestore();
+    }
+  });
+
+  it("normalizes repeated ./ and backslashes identically across DocumentsProvider and DocumentReader", async () => {
+    expect(normalizeDocumentPath(" .\\././docs/product/concept-v2.md ")).toBe(
+      "docs/product/concept-v2.md",
+    );
+    expect(normalizeDocumentPath("/docs/product/concept-v2.md")).toBe(
+      "docs/product/concept-v2.md",
+    );
+    expect(normalizeDocumentPath("/./.OKF/templates/human-view.html/")).toBe(
+      ".OKF/templates/human-view.html",
+    );
+    expect(normalizeDocumentPath("///././docs/product/concept-v2.html//")).toBe(
+      "docs/product/concept-v2.html",
+    );
+    expect(normalizeDocumentPath("docs//domains/./documents//prd.md")).toBe(
+      "docs/domains/documents/prd.md",
+    );
+    expect(normalizeDocumentPath("/./.OKF//./templates//human-view.html/")).toBe(
+      ".OKF/templates/human-view.html",
+    );
+    expect(normalizeDocumentPath("docs/../.okf/x.md")).toBe(".okf/x.md");
+    expect(normalizeDocumentPath("docs/domains/../product/concept-v2.md")).toBe(
+      "docs/product/concept-v2.md",
+    );
+    expect(normalizeDocumentPath("../../../outside.md")).toBe("");
+    expect(normalizeDocumentPath("docs/../../outside.md")).toBe("");
+
+    const user = userEvent.setup();
+    const gateway = new FakeDocumentsGateway();
+    const doc: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      summary: {
+        ...invalidFrontmatterDocument().summary,
+        path: "././docs/product/concept-v2.md",
+        fileName: "concept-v2.md",
+        title: "컨셉 v2",
+      },
+      markdown: "# 컨셉 v2\n\n원문 마크다운입니다.",
+      companionHtml: {
+        path: "docs/product/concept-v2.html",
+        html: "<!doctype html><html><body><h1>컨셉 v2 HTML</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync",
+    };
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.sessionSnapshot.catalog = {
+      documents: [{ ...doc.summary, path: "docs/product/concept-v2.md" }],
+      roots: [{ kind: "document", summary: { ...doc.summary, path: "docs/product/concept-v2.md" } }],
+    };
+    vi.spyOn(gateway, "readDocument").mockResolvedValue(doc);
+
+    function SelectWithRepeatedDotSlash() {
+      const { selectDocument } = useDocuments();
+      return (
+        <button
+          type="button"
+          onClick={() => selectDocument("././docs/product/concept-v2.html", undefined, "markdown")}
+        >
+          반복접두사열기
+        </button>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+          <MemoryRouter>
+            <DocumentsProvider gateway={gateway}>
+              <SelectWithRepeatedDotSlash />
+              <DocumentsPage />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "반복접두사열기" }));
+
+    expect(
+      await screen.findByRole("tab", { name: "원문 (.md)" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("원문 마크다운입니다.")).toBeVisible();
+  });
+
+  it("keeps markdown selection stable when companionHtml object identity changes on rerender", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeDocumentsGateway();
+    const baseDoc: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      summary: {
+        ...invalidFrontmatterDocument().summary,
+        path: "docs/product/roadmap-v2.md",
+        fileName: "roadmap-v2.md",
+        title: "OkHub v2 컨셉",
+      },
+      markdown: "# OkHub v2 컨셉\n\n유지될 원문입니다.",
+      companionHtml: {
+        path: "docs/product/roadmap-v2.html",
+        html: "<!doctype html><html><body><h1>컨셉 HTML</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync",
+    };
+
+    const wrap = (doc: DocumentContent) => (
+      <TestQueryProvider>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+          <MemoryRouter>
+            <DocumentsProvider gateway={gateway}>
+              <DocumentReader document={doc} />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>
+    );
+
+    const view = render(wrap(baseDoc));
+    const mdTab = await screen.findByRole("tab", { name: "원문 (.md)" });
+    await user.click(mdTab);
+    expect(mdTab).toHaveAttribute("aria-selected", "true");
+
+    const clonedCompanionDoc: DocumentContent = {
+      ...baseDoc,
+      companionHtml: { ...baseDoc.companionHtml! },
+    };
+    view.rerender(wrap(clonedCompanionDoc));
+
+    expect(screen.getByRole("tab", { name: "원문 (.md)" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("유지될 원문입니다.")).toBeVisible();
+  });
+
+  it("clears pending TOC heading scroll when switching to another document before animation frame fires", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeDocumentsGateway();
+    const queuedFrames: FrameRequestCallback[] = [];
+    const cancelSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      queuedFrames.push(cb);
+      return queuedFrames.length;
+    });
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+
+    try {
+      const docA: DocumentContent = {
+        ...invalidFrontmatterDocument(),
+        summary: {
+          ...invalidFrontmatterDocument().summary,
+          path: "docs/product/roadmap-v2.md",
+          fileName: "roadmap-v2.md",
+          title: "문서 A",
+        },
+        markdown: "# 문서 A\n\n## 공통 섹션\n\nA 본문",
+        tableOfContents: [
+          { level: 1, title: "문서 A", id: "doc-a" },
+          { level: 2, title: "공통 섹션", id: "shared-section" },
+        ],
+        companionHtml: {
+          path: "docs/product/roadmap-v2.html",
+          html: "<!doctype html><html><body><h1>A HTML</h1></body></html>",
+          modifiedAtUnixMs: 1_721_000_000_500,
+        },
+        htmlSyncStatus: "in_sync",
+      };
+
+      const docB: DocumentContent = {
+        ...invalidFrontmatterDocument(),
+        summary: {
+          ...invalidFrontmatterDocument().summary,
+          path: "docs/product/other.md",
+          fileName: "other.md",
+          title: "문서 B",
+        },
+        markdown: "# 문서 B\n\n## 공통 섹션\n\nB 본문",
+        tableOfContents: [
+          { level: 1, title: "문서 B", id: "doc-b" },
+          { level: 2, title: "공통 섹션", id: "shared-section" },
+        ],
+        companionHtml: null,
+        htmlSyncStatus: "not_applicable",
+      };
+
+      const wrap = (doc: DocumentContent) => (
+        <TestQueryProvider>
+          <PreferencesProvider repository={new FakePreferencesRepository()}>
+            <MemoryRouter>
+              <DocumentsProvider gateway={gateway}>
+                <DocumentReader document={doc} />
+              </DocumentsProvider>
+            </MemoryRouter>
+          </PreferencesProvider>
+        </TestQueryProvider>
+      );
+
+      const view = render(wrap(docA));
+      expect(await screen.findByRole("tab", { name: "사람용 보기 (.html)" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+
+      const tocNav = screen.getByRole("navigation", { name: "목차" });
+      await user.click(within(tocNav).getByRole("link", { name: "공통 섹션" }));
+      expect(queuedFrames.length).toBeGreaterThan(0);
+
+      view.rerender(wrap(docB));
+      expect(await screen.findByText("B 본문")).toBeVisible();
+
+      for (const frameCallback of queuedFrames) {
+        frameCallback(performance.now());
+      }
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      scroll.mockRestore();
+      rafSpy.mockRestore();
+      cancelSpy.mockRestore();
+    }
   });
 });

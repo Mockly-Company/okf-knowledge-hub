@@ -46,13 +46,20 @@ function DocumentsDeepLinkSync({
   ready: boolean;
   selectedPath: string | null;
   showDocumentsHome: () => void;
-  selectDocument: (path: string) => void;
+  selectDocument: (
+    path: string,
+    searchMatch?: undefined,
+    preferredViewMode?: "html" | "markdown",
+  ) => void;
 }) {
   const { state, listDocsPullRequests } = useDocuments();
   const sessionId = state.activeSessionId;
   const [searchParams, setSearchParams] = useSearchParams();
   const prParam = searchParams.get("pr");
   const docParam = searchParams.get("doc");
+  const viewParam = searchParams.get("view");
+  const preferredView =
+    viewParam === "html" || viewParam === "markdown" ? viewParam : undefined;
   const lastConsumedDocRef = useRef<string | null>(null);
   const parsedPrNumber = prParam ? Number(prParam) : Number.NaN;
   const hasPositivePrNumber =
@@ -112,17 +119,11 @@ function DocumentsDeepLinkSync({
   useEffect(() => {
     if (!docParam) {
       lastConsumedDocRef.current = null;
-      return;
-    }
-    if (!ready) return;
-    if (prParam) {
-      // 유효한 PR 딥링크가 확정된 경우에만 ?doc=을 비우고, 미확정·무효 ?pr= 동안에는 보존한다(S21, S37).
-      if (prConfirmedValid) {
-        lastConsumedDocRef.current = null;
+      if (ready && !prParam && viewParam !== null) {
         setSearchParams(
           (prev) => {
             const next = new URLSearchParams(prev);
-            next.delete("doc");
+            next.delete("view");
             return next;
           },
           { replace: true },
@@ -130,13 +131,32 @@ function DocumentsDeepLinkSync({
       }
       return;
     }
-    if (lastConsumedDocRef.current === docParam) return;
-    lastConsumedDocRef.current = docParam;
-    selectDocument(docParam);
+    if (!ready) return;
+    if (prParam) {
+      // 유효한 PR 딥링크가 확정된 경우에만 ?doc=/view=를 비우고, 미확정·무효 ?pr= 동안에는 보존한다(S21, S37).
+      if (prConfirmedValid) {
+        lastConsumedDocRef.current = null;
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.delete("doc");
+            next.delete("view");
+            return next;
+          },
+          { replace: true },
+        );
+      }
+      return;
+    }
+    const consumedKey = `${docParam}|${preferredView ?? ""}`;
+    if (lastConsumedDocRef.current === consumedKey) return;
+    lastConsumedDocRef.current = consumedKey;
+    selectDocument(docParam, undefined, preferredView);
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("doc");
+        next.delete("view");
         return next;
       },
       { replace: true },
@@ -144,6 +164,8 @@ function DocumentsDeepLinkSync({
   }, [
     prParam,
     docParam,
+    viewParam,
+    preferredView,
     ready,
     prConfirmedValid,
     setSearchParams,
@@ -532,6 +554,7 @@ export function DocumentsPage({
             })
           }
           onRetry={retrySearch}
+          onNewDocumentInFolder={openNewDocument}
           toolbarAction={
             <Button className="documents-page__new-document" onClick={() => openNewDocument("docs")}>
               <FilePlus2 aria-hidden="true" />

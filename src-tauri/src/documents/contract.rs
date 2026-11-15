@@ -9,6 +9,14 @@ pub struct DocumentSummary {
     pub title: String,
     pub document_id: Option<Uuid>,
     pub frontmatter_status: FrontmatterStatus,
+    #[serde(default)]
+    pub doc_type: Option<String>,
+    #[serde(default)]
+    pub domain: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub has_companion_html: bool,
     pub modified_at_unix_ms: i64,
     pub size: u64,
 }
@@ -137,6 +145,9 @@ pub struct ParsedDocumentMetadata {
     pub title: String,
     pub document_id: Option<Uuid>,
     pub frontmatter_status: FrontmatterStatus,
+    pub doc_type: Option<String>,
+    pub domain: Option<String>,
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

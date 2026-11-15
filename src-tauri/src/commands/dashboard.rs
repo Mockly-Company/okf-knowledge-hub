@@ -88,6 +88,7 @@ pub struct DashboardNotificationItem {
     pub has_companion_html: bool,
     pub timestamp: String,
     pub is_new: bool,
+    pub is_checked: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -161,6 +162,23 @@ pub(crate) fn is_timestamp_new(
         ts > seen
     } else {
         ts >= now_unix - SEVEN_DAYS_SECS
+    }
+}
+
+pub(crate) fn is_notification_checked(
+    id: &str,
+    item_timestamp: &str,
+    checked_notifications: &BTreeMap<String, String>,
+) -> bool {
+    let Some(checked_ts) = checked_notifications.get(id) else {
+        return false;
+    };
+    match (
+        parse_rfc3339_unix(Some(item_timestamp)),
+        parse_rfc3339_unix(Some(checked_ts)),
+    ) {
+        (Some(item_unix), Some(checked_unix)) => checked_unix >= item_unix,
+        _ => checked_ts.trim() == item_timestamp.trim(),
     }
 }
 
@@ -240,54 +258,132 @@ pub(crate) fn extract_change_summary(body: &str, fallback_title: &str) -> String
 }
 
 pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<String>, bool) {
-    let is_regular_md = |path: &str| {
-        let lower = path.to_ascii_lowercase();
-        let file_name = lower.rsplit('/').next().unwrap_or(&lower);
-        lower.ends_with(".md") && file_name != "agents.md" && file_name != "readme.md"
+    let is_auxiliary_md = |norm_lower: &str| {
+        let file_name = norm_lower.rsplit('/').next().unwrap_or(norm_lower);
+        crate::documents::reader::is_reserved_markdown_path(norm_lower, file_name)
+    };
+    let is_auxiliary_html = |norm_lower: &str| {
+        let file_name = norm_lower.rsplit('/').next().unwrap_or(norm_lower);
+        crate::documents::reader::is_reserved_html_path(norm_lower, file_name)
+    };
+    let companion_html_for_md = |md_path: &str, pool: &[String]| -> bool {
+        let norm_lower = md_path.to_ascii_lowercase();
+        if is_auxiliary_md(&norm_lower) {
+            return false;
+        }
+        // 바이트 길이 인덱싱 대신 ASCII 구분자 `.` 기준으로 확장자를 분리해
+        // 비ASCII·이모지 경로에서도 UTF-8 경계 패닉이 나지 않게 한다.
+        let expected_html = md_path
+            .rsplit_once('.')
+            .filter(|(_, ext)| ext.eq_ignore_ascii_case("md"))
+            .map(|(stem, _)| format!("{stem}.html"));
+        pool.iter().any(|norm| {
+            expected_html
+                .as_deref()
+                .is_some_and(|exp| norm.eq_ignore_ascii_case(exp))
+        })
     };
 
-    let active: Vec<&PullRequestChangedFile> =
-        files.iter().filter(|f| f.status != "removed").collect();
-    let pool: Vec<&PullRequestChangedFile> = if active.is_empty() {
-        files.iter().collect()
+    let active: Vec<String> = files
+        .iter()
+        .filter(|f| f.status != "removed")
+        .map(|f| crate::documents::reader::normalize_portable_doc_path(&f.filename))
+        .filter(|p| !p.is_empty())
+        .collect();
+    let pool: Vec<String> = if active.is_empty() {
+        files
+            .iter()
+            .map(|f| crate::documents::reader::normalize_portable_doc_path(&f.filename))
+            .filter(|p| !p.is_empty())
+            .collect()
     } else {
         active
     };
 
-    let primary = pool
+    if let Some((md_path, has_html)) = pool
         .iter()
-        .find(|f| {
-            let norm = f.filename.replace('\\', "/").to_ascii_lowercase();
-            norm.starts_with("docs/") && is_regular_md(&norm)
+        .find_map(|norm| {
+            let lower = norm.to_ascii_lowercase();
+            (lower.starts_with("docs/")
+                && lower.ends_with(".md")
+                && !is_auxiliary_md(&lower)
+                && companion_html_for_md(norm, &pool))
+            .then_some((norm.clone(), true))
         })
-        .or_else(|| pool.iter().find(|f| is_regular_md(&f.filename)))
         .or_else(|| {
-            pool.iter()
-                .find(|f| f.filename.to_ascii_lowercase().ends_with(".md"))
-        })
-        .map(|f| f.filename.replace('\\', "/"));
-
-    let has_companion_html = match &primary {
-        Some(md_path) => {
-            // 바이트 길이 인덱싱 대신 ASCII 구분자 `.` 기준으로 확장자를 분리해
-            // 비ASCII·이모지 경로에서도 UTF-8 경계 패닉이 나지 않게 한다.
-            let expected_html = md_path
-                .rsplit_once('.')
-                .filter(|(_, ext)| ext.eq_ignore_ascii_case("md"))
-                .map(|(stem, _)| format!("{stem}.html"));
-            pool.iter().any(|f| {
-                let norm = f.filename.replace('\\', "/");
-                expected_html
-                    .as_deref()
-                    .is_some_and(|exp| norm.eq_ignore_ascii_case(exp))
+            pool.iter().find_map(|norm| {
+                let lower = norm.to_ascii_lowercase();
+                (lower.starts_with("docs/") && lower.ends_with(".md") && !is_auxiliary_md(&lower))
+                    .then_some((norm.clone(), false))
             })
-        }
-        None => pool
-            .iter()
-            .any(|f| f.filename.to_ascii_lowercase().ends_with(".html")),
-    };
+        })
+        .or_else(|| {
+            pool.iter().find_map(|norm| {
+                let lower = norm.to_ascii_lowercase();
+                (lower.ends_with(".md")
+                    && !is_auxiliary_md(&lower)
+                    && companion_html_for_md(norm, &pool))
+                .then_some((norm.clone(), true))
+            })
+        })
+        .or_else(|| {
+            pool.iter().find_map(|norm| {
+                let lower = norm.to_ascii_lowercase();
+                (lower.ends_with(".md") && !is_auxiliary_md(&lower))
+                    .then_some((norm.clone(), false))
+            })
+        })
+        .or_else(|| {
+            pool.iter().find_map(|norm| {
+                let lower = norm.to_ascii_lowercase();
+                (lower.starts_with("docs/")
+                    && lower.ends_with(".html")
+                    && !is_auxiliary_html(&lower))
+                .then(|| {
+                    norm.rsplit_once('.')
+                        .filter(|(_, ext)| ext.eq_ignore_ascii_case("html"))
+                        .map(|(stem, _)| (format!("{stem}.md"), true))
+                })
+                .flatten()
+            })
+        })
+        .or_else(|| {
+            // 본문 기획 문서 변경이 없고 `docs/log.md`·`docs/index.md` 같은 보조 문서만 바뀐 PR이라도
+            // `docs/` 하위 마크다운 문서는 최후 폴백으로 연결한다(단, 동반 `.html`은 없음).
+            pool.iter().find_map(|norm| {
+                let lower = norm.to_ascii_lowercase();
+                (lower.starts_with("docs/") && lower.ends_with(".md"))
+                    .then_some((norm.clone(), false))
+            })
+        })
+        .or_else(|| {
+            pool.iter().find_map(|norm| {
+                norm.to_ascii_lowercase()
+                    .ends_with(".md")
+                    .then_some((norm.clone(), false))
+            })
+        })
+        .or_else(|| {
+            // `docs/index.html` 등 보조 `.html`만 단독 변경된 PR이라도 `docs/` 하위라면
+            // 리뷰 패널(`S17`)과 동일하게 대응 `.md` 폴백(`has_html = false`)으로 연결한다.
+            pool.iter().find_map(|norm| {
+                let lower = norm.to_ascii_lowercase();
+                (lower.starts_with("docs/")
+                    && lower.ends_with(".html")
+                    && !crate::documents::reader::is_okf_path(norm))
+                .then(|| {
+                    norm.rsplit_once('.')
+                        .filter(|(_, ext)| ext.eq_ignore_ascii_case("html"))
+                        .map(|(stem, _)| (format!("{stem}.md"), false))
+                })
+                .flatten()
+            })
+        })
+    {
+        return (Some(md_path), has_html);
+    }
 
-    (primary, has_companion_html)
+    (None, false)
 }
 
 fn infer_repository_full_name_from_url(url: &str) -> Option<String> {
@@ -542,20 +638,23 @@ fn build_notifications_for_prs(
         Vec<PullRequestChangedFile>,
     )>,
     last_seen_at: Option<&str>,
+    checked_notifications: &BTreeMap<String, String>,
     now_unix: i64,
 ) -> Vec<DashboardNotificationItem> {
     prs.into_iter()
         .map(|(kind, pr, files)| {
             let timestamp = pr_effective_timestamp(kind, &pr).to_owned();
-            let is_new = is_timestamp_new(Some(&timestamp), last_seen_at, now_unix);
-            let summary = extract_change_summary(&pr.body, &pr.title);
-            let (primary_doc_path, has_companion_html) = pick_primary_doc(&files);
             let kind_tag = match kind {
                 DashboardNotificationKind::OpenPr => "open",
                 DashboardNotificationKind::MergedDoc => "merged",
             };
+            let id = format!("{}:{kind_tag}:{}", workspace.id, pr.number);
+            let is_checked = is_notification_checked(&id, &timestamp, checked_notifications);
+            let is_new = !is_checked && is_timestamp_new(Some(&timestamp), last_seen_at, now_unix);
+            let summary = extract_change_summary(&pr.body, &pr.title);
+            let (primary_doc_path, has_companion_html) = pick_primary_doc(&files);
             DashboardNotificationItem {
-                id: format!("{}:{kind_tag}:{}", workspace.id, pr.number),
+                id,
                 workspace_id: workspace.id.clone(),
                 workspace_title: workspace.title.clone(),
                 repository_full_name: repo_full_name.to_owned(),
@@ -569,6 +668,7 @@ fn build_notifications_for_prs(
                 has_companion_html,
                 timestamp,
                 is_new,
+                is_checked,
             }
         })
         .collect()
@@ -682,6 +782,7 @@ async fn fetch_workspace_docs_notifications(
     workspace: &HubWorkspace,
     repo_full_name: &str,
     last_seen_at: Option<&str>,
+    checked_notifications: &BTreeMap<String, String>,
     now_unix: i64,
 ) -> Result<DocsNotificationFetchOutcome, DashboardWorkspaceFailure> {
     let cutoff = now_unix - SEVEN_DAYS_SECS;
@@ -745,8 +846,14 @@ async fn fetch_workspace_docs_notifications(
         .enumerate()
         .map(|(idx, (kind, pr))| (kind, pr, files_by_idx.remove(&idx).unwrap_or_default()))
         .collect();
-    let items =
-        build_notifications_for_prs(workspace, repo_full_name, enriched, last_seen_at, now_unix);
+    let items = build_notifications_for_prs(
+        workspace,
+        repo_full_name,
+        enriched,
+        last_seen_at,
+        checked_notifications,
+        now_unix,
+    );
     Ok(DocsNotificationFetchOutcome { items, failure })
 }
 
@@ -813,6 +920,7 @@ struct WorkspaceFetchContext {
     github: Arc<GithubService>,
     cache_root: std::path::PathBuf,
     last_seen_at: Option<String>,
+    checked_notifications: Arc<BTreeMap<String, String>>,
     now_unix: i64,
     semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -867,6 +975,7 @@ async fn fetch_workspace_dashboard(
                 &workspace,
                 &docs_repo.full_name,
                 ctx.last_seen_at.as_deref(),
+                &ctx.checked_notifications,
                 ctx.now_unix,
             )
             .await,
@@ -891,12 +1000,15 @@ pub async fn get_personal_dashboard(
     retry_workspace_id: Option<String>,
 ) -> CommandResult<PersonalDashboardResult> {
     // 인증 가드는 서비스 핸들 복제와 로컬 설정 조회 직후 즉시 해제해 네트워크 병렬 fetch 동안 락 경합을 막는다.
-    let (github, workspaces, last_seen_at) = {
+    let (github, workspaces, last_seen_at, checked_notifications) = {
         let _access = state.acquire_authenticated_command().await?;
         let github = state.github.clone().ok_or_else(service_unavailable)?;
         let workspaces = state.local_settings.load_hub_workspaces()?;
         let last_seen_at = state.local_settings.load_dashboard_last_seen_at()?;
-        (github, workspaces, last_seen_at)
+        let checked_notifications = state
+            .local_settings
+            .load_checked_dashboard_notifications()?;
+        (github, workspaces, last_seen_at, checked_notifications)
     };
     let cache_root = resolve_project_board_cache_root(&app)?;
     let viewer = github.current_user().await?;
@@ -937,6 +1049,7 @@ pub async fn get_personal_dashboard(
         github,
         cache_root,
         last_seen_at: last_seen_at.clone(),
+        checked_notifications: Arc::new(checked_notifications),
         now_unix,
         semaphore: Arc::new(tokio::sync::Semaphore::new(WORKSPACE_FETCH_CONCURRENCY)),
     });
@@ -1345,11 +1458,13 @@ mod tests {
         ];
 
         let now_unix = 1_763_107_200;
+        let checked = BTreeMap::new();
         let items = build_notifications_for_prs(
             &ws,
             "Mockly-Company/okf-docs",
             prs,
             Some("2026-11-14T06:00:00Z"),
+            &checked,
             now_unix,
         );
         assert_eq!(items.len(), 2);
@@ -1383,6 +1498,94 @@ mod tests {
         let (primary, has_html) = super::pick_primary_doc(&files);
         assert_eq!(primary.as_deref(), Some("docs/product/spec.md"));
         assert!(!has_html);
+    }
+
+    #[test]
+    fn pick_primary_doc_prefers_spec_with_html_over_alphabetical_index_and_log() {
+        let files = vec![
+            PullRequestChangedFile {
+                filename: "docs/index.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/log.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/specs/screen-spec.html".into(),
+                status: "added".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/specs/screen-spec.md".into(),
+                status: "added".into(),
+                previous_filename: None,
+            },
+        ];
+        let (primary, has_html) = super::pick_primary_doc(&files);
+        assert_eq!(primary.as_deref(), Some("docs/specs/screen-spec.md"));
+        assert!(has_html);
+    }
+
+    #[test]
+    fn pick_primary_doc_maps_html_only_spec_change_to_paired_md() {
+        let files = vec![
+            PullRequestChangedFile {
+                filename: "docs/index.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/specs/screen-spec.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+        ];
+        let (primary, has_html) = super::pick_primary_doc(&files);
+        assert_eq!(primary.as_deref(), Some("docs/specs/screen-spec.md"));
+        assert!(has_html);
+    }
+
+    #[test]
+    fn pick_primary_doc_falls_back_to_log_md_without_html_when_only_log_changed() {
+        let files = vec![PullRequestChangedFile {
+            filename: "docs/log.md".into(),
+            status: "modified".into(),
+            previous_filename: None,
+        }];
+        let (primary, has_html) = super::pick_primary_doc(&files);
+        assert_eq!(primary.as_deref(), Some("docs/log.md"));
+        assert!(!has_html);
+    }
+
+    #[test]
+    fn pick_primary_doc_normalizes_dot_slash_and_falls_back_for_standalone_auxiliary_html() {
+        let paired_with_prefix = vec![
+            PullRequestChangedFile {
+                filename: "./docs/specs/screen-spec.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/specs/screen-spec.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+        ];
+        let (primary, has_html) = super::pick_primary_doc(&paired_with_prefix);
+        assert_eq!(primary.as_deref(), Some("docs/specs/screen-spec.md"));
+        assert!(has_html);
+
+        let auxiliary_html_only = vec![PullRequestChangedFile {
+            filename: "/./docs/index.html".into(),
+            status: "modified".into(),
+            previous_filename: None,
+        }];
+        let (aux_primary, aux_has_html) = super::pick_primary_doc(&auxiliary_html_only);
+        assert_eq!(aux_primary.as_deref(), Some("docs/index.md"));
+        assert!(!aux_has_html);
     }
 
     #[test]
@@ -1430,6 +1633,7 @@ mod tests {
                 has_companion_html: false,
                 timestamp: "2026-11-14T10:00:00+09:00".into(), // 01:00Z
                 is_new: false,
+                is_checked: false,
             },
             super::DashboardNotificationItem {
                 id: "2".into(),
@@ -1446,6 +1650,7 @@ mod tests {
                 has_companion_html: false,
                 timestamp: "2026-11-14T02:00:00Z".into(), // 02:00Z
                 is_new: false,
+                is_checked: false,
             },
         ];
 
@@ -1602,5 +1807,66 @@ mod tests {
         assert_eq!(err.scope, DashboardFailureScope::Docs);
         assert!(err.message.contains("open err"));
         assert!(err.message.contains("merged err"));
+    }
+
+    #[test]
+    fn checked_notification_clears_is_new_and_resurfaces_on_newer_timestamp() {
+        let ws = sample_workspace("okf", "OkHub");
+        let make_pr = |number: u64, updated_at: &str| DocsPullRequestSummary {
+            number,
+            title: format!("PR #{number}"),
+            body: "## 이번 변경 요약\n- 확인 토글 테스트".into(),
+            html_url: format!("https://example.test/pr/{number}"),
+            author_login: "alice".into(),
+            head_ref: "feat".into(),
+            head_sha: "abc".into(),
+            base_ref: "main".into(),
+            base_sha: "def".into(),
+            is_draft: false,
+            mergeable: None,
+            updated_at: updated_at.into(),
+            merged_at: None,
+        };
+
+        let mut checked = BTreeMap::new();
+        checked.insert(
+            format!("{}:open:12", ws.id),
+            "2026-11-14T10:00:00Z".to_owned(),
+        );
+        let now_unix = 1_763_121_600; // 2025/2026 irrelevant since last_seen_at is provided
+
+        // 1) Same or older timestamp stays checked and not new
+        let same_ts_items = super::build_notifications_for_prs(
+            &ws,
+            "Mockly-Company/okf-docs",
+            vec![(
+                DashboardNotificationKind::OpenPr,
+                make_pr(12, "2026-11-14T10:00:00Z"),
+                vec![],
+            )],
+            Some("2026-11-14T08:00:00Z"),
+            &checked,
+            now_unix,
+        );
+        assert_eq!(same_ts_items.len(), 1);
+        assert!(same_ts_items[0].is_checked);
+        assert!(!same_ts_items[0].is_new);
+
+        // 2) Newer PR update resets is_checked and surfaces as NEW again
+        let updated_items = super::build_notifications_for_prs(
+            &ws,
+            "Mockly-Company/okf-docs",
+            vec![(
+                DashboardNotificationKind::OpenPr,
+                make_pr(12, "2026-11-14T11:30:00Z"),
+                vec![],
+            )],
+            Some("2026-11-14T08:00:00Z"),
+            &checked,
+            now_unix,
+        );
+        assert_eq!(updated_items.len(), 1);
+        assert!(!updated_items[0].is_checked);
+        assert!(updated_items[0].is_new);
     }
 }

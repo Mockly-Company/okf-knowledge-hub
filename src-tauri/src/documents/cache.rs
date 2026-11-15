@@ -13,7 +13,7 @@ use super::contract::{
 };
 use super::search_text::markdown_to_plain_text;
 
-const INDEX_VERSION: i64 = 1;
+const INDEX_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub enum CacheError {
@@ -78,6 +78,10 @@ impl DocumentCache {
                title TEXT NOT NULL,
                document_id TEXT,
                frontmatter_status_json TEXT NOT NULL,
+               doc_type TEXT,
+               domain TEXT,
+               status TEXT,
+               has_companion_html INTEGER NOT NULL DEFAULT 0,
                modified_at_unix_ms INTEGER NOT NULL,
                size INTEGER NOT NULL,
                content_hash TEXT,
@@ -150,6 +154,7 @@ impl DocumentCache {
     pub fn cached_summaries(&self) -> Result<Vec<DocumentSummary>, CacheError> {
         let mut statement = self.connection.prepare(
             "SELECT path, file_name, title, document_id, frontmatter_status_json,
+                    doc_type, domain, status, has_companion_html,
                     modified_at_unix_ms, size
              FROM documents
              ORDER BY path",
@@ -161,18 +166,38 @@ impl DocumentCache {
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, String>(4)?,
-                row.get::<_, i64>(5)?,
-                row.get::<_, i64>(6)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
             ))
         })?;
         rows.map(|row| {
-            let (path, file_name, title, document_id, status, modified_at_unix_ms, size) = row?;
+            let (
+                path,
+                file_name,
+                title,
+                document_id,
+                frontmatter_status,
+                doc_type,
+                domain,
+                status,
+                has_companion_html,
+                modified_at_unix_ms,
+                size,
+            ) = row?;
             Ok(DocumentSummary {
                 path,
                 file_name,
                 title,
                 document_id: document_id.and_then(|value| Uuid::parse_str(&value).ok()),
-                frontmatter_status: serde_json::from_str(&status)?,
+                frontmatter_status: serde_json::from_str(&frontmatter_status)?,
+                doc_type,
+                domain,
+                status,
+                has_companion_html: has_companion_html != 0,
                 modified_at_unix_ms,
                 size: u64::try_from(size).unwrap_or_default(),
             })
@@ -187,37 +212,7 @@ impl DocumentCache {
         let transaction = self.connection.transaction()?;
         let mut to_index = Vec::new();
         for summary in summaries {
-            let size = sqlite_size(summary.size)?;
-            let document_id = summary.document_id.map(|id| id.to_string());
-            let frontmatter_status_json = serde_json::to_string(&summary.frontmatter_status)
-                .expect("serializing enum cannot fail");
-            let stored = transaction.query_row(
-                "SELECT file_name, title, document_id, frontmatter_status_json,
-                        modified_at_unix_ms, size
-                 FROM documents WHERE path = ?1",
-                params![summary.path],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, i64>(4)?,
-                        row.get::<_, i64>(5)?,
-                    ))
-                },
-            );
-            let unchanged = matches!(
-                stored,
-                Ok((file_name, title, stored_document_id, stored_frontmatter, modified, stored_size))
-                    if file_name == summary.file_name
-                        && title == summary.title
-                        && stored_document_id == document_id
-                        && stored_frontmatter == frontmatter_status_json
-                        && modified == summary.modified_at_unix_ms
-                        && stored_size == size
-            );
-            if !unchanged {
+            if !is_summary_unchanged(&transaction, summary)? {
                 to_index.push(summary.path.clone());
             }
         }
@@ -255,39 +250,7 @@ impl DocumentCache {
     ) -> Result<ReconcileDelta, CacheError> {
         let mut to_index = Vec::new();
         for summary in summaries {
-            let size = sqlite_size(summary.size)?;
-            let document_id = summary.document_id.map(|id| id.to_string());
-            let frontmatter_status_json = serde_json::to_string(&summary.frontmatter_status)?;
-            let stored = self
-                .connection
-                .query_row(
-                    "SELECT file_name, title, document_id, frontmatter_status_json,
-                            modified_at_unix_ms, size
-                     FROM documents WHERE path = ?1",
-                    params![summary.path],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<String>>(2)?,
-                            row.get::<_, String>(3)?,
-                            row.get::<_, i64>(4)?,
-                            row.get::<_, i64>(5)?,
-                        ))
-                    },
-                )
-                .optional()?;
-            let unchanged = matches!(
-                stored,
-                Some((file_name, title, stored_document_id, stored_frontmatter, modified, stored_size))
-                    if file_name == summary.file_name
-                        && title == summary.title
-                        && stored_document_id == document_id
-                        && stored_frontmatter == frontmatter_status_json
-                        && modified == summary.modified_at_unix_ms
-                        && stored_size == size
-            );
-            if !unchanged {
+            if !is_summary_unchanged(&self.connection, summary)? {
                 to_index.push(summary.path.clone());
             }
         }
@@ -422,8 +385,10 @@ impl DocumentCache {
                     transaction.execute(
                         "UPDATE documents SET
                            file_name = ?2, title = ?3, document_id = ?4,
-                           frontmatter_status_json = ?5, modified_at_unix_ms = ?6, size = ?7,
-                           content_hash = ?8, body_text = ?9
+                           frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
+                           status = ?8, has_companion_html = ?9,
+                           modified_at_unix_ms = ?10, size = ?11,
+                           content_hash = ?12, body_text = ?13
                          WHERE path = ?1",
                         params![
                             summary.path,
@@ -431,6 +396,10 @@ impl DocumentCache {
                             summary.title,
                             prepared.document_id,
                             prepared.frontmatter_status_json,
+                            summary.doc_type,
+                            summary.domain,
+                            summary.status,
+                            i64::from(summary.has_companion_html),
                             summary.modified_at_unix_ms,
                             prepared.size,
                             content.content_hash,
@@ -446,14 +415,19 @@ impl DocumentCache {
                     transaction.execute(
                         "INSERT INTO documents (
                            path, file_name, title, document_id, frontmatter_status_json,
+                           doc_type, domain, status, has_companion_html,
                            modified_at_unix_ms, size, content_hash, body_text
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                         params![
                             summary.path,
                             summary.file_name,
                             summary.title,
                             prepared.document_id,
                             prepared.frontmatter_status_json,
+                            summary.doc_type,
+                            summary.domain,
+                            summary.status,
+                            i64::from(summary.has_companion_html),
                             summary.modified_at_unix_ms,
                             prepared.size,
                             content.content_hash,
@@ -471,7 +445,9 @@ impl DocumentCache {
                 let updated = transaction.execute(
                     "UPDATE documents SET
                        file_name = ?2, title = ?3, document_id = ?4,
-                       frontmatter_status_json = ?5, modified_at_unix_ms = ?6, size = ?7
+                       frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
+                       status = ?8, has_companion_html = ?9,
+                       modified_at_unix_ms = ?10, size = ?11
                      WHERE path = ?1",
                     params![
                         summary.path,
@@ -479,6 +455,10 @@ impl DocumentCache {
                         summary.title,
                         prepared.document_id,
                         prepared.frontmatter_status_json,
+                        summary.doc_type,
+                        summary.domain,
+                        summary.status,
+                        i64::from(summary.has_companion_html),
                         summary.modified_at_unix_ms,
                         prepared.size,
                     ],
@@ -545,7 +525,9 @@ impl DocumentCache {
                 transaction.execute(
                     "UPDATE documents SET
                        file_name = ?2, title = ?3, document_id = ?4,
-                       frontmatter_status_json = ?5, modified_at_unix_ms = ?6, size = ?7
+                       frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
+                       status = ?8, has_companion_html = ?9,
+                       modified_at_unix_ms = ?10, size = ?11
                      WHERE path = ?1",
                     params![
                         summary.path,
@@ -553,6 +535,10 @@ impl DocumentCache {
                         summary.title,
                         document_id,
                         frontmatter_status_json,
+                        summary.doc_type,
+                        summary.domain,
+                        summary.status,
+                        i64::from(summary.has_companion_html),
                         summary.modified_at_unix_ms,
                         size,
                     ],
@@ -566,8 +552,10 @@ impl DocumentCache {
             transaction.execute(
                 "UPDATE documents SET
                    file_name = ?2, title = ?3, document_id = ?4,
-                   frontmatter_status_json = ?5, modified_at_unix_ms = ?6, size = ?7,
-                   content_hash = ?8, body_text = ?9
+                   frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
+                   status = ?8, has_companion_html = ?9,
+                   modified_at_unix_ms = ?10, size = ?11,
+                   content_hash = ?12, body_text = ?13
                  WHERE path = ?1",
                 params![
                     summary.path,
@@ -575,6 +563,10 @@ impl DocumentCache {
                     summary.title,
                     document_id,
                     frontmatter_status_json,
+                    summary.doc_type,
+                    summary.domain,
+                    summary.status,
+                    i64::from(summary.has_companion_html),
                     summary.modified_at_unix_ms,
                     size,
                     content_hash,
@@ -590,14 +582,19 @@ impl DocumentCache {
             transaction.execute(
                 "INSERT INTO documents (
                    path, file_name, title, document_id, frontmatter_status_json,
+                   doc_type, domain, status, has_companion_html,
                    modified_at_unix_ms, size, content_hash, body_text
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     summary.path,
                     summary.file_name,
                     summary.title,
                     document_id,
                     frontmatter_status_json,
+                    summary.doc_type,
+                    summary.domain,
+                    summary.status,
+                    i64::from(summary.has_companion_html),
                     summary.modified_at_unix_ms,
                     size,
                     content_hash,
@@ -682,6 +679,63 @@ impl DocumentCache {
 
 fn sqlite_size(size: u64) -> Result<i64, CacheError> {
     i64::try_from(size).map_err(|_| CacheError::SizeOverflow(size))
+}
+
+fn is_summary_unchanged(
+    connection: &Connection,
+    summary: &DocumentSummary,
+) -> Result<bool, CacheError> {
+    let size = sqlite_size(summary.size)?;
+    let document_id = summary.document_id.map(|id| id.to_string());
+    let frontmatter_status_json = serde_json::to_string(&summary.frontmatter_status)?;
+    let has_companion_html = i64::from(summary.has_companion_html);
+    let stored = connection
+        .query_row(
+            "SELECT file_name, title, document_id, frontmatter_status_json,
+                    doc_type, domain, status, has_companion_html,
+                    modified_at_unix_ms, size
+             FROM documents WHERE path = ?1",
+            params![summary.path],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()?;
+    Ok(matches!(
+        stored,
+        Some((
+            file_name,
+            title,
+            stored_document_id,
+            stored_frontmatter,
+            doc_type,
+            domain,
+            status,
+            stored_has_companion_html,
+            modified,
+            stored_size
+        )) if file_name == summary.file_name
+            && title == summary.title
+            && stored_document_id == document_id
+            && stored_frontmatter == frontmatter_status_json
+            && doc_type == summary.doc_type
+            && domain == summary.domain
+            && status == summary.status
+            && stored_has_companion_html == has_companion_html
+            && modified == summary.modified_at_unix_ms
+            && stored_size == size
+    ))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -895,6 +949,10 @@ mod tests {
                 .to_owned(),
             document_id: None,
             frontmatter_status: FrontmatterStatus::Missing,
+            doc_type: None,
+            domain: None,
+            status: None,
+            has_companion_html: false,
             modified_at_unix_ms,
             size,
         }
@@ -935,7 +993,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let cache =
             DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
-        assert_eq!(cache.index_version().unwrap(), 1);
+        assert_eq!(cache.index_version().unwrap(), 2);
         assert!(cache.has_table("documents").unwrap());
         assert!(cache.has_table("document_search").unwrap());
     }
@@ -943,6 +1001,7 @@ mod tests {
     #[test]
     fn identity_mismatches_preserve_invalid_database_and_create_clean_cache() {
         for (case, key, value) in [
+            ("next_version", "index_version", "3"),
             ("version", "index_version", "999"),
             (
                 "workspace",
@@ -966,7 +1025,7 @@ mod tests {
             drop(connection);
 
             let rebuilt = DocumentCache::open(&path, workspace_id()).unwrap();
-            assert_eq!(rebuilt.index_version().unwrap(), 1);
+            assert_eq!(rebuilt.index_version().unwrap(), 2);
             assert!(!rebuilt.has_table("marker").unwrap());
             assert_eq!(
                 std::fs::read_dir(&case_dir)
@@ -988,7 +1047,7 @@ mod tests {
         let path = temp.path().join("search.sqlite3");
         drop(DocumentCache::open(&path, workspace_id()).unwrap());
 
-        for invalid_version in ["2", "3"] {
+        for invalid_version in ["3", "998", "999"] {
             let connection = rusqlite::Connection::open(&path).unwrap();
             connection
                 .execute(
@@ -1009,7 +1068,7 @@ mod tests {
                     .to_string_lossy()
                     .starts_with("search.invalid-"))
                 .count(),
-            2
+            3
         );
     }
 

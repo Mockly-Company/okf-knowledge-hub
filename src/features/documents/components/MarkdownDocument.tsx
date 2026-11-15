@@ -2,6 +2,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from "react";
@@ -27,6 +28,10 @@ import { MermaidBlock } from "./MermaidBlock";
 const markdownSanitizeSchema = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "mark", "details", "summary"],
+  protocols: {
+    ...defaultSchema.protocols,
+    href: [...(defaultSchema.protocols?.href ?? []), "tel"],
+  },
   attributes: {
     ...defaultSchema.attributes,
     mark: ["dataSearchMatch"],
@@ -205,12 +210,121 @@ function safeMarkdownUrl(documentPath: string, url: string): string {
   const value = url.trim();
   if (!value) return "#";
   if (value.startsWith("#")) return value;
-  if (/^(https?|mailto):/i.test(value)) return value;
+  if (/^(https?|mailto|tel):/i.test(value)) return value;
   return resolveRepositoryPath(documentPath, value) ? value : "#";
 }
 
 function isMarkdownLink(path: string): boolean {
   return splitSuffix(path).path.toLocaleLowerCase().endsWith(".md");
+}
+
+function isHtmlLink(path: string): boolean {
+  return splitSuffix(path).path.toLocaleLowerCase().endsWith(".html");
+}
+
+function headingSlug(title: string): string {
+  return title
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]+/gu, "")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+interface ResolvedFragmentTarget {
+  target: HTMLElement;
+  canNavigateNatively: boolean;
+}
+
+function findScopedElementById(scope: ParentNode, id: string): HTMLElement | null {
+  for (const element of scope.querySelectorAll<HTMLElement>("[id]")) {
+    if (element.id === id) {
+      return element;
+    }
+  }
+  return null;
+}
+
+function resolveFragmentTarget(
+  article: HTMLElement,
+  rawFragment: string,
+): ResolvedFragmentTarget | null {
+  let decoded = rawFragment;
+  try {
+    decoded = decodeURIComponent(rawFragment);
+  } catch {
+    decoded = rawFragment;
+  }
+  const ownerDoc = article.ownerDocument;
+  const scope = article.closest<HTMLElement>(".document-reader") ?? article;
+
+  for (const exactId of [decoded, rawFragment]) {
+    if (!exactId) continue;
+    const match = findScopedElementById(scope, exactId);
+    if (match) {
+      return {
+        target: match,
+        canNavigateNatively: ownerDoc.getElementById(exactId) === match,
+      };
+    }
+  }
+
+  const clobberedId = decoded ? `${defaultSchema.clobberPrefix}${decoded}` : "";
+  if (clobberedId) {
+    const match = findScopedElementById(scope, clobberedId);
+    if (match) {
+      return { target: match, canNavigateNatively: false };
+    }
+  }
+
+  const decodedLower = decoded.toLocaleLowerCase();
+  const headings = [...article.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")];
+  for (const heading of headings) {
+    const idLower = heading.id.toLocaleLowerCase();
+    if (
+      idLower === decodedLower ||
+      (idLower.startsWith(`${decodedLower}-`) &&
+        /^\d+$/.test(idLower.slice(decodedLower.length + 1)))
+    ) {
+      return { target: heading, canNavigateNatively: false };
+    }
+  }
+  for (const heading of headings) {
+    if (headingSlug(heading.textContent ?? "") === decodedLower) {
+      return { target: heading, canNavigateNatively: false };
+    }
+  }
+  return null;
+}
+
+function scrollTargetIntoMarkdownView(
+  article: HTMLElement,
+  target: HTMLElement,
+): void {
+  const canvas = article.closest<HTMLElement>(".document-reader__canvas");
+  if (
+    canvas &&
+    /(auto|scroll)/.test(getComputedStyle(canvas).overflowY) &&
+    canvas.scrollHeight > canvas.clientHeight
+  ) {
+    const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+    const desired =
+      canvas.scrollTop +
+      target.getBoundingClientRect().top -
+      canvas.getBoundingClientRect().top -
+      offset;
+    const nextScrollTop = Math.max(
+      0,
+      Math.min(desired, canvas.scrollHeight - canvas.clientHeight),
+    );
+    if (typeof canvas.scrollTo === "function") {
+      canvas.scrollTo({ top: nextScrollTop, behavior: "auto" });
+    } else {
+      canvas.scrollTop = nextScrollTop;
+    }
+    return;
+  }
+  target.scrollIntoView?.({ block: "start" });
 }
 
 type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
@@ -324,8 +438,13 @@ export function MarkdownDocument({
 }: MarkdownDocumentProps) {
   const { selectDocument, readAsset, openExternal, copyText, state } = useDocuments();
   const articleRef = useRef<HTMLElement>(null);
+  const [unsupportedLinkNotice, setUnsupportedLinkNotice] = useState<string | null>(null);
   const searchMatch = state.selectedSearchMatch;
   const bodySearchQuery = searchMatch?.matchField === "body" ? searchMatch.matchText : "";
+
+  useEffect(() => {
+    setUnsupportedLinkNotice(null);
+  }, [document.summary.path, document.markdown]);
   const remarkPlugins = useMemo(
     () => [
       remarkGfm,
@@ -383,29 +502,44 @@ export function MarkdownDocument({
           : href ?? "#";
         const target = resolveRepositoryPath(document.summary.path, value);
         if (target) {
-          if (!isMarkdownLink(value)) {
-            return <span className="markdown-document__unsupported-link">지원하지 않는 파일 링크입니다: {children}</span>;
+          if (isMarkdownLink(value)) {
+            return (
+              <a
+                {...props}
+                href={value}
+                onClick={(event) => {
+                  event.preventDefault();
+                  selectDocument(target);
+                }}
+              >
+                {children}
+              </a>
+            );
           }
-          return (
-            <a
-              {...props}
-              href={value}
-              onClick={(event) => {
-                event.preventDefault();
-                selectDocument(target);
-              }}
-            >
-              {children}
-            </a>
-          );
+          if (isHtmlLink(value)) {
+            return (
+              <a
+                {...props}
+                href={value}
+                onClick={(event) => {
+                  event.preventDefault();
+                  selectDocument(target, undefined, "html");
+                }}
+              >
+                {children}
+              </a>
+            );
+          }
+          return <span className="markdown-document__unsupported-link">지원하지 않는 파일 링크입니다: {children}</span>;
         }
-        if (/^https?:/i.test(value)) {
+        if (/^(https?|mailto|tel):/i.test(value)) {
           return (
             <a
               {...props}
               href={value}
               onClick={(event) => {
                 event.preventDefault();
+                setUnsupportedLinkNotice(null);
                 void openExternal(value);
               }}
             >
@@ -413,7 +547,49 @@ export function MarkdownDocument({
             </a>
           );
         }
-        return <a {...props} href={value}>{children}</a>;
+        if (value.startsWith("#") && value.length > 1) {
+          return (
+            <a
+              {...props}
+              href={value}
+              onClick={(event) => {
+                setUnsupportedLinkNotice(null);
+                const article = articleRef.current;
+                const rawFragment = value.slice(1);
+                const resolved = article
+                  ? resolveFragmentTarget(article, rawFragment)
+                  : null;
+                // HashRouter(`#/...`) 환경에서는 location.hash 덮어쓰기로 라우트가 깨지는 것을 막고,
+                // 일반 문서/Storybook 환경에서는 스코프 내부에 실제 DOM 타깃이 있을 때만 기본 해시 이동을 허용한다.
+                if (
+                  window.location.hash.startsWith("#/") ||
+                  !resolved ||
+                  !resolved.canNavigateNatively
+                ) {
+                  event.preventDefault();
+                  if (article && resolved) {
+                    scrollTargetIntoMarkdownView(article, resolved.target);
+                  }
+                }
+              }}
+            >
+              {children}
+            </a>
+          );
+        }
+        return (
+          <a
+            {...props}
+            href={value}
+            title="이 문서에서 열 수 없는 링크입니다"
+            onClick={(event) => {
+              event.preventDefault();
+              setUnsupportedLinkNotice("이 문서에서 열 수 없는 링크입니다.");
+            }}
+          >
+            {children}
+          </a>
+        );
       },
       img: ({ src, alt, title }: ComponentPropsWithoutRef<"img"> & ExtraProps) => (
         <MarkdownImage
@@ -512,6 +688,11 @@ export function MarkdownDocument({
           <p>{document.summary.path}</p>
         </header>
       )}
+      {unsupportedLinkNotice ? (
+        <p role="status" className="markdown-document__unsupported-link">
+          {unsupportedLinkNotice}
+        </p>
+      ) : null}
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={rehypePlugins}

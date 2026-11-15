@@ -47,6 +47,10 @@ export interface DocumentSummary {
   title: string;
   documentId: string | null;
   frontmatterStatus: FrontmatterStatus;
+  docType?: string | null;
+  domain?: string | null;
+  status?: string | null;
+  hasCompanionHtml?: boolean;
   modifiedAtUnixMs: number;
   size: number;
 }
@@ -378,4 +382,20 @@ export interface ApproveAndMergeDocsPrResponse {
   merged: boolean;
   mergeSha: string | null;
   reviewSubmitted: boolean;
+}
+
+export function normalizeDocumentPath(path: string): string {
+  const segments: string[] = [];
+  for (const segment of path.trim().replace(/\\/g, "/").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return "";
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join("/");
 }

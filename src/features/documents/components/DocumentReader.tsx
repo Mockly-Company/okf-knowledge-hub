@@ -18,7 +18,7 @@ import { setPendingAiLaunch } from "@/features/ai/pendingAiLaunch";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDocuments } from "../DocumentsProvider";
-import type { DocumentContent } from "../model";
+import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { MarkdownDocument } from "./MarkdownDocument";
 import { DocumentHistory } from "./DocumentHistory";
@@ -76,6 +76,9 @@ export function DocumentReader({
   const {
     state,
     authoringState,
+    preferredViewMode,
+    preferredViewTargetPath,
+    clearPreferredViewMode,
     copyText,
     openExternal,
     selectCurrentVersion,
@@ -83,8 +86,19 @@ export function DocumentReader({
   } = useDocuments();
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
+  const normalizedDocPath = normalizeDocumentPath(document.summary.path);
+  const hasCompanionNow = Boolean(document.companionHtml);
+  const matchingPreferredView =
+    preferredViewTargetPath !== null &&
+    preferredViewTargetPath.toLowerCase() === normalizedDocPath.toLowerCase()
+      ? preferredViewMode
+      : null;
   const [viewMode, setViewMode] = useState<"html" | "markdown">(() =>
-    document.companionHtml ? "html" : "markdown",
+    matchingPreferredView === "markdown"
+      ? "markdown"
+      : hasCompanionNow
+        ? "html"
+        : "markdown",
   );
   const [menuOpen, setMenuOpen] = useState(false);
   const [navigateTarget, setNavigateTarget] = useState<string | null>(null);
@@ -94,12 +108,47 @@ export function DocumentReader({
   const readerRef = useRef<HTMLElement>(null);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const navigationTargetRef = useRef<string | null>(null);
+  const pendingHeadingRef = useRef<{ docPath: string; id: string } | null>(null);
+  const lastDocumentPathRef = useRef(normalizedDocPath);
+  const hadCompanionHtmlRef = useRef(hasCompanionNow);
   useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
   useEffect(() => {
-    if (state.selectedVersion === null) {
-      setViewMode(document.companionHtml ? "html" : "markdown");
+    const pathChanged = lastDocumentPathRef.current !== normalizedDocPath;
+    const companionAdded = !hadCompanionHtmlRef.current && hasCompanionNow;
+    lastDocumentPathRef.current = normalizedDocPath;
+    hadCompanionHtmlRef.current = hasCompanionNow;
+    if (pathChanged) {
+      pendingHeadingRef.current = null;
     }
-  }, [document.summary.path, document.companionHtml, state.selectedVersion]);
+
+    if (state.selectedVersion !== null) {
+      return;
+    }
+
+    if (matchingPreferredView !== null) {
+      setViewMode(
+        matchingPreferredView === "markdown"
+          ? "markdown"
+          : hasCompanionNow
+            ? "html"
+            : "markdown",
+      );
+      clearPreferredViewMode(normalizedDocPath);
+      return;
+    }
+
+    if (pathChanged) {
+      setViewMode(hasCompanionNow ? "html" : "markdown");
+    } else if (companionAdded) {
+      setViewMode("html");
+    }
+  }, [
+    clearPreferredViewMode,
+    hasCompanionNow,
+    matchingPreferredView,
+    normalizedDocPath,
+    state.selectedVersion,
+  ]);
 
   const handleStartAiFromDoc = () => {
     setPendingAiLaunch({
@@ -115,8 +164,56 @@ export function DocumentReader({
       setNavigateTarget("/ai");
     }
   };
-  const hasCompanionHtml = Boolean(document.companionHtml) && state.selectedVersion === null;
+  const hasCompanionHtml = hasCompanionNow && state.selectedVersion === null;
   const effectiveView = hasCompanionHtml ? viewMode : "markdown";
+  useEffect(() => {
+    const currentDocKey = normalizedDocPath.toLowerCase();
+    const pending = pendingHeadingRef.current;
+    if (!pending) return;
+    if (pending.docPath !== currentDocKey) {
+      pendingHeadingRef.current = null;
+      return;
+    }
+    if (effectiveView !== "markdown") return;
+    const pendingId = pending.id;
+    const frame = window.requestAnimationFrame(() => {
+      if (
+        pendingHeadingRef.current?.docPath === currentDocKey &&
+        pendingHeadingRef.current?.id === pendingId
+      ) {
+        pendingHeadingRef.current = null;
+      }
+      if (lastDocumentPathRef.current.toLowerCase() !== currentDocKey) return;
+      const reader = readerRef.current;
+      const target = reader?.ownerDocument.getElementById(pendingId);
+      if (!target || !reader?.contains(target)) return;
+      const canvas = reader.querySelector<HTMLElement>(".document-reader__canvas");
+      if (
+        canvas &&
+        /(auto|scroll)/.test(getComputedStyle(canvas).overflowY) &&
+        canvas.scrollHeight > canvas.clientHeight
+      ) {
+        const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+        const desired =
+          canvas.scrollTop +
+          target.getBoundingClientRect().top -
+          canvas.getBoundingClientRect().top -
+          offset;
+        const nextScrollTop = Math.max(
+          0,
+          Math.min(desired, canvas.scrollHeight - canvas.clientHeight),
+        );
+        if (typeof canvas.scrollTo === "function") {
+          canvas.scrollTo({ top: nextScrollTop, behavior: "auto" });
+        } else {
+          canvas.scrollTop = nextScrollTop;
+        }
+        return;
+      }
+      target.scrollIntoView?.({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [effectiveView, normalizedDocPath]);
   const headerRef = useRef<HTMLElement>(null);
   const contextToggleRef = useRef<HTMLButtonElement>(null);
   const contextCloseRef = useRef<HTMLButtonElement>(null);
@@ -151,7 +248,7 @@ export function DocumentReader({
       header?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [document.summary.path, state.selectedSearchMatch]);
+  }, [normalizedDocPath, state.selectedSearchMatch]);
 
   const contextContents = <>
     <div className="document-reader__context-header">
@@ -161,7 +258,31 @@ export function DocumentReader({
       </TabsList>
       <IconButton ref={contextCloseRef} label={isNarrow ? "문서 문맥 닫기" : "문서 문맥 접기"} tooltip={false} aria-controls="document-reader-context" aria-expanded onClick={() => isNarrow ? setMobileContextOpen(false) : setContextCollapsed(true)}><PanelRightClose aria-hidden="true" /></IconButton>
     </div>
-    {tab === "overview" ? <DocumentOverview document={document} readerRef={readerRef} onNavigate={isNarrow ? id => { navigationTargetRef.current = id; setMobileContextOpen(false); } : undefined} /> : <DocumentHistory />}
+    {tab === "overview" ? (
+      <DocumentOverview
+        document={document}
+        readerRef={readerRef}
+        onNavigate={
+          isNarrow
+            ? (id) => {
+                navigationTargetRef.current = id;
+                setMobileContextOpen(false);
+              }
+            : undefined
+        }
+        onRequestHeading={(id) => {
+          if (effectiveView === "html") {
+            pendingHeadingRef.current = {
+              docPath: normalizedDocPath.toLowerCase(),
+              id,
+            };
+            setViewMode("markdown");
+          }
+        }}
+      />
+    ) : (
+      <DocumentHistory />
+    )}
   </>;
 
   return (

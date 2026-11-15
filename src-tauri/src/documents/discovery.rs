@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
 use std::io::BufReader;
@@ -10,6 +10,10 @@ use crate::error::{AppError, ErrorCode};
 
 use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry};
 use super::frontmatter::parse_document_reader;
+use super::reader::{
+    is_reserved_markdown_path, lower_stem_key, resolve_companion_html,
+    sort_companion_html_candidates, validate_companion_html_path,
+};
 
 pub fn discover_documents(
     repository_root: &Path,
@@ -98,6 +102,26 @@ fn discover_directory(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| document_path_error(directory, error.to_string()))?;
 
+    // 디렉터리 스캔 결과를 소문자 stem별로 1회 색인해 대소문자 구분 FS의 .HTML/.Html·상대 stem 대소문자 변형도 추가 read_dir 없이 판별한다.
+    let mut html_candidates_by_stem: HashMap<String, Vec<PathBuf>> = HashMap::new();
+    for entry in &entries {
+        if entry.file_name() == OsStr::new(".git") {
+            continue;
+        }
+        let entry_path = entry.path();
+        if is_html(&entry_path) {
+            if let Some(stem_key) = lower_stem_key(&entry_path) {
+                html_candidates_by_stem
+                    .entry(stem_key)
+                    .or_default()
+                    .push(entry_path);
+            }
+        }
+    }
+    for bucket in html_candidates_by_stem.values_mut() {
+        sort_companion_html_candidates(bucket, None);
+    }
+
     for entry in entries {
         if entry.file_name() == OsStr::new(".git") {
             continue;
@@ -125,7 +149,18 @@ fn discover_directory(
                 seen_documents,
             )?);
         } else if metadata.is_file() && is_markdown(&canonical_path) {
-            let summary = summarize_document(repository_root, &canonical_path, metadata)?;
+            let sibling_candidates = (canonical_path.parent() == Some(directory)).then(|| {
+                lower_stem_key(&canonical_path)
+                    .and_then(|key| html_candidates_by_stem.get(&key))
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
+            });
+            let summary = summarize_document(
+                repository_root,
+                &canonical_path,
+                metadata,
+                sibling_candidates,
+            )?;
             if seen_documents.insert(canonical_path) {
                 documents.push(summary.clone());
                 children.push(DocumentTreeEntry::Document { summary });
@@ -149,6 +184,7 @@ fn summarize_document(
     repository_root: &Path,
     path: &Path,
     metadata: fs::Metadata,
+    sibling_html_candidates: Option<&[PathBuf]>,
 ) -> Result<DocumentSummary, AppError> {
     let file =
         fs::File::open(path).map_err(|error| document_path_error(path, error.to_string()))?;
@@ -166,21 +202,44 @@ fn summarize_document(
         Err(_) => 0,
     };
 
+    let relative_path = portable_path(repository_root, path);
+    let has_companion_html = !is_reserved_markdown_path(&relative_path, &file_name)
+        && match sibling_html_candidates {
+            Some(candidates) => candidates.iter().any(|candidate| {
+                validate_companion_html_path(repository_root, candidate).is_some()
+            }),
+            None => has_valid_companion_html(repository_root, path),
+        };
+
     Ok(DocumentSummary {
-        path: portable_path(repository_root, path),
+        path: relative_path,
         file_name,
         title: parsed.title,
         document_id: parsed.document_id,
         frontmatter_status: parsed.frontmatter_status,
+        doc_type: parsed.doc_type,
+        domain: parsed.domain,
+        status: parsed.status,
+        has_companion_html,
         modified_at_unix_ms,
         size: metadata.len(),
     })
+}
+
+fn has_valid_companion_html(repository_root: &Path, markdown_path: &Path) -> bool {
+    resolve_companion_html(repository_root, markdown_path).is_some()
 }
 
 fn is_markdown(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
+fn is_html(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
 }
 
 fn portable_path(repository_root: &Path, path: &Path) -> String {
@@ -444,6 +503,152 @@ mod tests {
         assert_eq!(metadata.title, "Small header");
         assert_eq!(metadata.frontmatter_status, FrontmatterStatus::Valid);
         assert_eq!(reader.bytes_consumed, header_bytes);
+    }
+
+    #[test]
+    fn discovery_detects_companion_html_including_in_repo_symlinks_and_rejects_escaped_or_git_targets(
+    ) {
+        let outside = tempfile::tempdir().unwrap();
+        let escaped_html = outside.path().join("escaped.html");
+        fs::write(&escaped_html, "<html>escaped</html>").unwrap();
+
+        let repo = fixture_repo(&[
+            ("docs/regular.md", "# regular"),
+            ("docs/regular.html", "<html>regular</html>"),
+            ("docs/SPEC.MD", "# spec"),
+            ("docs/SPEC.HTML", "<html>SPEC</html>"),
+            ("docs/Mixed.md", "# mixed"),
+            ("docs/Mixed.Html", "<html>Mixed</html>"),
+            ("docs/lower-stem.md", "# lower"),
+            ("docs/LOWER-STEM.HTML", "<html>UPPER STEM</html>"),
+            ("docs/index.md", "# index"),
+            ("docs/index.html", "<html>index</html>"),
+            ("docs/linked.md", "# linked"),
+            ("shared/linked.html", "<html>linked</html>"),
+            ("docs/escaped.md", "# escaped"),
+            ("docs/git-linked.md", "# git-linked"),
+            (".git/internal.html", "<html>git</html>"),
+        ]);
+
+        let symlinks_supported = try_create_file_symlink(
+            &repo.path().join("shared/linked.html"),
+            &repo.path().join("docs/linked.html"),
+        );
+        if symlinks_supported {
+            assert!(try_create_file_symlink(
+                &escaped_html,
+                &repo.path().join("docs/escaped.html"),
+            ));
+            assert!(try_create_file_symlink(
+                &repo.path().join(".git/internal.html"),
+                &repo.path().join("docs/git-linked.html"),
+            ));
+        }
+
+        let catalog = discover_documents(repo.path(), &["docs".into()]).unwrap();
+        let has_html = |doc_path: &str| {
+            catalog
+                .documents
+                .iter()
+                .find(|doc| doc.path == doc_path)
+                .unwrap()
+                .has_companion_html
+        };
+
+        assert!(has_html("docs/regular.md"));
+        assert!(has_html("docs/SPEC.MD"));
+        assert!(has_html("docs/Mixed.md"));
+        assert!(has_html("docs/lower-stem.md"));
+        assert!(super::has_valid_companion_html(
+            repo.path(),
+            &repo.path().join("docs/SPEC.MD"),
+        ));
+        assert!(super::has_valid_companion_html(
+            repo.path(),
+            &repo.path().join("docs/Mixed.md"),
+        ));
+        assert!(super::has_valid_companion_html(
+            repo.path(),
+            &repo.path().join("docs/lower-stem.md"),
+        ));
+        assert!(!has_html("docs/index.md"));
+        assert!(!has_html("docs/escaped.md"));
+        assert!(!has_html("docs/git-linked.md"));
+        assert_eq!(has_html("docs/linked.md"), symlinks_supported);
+    }
+
+    #[test]
+    fn has_valid_companion_html_canonicalizes_symlinked_repository_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let repo_real = parent.path().join("real-repo");
+        fs::create_dir_all(repo_real.join("docs")).unwrap();
+        fs::create_dir_all(repo_real.join(".git")).unwrap();
+        fs::write(repo_real.join("docs/regular.md"), "# regular").unwrap();
+        fs::write(repo_real.join("docs/regular.html"), "<html>regular</html>").unwrap();
+        fs::write(repo_real.join("docs/git-linked.md"), "# git-linked").unwrap();
+        fs::write(repo_real.join(".git/internal.html"), "<html>git</html>").unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        let escaped_html = outside.path().join("escaped.html");
+        fs::write(&escaped_html, "<html>escaped</html>").unwrap();
+        fs::write(repo_real.join("docs/escaped.md"), "# escaped").unwrap();
+
+        let repo_alias = parent.path().join("alias-repo");
+        let symlinks_supported = try_create_dir_symlink(&repo_real, &repo_alias);
+        if !symlinks_supported {
+            return;
+        }
+        assert!(try_create_file_symlink(
+            &escaped_html,
+            &repo_real.join("docs/escaped.html"),
+        ));
+        assert!(try_create_file_symlink(
+            &repo_real.join(".git/internal.html"),
+            &repo_real.join("docs/git-linked.html"),
+        ));
+
+        assert!(super::has_valid_companion_html(
+            &repo_alias,
+            &repo_alias.join("docs/regular.md"),
+        ));
+        assert!(!super::has_valid_companion_html(
+            &repo_alias,
+            &repo_alias.join("docs/escaped.md"),
+        ));
+        assert!(!super::has_valid_companion_html(
+            &repo_alias,
+            &repo_alias.join("docs/git-linked.md"),
+        ));
+    }
+
+    #[cfg(unix)]
+    fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(original, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        match std::os::windows::fs::symlink_file(original, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("unexpected windows symlink failure: {error}"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn try_create_dir_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(original, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn try_create_dir_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        match std::os::windows::fs::symlink_dir(original, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("unexpected windows dir symlink failure: {error}"),
+        }
     }
 
     fn fixture_repo(files: &[(&str, &str)]) -> TempDir {

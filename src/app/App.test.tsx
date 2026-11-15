@@ -9,6 +9,8 @@ import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
 import { FakePersonalDashboardGateway } from "@/test/FakePersonalDashboardGateway";
+import * as HomePageModule from "@/pages/HomePage";
+import * as AppRoutesModule from "./AppRoutes";
 import { App } from "./App";
 
 const { initializeMermaid, renderMermaid } = vi.hoisted(() => ({
@@ -454,5 +456,231 @@ describe("App", () => {
     await waitFor(() =>
       expect(dashboardLink).toHaveAttribute("aria-current", "page"),
     );
+  });
+
+  it("renders shared not-found screen with 홈으로 돌아가기 for unmatched hash routes instead of a blank white screen", async () => {
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    window.location.hash = "#/2026-11-15-unknown-toc";
+    const user = userEvent.setup();
+    render(
+      <App
+        workspaceGateway={FakeWorkspaceConnectionGateway.connected()}
+        projectBoardGateway={FakeProjectBoardGateway.empty()}
+        docsRepositoryGateway={docsRepoGateway}
+        documentsGateway={new FakeDocumentsGateway()}
+        personalDashboardGateway={new FakePersonalDashboardGateway({ viewerLogin: "hyeeun" })}
+        preferencesRepository={new FakePreferencesRepository()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "요청한 화면을 찾을 수 없습니다" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "홈으로 돌아가기" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "내 대시보드" }),
+    ).toBeVisible();
+    expect(window.location.hash).toBe("#/home");
+  });
+
+  it("keeps HashRouter on /documents when clicking TOC and in-document #hash links", async () => {
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    const documentsGateway = new FakeDocumentsGateway();
+    const specSummary = {
+      path: "docs/log.md",
+      fileName: "log.md",
+      title: "변경 로그",
+      documentId: "log-1",
+      frontmatterStatus: { status: "valid" as const },
+      modifiedAtUnixMs: 1_721_000_000_000,
+      size: 200,
+    };
+    documentsGateway.sessionSnapshot.catalog = {
+      documents: [specSummary],
+      roots: [{ kind: "document", summary: specSummary }],
+    };
+    documentsGateway.sessionSnapshot.lastOpenedPath = "docs/log.md";
+    vi.spyOn(documentsGateway, "readDocument").mockResolvedValue({
+      summary: specSummary,
+      markdown: "# 변경 로그\n\n- [2026-11-14](#2026-11-14)\n\n## 2026-11-14\n\n반영 내역",
+      properties: {},
+      tableOfContents: [
+        { level: 1, title: "변경 로그", id: "log-title" },
+        { level: 2, title: "2026-11-14", id: "2026-11-14" },
+      ],
+      lastCommit: null,
+    });
+
+    window.location.hash = "#/documents";
+    const user = userEvent.setup();
+    render(
+      <App
+        workspaceGateway={FakeWorkspaceConnectionGateway.connected()}
+        projectBoardGateway={FakeProjectBoardGateway.empty()}
+        docsRepositoryGateway={docsRepoGateway}
+        documentsGateway={documentsGateway}
+        personalDashboardGateway={new FakePersonalDashboardGateway({ viewerLogin: "hyeeun" })}
+        preferencesRepository={new FakePreferencesRepository()}
+      />,
+    );
+
+    const tocNav = await screen.findByRole("navigation", { name: "목차" });
+    await user.click(within(tocNav).getByRole("link", { name: "2026-11-14" }));
+    expect(window.location.hash).toBe("#/documents");
+    expect(screen.queryByRole("heading", { name: "요청한 화면을 찾을 수 없습니다" })).toBeNull();
+
+    const docRegion = screen.getByRole("region", { name: "변경 로그" });
+    const inlineDateLink = within(docRegion).getAllByRole("link", { name: "2026-11-14" })[0];
+    await user.click(inlineDateLink);
+    expect(window.location.hash).toBe("#/documents");
+    expect(screen.queryByRole("heading", { name: "요청한 화면을 찾을 수 없습니다" })).toBeNull();
+  });
+
+  it("catches route render errors via AppErrorBoundary and recovers cleanly on 홈으로 돌아가기", async () => {
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    let shouldCrash = true;
+    const OriginalHomePage = HomePageModule.HomePage;
+    const suppressWindowError = (event: ErrorEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("error", suppressWindowError);
+    const spy = vi
+      .spyOn(HomePageModule, "HomePage")
+      .mockImplementation((...args: Parameters<typeof OriginalHomePage>) => {
+        if (shouldCrash) {
+          throw new Error("Rendered crash test");
+        }
+        return OriginalHomePage(...args);
+      });
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    try {
+      render(
+        <App
+          workspaceGateway={FakeWorkspaceConnectionGateway.connected()}
+          projectBoardGateway={FakeProjectBoardGateway.empty()}
+          docsRepositoryGateway={docsRepoGateway}
+          documentsGateway={new FakeDocumentsGateway()}
+          personalDashboardGateway={new FakePersonalDashboardGateway({ viewerLogin: "hyeeun" })}
+          preferencesRepository={new FakePreferencesRepository()}
+        />,
+      );
+
+      expect(
+        await screen.findByRole("heading", {
+          level: 1,
+          name: "화면을 표시하는 중 문제가 발생했습니다",
+        }),
+      ).toBeVisible();
+      shouldCrash = false;
+      await user.click(screen.getByRole("button", { name: "홈으로 돌아가기" }));
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "내 대시보드" }),
+      ).toBeVisible();
+    } finally {
+      spy.mockRestore();
+      consoleErrorSpy.mockRestore();
+      window.removeEventListener("error", suppressWindowError);
+    }
+  });
+
+  it("resets the root AppErrorBoundary when window hash changes manually", async () => {
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    let shouldCrash = true;
+    const OriginalAppRoutes = AppRoutesModule.AppRoutes;
+    const suppressWindowError = (event: ErrorEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("error", suppressWindowError);
+    const spy = vi
+      .spyOn(AppRoutesModule, "AppRoutes")
+      .mockImplementation((...args: Parameters<typeof OriginalAppRoutes>) => {
+        if (shouldCrash) {
+          throw new Error("Root boundary crash test");
+        }
+        return OriginalAppRoutes(...args);
+      });
+    const documentsGateway = new FakeDocumentsGateway();
+    documentsGateway.sessionSnapshot.lastOpenedPath = null;
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(
+        <App
+          workspaceGateway={FakeWorkspaceConnectionGateway.connected()}
+          projectBoardGateway={FakeProjectBoardGateway.empty()}
+          docsRepositoryGateway={docsRepoGateway}
+          documentsGateway={documentsGateway}
+          personalDashboardGateway={new FakePersonalDashboardGateway({ viewerLogin: "hyeeun" })}
+          preferencesRepository={new FakePreferencesRepository()}
+        />,
+      );
+
+      expect(
+        await screen.findByRole("heading", {
+          level: 1,
+          name: "화면을 표시하는 중 문제가 발생했습니다",
+        }),
+      ).toBeVisible();
+
+      shouldCrash = false;
+      window.location.hash = "#/documents";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+
+      expect(
+        await screen.findByRole("heading", { level: 1, name: "Documents" }),
+      ).toBeVisible();
+    } finally {
+      spy.mockRestore();
+      consoleErrorSpy.mockRestore();
+      window.removeEventListener("error", suppressWindowError);
+    }
   });
 });

@@ -449,4 +449,183 @@ describe("MarkdownDocument", () => {
       "guide",
     );
   });
+
+  it("scrolls to Rust heading IDs on in-document #hash clicks without changing window.location.hash and opens relative .html links in html view", async () => {
+    const user = userEvent.setup();
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    window.location.hash = "#/documents";
+    try {
+      const gateway = new FakeDocumentsGateway();
+      const doc: DocumentContent = {
+        summary: {
+          path: "docs/guides/guide.md",
+          fileName: "guide.md",
+          title: "Guide",
+          documentId: "guide-id",
+          frontmatterStatus: { status: "valid" },
+          modifiedAtUnixMs: 0,
+          size: 200,
+        },
+        markdown:
+          "# Guide\n\n- [2026-11-14 변경](#2026-11-14-변경)\n- [화면명세서](./screen-spec.html)\n\n## 2026-11-14 변경\n\n내용입니다.",
+        properties: {},
+        tableOfContents: [
+          { level: 1, title: "Guide", id: "guide" },
+          { level: 2, title: "2026-11-14 변경", id: "2026-11-14-변경-2" },
+        ],
+        lastCommit: null,
+      };
+
+      let latestPreferredView: string | null = null;
+      function ViewProbe() {
+        latestPreferredView = useDocuments().preferredViewMode;
+        return null;
+      }
+
+      render(
+        <TestQueryProvider>
+          <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+            <ViewProbe />
+            <MarkdownDocument document={doc} />
+          </DocumentsProvider>
+        </TestQueryProvider>,
+      );
+
+      await user.click(screen.getByRole("link", { name: "2026-11-14 변경" }));
+      expect(window.location.hash).toBe("#/documents");
+      const targetHeading = document.getElementById("2026-11-14-변경-2");
+      expect(targetHeading).not.toBeNull();
+      expect(scroll.mock.instances).toContain(targetHeading);
+
+      await user.click(screen.getByRole("link", { name: "화면명세서" }));
+      await waitFor(() => {
+        expect(gateway.calls).toContainEqual({
+          method: "readDocument",
+          args: ["session-id", "session-id", "docs/guides/screen-spec.md"],
+        });
+      });
+      expect(latestPreferredView).toBe("html");
+    } finally {
+      window.location.hash = "";
+      scroll.mockRestore();
+    }
+  });
+
+  it("allows native #hash navigation outside HashRouter when the target DOM id exists", async () => {
+    const originalHash = window.location.hash;
+    window.location.hash = "";
+    try {
+      const gateway = new FakeDocumentsGateway();
+      const doc: DocumentContent = {
+        summary: {
+          path: "docs/guides/guide.md",
+          fileName: "guide.md",
+          title: "Guide",
+          documentId: "guide-id",
+          frontmatterStatus: { status: "valid" },
+          modifiedAtUnixMs: 0,
+          size: 200,
+        },
+        markdown:
+          "# Guide\n\n[응답 규칙으로 이동](#응답-규칙)\n\n## 응답 규칙\n\n본문",
+        properties: {},
+        tableOfContents: [
+          { level: 1, title: "Guide", id: "guide" },
+          { level: 2, title: "응답 규칙", id: "응답-규칙" },
+        ],
+        lastCommit: null,
+      };
+
+      render(
+        <TestQueryProvider>
+          <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+            <MarkdownDocument document={doc} />
+          </DocumentsProvider>
+        </TestQueryProvider>,
+      );
+
+      const link = screen.getByRole("link", { name: "응답 규칙으로 이동" });
+      let defaultPrevented: boolean | null = null;
+      const listener = (event: MouseEvent) => {
+        defaultPrevented = event.defaultPrevented;
+      };
+      window.addEventListener("click", listener);
+      try {
+        link.click();
+      } finally {
+        window.removeEventListener("click", listener);
+      }
+      expect(defaultPrevented).toBe(false);
+    } finally {
+      window.location.hash = originalHash;
+    }
+  });
+
+  it("prevents native #hash navigation when an id exists only outside the article scope", () => {
+    const originalHash = window.location.hash;
+    window.location.hash = "";
+    try {
+      const gateway = new FakeDocumentsGateway();
+      const doc: DocumentContent = {
+        summary: {
+          path: "docs/guides/guide.md",
+          fileName: "guide.md",
+          title: "Guide",
+          documentId: "guide-id",
+          frontmatterStatus: { status: "valid" },
+          modifiedAtUnixMs: 0,
+          size: 200,
+        },
+        markdown: "# Guide\n\n[외부로 이동](#outside-panel-id)",
+        properties: {},
+        tableOfContents: [{ level: 1, title: "Guide", id: "guide" }],
+        lastCommit: null,
+      };
+
+      render(
+        <TestQueryProvider>
+          <div id="outside-panel-id">외부 패널 요소</div>
+          <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+            <MarkdownDocument document={doc} />
+          </DocumentsProvider>
+        </TestQueryProvider>,
+      );
+
+      const link = screen.getByRole("link", { name: "외부로 이동" });
+      let defaultPrevented: boolean | null = null;
+      const listener = (event: MouseEvent) => {
+        defaultPrevented = event.defaultPrevented;
+      };
+      window.addEventListener("click", listener);
+      try {
+        link.click();
+      } finally {
+        window.removeEventListener("click", listener);
+      }
+      expect(defaultPrevented).toBe(true);
+      expect(window.location.hash).toBe("");
+    } finally {
+      window.location.hash = originalHash;
+    }
+  });
+
+  it("opens tel: links externally and reports an inline status notice when an unsupported relative link is clicked", async () => {
+    const user = userEvent.setup();
+    const { gateway } = renderMarkdown(
+      "[전화 문의](tel:02-1234-5678) [escape](../../../outside.md)",
+    );
+
+    const telLink = screen.getByRole("link", { name: "전화 문의" });
+    expect(telLink).toHaveAttribute("href", "tel:02-1234-5678");
+    await user.click(telLink);
+    expect(gateway.calls).toContainEqual({
+      method: "openExternal",
+      args: ["tel:02-1234-5678"],
+    });
+
+    await user.click(screen.getByRole("link", { name: "escape" }));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "이 문서에서 열 수 없는 링크입니다.",
+    );
+  });
 });

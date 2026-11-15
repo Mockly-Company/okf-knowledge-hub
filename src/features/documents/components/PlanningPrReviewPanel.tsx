@@ -97,11 +97,14 @@ function RouterPrDeepLinkSync({
 }: {
   ready: boolean;
   canOpenPrNumber: (prNumber: number) => boolean;
-  onOpenPr: (prNumber: number) => void;
+  onOpenPr: (prNumber: number, preferredView?: ReviewTab) => void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const prParam = searchParams.get("pr");
+  const viewParam = searchParams.get("view");
+  const preferredView: ReviewTab | undefined =
+    viewParam === "html" || viewParam === "markdown" ? viewParam : undefined;
 
   useEffect(() => {
     if (!ready) return;
@@ -110,21 +113,22 @@ function RouterPrDeepLinkSync({
     const matchedPr =
       Number.isInteger(prNumber) && prNumber > 0 && canOpenPrNumber(prNumber);
     if (matchedPr) {
-      onOpenPr(prNumber);
+      onOpenPr(prNumber, preferredView);
     }
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("pr");
-        // 유효한 PR을 실제로 여는 경우에만 같은 커밋의 ?doc= 정리를 함께 보장한다(S21, S37).
+        // 유효한 PR을 실제로 여는 경우에만 같은 커밋의 ?doc=/view= 정리를 함께 보장한다(S21, S37).
         if (matchedPr) {
           next.delete("doc");
+          next.delete("view");
         }
         return next;
       },
       { replace: true },
     );
-  }, [ready, prParam, canOpenPrNumber, setSearchParams, onOpenPr]);
+  }, [ready, prParam, preferredView, canOpenPrNumber, setSearchParams, onOpenPr]);
 
   return null;
 }
@@ -141,8 +145,14 @@ export function PlanningPrReviewSection() {
   const ready = state.status === "ready" && sessionId !== null;
   const inRouter = useInRouterContext();
   const prevRepoRef = useRef(state.repositoryFullName);
+  const appliedDocKeyRef = useRef<string | null>(null);
 
   const [selectedPrNumber, setSelectedPrNumber] = useState<number | null>(null);
+  const [openViewRequest, setOpenViewRequest] = useState<{
+    prNumber: number;
+    preferredTab: ReviewTab | null;
+    nonce: number;
+  } | null>(null);
   const [selectedDocPath, setSelectedDocPath] = useState<string | null>(null);
   const [viewTab, setViewTab] = useState<ReviewTab>("html");
   const [reviewComment, setReviewComment] = useState("");
@@ -170,6 +180,7 @@ export function PlanningPrReviewSection() {
     if (prevRepoRef.current === state.repositoryFullName) return;
     prevRepoRef.current = state.repositoryFullName;
     setSelectedPrNumber(null);
+    setOpenViewRequest(null);
     setSelectedDocPath(null);
     setApproveError(null);
     setApprovalNotice(null);
@@ -181,23 +192,59 @@ export function PlanningPrReviewSection() {
     if (!detail || detail.documents.length === 0) return null;
     return (
       detail.documents.find((item) => item.path === selectedDocPath) ??
+      detail.documents.find(
+        (item) => item.hasCompanionHtml && Boolean(item.companionHtml),
+      ) ??
       detail.documents[0]
     );
   }, [detail, selectedDocPath]);
 
   const activeDocPath = activeDoc?.path ?? null;
+  const activeDocHasHtml = Boolean(
+    activeDoc?.hasCompanionHtml && activeDoc?.companionHtml,
+  );
   const activeDocDefaultTab: ReviewTab = !activeDoc
     ? "markdown"
-    : activeDoc.hasCompanionHtml && activeDoc.companionHtml
+    : activeDocHasHtml
       ? "html"
       : activeDoc.headMarkdown === null
         ? "diff"
         : "markdown";
 
   useEffect(() => {
-    if (!activeDocPath) return;
-    setViewTab(activeDocDefaultTab);
-  }, [selectedPrNumber, activeDocPath, activeDocDefaultTab]);
+    const docKey =
+      selectedPrNumber !== null && activeDocPath
+        ? `${selectedPrNumber}:${activeDocPath}`
+        : null;
+    if (!docKey) {
+      appliedDocKeyRef.current = null;
+      return;
+    }
+    if (openViewRequest && openViewRequest.prNumber === selectedPrNumber) {
+      const requested = openViewRequest.preferredTab;
+      const nextTab =
+        !requested ||
+        (requested === "html" && !activeDocHasHtml) ||
+        (requested === "markdown" && activeDoc?.headMarkdown === null)
+          ? activeDocDefaultTab
+          : requested;
+      appliedDocKeyRef.current = docKey;
+      setViewTab(nextTab);
+      setOpenViewRequest(null);
+      return;
+    }
+    if (appliedDocKeyRef.current !== docKey) {
+      appliedDocKeyRef.current = docKey;
+      setViewTab(activeDocDefaultTab);
+    }
+  }, [
+    openViewRequest,
+    selectedPrNumber,
+    activeDocPath,
+    activeDocDefaultTab,
+    activeDocHasHtml,
+    activeDoc?.headMarkdown,
+  ]);
 
   const diffRows = useMemo(() => {
     if (!activeDoc) return [];
@@ -207,7 +254,12 @@ export function PlanningPrReviewSection() {
     );
   }, [activeDoc]);
 
-  const handleOpenPr = useCallback((number: number) => {
+  const handleOpenPr = useCallback((number: number, preferredTab?: ReviewTab) => {
+    setOpenViewRequest((prev) => ({
+      prNumber: number,
+      preferredTab: preferredTab ?? null,
+      nonce: (prev?.nonce ?? 0) + 1,
+    }));
     setSelectedPrNumber(number);
     setSelectedDocPath(null);
     setReviewComment("");
@@ -227,6 +279,7 @@ export function PlanningPrReviewSection() {
         trimmedComment.length > 0 ? trimmedComment : undefined,
       );
       setSelectedPrNumber(null);
+      setOpenViewRequest(null);
       setSelectedDocPath(null);
       setReviewComment("");
       setApprovalNotice(
@@ -352,6 +405,7 @@ export function PlanningPrReviewSection() {
               variant="ghost"
               onClick={() => {
                 setSelectedPrNumber(null);
+                setOpenViewRequest(null);
                 setApproveError(null);
               }}
               disabled={approving}

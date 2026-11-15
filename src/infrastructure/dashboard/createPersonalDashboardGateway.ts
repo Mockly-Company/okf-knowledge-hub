@@ -26,6 +26,8 @@ class UnavailablePersonalDashboardGateway implements PersonalDashboardGateway {
   async markDashboardSeen(timestamp?: string | null) {
     return timestamp ?? new Date().toISOString();
   }
+
+  async setDashboardNotificationChecked() {}
 }
 
 export function createPersonalDashboardGateway(

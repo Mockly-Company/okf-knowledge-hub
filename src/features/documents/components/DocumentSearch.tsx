@@ -1,14 +1,26 @@
-import { FileText, Search } from "lucide-react";
-import type { ReactNode } from "react";
+import { FilePlus2, FileText, Search } from "lucide-react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusFeedback } from "@/components/ui/status-feedback";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
-import type {
-  AppError,
-  DocumentSummary,
-  IndexStatus,
-  SearchResult,
+import {
+  classifyDocumentCategory,
+  DOCUMENT_CATEGORY_LABELS,
+  DOCUMENT_CATEGORY_ORDER,
+  groupDocumentsByCategory,
+  groupDocumentsByDomain,
+  isAuxiliaryDocument,
+  type DocumentCategoryFilter,
+  type DocumentGroup,
+  type DocumentGroupMode,
+} from "../document-taxonomy";
+import {
+  normalizeDocumentPath,
+  type AppError,
+  type DocumentSummary,
+  type IndexStatus,
+  type SearchResult,
 } from "../model";
 import type { AsyncStatus } from "../documents-reducer";
 
@@ -23,8 +35,15 @@ interface DocumentSearchProps {
   onSelectDocument(path: string): void;
   onSelectResult(result: SearchResult): void;
   onRetry(): void;
+  onNewDocumentInFolder?: (folderPath: string) => void;
   toolbarAction?: ReactNode;
 }
+
+const GROUP_MODE_OPTIONS: ReadonlyArray<{ mode: DocumentGroupMode; label: string }> = [
+  { mode: "domain", label: "도메인별" },
+  { mode: "type", label: "문서 유형별" },
+  { mode: "flat", label: "전체 목록" },
+];
 
 function escapeRegularExpression(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -65,8 +84,38 @@ export function DocumentSearch({
   onSelectDocument,
   onSelectResult,
   onRetry,
+  onNewDocumentInFolder,
   toolbarAction,
 }: DocumentSearchProps) {
+  const [groupMode, setGroupMode] = useState<DocumentGroupMode>("domain");
+  const [categoryFilter, setCategoryFilter] =
+    useState<DocumentCategoryFilter>("all");
+
+  const documentByPath = useMemo(() => {
+    const exact = new Map<string, DocumentSummary>();
+    const lower = new Map<string, DocumentSummary>();
+    for (const doc of documents) {
+      const normalized = normalizeDocumentPath(doc.path);
+      exact.set(normalized, doc);
+      const lowerKey = normalized.toLowerCase();
+      if (!lower.has(lowerKey)) {
+        lower.set(lowerKey, doc);
+      }
+    }
+    return { exact, lower };
+  }, [documents]);
+
+  const lookupDocumentByPath = useCallback(
+    (path: string): DocumentSummary | undefined => {
+      const normalized = normalizeDocumentPath(path);
+      return (
+        documentByPath.exact.get(normalized) ??
+        documentByPath.lower.get(normalized.toLowerCase())
+      );
+    },
+    [documentByPath],
+  );
+
   const isSearching = query.trim().length > 0;
   const isAwaitingSearch =
     isSearching && searchStatus !== "ready" && searchStatus !== "error";
@@ -76,15 +125,134 @@ export function DocumentSearch({
     searchError?.code === "document_index_unavailable";
   const searchFailed =
     isSearching && searchStatus === "error" && searchError !== null && !bodySearchUnavailable;
-  const titleAndPathMatches = isSearching
-    ? documents.filter((document) => matchesTitleOrPath(document, query))
-    : documents;
-  const items =
-    !isSearching || searchStatus === "ready"
-      ? isSearching ? results : documents
+  const filteredDocuments = useMemo(
+    () =>
+      categoryFilter === "all"
+        ? documents
+        : documents.filter(
+            (doc) => classifyDocumentCategory(doc) === categoryFilter,
+          ),
+    [documents, categoryFilter],
+  );
+  const unfilteredTitleAndPathMatches = useMemo(
+    () =>
+      isSearching
+        ? documents.filter((document) => matchesTitleOrPath(document, query))
+        : documents,
+    [documents, isSearching, query],
+  );
+  const titleAndPathMatches = useMemo(
+    () =>
+      categoryFilter === "all"
+        ? unfilteredTitleAndPathMatches
+        : unfilteredTitleAndPathMatches.filter(
+            (doc) => classifyDocumentCategory(doc) === categoryFilter,
+          ),
+    [categoryFilter, unfilteredTitleAndPathMatches],
+  );
+  const filteredResults = useMemo(
+    () =>
+      categoryFilter === "all"
+        ? results
+        : results.filter((result) => {
+            const summary = lookupDocumentByPath(result.path);
+            const normalizedPath = normalizeDocumentPath(result.path);
+            const docRef = summary ?? {
+              path: normalizedPath,
+              fileName: normalizedPath.split("/").pop() ?? normalizedPath,
+            };
+            return classifyDocumentCategory(docRef) === categoryFilter;
+          }),
+    [categoryFilter, lookupDocumentByPath, results],
+  );
+  const groupedDocuments: DocumentGroup[] = useMemo(() => {
+    if (groupMode === "domain") {
+      return groupDocumentsByDomain(filteredDocuments);
+    }
+    if (groupMode === "type") {
+      return groupDocumentsByCategory(filteredDocuments);
+    }
+    return [];
+  }, [filteredDocuments, groupMode]);
+
+  const unfilteredSearchCount = !isSearching
+    ? documents.length
+    : searchStatus === "ready"
+      ? results.length
+      : searchFailed
+        ? 0
+        : unfilteredTitleAndPathMatches.length;
+
+  const items: Array<DocumentSummary | SearchResult> = !isSearching
+    ? filteredDocuments
+    : searchStatus === "ready"
+      ? filteredResults
       : searchFailed
         ? []
         : titleAndPathMatches;
+
+  const renderResultRow = (
+    item: DocumentSummary | SearchResult,
+    normalizedPath: string,
+    rowKey: string,
+  ) => {
+    const result = "matchField" in item ? item : null;
+    const summary = "matchField" in item ? lookupDocumentByPath(item.path) : item;
+    const docRef = summary ?? {
+      path: normalizedPath,
+      fileName: normalizedPath.split("/").pop() ?? normalizedPath,
+    };
+    const category = classifyDocumentCategory(docRef);
+    const hasCompanionHtml =
+      Boolean(summary?.hasCompanionHtml) && !isAuxiliaryDocument(docRef);
+
+    return (
+      <li key={rowKey}>
+        <UnstyledButton
+          className="document-search__result-row"
+          onClick={() =>
+            result ? onSelectResult(result) : onSelectDocument(item.path)
+          }
+        >
+          <FileText aria-hidden="true" />
+          <span className="document-search__result-copy">
+            <strong>{item.title}</strong>
+            <small>{item.path}</small>
+            {result?.snippet ? (
+              <span>
+                <HighlightedSnippet
+                  snippet={result.snippet}
+                  matchText={result.matchText}
+                />
+              </span>
+            ) : null}
+          </span>
+          <span className="document-search__result-badges">
+            <span className="document-search__category-badge">
+              {DOCUMENT_CATEGORY_LABELS[category]}
+            </span>
+            {hasCompanionHtml ? (
+              <span className="document-search__html-badge">HTML</span>
+            ) : null}
+          </span>
+        </UnstyledButton>
+      </li>
+    );
+  };
+
+  const renderResultRows = (
+    rowItems: readonly (DocumentSummary | SearchResult)[],
+  ) => {
+    const keyCounts = new Map<string, number>();
+    return rowItems.map((item) => {
+      const normalizedPath = normalizeDocumentPath(item.path);
+      const baseKey = normalizedPath.toLowerCase();
+      const seen = (keyCounts.get(baseKey) ?? 0) + 1;
+      keyCounts.set(baseKey, seen);
+      const rowKey = seen === 1 ? baseKey : `${baseKey}#${seen}`;
+      return renderResultRow(item, normalizedPath, rowKey);
+    });
+  };
 
   return (
     <section
@@ -106,6 +274,58 @@ export function DocumentSearch({
         {toolbarAction}
       </div>
 
+      {documents.length > 0 ? (
+        <div className="document-search__taxonomy">
+          {!isSearching ? (
+            <div
+              className="document-search__view-switch"
+              role="group"
+              aria-label="문서 묶음 기준"
+            >
+              {GROUP_MODE_OPTIONS.map((option) => (
+                <UnstyledButton
+                  key={option.mode}
+                  type="button"
+                  className="document-search__mode-chip"
+                  data-active={groupMode === option.mode}
+                  aria-pressed={groupMode === option.mode}
+                  onClick={() => setGroupMode(option.mode)}
+                >
+                  {option.label}
+                </UnstyledButton>
+              ))}
+            </div>
+          ) : null}
+          <div
+            className="document-search__category-filters"
+            role="group"
+            aria-label="문서 종류 필터"
+          >
+            <UnstyledButton
+              type="button"
+              className="document-search__filter-chip"
+              data-active={categoryFilter === "all"}
+              aria-pressed={categoryFilter === "all"}
+              onClick={() => setCategoryFilter("all")}
+            >
+              전체
+            </UnstyledButton>
+            {DOCUMENT_CATEGORY_ORDER.map((category) => (
+              <UnstyledButton
+                key={category}
+                type="button"
+                className="document-search__filter-chip"
+                data-active={categoryFilter === category}
+                aria-pressed={categoryFilter === category}
+                onClick={() => setCategoryFilter(category)}
+              >
+                {DOCUMENT_CATEGORY_LABELS[category]}
+              </UnstyledButton>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="document-search__results">
         {searchFailed ? (
           <StatusFeedback
@@ -115,49 +335,71 @@ export function DocumentSearch({
             action={searchError.recovery === "retry" ? (
               <Button variant="secondary" onClick={onRetry}>
                 검색 다시 시도
-            </Button>
-          ) : undefined}
+              </Button>
+            ) : undefined}
           >
             <p>검색 결과를 불러오지 못했습니다.</p>
           </StatusFeedback>
         ) : isAwaitingSearch && items.length === 0 ? null : items.length === 0 ? (
-          <p className="document-search__empty">
-            {isSearching && searchStatus !== "loading"
-              ? "검색 결과가 없습니다."
-              : "표시할 문서가 없습니다."}
-          </p>
-        ) : (
-          <ul>
-            {items.map((item) => {
-              const result = "matchField" in item ? item : null;
+          categoryFilter !== "all" && unfilteredSearchCount > 0 ? (
+            <div className="document-search__filtered-empty">
+              <p className="document-search__empty">
+                선택한 분류에 해당하는 문서가 없습니다.
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setCategoryFilter("all")}
+              >
+                필터 초기화
+              </Button>
+            </div>
+          ) : (
+            <p className="document-search__empty">
+              {isSearching && searchStatus !== "loading"
+                ? "검색 결과가 없습니다."
+                : "표시할 문서가 없습니다."}
+            </p>
+          )
+        ) : !isSearching && groupMode !== "flat" ? (
+          <div className="document-search__groups">
+            {groupedDocuments.map((group) => {
+              const folderPath = group.folderPath;
               return (
-                <li key={item.path}>
-                  <UnstyledButton
-                    className="document-search__result-row"
-                    onClick={() =>
-                      result
-                        ? onSelectResult(result)
-                        : onSelectDocument(item.path)
-                    }
-                  >
-                    <FileText aria-hidden="true" />
-                    <span className="document-search__result-copy">
-                      <strong>{item.title}</strong>
-                      <small>{item.path}</small>
-                      {result?.snippet ? (
-                        <span>
-                          <HighlightedSnippet
-                            snippet={result.snippet}
-                            matchText={result.matchText}
-                          />
-                        </span>
-                      ) : null}
-                    </span>
-                  </UnstyledButton>
-                </li>
+                <section
+                  key={group.key}
+                  className="document-search__group"
+                  aria-label={group.label}
+                >
+                  <div className="document-search__group-header">
+                    <div className="document-search__group-heading">
+                      <h2>{group.label}</h2>
+                      <span className="document-search__group-count">
+                        {`${group.documents.length}건`}
+                      </span>
+                    </div>
+                    {groupMode === "domain" &&
+                    folderPath &&
+                    onNewDocumentInFolder ? (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="document-search__group-action"
+                        aria-label={`${folderPath} 폴더에 새 문서`}
+                        onClick={() => onNewDocumentInFolder(folderPath)}
+                      >
+                        <FilePlus2 aria-hidden="true" />
+                        폴더에 새 문서
+                      </Button>
+                    ) : null}
+                  </div>
+                  <ul>{renderResultRows(group.documents)}</ul>
+                </section>
               );
             })}
-          </ul>
+          </div>
+        ) : (
+          <ul>{renderResultRows(items)}</ul>
         )}
       </div>
     </section>

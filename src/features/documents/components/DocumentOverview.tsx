@@ -96,11 +96,13 @@ export function DocumentOverview({
   document,
   readerRef,
   onNavigate,
+  onRequestHeading,
   codeRepositoriesGateway = defaultCodeGateway,
 }: {
   document: DocumentContent;
   readerRef?: RefObject<HTMLElement | null>;
   onNavigate?: (id: string) => void;
+  onRequestHeading?: (id: string) => void;
   codeRepositoriesGateway?: CodeRepositoriesGateway;
 }) {
   const entries = propertyEntries(document.properties);
@@ -171,10 +173,21 @@ export function DocumentOverview({
     const reader = readerRef?.current ?? navRef.current?.closest(".document-reader") ?? null;
     const root = scrollContainer(reader);
     const heading = reader?.ownerDocument.getElementById(id);
-    if (root && heading) {
+    if (!heading) {
+      onRequestHeading?.(id);
+    } else if (root && root.scrollHeight > root.clientHeight) {
       const offset = parseFloat(getComputedStyle(heading).scrollMarginTop) || 0;
       const desired = root.scrollTop + heading.getBoundingClientRect().top - root.getBoundingClientRect().top - offset;
-      requestedLocation.current = {id, scrollTop: Math.max(0, Math.min(desired, root.scrollHeight - root.clientHeight))};
+      const nextScrollTop = Math.max(0, Math.min(desired, root.scrollHeight - root.clientHeight));
+      requestedLocation.current = { id, scrollTop: nextScrollTop };
+      if (typeof root.scrollTo === "function") {
+        root.scrollTo({ top: nextScrollTop, behavior: "auto" });
+      } else {
+        root.scrollTop = nextScrollTop;
+      }
+    } else if (typeof heading.scrollIntoView === "function") {
+      requestedLocation.current = null;
+      heading.scrollIntoView({ block: "start" });
     }
     setActiveId(id);
     onNavigate?.(id);
@@ -298,7 +311,17 @@ export function DocumentOverview({
                   paddingInlineStart: `calc(${item.level - 1} * var(--space-3))`,
                 }}
               >
-                <a href={`#${item.id}`} target="_self" aria-current={activeId === item.id ? "location" : undefined} onClick={() => selectLocation(item.id)}>{item.title}</a>
+                <a
+                  href={`#${item.id}`}
+                  target="_self"
+                  aria-current={activeId === item.id ? "location" : undefined}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    selectLocation(item.id);
+                  }}
+                >
+                  {item.title}
+                </a>
               </li>
             ))}
           </ol>

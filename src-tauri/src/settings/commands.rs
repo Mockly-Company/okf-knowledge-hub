@@ -76,6 +76,29 @@ pub(crate) fn mark_dashboard_seen_inner(
     Ok(ts)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+pub fn set_dashboard_notification_checked(
+    state: State<'_, AppServices>,
+    notification_id: String,
+    checked: bool,
+    item_timestamp: Option<String>,
+) -> CommandResult<()> {
+    set_dashboard_notification_checked_inner(&state, &notification_id, checked, item_timestamp)
+}
+
+pub(crate) fn set_dashboard_notification_checked_inner(
+    services: &AppServices,
+    notification_id: &str,
+    checked: bool,
+    item_timestamp: Option<String>,
+) -> CommandResult<()> {
+    services.local_settings.set_dashboard_notification_checked(
+        notification_id,
+        checked,
+        item_timestamp.as_deref(),
+    )
+}
+
 const AGENTS_MD_LIMIT_BYTES: usize = 200 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]

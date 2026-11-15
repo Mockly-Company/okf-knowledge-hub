@@ -1,4 +1,4 @@
-import { RefreshCw } from "lucide-react";
+import { Check, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
@@ -19,6 +19,7 @@ import type { DashboardNotificationItem, DashboardTaskItem } from "./model";
 const NOTIFICATION_PAGE_SIZE = 10;
 const FILTER_ME_VALUE = "__me__";
 const FILTER_ALL_VALUE = "*";
+const EMPTY_NOTIFICATIONS: DashboardNotificationItem[] = [];
 
 const STATUS_META: Record<BoardStatus, { label: string; tone: StatusTone }> = {
   backlog: { label: "Backlog", tone: "neutral" },
@@ -27,6 +28,11 @@ const STATUS_META: Record<BoardStatus, { label: string; tone: StatusTone }> = {
   in_review: { label: "In review", tone: "warning" },
   done: { label: "Done", tone: "success" },
 };
+
+function companionHtmlName(docPath: string): string {
+  const fileName = docPath.replace(/\\/g, "/").split("/").pop() ?? docPath;
+  return fileName.replace(/\.md$/i, ".html");
+}
 
 function formatAssigneeOptionLabel(login: string, name?: string | null): string {
   const trimmedName = name?.trim();
@@ -56,6 +62,7 @@ function PersonalDashboardInner({
   const dashboardContext = useOptionalPersonalDashboard();
   const activeProject = useOptionalActiveProject();
   const [page, setPage] = useState(0);
+  const [unreadOnlyNotifications, setUnreadOnlyNotifications] = useState(false);
   const [actionError, setActionError] = useState<{
     title: string;
     message: string;
@@ -71,12 +78,19 @@ function PersonalDashboardInner({
 
   const viewerLogin = dashboard?.viewerLogin ?? null;
   const tasks = dashboard?.tasks ?? [];
-  const notifications = dashboard?.notifications ?? [];
+  const notifications = dashboard?.notifications ?? EMPTY_NOTIFICATIONS;
+  const visibleNotifications = useMemo(
+    () =>
+      unreadOnlyNotifications
+        ? notifications.filter((item) => !item.isChecked)
+        : notifications,
+    [notifications, unreadOnlyNotifications],
+  );
   const failures = dashboard?.failures ?? [];
 
   const totalPages = Math.max(
     1,
-    Math.ceil(notifications.length / NOTIFICATION_PAGE_SIZE),
+    Math.ceil(visibleNotifications.length / NOTIFICATION_PAGE_SIZE),
   );
   useEffect(() => {
     setPage((prev) => Math.min(prev, totalPages - 1));
@@ -84,11 +98,11 @@ function PersonalDashboardInner({
   const safePage = Math.min(page, totalPages - 1);
   const pagedNotifications = useMemo(
     () =>
-      notifications.slice(
+      visibleNotifications.slice(
         safePage * NOTIFICATION_PAGE_SIZE,
         (safePage + 1) * NOTIFICATION_PAGE_SIZE,
       ),
-    [notifications, safePage],
+    [visibleNotifications, safePage],
   );
 
   const otherAssignees = useMemo(() => {
@@ -175,18 +189,45 @@ function PersonalDashboardInner({
     navigate?.(`/project?issue=${task.issueNumber}`);
   };
 
-  const handleOpenNotification = async (item: DashboardNotificationItem) => {
+  const handleOpenNotification = async (
+    item: DashboardNotificationItem,
+    preferredView?: "html" | "markdown",
+  ) => {
     const ok = await switchWorkspaceIfNeeded(item.workspaceId);
     if (!ok) return;
     if (item.kind === "open_pr") {
-      navigate?.(`/documents?pr=${item.prNumber}`);
+      const base = `/documents?pr=${item.prNumber}`;
+      navigate?.(preferredView ? `${base}&view=${preferredView}` : base);
       return;
     }
     if (item.primaryDocPath) {
-      navigate?.(`/documents?doc=${encodeURIComponent(item.primaryDocPath)}`);
+      const base = `/documents?doc=${encodeURIComponent(item.primaryDocPath)}`;
+      navigate?.(preferredView ? `${base}&view=${preferredView}` : base);
       return;
     }
     navigate?.("/documents");
+  };
+
+  const handleToggleNotificationChecked = async (
+    item: DashboardNotificationItem,
+  ) => {
+    if (!dashboardContext) return;
+    setActionError(null);
+    try {
+      await dashboardContext.toggleNotificationChecked(
+        item.id,
+        !item.isChecked,
+        item.timestamp,
+      );
+    } catch (err) {
+      setActionError({
+        title: "확인 상태 변경 실패",
+        message:
+          err instanceof Error
+            ? err.message
+            : "알림 확인 상태를 저장하지 못했습니다.",
+      });
+    }
   };
 
   return (
@@ -446,16 +487,31 @@ function PersonalDashboardInner({
             aria-labelledby="dashboard-docs-heading"
             className="grid min-w-0 content-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)]"
           >
-            <div className="flex items-center justify-between gap-[var(--space-2)]">
+            <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
               <h2
                 id="dashboard-docs-heading"
                 className="m-0 text-[length:var(--font-h2-size)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]"
               >
                 기획 · 화면명세 변경 알림
               </h2>
-              <StatusBadge tone="neutral">
-                {`${notifications.length}건`}
-              </StatusBadge>
+              <div className="flex items-center gap-[var(--space-2)]">
+                <UnstyledButton
+                  type="button"
+                  aria-pressed={unreadOnlyNotifications}
+                  onClick={() => {
+                    setUnreadOnlyNotifications((prev) => !prev);
+                    setPage(0);
+                  }}
+                  className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-canvas)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-default)] transition-colors hover:border-[var(--color-border-hover)] aria-[pressed=true]:border-[var(--color-primary)] aria-[pressed=true]:bg-[var(--color-primary-soft)] aria-[pressed=true]:text-[var(--color-primary-text)]"
+                >
+                  미확인만 보기
+                </UnstyledButton>
+                <StatusBadge tone="neutral">
+                  {unreadOnlyNotifications
+                    ? `${visibleNotifications.length} / ${notifications.length}건`
+                    : `${notifications.length}건`}
+                </StatusBadge>
+              </div>
             </div>
 
             {isLoading && !dashboard ? (
@@ -466,15 +522,36 @@ function PersonalDashboardInner({
               <p className="m-0 py-[var(--space-4)] text-[var(--color-text-muted)]">
                 최근 변경된 기획·화면명세가 없습니다.
               </p>
+            ) : visibleNotifications.length === 0 ? (
+              <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)] py-[var(--space-4)]">
+                <p className="m-0 text-[var(--color-text-muted)]">
+                  미확인 변경 알림이 없습니다.
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setUnreadOnlyNotifications(false);
+                    setPage(0);
+                  }}
+                >
+                  전체 알림 보기
+                </Button>
+              </div>
             ) : (
               <>
                 <ul className="m-0 grid list-none gap-[var(--space-2)] p-0">
                   {pagedNotifications.map((item) => (
-                    <li key={item.id}>
+                    <li
+                      key={item.id}
+                      className="grid rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] transition-colors hover:border-[var(--color-border-hover)]"
+                    >
                       <UnstyledButton
                         type="button"
                         onClick={() => void handleOpenNotification(item)}
-                        className="grid w-full min-w-0 gap-[var(--space-1)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-left transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]"
+                        className={`grid w-full min-w-0 gap-[var(--space-1)] rounded-[var(--radius-md)] p-[var(--space-3)] text-left transition-colors hover:bg-[var(--color-surface-hover)]${
+                          item.isChecked ? " opacity-75" : ""
+                        }`}
                       >
                         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
                           <span className="text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-muted)]">
@@ -485,8 +562,14 @@ function PersonalDashboardInner({
                           >
                             {item.kind === "open_pr" ? "검토 대기" : "반영 완료"}
                           </StatusBadge>
+                          {item.hasCompanionHtml ? (
+                            <StatusBadge tone="neutral">HTML · MD</StatusBadge>
+                          ) : null}
                           {item.isNew ? (
                             <StatusBadge tone="info">NEW</StatusBadge>
+                          ) : null}
+                          {item.isChecked ? (
+                            <StatusBadge tone="neutral">확인됨</StatusBadge>
                           ) : null}
                         </div>
                         <strong className="truncate font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
@@ -499,10 +582,48 @@ function PersonalDashboardInner({
                         ) : null}
                         <span className="truncate text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                           {item.primaryDocPath
-                            ? `@${item.authorLogin} · ${item.primaryDocPath}`
+                            ? item.hasCompanionHtml
+                              ? `@${item.authorLogin} · ${item.primaryDocPath} · ${companionHtmlName(item.primaryDocPath)}`
+                              : `@${item.authorLogin} · ${item.primaryDocPath}`
                             : `@${item.authorLogin}`}
                         </span>
                       </UnstyledButton>
+                      <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)] border-t border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)]">
+                        <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+                          {item.primaryDocPath && item.hasCompanionHtml ? (
+                            <>
+                              <UnstyledButton
+                                type="button"
+                                onClick={() => void handleOpenNotification(item, "html")}
+                                className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]"
+                              >
+                                사람용 보기 (.html)
+                              </UnstyledButton>
+                              <UnstyledButton
+                                type="button"
+                                onClick={() => void handleOpenNotification(item, "markdown")}
+                                className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-default)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)]"
+                              >
+                                원문 (.md)
+                              </UnstyledButton>
+                            </>
+                          ) : null}
+                        </div>
+                        <UnstyledButton
+                          type="button"
+                          aria-pressed={Boolean(item.isChecked)}
+                          aria-label={
+                            item.isChecked
+                              ? `PR #${item.prNumber} 확인됨 (클릭하여 해제)`
+                              : `PR #${item.prNumber} 확인 체크`
+                          }
+                          onClick={() => void handleToggleNotificationChecked(item)}
+                          className="inline-flex items-center gap-[var(--space-1)] rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-default)] transition-colors hover:border-[var(--color-border-hover)] hover:bg-[var(--color-surface-hover)] aria-[pressed=true]:border-[var(--color-success)] aria-[pressed=true]:bg-[var(--color-success-soft)] aria-[pressed=true]:text-[var(--color-success)]"
+                        >
+                          <Check className="size-3.5" aria-hidden="true" />
+                          {item.isChecked ? "확인됨" : "확인"}
+                        </UnstyledButton>
+                      </div>
                     </li>
                   ))}
                 </ul>

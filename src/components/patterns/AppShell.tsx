@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { PanelLeftOpen } from "lucide-react";
+import { AppErrorBoundary } from "@/app/AppErrorBoundary";
 import { Button, IconButton } from "@/components/ui/button";
 import {
   StatusFeedback,
@@ -28,6 +29,7 @@ export function AppShell({
   aiGateway?: AiGateway;
 }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const { account } = useWorkspaceConnection();
   const activeProject = useOptionalActiveProject();
   const currentDocsQuery = useCurrentDocsRepositoryQuery(
@@ -142,7 +144,13 @@ export function AppShell({
             </StatusFeedbackDescription>
           </StatusFeedback>
         ) : null}
-        <Outlet />
+        <AppErrorBoundary
+          resetKey={`${location.pathname}${location.search}`}
+          onGoHome={() => navigate("/home", { replace: true })}
+          onGoDocuments={() => navigate("/documents", { replace: true })}
+        >
+          <Outlet />
+        </AppErrorBoundary>
       </main>
     </div>
   );
