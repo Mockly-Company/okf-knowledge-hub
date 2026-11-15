@@ -132,5 +132,31 @@ describe("AppFallbackScreen", () => {
       />,
     );
     expect(screen.getByText("Failed while opening task-12")).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail={'error path=/Users/alice/secret.ts and ref=token:/Users/alice/id_rsa and "/private/var/tmp/crash.log"'}
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.queryByText(/\/Users\/alice/)).toBeNull();
+    expect(screen.queryByText(/\/private\/var/)).toBeNull();
+    expect(
+      screen.getByText(
+        "error path=[REDACTED] and ref=token:[REDACTED] and \"[REDACTED]\"",
+      ),
+    ).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="Remote resource missing at https://github.com/users/octocat"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(
+      screen.getByText("Remote resource missing at https://github.com/users/octocat"),
+    ).toBeVisible();
   });
 });

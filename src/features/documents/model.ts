@@ -385,5 +385,9 @@ export interface ApproveAndMergeDocsPrResponse {
 }
 
 export function normalizeDocumentPath(path: string): string {
-  return path.trim().replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+  return path
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^(?:\/+|\.\/)+/, "")
+    .replace(/\/+$/, "");
 }

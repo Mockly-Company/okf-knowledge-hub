@@ -88,7 +88,10 @@ export function DocumentReader({
   const [tab, setTab] = useState<ContextTab>("overview");
   const normalizedDocPath = normalizeDocumentPath(document.summary.path);
   const matchingPreferredView =
-    preferredViewTargetPath === normalizedDocPath ? preferredViewMode : null;
+    preferredViewTargetPath !== null &&
+    preferredViewTargetPath.toLowerCase() === normalizedDocPath.toLowerCase()
+      ? preferredViewMode
+      : null;
   const [viewMode, setViewMode] = useState<"html" | "markdown">(() =>
     matchingPreferredView === "markdown"
       ? "markdown"

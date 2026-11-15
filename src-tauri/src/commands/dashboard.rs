@@ -266,8 +266,8 @@ pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<Stri
         let file_name = norm_lower.rsplit('/').next().unwrap_or(norm_lower);
         crate::documents::reader::is_reserved_html_path(norm_lower, file_name)
     };
-    let companion_html_for_md = |md_path: &str, pool: &[&PullRequestChangedFile]| -> bool {
-        let norm_lower = md_path.replace('\\', "/").to_ascii_lowercase();
+    let companion_html_for_md = |md_path: &str, pool: &[String]| -> bool {
+        let norm_lower = md_path.to_ascii_lowercase();
         if is_auxiliary_md(&norm_lower) {
             return false;
         }
@@ -277,61 +277,64 @@ pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<Stri
             .rsplit_once('.')
             .filter(|(_, ext)| ext.eq_ignore_ascii_case("md"))
             .map(|(stem, _)| format!("{stem}.html"));
-        pool.iter().any(|f| {
-            let norm = f.filename.replace('\\', "/");
+        pool.iter().any(|norm| {
             expected_html
                 .as_deref()
                 .is_some_and(|exp| norm.eq_ignore_ascii_case(exp))
         })
     };
 
-    let active: Vec<&PullRequestChangedFile> =
-        files.iter().filter(|f| f.status != "removed").collect();
-    let pool: Vec<&PullRequestChangedFile> = if active.is_empty() {
-        files.iter().collect()
+    let active: Vec<String> = files
+        .iter()
+        .filter(|f| f.status != "removed")
+        .map(|f| crate::documents::reader::normalize_portable_doc_path(&f.filename))
+        .filter(|p| !p.is_empty())
+        .collect();
+    let pool: Vec<String> = if active.is_empty() {
+        files
+            .iter()
+            .map(|f| crate::documents::reader::normalize_portable_doc_path(&f.filename))
+            .filter(|p| !p.is_empty())
+            .collect()
     } else {
         active
     };
 
     if let Some((md_path, has_html)) = pool
         .iter()
-        .find_map(|f| {
-            let norm = f.filename.replace('\\', "/");
+        .find_map(|norm| {
             let lower = norm.to_ascii_lowercase();
             (lower.starts_with("docs/")
                 && lower.ends_with(".md")
                 && !is_auxiliary_md(&lower)
-                && companion_html_for_md(&norm, &pool))
-            .then_some((norm, true))
+                && companion_html_for_md(norm, &pool))
+            .then_some((norm.clone(), true))
         })
         .or_else(|| {
-            pool.iter().find_map(|f| {
-                let norm = f.filename.replace('\\', "/");
+            pool.iter().find_map(|norm| {
                 let lower = norm.to_ascii_lowercase();
                 (lower.starts_with("docs/") && lower.ends_with(".md") && !is_auxiliary_md(&lower))
-                    .then_some((norm, false))
+                    .then_some((norm.clone(), false))
             })
         })
         .or_else(|| {
-            pool.iter().find_map(|f| {
-                let norm = f.filename.replace('\\', "/");
+            pool.iter().find_map(|norm| {
                 let lower = norm.to_ascii_lowercase();
                 (lower.ends_with(".md")
                     && !is_auxiliary_md(&lower)
-                    && companion_html_for_md(&norm, &pool))
-                .then_some((norm, true))
+                    && companion_html_for_md(norm, &pool))
+                .then_some((norm.clone(), true))
             })
         })
         .or_else(|| {
-            pool.iter().find_map(|f| {
-                let norm = f.filename.replace('\\', "/");
+            pool.iter().find_map(|norm| {
                 let lower = norm.to_ascii_lowercase();
-                (lower.ends_with(".md") && !is_auxiliary_md(&lower)).then_some((norm, false))
+                (lower.ends_with(".md") && !is_auxiliary_md(&lower))
+                    .then_some((norm.clone(), false))
             })
         })
         .or_else(|| {
-            pool.iter().find_map(|f| {
-                let norm = f.filename.replace('\\', "/");
+            pool.iter().find_map(|norm| {
                 let lower = norm.to_ascii_lowercase();
                 (lower.starts_with("docs/")
                     && lower.ends_with(".html")
@@ -347,18 +350,33 @@ pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<Stri
         .or_else(|| {
             // 본문 기획 문서 변경이 없고 `docs/log.md`·`docs/index.md` 같은 보조 문서만 바뀐 PR이라도
             // `docs/` 하위 마크다운 문서는 최후 폴백으로 연결한다(단, 동반 `.html`은 없음).
-            pool.iter().find_map(|f| {
-                let norm = f.filename.replace('\\', "/");
+            pool.iter().find_map(|norm| {
                 let lower = norm.to_ascii_lowercase();
-                (lower.starts_with("docs/") && lower.ends_with(".md")).then_some((norm, false))
+                (lower.starts_with("docs/") && lower.ends_with(".md"))
+                    .then_some((norm.clone(), false))
             })
         })
         .or_else(|| {
-            pool.iter().find_map(|f| {
-                let norm = f.filename.replace('\\', "/");
+            pool.iter().find_map(|norm| {
                 norm.to_ascii_lowercase()
                     .ends_with(".md")
-                    .then_some((norm, false))
+                    .then_some((norm.clone(), false))
+            })
+        })
+        .or_else(|| {
+            // `docs/index.html` 등 보조 `.html`만 단독 변경된 PR이라도 `docs/` 하위라면
+            // 리뷰 패널(`S17`)과 동일하게 대응 `.md` 폴백(`has_html = false`)으로 연결한다.
+            pool.iter().find_map(|norm| {
+                let lower = norm.to_ascii_lowercase();
+                (lower.starts_with("docs/")
+                    && lower.ends_with(".html")
+                    && !crate::documents::reader::is_okf_path(norm))
+                .then(|| {
+                    norm.rsplit_once('.')
+                        .filter(|(_, ext)| ext.eq_ignore_ascii_case("html"))
+                        .map(|(stem, _)| (format!("{stem}.md"), false))
+                })
+                .flatten()
             })
         })
     {
@@ -1540,6 +1558,34 @@ mod tests {
         let (primary, has_html) = super::pick_primary_doc(&files);
         assert_eq!(primary.as_deref(), Some("docs/log.md"));
         assert!(!has_html);
+    }
+
+    #[test]
+    fn pick_primary_doc_normalizes_dot_slash_and_falls_back_for_standalone_auxiliary_html() {
+        let paired_with_prefix = vec![
+            PullRequestChangedFile {
+                filename: "./docs/specs/screen-spec.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/specs/screen-spec.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+        ];
+        let (primary, has_html) = super::pick_primary_doc(&paired_with_prefix);
+        assert_eq!(primary.as_deref(), Some("docs/specs/screen-spec.md"));
+        assert!(has_html);
+
+        let auxiliary_html_only = vec![PullRequestChangedFile {
+            filename: "/./docs/index.html".into(),
+            status: "modified".into(),
+            previous_filename: None,
+        }];
+        let (aux_primary, aux_has_html) = super::pick_primary_doc(&auxiliary_html_only);
+        assert_eq!(aux_primary.as_deref(), Some("docs/index.md"));
+        assert!(!aux_has_html);
     }
 
     #[test]

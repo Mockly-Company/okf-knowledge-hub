@@ -1,5 +1,5 @@
 import { FilePlus2, FileText, Search } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { StatusFeedback } from "@/components/ui/status-feedback";
@@ -15,11 +15,12 @@ import {
   type DocumentGroup,
   type DocumentGroupMode,
 } from "../document-taxonomy";
-import type {
-  AppError,
-  DocumentSummary,
-  IndexStatus,
-  SearchResult,
+import {
+  normalizeDocumentPath,
+  type AppError,
+  type DocumentSummary,
+  type IndexStatus,
+  type SearchResult,
 } from "../model";
 import type { AsyncStatus } from "../documents-reducer";
 
@@ -90,9 +91,29 @@ export function DocumentSearch({
   const [categoryFilter, setCategoryFilter] =
     useState<DocumentCategoryFilter>("all");
 
-  const documentByPath = useMemo(
-    () => new Map(documents.map((doc) => [doc.path, doc])),
-    [documents],
+  const documentByPath = useMemo(() => {
+    const exact = new Map<string, DocumentSummary>();
+    const lower = new Map<string, DocumentSummary>();
+    for (const doc of documents) {
+      const normalized = normalizeDocumentPath(doc.path);
+      exact.set(normalized, doc);
+      const lowerKey = normalized.toLowerCase();
+      if (!lower.has(lowerKey)) {
+        lower.set(lowerKey, doc);
+      }
+    }
+    return { exact, lower };
+  }, [documents]);
+
+  const lookupDocumentByPath = useCallback(
+    (path: string): DocumentSummary | undefined => {
+      const normalized = normalizeDocumentPath(path);
+      return (
+        documentByPath.exact.get(normalized) ??
+        documentByPath.lower.get(normalized.toLowerCase())
+      );
+    },
+    [documentByPath],
   );
 
   const isSearching = query.trim().length > 0;
@@ -134,14 +155,15 @@ export function DocumentSearch({
       categoryFilter === "all"
         ? results
         : results.filter((result) => {
-            const summary = documentByPath.get(result.path);
+            const summary = lookupDocumentByPath(result.path);
+            const normalizedPath = normalizeDocumentPath(result.path);
             const docRef = summary ?? {
-              path: result.path,
-              fileName: result.path.split("/").pop() ?? result.path,
+              path: normalizedPath,
+              fileName: normalizedPath.split("/").pop() ?? normalizedPath,
             };
             return classifyDocumentCategory(docRef) === categoryFilter;
           }),
-    [categoryFilter, documentByPath, results],
+    [categoryFilter, lookupDocumentByPath, results],
   );
   const groupedDocuments: DocumentGroup[] = useMemo(() => {
     if (groupMode === "domain") {
@@ -171,10 +193,11 @@ export function DocumentSearch({
 
   const renderResultRow = (item: DocumentSummary | SearchResult) => {
     const result = "matchField" in item ? item : null;
-    const summary = "matchField" in item ? documentByPath.get(item.path) : item;
+    const summary = "matchField" in item ? lookupDocumentByPath(item.path) : item;
+    const normalizedPath = normalizeDocumentPath(item.path);
     const docRef = summary ?? {
-      path: item.path,
-      fileName: item.path.split("/").pop() ?? item.path,
+      path: normalizedPath,
+      fileName: normalizedPath.split("/").pop() ?? normalizedPath,
     };
     const category = classifyDocumentCategory(docRef);
     const hasCompanionHtml =

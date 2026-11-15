@@ -43,9 +43,7 @@ const RESERVED_STEMS = new Set(["index", "log", "readme", "agents"]);
 const RESERVED_EXTENSIONS = new Set(["md", "html"]);
 
 function normalizePortablePath(path: string): string {
-  return normalizeDocumentPath(path)
-    .replace(/^(?:\/+|\.\/)+/, "")
-    .replace(/\/+$/, "");
+  return normalizeDocumentPath(path);
 }
 
 function isReservedDocumentFileName(fileName: string): boolean {

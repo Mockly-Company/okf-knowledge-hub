@@ -360,16 +360,24 @@ fn is_reserved_stem(file_name: &str, ext: &str) -> bool {
         )
 }
 
-fn is_reserved_path_for_ext(relative_path: &str, file_name: &str, ext: &str) -> bool {
-    let replaced = relative_path.trim().replace('\\', "/");
+pub(crate) fn normalize_portable_doc_path(path: &str) -> String {
+    let replaced = path.trim().replace('\\', "/");
     let mut clean = replaced.trim_start_matches('/');
     while let Some(stripped) = clean.strip_prefix("./") {
         clean = stripped.trim_start_matches('/');
     }
+    clean.trim_end_matches('/').to_owned()
+}
+
+pub(crate) fn is_okf_path(relative_path: &str) -> bool {
+    let clean = normalize_portable_doc_path(relative_path);
     clean
         .get(..5)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(".okf/"))
-        || is_reserved_stem(file_name, ext)
+}
+
+fn is_reserved_path_for_ext(relative_path: &str, file_name: &str, ext: &str) -> bool {
+    is_okf_path(relative_path) || is_reserved_stem(file_name, ext)
 }
 
 pub(crate) fn is_reserved_markdown_path(relative_path: &str, file_name: &str) -> bool {

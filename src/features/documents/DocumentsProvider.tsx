@@ -73,7 +73,7 @@ function containsPrivateValue(value: string): boolean {
   return (
     secretMarkers.some((marker) => normalized.includes(marker)) ||
     secretTokenPrefixPattern.test(value) ||
-    /(?:^|\s)\/(?:users|home|private|var|tmp)\//i.test(value) ||
+    /(?:^|[^a-z0-9])\/(?:users|home|private|var|tmp)\//i.test(value) ||
     /[a-z]:\\/i.test(value) ||
     normalized.includes("search.sqlite3") ||
     normalized.includes("document-search")
@@ -215,7 +215,8 @@ export function DocumentsProvider({
       if (!current) return null;
       if (
         expectedPath &&
-        current.path !== normalizeDocumentPath(expectedPath)
+        current.path.toLowerCase() !==
+          normalizeDocumentPath(expectedPath).toLowerCase()
       ) {
         return current;
       }

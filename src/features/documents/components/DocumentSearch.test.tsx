@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -477,5 +477,51 @@ describe("DocumentSearch", () => {
 
     await user.click(screen.getByRole("button", { name: "필터 초기화" }));
     expect(screen.getByRole("button", { name: /Dashboard 화면명세서/ })).toBeVisible();
+  });
+
+  it("matches search result summaries across path format differences during category filtering", async () => {
+    const user = userEvent.setup();
+    const docs: DocumentSummary[] = [
+      {
+        path: "docs/domains/documents/custom.md",
+        fileName: "custom.md",
+        title: "Documents 커스텀 설계",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Screen Spec",
+        domain: "documents",
+        hasCompanionHtml: true,
+        modifiedAtUnixMs: 1,
+        size: 100,
+      },
+    ];
+    const hitWithDifferentPathFormat: SearchResult = {
+      path: "./DOCS\\domains\\documents\\custom.md",
+      title: "Documents 커스텀 설계",
+      snippet: "커스텀 [[레이아웃]] 내용",
+      matchField: "body",
+      matchText: "레이아웃",
+    };
+
+    render(
+      <DocumentSearch
+        query="레이아웃"
+        documents={docs}
+        results={[hitWithDifferentPathFormat]}
+        searchStatus="ready"
+        searchError={null}
+        indexStatus={{ status: "ready" }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "화면명세" }));
+    const row = screen.getByRole("button", { name: /Documents 커스텀 설계/ });
+    expect(row).toBeVisible();
+    expect(within(row).getByText("화면명세")).toBeVisible();
+    expect(within(row).getByText("HTML")).toBeVisible();
   });
 });
