@@ -13,32 +13,27 @@ export interface AppFallbackScreenProps {
   onRetry?: () => void;
 }
 
-const RESIDUAL_SECRET_MARKERS = [
-  "access_token",
-  "refresh_token",
-  "id_token",
-  "auth_token",
-  "device_code",
-  "client_secret",
-  "private_key",
-  "authorization",
-  "password",
-  "passwd",
-  "secret",
-  "api_key",
-  "api-key",
-  "apikey",
-  "x-api-key",
-  "bearer ",
-  "token",
+const RESIDUAL_SECRET_PATTERNS: RegExp[] = [
+  // Unredacted key=value or key: value secret assignments (e.g., unclosed quote or empty/weird delimiter)
+  /\b(?:access_token|refresh_token|id_token|auth_token|device_code|client_secret|private_key|authorization|x-api-key|api[-_]?key|password|passwd|secret|token)\s*[:=]/i,
+  // Unredacted auth scheme credentials
+  /\b(?:bearer|basic)\s+\S+/i,
+  // Unredacted URL userinfo
+  /[a-z][a-z0-9+.-]*:\/\/[^/\s@]+@/i,
+  // Known secret token prefixes or JWT headers
+  /(?:^|[^a-z0-9])(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-|sk-|eyJ[a-z0-9_-]+\.[a-z0-9_-]+)/i,
+  // PEM private key blocks
+  /-----begin [a-z0-9 ]*private key/i,
 ];
-
-const RESIDUAL_PREFIX_PATTERN =
-  /(?:^|[^a-z0-9])(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-|sk-)/i;
 
 function maskSensitivePatterns(input: string): string {
   return (
     input
+      // PEM private key blocks
+      .replace(
+        /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/gi,
+        "[REDACTED]",
+      )
       // URL userinfo credentials: https://user:token@github.com/...
       .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1[REDACTED]@")
       // Windows local paths: C:\Users\alice\..., C:/Users/alice/..., path=D:/..., file:///C:/...
@@ -53,8 +48,8 @@ function maskSensitivePatterns(input: string): string {
         /\b(authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?[^\s,;'"`)]+/gi,
         "$1[REDACTED]",
       )
-      // Standalone Bearer scheme: Bearer xxx
-      .replace(/\b(bearer\s+)[^\s,;'"`)]+/gi, "$1[REDACTED]")
+      // Standalone Bearer / Basic scheme: Bearer xxx / Basic xxx
+      .replace(/\b((?:bearer|basic)\s+)[^\s,;'"`)]+/gi, "$1[REDACTED]")
       // Known token prefixes (GitHub classic/OAuth/App/PAT, GitLab, Slack, OpenAI/API sk-, JWT)
       .replace(
         /(^|[^a-z0-9])(?:gh[pousr]_[a-z0-9_]*|github_pat_[a-z0-9_]*|glpat-[a-z0-9_-]*|xox[baprs]-[a-z0-9-]*|sk-[a-z0-9_-]+|eyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+)/gi,
@@ -75,16 +70,13 @@ export function sanitizeDetail(detail: string | null | undefined): string | null
 
   const masked = maskSensitivePatterns(trimmed);
   const remainder = masked
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)\[REDACTED\]@/gi, "$1")
     .replace(
-      /(?:\b[a-z0-9_-]+\s*[:=]\s*|\b(?:bearer|authorization)\s*:?\s*)?\[REDACTED\]/gi,
+      /(?:\b[a-z0-9_-]+\s*[:=]\s*|\b(?:bearer|basic|authorization)\s*:?\s*)?\[REDACTED\]/gi,
       "",
-    )
-    .toLowerCase();
+    );
 
-  if (
-    RESIDUAL_SECRET_MARKERS.some((marker) => remainder.includes(marker)) ||
-    RESIDUAL_PREFIX_PATTERN.test(remainder)
-  ) {
+  if (RESIDUAL_SECRET_PATTERNS.some((pattern) => pattern.test(remainder))) {
     return null;
   }
   return masked;

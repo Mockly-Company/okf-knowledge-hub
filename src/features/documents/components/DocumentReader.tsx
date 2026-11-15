@@ -108,7 +108,7 @@ export function DocumentReader({
   const readerRef = useRef<HTMLElement>(null);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const navigationTargetRef = useRef<string | null>(null);
-  const pendingHeadingIdRef = useRef<string | null>(null);
+  const pendingHeadingRef = useRef<{ docPath: string; id: string } | null>(null);
   const lastDocumentPathRef = useRef(normalizedDocPath);
   const hadCompanionHtmlRef = useRef(hasCompanionNow);
   useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
@@ -117,6 +117,9 @@ export function DocumentReader({
     const companionAdded = !hadCompanionHtmlRef.current && hasCompanionNow;
     lastDocumentPathRef.current = normalizedDocPath;
     hadCompanionHtmlRef.current = hasCompanionNow;
+    if (pathChanged) {
+      pendingHeadingRef.current = null;
+    }
 
     if (state.selectedVersion !== null) {
       return;
@@ -164,11 +167,23 @@ export function DocumentReader({
   const hasCompanionHtml = hasCompanionNow && state.selectedVersion === null;
   const effectiveView = hasCompanionHtml ? viewMode : "markdown";
   useEffect(() => {
+    const currentDocKey = normalizedDocPath.toLowerCase();
+    const pending = pendingHeadingRef.current;
+    if (!pending) return;
+    if (pending.docPath !== currentDocKey) {
+      pendingHeadingRef.current = null;
+      return;
+    }
     if (effectiveView !== "markdown") return;
-    const pendingId = pendingHeadingIdRef.current;
-    if (!pendingId) return;
-    pendingHeadingIdRef.current = null;
+    const pendingId = pending.id;
     const frame = window.requestAnimationFrame(() => {
+      if (
+        pendingHeadingRef.current?.docPath === currentDocKey &&
+        pendingHeadingRef.current?.id === pendingId
+      ) {
+        pendingHeadingRef.current = null;
+      }
+      if (lastDocumentPathRef.current.toLowerCase() !== currentDocKey) return;
       const reader = readerRef.current;
       const target = reader?.ownerDocument.getElementById(pendingId);
       if (!target || !reader?.contains(target)) return;
@@ -233,7 +248,7 @@ export function DocumentReader({
       header?.focus({ preventScroll: true });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [document.summary.path, state.selectedSearchMatch]);
+  }, [normalizedDocPath, state.selectedSearchMatch]);
 
   const contextContents = <>
     <div className="document-reader__context-header">
@@ -257,7 +272,10 @@ export function DocumentReader({
         }
         onRequestHeading={(id) => {
           if (effectiveView === "html") {
-            pendingHeadingIdRef.current = id;
+            pendingHeadingRef.current = {
+              docPath: normalizedDocPath.toLowerCase(),
+              id,
+            };
             setViewMode("markdown");
           }
         }}

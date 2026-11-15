@@ -143,11 +143,48 @@ describe("AppFallbackScreen", () => {
     rerender(
       <AppFallbackScreen
         kind="error"
-        detail="Token leak rawUnprefixedSecret999"
+        detail={'Auth failed: client_secret="unclosedRawSecret999'}
         onGoHome={onGoHome}
       />,
     );
-    expect(screen.queryByText(/rawUnprefixedSecret999/)).toBeNull();
+    expect(screen.queryByText(/unclosedRawSecret999/)).toBeNull();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail={"-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----"}
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.queryByText(/abc123/)).toBeNull();
+    expect(screen.getByText("[REDACTED]")).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="password reset required"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.getByText("password reset required")).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="missing authorization header"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.getByText("missing authorization header")).toBeVisible();
+
+    rerender(
+      <AppFallbackScreen
+        kind="error"
+        detail="session token expired"
+        onGoHome={onGoHome}
+      />,
+    );
+    expect(screen.getByText("session token expired")).toBeVisible();
 
     rerender(
       <AppFallbackScreen

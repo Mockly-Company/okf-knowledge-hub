@@ -591,6 +591,12 @@ describe("DocumentReader", () => {
     expect(normalizeDocumentPath("/./.OKF//./templates//human-view.html/")).toBe(
       ".OKF/templates/human-view.html",
     );
+    expect(normalizeDocumentPath("docs/../.okf/x.md")).toBe(".okf/x.md");
+    expect(normalizeDocumentPath("docs/domains/../product/concept-v2.md")).toBe(
+      "docs/product/concept-v2.md",
+    );
+    expect(normalizeDocumentPath("../../../outside.md")).toBe("");
+    expect(normalizeDocumentPath("docs/../../outside.md")).toBe("");
 
     const user = userEvent.setup();
     const gateway = new FakeDocumentsGateway();
@@ -698,5 +704,91 @@ describe("DocumentReader", () => {
       "true",
     );
     expect(screen.getByText("유지될 원문입니다.")).toBeVisible();
+  });
+
+  it("clears pending TOC heading scroll when switching to another document before animation frame fires", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeDocumentsGateway();
+    const queuedFrames: FrameRequestCallback[] = [];
+    const cancelSpy = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      queuedFrames.push(cb);
+      return queuedFrames.length;
+    });
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+
+    try {
+      const docA: DocumentContent = {
+        ...invalidFrontmatterDocument(),
+        summary: {
+          ...invalidFrontmatterDocument().summary,
+          path: "docs/product/roadmap-v2.md",
+          fileName: "roadmap-v2.md",
+          title: "문서 A",
+        },
+        markdown: "# 문서 A\n\n## 공통 섹션\n\nA 본문",
+        tableOfContents: [
+          { level: 1, title: "문서 A", id: "doc-a" },
+          { level: 2, title: "공통 섹션", id: "shared-section" },
+        ],
+        companionHtml: {
+          path: "docs/product/roadmap-v2.html",
+          html: "<!doctype html><html><body><h1>A HTML</h1></body></html>",
+          modifiedAtUnixMs: 1_721_000_000_500,
+        },
+        htmlSyncStatus: "in_sync",
+      };
+
+      const docB: DocumentContent = {
+        ...invalidFrontmatterDocument(),
+        summary: {
+          ...invalidFrontmatterDocument().summary,
+          path: "docs/product/other.md",
+          fileName: "other.md",
+          title: "문서 B",
+        },
+        markdown: "# 문서 B\n\n## 공통 섹션\n\nB 본문",
+        tableOfContents: [
+          { level: 1, title: "문서 B", id: "doc-b" },
+          { level: 2, title: "공통 섹션", id: "shared-section" },
+        ],
+        companionHtml: null,
+        htmlSyncStatus: "not_applicable",
+      };
+
+      const wrap = (doc: DocumentContent) => (
+        <TestQueryProvider>
+          <PreferencesProvider repository={new FakePreferencesRepository()}>
+            <MemoryRouter>
+              <DocumentsProvider gateway={gateway}>
+                <DocumentReader document={doc} />
+              </DocumentsProvider>
+            </MemoryRouter>
+          </PreferencesProvider>
+        </TestQueryProvider>
+      );
+
+      const view = render(wrap(docA));
+      expect(await screen.findByRole("tab", { name: "사람용 보기 (.html)" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+
+      const tocNav = screen.getByRole("navigation", { name: "목차" });
+      await user.click(within(tocNav).getByRole("link", { name: "공통 섹션" }));
+      expect(queuedFrames.length).toBeGreaterThan(0);
+
+      view.rerender(wrap(docB));
+      expect(await screen.findByText("B 본문")).toBeVisible();
+
+      for (const frameCallback of queuedFrames) {
+        frameCallback(performance.now());
+      }
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      scroll.mockRestore();
+      rafSpy.mockRestore();
+      cancelSpy.mockRestore();
+    }
   });
 });

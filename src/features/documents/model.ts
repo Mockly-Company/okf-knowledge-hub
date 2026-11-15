@@ -385,10 +385,17 @@ export interface ApproveAndMergeDocsPrResponse {
 }
 
 export function normalizeDocumentPath(path: string): string {
-  return path
-    .trim()
-    .replace(/\\/g, "/")
-    .split("/")
-    .filter((segment) => segment.length > 0 && segment !== ".")
-    .join("/");
+  const segments: string[] = [];
+  for (const segment of path.trim().replace(/\\/g, "/").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        return "";
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join("/");
 }

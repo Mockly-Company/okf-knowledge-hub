@@ -3957,5 +3957,18 @@ mod tests {
             ),
             ".OKF/templates/human-view.html"
         );
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path("docs/../.okf/x.md"),
+            ".okf/x.md"
+        );
+        assert!(crate::documents::reader::is_okf_path("docs/../.okf/x.md"));
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path("../../../outside.md"),
+            ""
+        );
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path("docs/../../outside.md"),
+            ""
+        );
     }
 }

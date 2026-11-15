@@ -427,12 +427,21 @@ pub(crate) fn resolve_companion_html(
 }
 
 pub(crate) fn normalize_portable_doc_path(path: &str) -> String {
-    path.trim()
-        .replace('\\', "/")
-        .split('/')
-        .filter(|segment| !segment.is_empty() && *segment != ".")
-        .collect::<Vec<_>>()
-        .join("/")
+    let normalized = path.trim().replace('\\', "/");
+    let mut segments = Vec::new();
+    for segment in normalized.split('/') {
+        if segment.is_empty() || segment == "." {
+            continue;
+        }
+        if segment == ".." {
+            if segments.pop().is_none() {
+                return String::new();
+            }
+            continue;
+        }
+        segments.push(segment);
+    }
+    segments.join("/")
 }
 
 pub(crate) fn is_okf_path(relative_path: &str) -> bool {
