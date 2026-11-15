@@ -524,4 +524,100 @@ describe("DocumentSearch", () => {
     expect(within(row).getByText("화면명세")).toBeVisible();
     expect(within(row).getByText("HTML")).toBeVisible();
   });
+
+  it("keeps stable normalized row keys across path formats and avoids duplicate key warnings", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const docs: DocumentSummary[] = [
+        {
+          path: "docs/domains/documents/custom.md",
+          fileName: "custom.md",
+          title: "Documents 커스텀 설계",
+          documentId: null,
+          frontmatterStatus: { status: "valid" },
+          docType: "Screen Spec",
+          domain: "documents",
+          modifiedAtUnixMs: 1,
+          size: 100,
+        },
+      ];
+
+      const view = render(
+        <DocumentSearch
+          query="custom"
+          documents={docs}
+          results={[]}
+          searchStatus="loading"
+          searchError={null}
+          indexStatus={{ status: "ready" }}
+          onQueryChange={() => {}}
+          onSelectDocument={() => {}}
+          onSelectResult={() => {}}
+          onRetry={() => {}}
+        />,
+      );
+
+      const firstListItem = screen.getByRole("listitem");
+
+      view.rerender(
+        <DocumentSearch
+          query="custom"
+          documents={docs}
+          results={[
+            {
+              path: "./DOCS\\domains\\documents\\custom.md",
+              title: "Documents 커스텀 설계",
+              snippet: "[[custom]] 첫 번째 매치",
+              matchField: "body",
+              matchText: "custom",
+            },
+          ]}
+          searchStatus="ready"
+          searchError={null}
+          indexStatus={{ status: "ready" }}
+          onQueryChange={() => {}}
+          onSelectDocument={() => {}}
+          onSelectResult={() => {}}
+          onRetry={() => {}}
+        />,
+      );
+
+      expect(screen.getByRole("listitem")).toBe(firstListItem);
+
+      view.rerender(
+        <DocumentSearch
+          query="custom"
+          documents={docs}
+          results={[
+            {
+              path: "docs/domains/documents/custom.md",
+              title: "Documents 커스텀 설계",
+              snippet: "[[custom]] 첫 번째 매치",
+              matchField: "body",
+              matchText: "custom",
+            },
+            {
+              path: "./DOCS\\domains\\documents\\custom.md",
+              title: "Documents 커스텀 설계",
+              snippet: "[[custom]] 두 번째 매치",
+              matchField: "title",
+              matchText: "custom",
+            },
+          ]}
+          searchStatus="ready"
+          searchError={null}
+          indexStatus={{ status: "ready" }}
+          onQueryChange={() => {}}
+          onSelectDocument={() => {}}
+          onSelectResult={() => {}}
+          onRetry={() => {}}
+        />,
+      );
+
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
+      expect(consoleError).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
 });

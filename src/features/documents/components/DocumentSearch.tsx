@@ -191,10 +191,13 @@ export function DocumentSearch({
         ? []
         : titleAndPathMatches;
 
-  const renderResultRow = (item: DocumentSummary | SearchResult) => {
+  const renderResultRow = (
+    item: DocumentSummary | SearchResult,
+    normalizedPath: string,
+    rowKey: string,
+  ) => {
     const result = "matchField" in item ? item : null;
     const summary = "matchField" in item ? lookupDocumentByPath(item.path) : item;
-    const normalizedPath = normalizeDocumentPath(item.path);
     const docRef = summary ?? {
       path: normalizedPath,
       fileName: normalizedPath.split("/").pop() ?? normalizedPath,
@@ -204,7 +207,7 @@ export function DocumentSearch({
       Boolean(summary?.hasCompanionHtml) && !isAuxiliaryDocument(docRef);
 
     return (
-      <li key={item.path}>
+      <li key={rowKey}>
         <UnstyledButton
           className="document-search__result-row"
           onClick={() =>
@@ -235,6 +238,20 @@ export function DocumentSearch({
         </UnstyledButton>
       </li>
     );
+  };
+
+  const renderResultRows = (
+    rowItems: readonly (DocumentSummary | SearchResult)[],
+  ) => {
+    const keyCounts = new Map<string, number>();
+    return rowItems.map((item) => {
+      const normalizedPath = normalizeDocumentPath(item.path);
+      const baseKey = normalizedPath.toLowerCase();
+      const seen = (keyCounts.get(baseKey) ?? 0) + 1;
+      keyCounts.set(baseKey, seen);
+      const rowKey = seen === 1 ? baseKey : `${baseKey}#${seen}`;
+      return renderResultRow(item, normalizedPath, rowKey);
+    });
   };
 
   return (
@@ -376,13 +393,13 @@ export function DocumentSearch({
                       </Button>
                     ) : null}
                   </div>
-                  <ul>{group.documents.map((doc) => renderResultRow(doc))}</ul>
+                  <ul>{renderResultRows(group.documents)}</ul>
                 </section>
               );
             })}
           </div>
         ) : (
-          <ul>{items.map((item) => renderResultRow(item))}</ul>
+          <ul>{renderResultRows(items)}</ul>
         )}
       </div>
     </section>

@@ -87,6 +87,7 @@ export function DocumentReader({
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
   const normalizedDocPath = normalizeDocumentPath(document.summary.path);
+  const hasCompanionNow = Boolean(document.companionHtml);
   const matchingPreferredView =
     preferredViewTargetPath !== null &&
     preferredViewTargetPath.toLowerCase() === normalizedDocPath.toLowerCase()
@@ -95,7 +96,7 @@ export function DocumentReader({
   const [viewMode, setViewMode] = useState<"html" | "markdown">(() =>
     matchingPreferredView === "markdown"
       ? "markdown"
-      : document.companionHtml
+      : hasCompanionNow
         ? "html"
         : "markdown",
   );
@@ -109,11 +110,10 @@ export function DocumentReader({
   const navigationTargetRef = useRef<string | null>(null);
   const pendingHeadingIdRef = useRef<string | null>(null);
   const lastDocumentPathRef = useRef(normalizedDocPath);
-  const hadCompanionHtmlRef = useRef(Boolean(document.companionHtml));
+  const hadCompanionHtmlRef = useRef(hasCompanionNow);
   useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
   useEffect(() => {
     const pathChanged = lastDocumentPathRef.current !== normalizedDocPath;
-    const hasCompanionNow = Boolean(document.companionHtml);
     const companionAdded = !hadCompanionHtmlRef.current && hasCompanionNow;
     lastDocumentPathRef.current = normalizedDocPath;
     hadCompanionHtmlRef.current = hasCompanionNow;
@@ -141,7 +141,7 @@ export function DocumentReader({
     }
   }, [
     clearPreferredViewMode,
-    document.companionHtml,
+    hasCompanionNow,
     matchingPreferredView,
     normalizedDocPath,
     state.selectedVersion,
@@ -161,7 +161,7 @@ export function DocumentReader({
       setNavigateTarget("/ai");
     }
   };
-  const hasCompanionHtml = Boolean(document.companionHtml) && state.selectedVersion === null;
+  const hasCompanionHtml = hasCompanionNow && state.selectedVersion === null;
   const effectiveView = hasCompanionHtml ? viewMode : "markdown";
   useEffect(() => {
     if (effectiveView !== "markdown") return;

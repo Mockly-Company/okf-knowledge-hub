@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { DocumentsProvider, useDocuments } from "../DocumentsProvider";
+import { DocumentReader } from "./DocumentReader";
 import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
@@ -641,5 +642,55 @@ describe("DocumentReader", () => {
       await screen.findByRole("tab", { name: "원문 (.md)" }),
     ).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByText("원문 마크다운입니다.")).toBeVisible();
+  });
+
+  it("keeps markdown selection stable when companionHtml object identity changes on rerender", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeDocumentsGateway();
+    const baseDoc: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      summary: {
+        ...invalidFrontmatterDocument().summary,
+        path: "docs/product/roadmap-v2.md",
+        fileName: "roadmap-v2.md",
+        title: "OkHub v2 컨셉",
+      },
+      markdown: "# OkHub v2 컨셉\n\n유지될 원문입니다.",
+      companionHtml: {
+        path: "docs/product/roadmap-v2.html",
+        html: "<!doctype html><html><body><h1>컨셉 HTML</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync",
+    };
+
+    const wrap = (doc: DocumentContent) => (
+      <TestQueryProvider>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+          <MemoryRouter>
+            <DocumentsProvider gateway={gateway}>
+              <DocumentReader document={doc} />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>
+    );
+
+    const view = render(wrap(baseDoc));
+    const mdTab = await screen.findByRole("tab", { name: "원문 (.md)" });
+    await user.click(mdTab);
+    expect(mdTab).toHaveAttribute("aria-selected", "true");
+
+    const clonedCompanionDoc: DocumentContent = {
+      ...baseDoc,
+      companionHtml: { ...baseDoc.companionHtml! },
+    };
+    view.rerender(wrap(clonedCompanionDoc));
+
+    expect(screen.getByRole("tab", { name: "원문 (.md)" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("유지될 원문입니다.")).toBeVisible();
   });
 });
