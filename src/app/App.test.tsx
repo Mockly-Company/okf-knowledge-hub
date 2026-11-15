@@ -8,6 +8,7 @@ import { FakeProjectBoardGateway } from "@/test/FakeProjectBoardGateway";
 import { FakeTerminalRenderer } from "@/test/FakeTerminalRenderer";
 import { FakeWorkspaceConnectionGateway } from "@/test/FakeWorkspaceConnectionGateway";
 import { FakePreferencesRepository } from "@/test/FakePreferencesRepository";
+import { FakePersonalDashboardGateway } from "@/test/FakePersonalDashboardGateway";
 import { App } from "./App";
 
 const { initializeMermaid, renderMermaid } = vi.hoisted(() => ({
@@ -415,5 +416,43 @@ describe("App", () => {
       await screen.findByRole("tab", { name: /Antigravity/ }),
     ).toBeInTheDocument();
     expect(aiGateway.terminalStops).toEqual([]);
+  });
+
+  it("lands on 내 대시보드 (/home) by default when at least one workspace is connected", async () => {
+    const workspaceGateway = FakeWorkspaceConnectionGateway.connected();
+    const docsRepoGateway = new FakeDocsRepositoryGateway();
+    await docsRepoGateway.createProjectWorkspace(
+      {
+        id: "PVT_alpha",
+        owner: "Mockly-Company",
+        number: 1,
+        title: "Alpha Project",
+        scope: "organization",
+      },
+      { repositoryId: "R_alpha", fullName: "Mockly-Company/alpha-docs" },
+    );
+    await docsRepoGateway.setActiveWorkspace("PVT_alpha");
+
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "hyeeun",
+    });
+
+    render(
+      <App
+        workspaceGateway={workspaceGateway}
+        projectBoardGateway={FakeProjectBoardGateway.empty()}
+        docsRepositoryGateway={docsRepoGateway}
+        documentsGateway={new FakeDocumentsGateway()}
+        personalDashboardGateway={dashboardGateway}
+        preferencesRepository={new FakePreferencesRepository()}
+      />,
+    );
+
+    const dashboardLink = await screen.findByRole("link", {
+      name: /내 대시보드/,
+    });
+    await waitFor(() =>
+      expect(dashboardLink).toHaveAttribute("aria-current", "page"),
+    );
   });
 });

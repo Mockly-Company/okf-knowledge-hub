@@ -70,6 +70,16 @@ pub struct DraftPullRequest {
     pub is_draft: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardAssignee {
+    pub login: String,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DocsPullRequestSummary {
@@ -85,6 +95,7 @@ pub struct DocsPullRequestSummary {
     pub is_draft: bool,
     pub mergeable: Option<bool>,
     pub updated_at: String,
+    pub merged_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -123,6 +134,9 @@ pub struct GithubProjectItem {
     /// 본문 `이전 단계: #N`에서 읽은 선행 이슈 번호. 없으면 `None`.
     pub depends_on: Option<u64>,
     pub sub_issues: Vec<GithubSubIssue>,
+    pub assignees: Vec<BoardAssignee>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 impl GithubProjectItem {

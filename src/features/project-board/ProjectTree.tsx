@@ -2,6 +2,7 @@ import { useId, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { IssueAssigneeBadge } from "@/features/project-board/IssueAssigneeBadge";
 import {
   layerName,
   statusName,
@@ -250,6 +251,7 @@ function LeafRow({
         />
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
         <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
+        <IssueAssigneeBadge assignees={issue.assignees} />
         {issue.kind ? (
           <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
             {issue.kind}
@@ -419,6 +421,7 @@ function FlowNodeCard({
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
         <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
         <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
+        <IssueAssigneeBadge assignees={issue.assignees} />
         <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
           {layerName(issue.layer)}
           {issue.kind ? ` · ${issue.kind}` : null}
@@ -710,6 +713,7 @@ function EpicCard({
           </h2>
           <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
           <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
+          <IssueAssigneeBadge assignees={issue.assignees} />
           {issue.kind ? (
             <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
               {issue.kind}
@@ -817,6 +821,7 @@ export function ProjectTree({
                     {statusName(issue.status)}
                   </StatusBadge>
                   <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
+                  <IssueAssigneeBadge assignees={issue.assignees} />
                   <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
                     {layerName(issue.layer)}
                   </span>

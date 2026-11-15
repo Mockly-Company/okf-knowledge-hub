@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { dialogOverlayClassName } from "@/components/ui/dialog-styles";
 import { Select } from "@/components/ui/select";
+import { IssueAssigneeBadge } from "./IssueAssigneeBadge";
 import {
   BOARD_LAYERS,
   BOARD_STATUSES,
@@ -74,6 +75,10 @@ export function ProjectIssueDrawer({
   const isDeveloperBacklog =
     effectiveLayer === "backend" || effectiveLayer === "frontend";
   const githubHref = issue ? safeHref(issue.url) : null;
+  const effectiveAssignees =
+    detail?.assignees !== undefined
+      ? detail.assignees
+      : (issue?.assignees ?? []);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -107,6 +112,16 @@ export function ProjectIssueDrawer({
                         {`선행 #${readiness.waitingOn} 대기`}
                       </StatusBadge>
                     ) : null}
+                    {effectiveAssignees.length === 0 ? (
+                      <IssueAssigneeBadge assignees={[]} />
+                    ) : (
+                      effectiveAssignees.map((assignee) => (
+                        <IssueAssigneeBadge
+                          key={assignee.login}
+                          assignees={[assignee]}
+                        />
+                      ))
+                    )}
                   </div>
                   <DialogTitle className="break-words">
                     {issue.title}

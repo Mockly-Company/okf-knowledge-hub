@@ -65,7 +65,24 @@ async fn load_board_with_migration(
     Ok(legacy)
 }
 
-fn is_empty_board(board: &ProjectBoard) -> bool {
+pub(crate) async fn load_board_from_cache_root(
+    cache_root: &std::path::Path,
+    project: &GithubProjectRef,
+) -> CommandResult<ProjectBoard> {
+    load_board_with_migration(cache_root, project).await
+}
+
+pub(crate) fn resolve_project_board_cache_root(
+    app: &AppHandle,
+) -> CommandResult<std::path::PathBuf> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|_| settings_unavailable_error())?
+        .join(PROJECT_BOARD_CACHE_DIR_NAME))
+}
+
+pub(crate) fn is_empty_board(board: &ProjectBoard) -> bool {
     board.issues.is_empty() && board.fetched_at.is_none()
 }
 
@@ -549,6 +566,9 @@ fn build_tree(
                 // 자식이 없으면 잘릴 게 없으므로 리프로 둔다.
                 // 예산 절단으로 통째로 빠진 자식이 있으면 부모에도 표시한다.
                 children_truncated: (cut && !item.sub_issues.is_empty()) || child_cut,
+                assignees: item.assignees.clone(),
+                created_at: item.created_at.clone(),
+                updated_at: item.updated_at.clone(),
             }],
             child_cut,
         ),
@@ -785,12 +805,11 @@ pub async fn sync_project_board(
     sync_project_board_inner(&app, &state).await
 }
 
-async fn sync_project_board_inner(
-    app: &AppHandle,
-    state: &AppServices,
+pub(crate) async fn sync_project_board_with_github(
+    cache_root: std::path::PathBuf,
+    github: std::sync::Arc<crate::github::GithubService>,
+    project: GithubProjectRef,
 ) -> CommandResult<ProjectBoard> {
-    let project = load_linked_project(state)?;
-    let github = state.github.clone().ok_or_else(service_unavailable)?;
     let (first_scope, fallback_scope) = resolve_project_scope(&project);
     let (items, truncated, dropped) = match github
         .list_project_items(first_scope, &project.owner, project.number)
@@ -830,16 +849,29 @@ async fn sync_project_board_inner(
         skipped,
         truncated: board_truncated,
     };
-    let cache_root = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| settings_unavailable_error())?
-        .join(PROJECT_BOARD_CACHE_DIR_NAME);
     // 캐시 저장은 best-effort다. 실패해도 갓 가져온 보드는 반환한다.
     if let Err(error) = save_cached_board(&cache_root, &board_cache_key(&project), &board).await {
         eprintln!("warning: failed to persist project board cache: {error:?}");
     }
     Ok(board)
+}
+
+pub(crate) async fn sync_project_board_for_ref(
+    app: &AppHandle,
+    state: &AppServices,
+    project: &GithubProjectRef,
+) -> CommandResult<ProjectBoard> {
+    let github = state.github.clone().ok_or_else(service_unavailable)?;
+    let cache_root = resolve_project_board_cache_root(app)?;
+    sync_project_board_with_github(cache_root, github, project.clone()).await
+}
+
+async fn sync_project_board_inner(
+    app: &AppHandle,
+    state: &AppServices,
+) -> CommandResult<ProjectBoard> {
+    let project = load_linked_project(state)?;
+    sync_project_board_for_ref(app, state, &project).await
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -888,6 +920,9 @@ pub struct ProjectBoardIssueDetail {
     pub linked_pull_requests: Vec<BoardLinkedPullRequest>,
     pub recommended_working_dir: Option<String>,
     pub priority_options: Vec<String>,
+    pub assignees: Vec<crate::github::model::BoardAssignee>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -1147,6 +1182,9 @@ pub async fn get_project_board_issue_detail(
         linked_pull_requests,
         recommended_working_dir: pack.recommended_working_dir,
         priority_options,
+        assignees: target.assignees.clone(),
+        created_at: target.created_at.clone(),
+        updated_at: target.updated_at.clone(),
     })
 }
 
@@ -1414,6 +1452,9 @@ mod tests {
                     url: (*sub).to_owned(),
                 })
                 .collect(),
+            assignees: Vec::new(),
+            created_at: None,
+            updated_at: None,
         }
     }
 
@@ -1655,5 +1696,37 @@ mod tests {
                 .as_deref(),
             Some("Acme-Co/alpha-web")
         );
+    }
+
+    #[test]
+    fn collect_issue_trees_preserves_assignees_timestamps_and_deserializes_legacy_cache() {
+        let mut item = sample_item(42, "https://github.com/Acme-Org/acme-web/issues/42", &[]);
+        item.assignees = vec![crate::github::model::BoardAssignee {
+            login: "YoonDongGeun".into(),
+            avatar_url: Some("https://avatars.githubusercontent.com/u/1?v=4".into()),
+            name: Some("DongGeun Yoon".into()),
+        }];
+        item.created_at = Some("2026-11-10T01:00:00Z".into());
+        item.updated_at = Some("2026-11-14T02:00:00Z".into());
+
+        let mut skipped = 0u32;
+        let mut truncated = false;
+        let issues = collect_issue_trees(&[item], &mut skipped, &mut truncated);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].assignees.len(), 1);
+        assert_eq!(issues[0].assignees[0].login, "YoonDongGeun");
+        assert_eq!(
+            issues[0].created_at.as_deref(),
+            Some("2026-11-10T01:00:00Z")
+        );
+        assert_eq!(
+            issues[0].updated_at.as_deref(),
+            Some("2026-11-14T02:00:00Z")
+        );
+
+        let legacy_json = r#"{"project":{"id":"PVT_1","owner":"Acme-Org","number":1,"title":"Acme","scope":"organization"},"issues":[{"number":1,"title":"old","url":"https://github.com/Acme-Org/acme-web/issues/1","layer":"frontend","status":"backlog","children":[]}],"fetchedAt":"2026-11-01T00:00:00Z","incomplete":false,"skippedItems":0,"unmappedItems":0,"truncated":false}"#;
+        let board: crate::project_board::ProjectBoard = serde_json::from_str(legacy_json).unwrap();
+        assert!(board.issues[0].assignees.is_empty());
+        assert_eq!(board.issues[0].created_at, None);
     }
 }

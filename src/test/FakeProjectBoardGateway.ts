@@ -256,6 +256,9 @@ export class FakeProjectBoardGateway implements ProjectBoardGateway {
       linkedPullRequests: [],
       recommendedWorkingDir: null,
       priorityOptions: ["P0", "P1", "P2"],
+      assignees: found.assignees ?? [],
+      createdAt: found.createdAt ?? null,
+      updatedAt: found.updatedAt ?? null,
     };
   }
 

@@ -1,11 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useInRouterContext, useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Link,
+  useInRouterContext,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectOption } from "@/components/ui/select";
 import {
   Dialog,
   DialogBody,
@@ -49,7 +55,16 @@ import {
   safeHref,
 } from "@/features/project-board/boardUtils";
 import { ProjectTree } from "@/features/project-board/ProjectTree";
+import { IssueAssigneeBadge } from "@/features/project-board/IssueAssigneeBadge";
+import {
+  ASSIGNEE_FILTER_ALL,
+  ASSIGNEE_FILTER_UNASSIGNED,
+  collectBoardAssignees,
+  filterTreeByAssignee,
+  matchesAssigneeFilter,
+} from "@/features/project-board/assigneeFilter";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
+import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import {
   sharedDocsRepositoryGateway,
@@ -274,6 +289,41 @@ function RouterRedirect({
   return null;
 }
 
+function RouterIssueDeepLinkSync({
+  ready,
+  issues,
+  onSelectIssueNumber,
+}: {
+  ready: boolean;
+  issues: ReadonlyArray<BoardIssue>;
+  onSelectIssueNumber: (issueNumber: number, fallback: BoardIssue | null) => void;
+}) {
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  useEffect(() => {
+    if (!ready) return;
+    const raw = searchParams.get("issue");
+    if (!raw) return;
+    const issueNumber = Number(raw);
+    if (Number.isInteger(issueNumber) && issueNumber > 0) {
+      const found = findIssueByNumber(issues, issueNumber);
+      if (found) {
+        onSelectIssueNumber(issueNumber, found);
+      }
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("issue");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [ready, issues, searchParams, setSearchParams, onSelectIssueNumber]);
+
+  return null;
+}
+
 function patchIssueInTree(
   issues: BoardIssue[],
   issueNumber: number,
@@ -366,6 +416,7 @@ function BoardColumn({
                         {`선행 #${readiness.waitingOn} 대기`}
                       </StatusBadge>
                     ) : null}
+                    <IssueAssigneeBadge assignees={issue.assignees} />
                   </div>
                   <Button
                     type="button"
@@ -416,6 +467,11 @@ export function ProjectPage({
 }) {
   const inRouterContext = useInRouterContext();
   const activeProject = useOptionalActiveProject();
+  const workspaceConnection = useOptionalWorkspaceConnection();
+  const viewerLogin =
+    workspaceConnection?.account.status === "authenticated"
+      ? workspaceConnection.account.user.login
+      : null;
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
   const isStandaloneDocsWorkspace =
     activeWorkspace !== null && activeWorkspace.project === null;
@@ -479,6 +535,9 @@ export function ProjectPage({
   const [view, setView] = useState<BoardView>("tree");
   const [hideDone, setHideDone] = useState(true);
   const [readyOnly, setReadyOnly] = useState(false);
+  const [assigneeFilter, setAssigneeFilter] = useState<string>(
+    ASSIGNEE_FILTER_ALL,
+  );
   const [attachDialogOpen, setAttachDialogOpen] = useState(false);
   const [attachingProject, setAttachingProject] = useState(false);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -490,11 +549,17 @@ export function ProjectPage({
   const [navigateTarget, setNavigateTarget] = useState<string | null>(null);
 
   const workspaceResetKey = `${activeWorkspace?.id ?? "none"}::${queryProjectId ?? "none"}`;
+  const prevWorkspaceResetKeyRef = useRef(workspaceResetKey);
   useEffect(() => {
+    if (prevWorkspaceResetKeyRef.current === workspaceResetKey) {
+      return;
+    }
+    prevWorkspaceResetKeyRef.current = workspaceResetKey;
     setFilter("all");
     setView("tree");
     setHideDone(true);
     setReadyOnly(false);
+    setAssigneeFilter(ASSIGNEE_FILTER_ALL);
     setAttachDialogOpen(false);
     setAttachingProject(false);
     setAttachError(null);
@@ -644,6 +709,32 @@ export function ProjectPage({
     [board],
   );
 
+  const assigneeOptions = useMemo(() => {
+    const discovered = collectBoardAssignees(board?.issues ?? [], viewerLogin);
+    if (
+      assigneeFilter !== ASSIGNEE_FILTER_ALL &&
+      assigneeFilter !== ASSIGNEE_FILTER_UNASSIGNED &&
+      !discovered.some(
+        (member) => member.login.toLowerCase() === assigneeFilter.toLowerCase(),
+      )
+    ) {
+      return [...discovered, { login: assigneeFilter }];
+    }
+    return discovered;
+  }, [board?.issues, viewerLogin, assigneeFilter]);
+
+  const isMineOnly =
+    viewerLogin !== null &&
+    assigneeFilter.trim().toLowerCase() === viewerLogin.trim().toLowerCase();
+
+  const handleDeepLinkIssueSelect = useCallback(
+    (issueNumber: number, fallback: BoardIssue | null) => {
+      setSelectedIssueFallback(fallback);
+      setSelectedIssueNumber(issueNumber);
+    },
+    [],
+  );
+
   const visibleLayers = useMemo(
     () =>
       BOARD_LAYERS.filter(
@@ -651,17 +742,26 @@ export function ProjectPage({
       ),
     [filter],
   );
-  const { grouped: groupedIssues, capped: walkCapped } = useMemo(() => {
+  const {
+    grouped: groupedIssues,
+    capped: walkCapped,
+    totalCount: groupedIssueCount,
+  } = useMemo(() => {
     // 계층 뷰에서는 레이어 셀이 렌더되지 않으므로 집계를 건너뛴다.
     // (walkIssues 전체 순회 + emitted Set 비용을 아낀다.)
     if (view !== "layers" || !board) {
-      return { grouped: new Map<string, BoardIssue[]>(), capped: false };
+      return {
+        grouped: new Map<string, BoardIssue[]>(),
+        capped: false,
+        totalCount: 0,
+      };
     }
     const grouped = new Map<string, BoardIssue[]>();
     // 다이아몬드 공유 자식은 여러 부모 경로에서 walk되므로 같은 셀에
     // 두 번 펼치지 않도록 레이어:상태:URL 기준으로 한 번만 집계한다.
     const emitted = new Set<string>();
     const budget = { count: 0, capped: false };
+    let totalCount = 0;
     for (const issue of walkIssues(board?.issues ?? [], 0, new Set<string>(), budget)) {
       if (hideDone && issue.status === "done") {
         continue;
@@ -673,11 +773,20 @@ export function ProjectPage({
       ) {
         continue;
       }
+      if (
+        assigneeFilter !== ASSIGNEE_FILTER_ALL &&
+        !matchesAssigneeFilter(issue, assigneeFilter)
+      ) {
+        continue;
+      }
       const dedupeKey = `${issue.layer}:${issue.status}:${issueKey(issue)}`;
       if (emitted.has(dedupeKey)) {
         continue;
       }
       emitted.add(dedupeKey);
+      if (filter === "all" || issue.layer === filter) {
+        totalCount += 1;
+      }
       const key = `${issue.layer}:${issue.status}`;
       const list = grouped.get(key);
       if (list) {
@@ -686,8 +795,8 @@ export function ProjectPage({
         grouped.set(key, [issue]);
       }
     }
-    return { grouped, capped: budget.capped };
-  }, [board, hideDone, readyOnly, readinessIndex, view]);
+    return { grouped, capped: budget.capped, totalCount };
+  }, [assigneeFilter, board, filter, hideDone, readyOnly, readinessIndex, view]);
 
   // 트리 펼침 상태(useState)가 무관한 렌더에 리셋되지 않도록 메모한다.
   const { issues: treeIssues, capped: treeCapped } = useMemo(() => {
@@ -704,8 +813,11 @@ export function ProjectPage({
     if (view === "tree" && readyOnly && readinessIndex) {
       baseIssues = filterTreeToReadyOnly(baseIssues, readinessIndex);
     }
+    if (view === "tree" && assigneeFilter !== ASSIGNEE_FILTER_ALL) {
+      baseIssues = filterTreeByAssignee(baseIssues, assigneeFilter);
+    }
     return { issues: baseIssues, capped };
-  }, [hideDone, readyOnly, readinessIndex, board, view]);
+  }, [assigneeFilter, hideDone, readyOnly, readinessIndex, board, view]);
 
   return (
     <section
@@ -919,6 +1031,44 @@ export function ProjectPage({
                   />
                   시작 가능만 보기
                 </label>
+                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                  <Checkbox
+                    disabled={viewerLogin === null}
+                    checked={isMineOnly}
+                    onChange={(event) =>
+                      setAssigneeFilter(
+                        event.target.checked && viewerLogin
+                          ? viewerLogin
+                          : ASSIGNEE_FILTER_ALL,
+                      )
+                    }
+                  />
+                  내 담당만 보기
+                </label>
+                <div className="min-w-[10.5rem]">
+                  <Select
+                    aria-label="담당자 필터"
+                    value={assigneeFilter}
+                    onValueChange={setAssigneeFilter}
+                  >
+                    <SelectOption value={ASSIGNEE_FILTER_ALL}>
+                      전체 담당자
+                    </SelectOption>
+                    {assigneeOptions.map((member) => (
+                      <SelectOption key={member.login} value={member.login}>
+                        {member.login.toLowerCase() ===
+                        viewerLogin?.toLowerCase()
+                          ? `@${member.login} (나)`
+                          : member.name
+                            ? `@${member.login} (${member.name})`
+                            : `@${member.login}`}
+                      </SelectOption>
+                    ))}
+                    <SelectOption value={ASSIGNEE_FILTER_UNASSIGNED}>
+                      미배정
+                    </SelectOption>
+                  </Select>
+                </div>
               </div>
             </div>
           ) : null}
@@ -966,6 +1116,36 @@ export function ProjectPage({
                   ) : (
                     <a href="#/ai">AI에서 시작하기</a>
                   )}
+                </Button>
+              </section>
+            ) : assigneeFilter !== ASSIGNEE_FILTER_ALL &&
+              ((view === "tree" && treeIssues.length === 0) ||
+                (view === "layers" && groupedIssueCount === 0)) ? (
+              <section
+                aria-label="필터 결과 없음"
+                className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
+              >
+                <p className="m-0 text-[var(--color-text-muted)]">
+                  {filter === "all" &&
+                  !readyOnly &&
+                  assigneeFilter !== ASSIGNEE_FILTER_UNASSIGNED
+                    ? hideDone
+                      ? "선택한 담당자에게 배정된 열린 작업이 없습니다."
+                      : "선택한 담당자에게 배정된 작업이 없습니다."
+                    : hideDone
+                      ? "선택한 필터 조건에 맞는 열린 작업이 없습니다."
+                      : "선택한 필터 조건에 맞는 작업이 없습니다."}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setFilter("all");
+                    setReadyOnly(false);
+                    setAssigneeFilter(ASSIGNEE_FILTER_ALL);
+                  }}
+                >
+                  필터 초기화
                 </Button>
               </section>
             ) : view === "tree" ? (
@@ -1058,6 +1238,14 @@ export function ProjectPage({
         }
         onStartWithAi={handleStartWithAi}
       />
+
+      {inRouterContext ? (
+        <RouterIssueDeepLinkSync
+          ready={!isUnlinked && board !== null && !boardLoading && !isFetchingBoard && !isSyncingBoard}
+          issues={board?.issues ?? EMPTY_ISSUES}
+          onSelectIssueNumber={handleDeepLinkIssueSelect}
+        />
+      ) : null}
 
       {inRouterContext && navigateTarget ? (
         <RouterRedirect

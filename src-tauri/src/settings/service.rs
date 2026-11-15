@@ -13,6 +13,7 @@ pub const CURRENT_WORKSPACE_PATH_KEY: &str = "current-workspace-path";
 pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
 pub const AI_CLI_COMMAND_KEY: &str = "ai-cli-command";
+pub const DASHBOARD_LAST_SEEN_AT_KEY: &str = "dashboard-last-seen-at";
 pub const LINKED_PROJECTS_KEY: &str = "linked-projects";
 pub const ACTIVE_PROJECT_KEY: &str = "active-project-id";
 pub const PROJECT_DOCS_REPOSITORIES_KEY: &str = "project-docs-repositories";
@@ -818,6 +819,21 @@ impl LocalSettingsService {
 
     pub fn set_ai_cli_command(&self, cli_command: &str) -> Result<(), AppError> {
         self.store.write(AI_CLI_COMMAND_KEY, cli_command)
+    }
+
+    pub fn load_dashboard_last_seen_at(&self) -> Result<Option<String>, AppError> {
+        Ok(self
+            .store
+            .read(DASHBOARD_LAST_SEEN_AT_KEY)?
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty()))
+    }
+
+    pub fn set_dashboard_last_seen_at(&self, timestamp: Option<&str>) -> Result<(), AppError> {
+        match timestamp.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(trimmed) => self.store.write(DASHBOARD_LAST_SEEN_AT_KEY, trimmed),
+            None => self.store.remove(DASHBOARD_LAST_SEEN_AT_KEY),
+        }
     }
 
     pub fn load_pending_initialization(
@@ -1926,5 +1942,24 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn dashboard_last_seen_at_persists_trims_and_clears() {
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store.clone());
+
+        assert_eq!(service.load_dashboard_last_seen_at().unwrap(), None);
+
+        service
+            .set_dashboard_last_seen_at(Some("  2026-11-14T08:00:00Z  "))
+            .unwrap();
+        assert_eq!(
+            service.load_dashboard_last_seen_at().unwrap().as_deref(),
+            Some("2026-11-14T08:00:00Z")
+        );
+
+        service.set_dashboard_last_seen_at(None).unwrap();
+        assert_eq!(service.load_dashboard_last_seen_at().unwrap(), None);
     }
 }

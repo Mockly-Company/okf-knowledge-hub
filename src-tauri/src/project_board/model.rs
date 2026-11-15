@@ -108,6 +108,12 @@ pub struct BoardIssue {
     /// 구 캐시에는 없어 `false`로 읽힌다.
     #[serde(default)]
     pub children_truncated: bool,
+    #[serde(default)]
+    pub assignees: Vec<crate::github::model::BoardAssignee>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -293,10 +299,16 @@ mod tests {
                     kind: Some("작업".to_owned()),
                     depends_on: Some(12),
                     children_truncated: false,
+                    assignees: Vec::new(),
+                    created_at: None,
+                    updated_at: None,
                 }],
                 kind: Some("기능".to_owned()),
                 depends_on: None,
                 children_truncated: false,
+                assignees: Vec::new(),
+                created_at: None,
+                updated_at: None,
             }],
             fetched_at: Some("2026-10-25T12:00:00+09:00".to_owned()),
             skipped: 0,
