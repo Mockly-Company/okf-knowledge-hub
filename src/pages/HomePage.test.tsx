@@ -1181,4 +1181,96 @@ describe("HomePage (내 대시보드)", () => {
     });
     expect(screen.getByText("NEW")).toBeVisible();
   });
+
+  it("does not optimistically mark a newer cached notification checked when checking from a stale filter cache", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      fetchedAt: "2026-11-14T06:00:00Z",
+      lastSeenAt: "2026-11-14T01:00:00Z",
+      assigneeOptions: [
+        { login: "YoonDongGeun", name: "윤동근" },
+        { login: "alice", name: "앨리스" },
+      ],
+      notifications: [
+        makeNotification({
+          id: "open_pr:PVT_alpha:51",
+          kind: "open_pr",
+          prNumber: 51,
+          title: "낙관적 업데이트 타임스탬프 비교 검증",
+          primaryDocPath: "docs/domains/dashboard/screen-spec.md",
+          hasCompanionHtml: true,
+          timestamp: "2026-11-14T02:00:00Z",
+          isNew: true,
+          isChecked: false,
+        }),
+      ],
+    });
+
+    renderDashboard({
+      dashboardGateway,
+      docsRepoGateway,
+    });
+
+    await screen.findByRole("button", { name: "PR #51 확인 체크" });
+
+    // 다른 필터("전체") 캐시에만 더 최신 타임스탬프가 반영된 상태에서 다시 "내 작업" 캐시로 복귀
+    dashboardGateway.notifications = dashboardGateway.notifications.map((item) => ({
+      ...item,
+      timestamp: "2026-11-14T05:00:00Z",
+      isNew: true,
+      isChecked: false,
+    }));
+    await user.click(screen.getByRole("combobox", { name: "담당자 보기" }));
+    await user.click(await screen.findByRole("option", { name: "전체" }));
+    await waitFor(() => {
+      expect(dashboardGateway.calls.some((call) => call.assigneeFilter === "*")).toBe(true);
+    });
+    await screen.findByRole("button", { name: "PR #51 확인 체크" });
+
+    await user.click(screen.getByRole("combobox", { name: "담당자 보기" }));
+    await user.click(await screen.findByRole("option", { name: /내 작업/ }));
+
+    // invalidateQueries refetch가 진행 중인 동안 낙관적 캐시 갱신만 확인하기 위해 refetch를 지연시킴
+    const originalGetDashboard = dashboardGateway.getPersonalDashboard.bind(dashboardGateway);
+    const pendingResolvers: Array<() => void> = [];
+    const getSpy = vi
+      .spyOn(dashboardGateway, "getPersonalDashboard")
+      .mockImplementation((options) => {
+        return new Promise((resolve, reject) => {
+          pendingResolvers.push(() => {
+            originalGetDashboard(options).then(resolve, reject);
+          });
+        });
+      });
+
+    try {
+      await user.click(screen.getByRole("button", { name: "PR #51 확인 체크" }));
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: /PR #51 확인됨/ }),
+        ).toHaveAttribute("aria-pressed", "true");
+      });
+
+      // refetch 완료 전이라도 "전체" 캐시로 전환 시 더 최신(05:00Z) 항목이 잘못 확인 처리되지 않았어야 함
+      await user.click(screen.getByRole("combobox", { name: "담당자 보기" }));
+      await user.click(await screen.findByRole("option", { name: "전체" }));
+
+      expect(
+        screen.getByRole("button", { name: "PR #51 확인 체크" }),
+      ).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByText("NEW")).toBeVisible();
+
+      pendingResolvers.forEach((flush) => flush());
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "PR #51 확인 체크" }),
+        ).toHaveAttribute("aria-pressed", "false");
+      });
+    } finally {
+      getSpy.mockRestore();
+    }
+  });
 });

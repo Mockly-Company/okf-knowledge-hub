@@ -13,6 +13,7 @@ import { useOptionalActiveProject } from "@/features/active-project/ActiveProjec
 import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { PersonalDashboardGateway } from "./PersonalDashboardGateway";
 import {
+  isDashboardNotificationChecked,
   isDashboardTimestampNew,
   type PersonalDashboardResult,
 } from "./model";
@@ -214,14 +215,20 @@ export function PersonalDashboardProvider({
         { queryKey: personalDashboardKeys.all },
         (current) => {
           if (!current) return current;
+          const fetchedMs = Date.parse(current.fetchedAt);
+          const fallbackNowMs = Number.isFinite(fetchedMs) ? fetchedMs : Date.now();
           const nextNotifications = current.notifications.map((item) => {
             if (item.id !== variables.notificationId) return item;
-            if (variables.checked) {
+            if (
+              variables.checked &&
+              isDashboardNotificationChecked(item.timestamp, variables.itemTimestamp)
+            ) {
               return { ...item, isChecked: true, isNew: false };
             }
             const restoredNew = isDashboardTimestampNew(
               item.timestamp,
               current.lastSeenAt,
+              fallbackNowMs,
             );
             return { ...item, isChecked: false, isNew: restoredNew };
           });

@@ -383,3 +383,7 @@ export interface ApproveAndMergeDocsPrResponse {
   mergeSha: string | null;
   reviewSubmitted: boolean;
 }
+
+export function normalizeDocumentPath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+}

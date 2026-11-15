@@ -20,16 +20,17 @@ import {
   type DocumentsState,
   type SelectedDocumentVersion,
 } from "./documents-reducer";
-import type {
-  AppError,
-  ApproveAndMergeDocsPrResponse,
-  DocsPullRequestDetail,
-  DocsPullRequestSummary,
-  DocumentAsset,
-  DocumentEventEnvelope,
-  HistoryItem,
-  PublishDocumentDraftResponse,
-  SearchResult,
+import {
+  normalizeDocumentPath,
+  type AppError,
+  type ApproveAndMergeDocsPrResponse,
+  type DocsPullRequestDetail,
+  type DocsPullRequestSummary,
+  type DocumentAsset,
+  type DocumentEventEnvelope,
+  type HistoryItem,
+  type PublishDocumentDraftResponse,
+  type SearchResult,
 } from "./model";
 import {
   createInitialAuthoringState,
@@ -57,10 +58,6 @@ const secretMarkers = [
 
 function createOperationId(): string {
   return crypto.randomUUID();
-}
-
-function normalizePreferredViewPath(path: string): string {
-  return path.trim().replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
 }
 
 function containsPrivateValue(value: string): boolean {
@@ -209,7 +206,7 @@ export function DocumentsProvider({
       if (!current) return null;
       if (
         expectedPath &&
-        current.path !== normalizePreferredViewPath(expectedPath)
+        current.path !== normalizeDocumentPath(expectedPath)
       ) {
         return current;
       }
@@ -971,7 +968,7 @@ export function DocumentsProvider({
     ) => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null) return;
-      const basePath = normalizePreferredViewPath(path);
+      const basePath = normalizeDocumentPath(path);
       if (!basePath) return;
       const isHtmlPath = /\.html$/i.test(basePath);
       const normalizedPath = isHtmlPath

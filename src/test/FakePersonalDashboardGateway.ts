@@ -3,6 +3,7 @@ import type {
   PersonalDashboardGateway,
 } from "@/features/dashboard/PersonalDashboardGateway";
 import {
+  isDashboardNotificationChecked,
   isDashboardTimestampNew,
   type DashboardNotificationItem,
   type DashboardTaskItem,
@@ -121,17 +122,14 @@ export class FakePersonalDashboardGateway implements PersonalDashboardGateway {
     checked: boolean,
     itemTimestamp?: string | null,
   ): Promise<void> {
-    const checkedMs = itemTimestamp ? Date.parse(itemTimestamp) : Number.NaN;
     const refMs = Date.parse(this.fetchedAt);
     const fallbackNowMs = Number.isFinite(refMs) ? refMs : Date.now();
     this.notifications = this.notifications.map((item) => {
       if (item.id !== notificationId) return item;
-      const currentMs = Date.parse(item.timestamp);
+      const effectiveCheckedTs = itemTimestamp ?? item.timestamp;
       if (
         checked &&
-        (!Number.isFinite(checkedMs) ||
-          !Number.isFinite(currentMs) ||
-          checkedMs >= currentMs)
+        isDashboardNotificationChecked(item.timestamp, effectiveCheckedTs)
       ) {
         return { ...item, isChecked: true, isNew: false };
       }

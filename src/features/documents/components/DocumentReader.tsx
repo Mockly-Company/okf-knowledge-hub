@@ -18,7 +18,7 @@ import { setPendingAiLaunch } from "@/features/ai/pendingAiLaunch";
 import { usePreferences } from "@/features/preferences/PreferencesProvider";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDocuments } from "../DocumentsProvider";
-import type { DocumentContent } from "../model";
+import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { MarkdownDocument } from "./MarkdownDocument";
 import { DocumentHistory } from "./DocumentHistory";
@@ -48,10 +48,6 @@ function subscribeNarrow(onChange: () => void) {
   return () => media?.removeEventListener("change", onChange);
 }
 function isNarrowScreen() { return window.matchMedia?.(narrowQuery).matches ?? false; }
-
-function normalizeReaderPath(path: string): string {
-  return path.trim().replace(/\\/g, "/").replace(/^\.\//, "");
-}
 
 function lastModifiedSummary(document: DocumentContent): string {
   const commit = document.lastCommit;
@@ -90,7 +86,7 @@ export function DocumentReader({
   } = useDocuments();
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
-  const normalizedDocPath = normalizeReaderPath(document.summary.path);
+  const normalizedDocPath = normalizeDocumentPath(document.summary.path);
   const matchingPreferredView =
     preferredViewTargetPath === normalizedDocPath ? preferredViewMode : null;
   const [viewMode, setViewMode] = useState<"html" | "markdown">(() =>

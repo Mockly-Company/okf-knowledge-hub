@@ -4,8 +4,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { DocumentsProvider } from "../DocumentsProvider";
-import type { DocumentContent } from "../model";
+import { DocumentsProvider, useDocuments } from "../DocumentsProvider";
+import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import type { PreferencesRepository } from "@/features/preferences/PreferencesRepository";
 import { FakeDocumentsGateway } from "@/test/FakeDocumentsGateway";
@@ -569,5 +569,68 @@ describe("DocumentReader", () => {
     } finally {
       scroll.mockRestore();
     }
+  });
+
+  it("normalizes repeated ./ and backslashes identically across DocumentsProvider and DocumentReader", async () => {
+    expect(normalizeDocumentPath(" .\\././docs/product/concept-v2.md ")).toBe(
+      "docs/product/concept-v2.md",
+    );
+
+    const user = userEvent.setup();
+    const gateway = new FakeDocumentsGateway();
+    const doc: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      summary: {
+        ...invalidFrontmatterDocument().summary,
+        path: "././docs/product/concept-v2.md",
+        fileName: "concept-v2.md",
+        title: "컨셉 v2",
+      },
+      markdown: "# 컨셉 v2\n\n원문 마크다운입니다.",
+      companionHtml: {
+        path: "docs/product/concept-v2.html",
+        html: "<!doctype html><html><body><h1>컨셉 v2 HTML</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync",
+    };
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.sessionSnapshot.catalog = {
+      documents: [{ ...doc.summary, path: "docs/product/concept-v2.md" }],
+      roots: [{ kind: "document", summary: { ...doc.summary, path: "docs/product/concept-v2.md" } }],
+    };
+    vi.spyOn(gateway, "readDocument").mockResolvedValue(doc);
+
+    function SelectWithRepeatedDotSlash() {
+      const { selectDocument } = useDocuments();
+      return (
+        <button
+          type="button"
+          onClick={() => selectDocument("././docs/product/concept-v2.html", undefined, "markdown")}
+        >
+          반복접두사열기
+        </button>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+          <MemoryRouter>
+            <DocumentsProvider gateway={gateway}>
+              <SelectWithRepeatedDotSlash />
+              <DocumentsPage />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "반복접두사열기" }));
+
+    expect(
+      await screen.findByRole("tab", { name: "원문 (.md)" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("원문 마크다운입니다.")).toBeVisible();
   });
 });

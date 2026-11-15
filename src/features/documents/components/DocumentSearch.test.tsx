@@ -381,4 +381,101 @@ describe("DocumentSearch", () => {
     await user.click(screen.getByRole("button", { name: "전체" }));
     expect(screen.getByRole("button", { name: /Dashboard 화면명세서/ })).toBeVisible();
   });
+
+  it("shows 검색 결과가 없습니다 instead of category empty state when a search query matches nothing in any category", async () => {
+    const user = userEvent.setup();
+    const docs: DocumentSummary[] = [
+      {
+        path: "docs/domains/documents/prd.md",
+        fileName: "prd.md",
+        title: "Documents PRD",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Product Spec",
+        domain: "documents",
+        modifiedAtUnixMs: 1,
+        size: 100,
+      },
+      {
+        path: "docs/domains/dashboard/screen-spec.md",
+        fileName: "screen-spec.md",
+        title: "Dashboard 화면명세서",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Screen Spec",
+        domain: "dashboard",
+        modifiedAtUnixMs: 1,
+        size: 100,
+      },
+    ];
+    const screenSpecHit: SearchResult = {
+      path: "docs/domains/dashboard/screen-spec.md",
+      title: "Dashboard 화면명세서",
+      matchField: "body",
+      matchText: "화면명세",
+      snippet: "Dashboard 화면명세 본문",
+    };
+
+    const view = render(
+      <DocumentSearch
+        query="없는검색어"
+        documents={docs}
+        results={[]}
+        searchStatus="ready"
+        searchError={null}
+        indexStatus={{ status: "ready" }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "기획 · PRD" }));
+    expect(screen.getByText("검색 결과가 없습니다.")).toBeVisible();
+    expect(screen.queryByText("선택한 분류에 해당하는 문서가 없습니다.")).toBeNull();
+
+    // fallback(본문 인덱스 미준비) 상태에서도 전체 일치 결과가 0건이면 검색 결과 없음을 우선 표시
+    view.rerender(
+      <DocumentSearch
+        query="없는검색어"
+        documents={docs}
+        results={[]}
+        searchStatus="error"
+        searchError={{
+          code: "document_index_unavailable",
+          message: "검색 불가",
+          recovery: "retry",
+          details: {},
+        }}
+        indexStatus={{ status: "preparing", indexed: 0, total: 2 }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+    expect(screen.getByText("검색 결과가 없습니다.")).toBeVisible();
+    expect(screen.queryByText("선택한 분류에 해당하는 문서가 없습니다.")).toBeNull();
+
+    // 다른 분류에 일치 결과가 있는 경우에는 필터 안내 및 초기화 버튼을 표시
+    view.rerender(
+      <DocumentSearch
+        query="화면명세"
+        documents={docs}
+        results={[screenSpecHit]}
+        searchStatus="ready"
+        searchError={null}
+        indexStatus={{ status: "ready" }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+    expect(screen.getByText("선택한 분류에 해당하는 문서가 없습니다.")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "필터 초기화" }));
+    expect(screen.getByRole("button", { name: /Dashboard 화면명세서/ })).toBeVisible();
+  });
 });

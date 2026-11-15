@@ -113,14 +113,21 @@ export function DocumentSearch({
           ),
     [documents, categoryFilter],
   );
-  const titleAndPathMatches = useMemo(
+  const unfilteredTitleAndPathMatches = useMemo(
     () =>
       isSearching
-        ? filteredDocuments.filter((document) =>
-            matchesTitleOrPath(document, query),
-          )
-        : filteredDocuments,
-    [filteredDocuments, isSearching, query],
+        ? documents.filter((document) => matchesTitleOrPath(document, query))
+        : documents,
+    [documents, isSearching, query],
+  );
+  const titleAndPathMatches = useMemo(
+    () =>
+      categoryFilter === "all"
+        ? unfilteredTitleAndPathMatches
+        : unfilteredTitleAndPathMatches.filter(
+            (doc) => classifyDocumentCategory(doc) === categoryFilter,
+          ),
+    [categoryFilter, unfilteredTitleAndPathMatches],
   );
   const filteredResults = useMemo(
     () =>
@@ -145,6 +152,14 @@ export function DocumentSearch({
     }
     return [];
   }, [filteredDocuments, groupMode]);
+
+  const unfilteredSearchCount = !isSearching
+    ? documents.length
+    : searchStatus === "ready"
+      ? results.length
+      : searchFailed
+        ? 0
+        : unfilteredTitleAndPathMatches.length;
 
   const items: Array<DocumentSummary | SearchResult> = !isSearching
     ? filteredDocuments
@@ -286,7 +301,7 @@ export function DocumentSearch({
             <p>검색 결과를 불러오지 못했습니다.</p>
           </StatusFeedback>
         ) : isAwaitingSearch && items.length === 0 ? null : items.length === 0 ? (
-          categoryFilter !== "all" && documents.length > 0 ? (
+          categoryFilter !== "all" && unfilteredSearchCount > 0 ? (
             <div className="document-search__filtered-empty">
               <p className="document-search__empty">
                 선택한 분류에 해당하는 문서가 없습니다.

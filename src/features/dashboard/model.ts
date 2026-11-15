@@ -78,3 +78,16 @@ export function isDashboardTimestampNew(
   }
   return itemMs >= nowMs - 7 * 86_400 * 1000;
 }
+
+export function isDashboardNotificationChecked(
+  itemTimestamp: string,
+  checkedTimestamp: string | null | undefined,
+): boolean {
+  if (!checkedTimestamp) return false;
+  const itemMs = Date.parse(itemTimestamp);
+  const checkedMs = Date.parse(checkedTimestamp);
+  if (Number.isFinite(itemMs) && Number.isFinite(checkedMs)) {
+    return checkedMs >= itemMs;
+  }
+  return checkedTimestamp.trim() === itemTimestamp.trim();
+}
