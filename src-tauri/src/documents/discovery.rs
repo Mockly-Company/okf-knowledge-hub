@@ -191,7 +191,10 @@ fn has_valid_companion_html(repository_root: &Path, markdown_path: &Path) -> boo
     let Ok(canonical) = candidate.canonicalize() else {
         return false;
     };
-    if !canonical.starts_with(repository_root) || is_git_path(repository_root, &canonical) {
+    let Ok(canonical_root) = repository_root.canonicalize() else {
+        return false;
+    };
+    if !canonical.starts_with(&canonical_root) || is_git_path(&canonical_root, &canonical) {
         return false;
     }
     fs::metadata(&canonical)
@@ -518,6 +521,50 @@ mod tests {
         assert_eq!(has_html("docs/linked.md"), symlinks_supported);
     }
 
+    #[test]
+    fn has_valid_companion_html_canonicalizes_symlinked_repository_root() {
+        let parent = tempfile::tempdir().unwrap();
+        let repo_real = parent.path().join("real-repo");
+        fs::create_dir_all(repo_real.join("docs")).unwrap();
+        fs::create_dir_all(repo_real.join(".git")).unwrap();
+        fs::write(repo_real.join("docs/regular.md"), "# regular").unwrap();
+        fs::write(repo_real.join("docs/regular.html"), "<html>regular</html>").unwrap();
+        fs::write(repo_real.join("docs/git-linked.md"), "# git-linked").unwrap();
+        fs::write(repo_real.join(".git/internal.html"), "<html>git</html>").unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        let escaped_html = outside.path().join("escaped.html");
+        fs::write(&escaped_html, "<html>escaped</html>").unwrap();
+        fs::write(repo_real.join("docs/escaped.md"), "# escaped").unwrap();
+
+        let repo_alias = parent.path().join("alias-repo");
+        let symlinks_supported = try_create_dir_symlink(&repo_real, &repo_alias);
+        if !symlinks_supported {
+            return;
+        }
+        assert!(try_create_file_symlink(
+            &escaped_html,
+            &repo_real.join("docs/escaped.html"),
+        ));
+        assert!(try_create_file_symlink(
+            &repo_real.join(".git/internal.html"),
+            &repo_real.join("docs/git-linked.html"),
+        ));
+
+        assert!(super::has_valid_companion_html(
+            &repo_alias,
+            &repo_alias.join("docs/regular.md"),
+        ));
+        assert!(!super::has_valid_companion_html(
+            &repo_alias,
+            &repo_alias.join("docs/escaped.md"),
+        ));
+        assert!(!super::has_valid_companion_html(
+            &repo_alias,
+            &repo_alias.join("docs/git-linked.md"),
+        ));
+    }
+
     #[cfg(unix)]
     fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
         std::os::unix::fs::symlink(original, link).unwrap();
@@ -530,6 +577,21 @@ mod tests {
             Ok(()) => true,
             Err(error) if error.raw_os_error() == Some(1314) => false,
             Err(error) => panic!("unexpected windows symlink failure: {error}"),
+        }
+    }
+
+    #[cfg(unix)]
+    fn try_create_dir_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(original, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn try_create_dir_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        match std::os::windows::fs::symlink_dir(original, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("unexpected windows dir symlink failure: {error}"),
         }
     }
 

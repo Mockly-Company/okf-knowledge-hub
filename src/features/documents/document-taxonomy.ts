@@ -248,6 +248,16 @@ export function resolveDocumentDomain(
   };
 }
 
+function compareDeterministicText(left: string, right: string): number {
+  const leftLower = left.toLowerCase();
+  const rightLower = right.toLowerCase();
+  if (leftLower < rightLower) return -1;
+  if (leftLower > rightLower) return 1;
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
 export function sortDocumentsInGroup(docs: readonly DocumentSummary[]): DocumentSummary[] {
   return [...docs].sort((a, b) => {
     const aAux = isAuxiliaryDocument(a) ? 1 : 0;
@@ -258,7 +268,7 @@ export function sortDocumentsInGroup(docs: readonly DocumentSummary[]): Document
     const bRank = DOCUMENT_CATEGORY_ORDER.indexOf(classifyDocumentCategory(b));
     if (aRank !== bRank) return aRank - bRank;
 
-    return a.path.localeCompare(b.path);
+    return compareDeterministicText(a.path, b.path);
   });
 }
 
@@ -324,7 +334,7 @@ export function groupDocumentsByDomain(
       const aGeneral = a.key === "general" ? 2 : a.isExplicitDomain ? 0 : 1;
       const bGeneral = b.key === "general" ? 2 : b.isExplicitDomain ? 0 : 1;
       if (aGeneral !== bGeneral) return aGeneral - bGeneral;
-      return a.key.localeCompare(b.key);
+      return compareDeterministicText(a.key, b.key);
     });
 }
 

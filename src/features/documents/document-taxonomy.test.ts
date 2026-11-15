@@ -5,6 +5,7 @@ import {
   groupDocumentsByDomain,
   isAuxiliaryDocument,
   resolveDocumentDomain,
+  sortDocumentsInGroup,
 } from "./document-taxonomy";
 import type { DocumentSummary } from "./model";
 
@@ -188,5 +189,19 @@ describe("document-taxonomy", () => {
     ]);
     expect(conflictingNonCanonical).toHaveLength(1);
     expect(conflictingNonCanonical[0]?.folderPath).toBeNull();
+  });
+
+  it("sorts documents within a group deterministically by lowercase path then exact code unit order", () => {
+    const sorted = sortDocumentsInGroup([
+      makeDoc("docs/domains/documents/Zebra-prd.md", { docType: "Product Spec" }),
+      makeDoc("docs/domains/documents/alpha-prd.md", { docType: "Product Spec" }),
+      makeDoc("docs/domains/documents/Alpha-prd.md", { docType: "Product Spec" }),
+    ]);
+
+    expect(sorted.map((doc) => doc.path)).toEqual([
+      "docs/domains/documents/Alpha-prd.md",
+      "docs/domains/documents/alpha-prd.md",
+      "docs/domains/documents/Zebra-prd.md",
+    ]);
   });
 });
