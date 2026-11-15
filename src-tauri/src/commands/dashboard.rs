@@ -260,16 +260,11 @@ pub(crate) fn extract_change_summary(body: &str, fallback_title: &str) -> String
 pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<String>, bool) {
     let is_auxiliary_md = |norm_lower: &str| {
         let file_name = norm_lower.rsplit('/').next().unwrap_or(norm_lower);
-        norm_lower.starts_with(".okf/")
-            || matches!(file_name, "index.md" | "log.md" | "agents.md" | "readme.md")
+        crate::documents::reader::is_reserved_markdown_path(norm_lower, file_name)
     };
     let is_auxiliary_html = |norm_lower: &str| {
         let file_name = norm_lower.rsplit('/').next().unwrap_or(norm_lower);
-        norm_lower.starts_with(".okf/")
-            || matches!(
-                file_name,
-                "index.html" | "log.html" | "agents.html" | "readme.html"
-            )
+        crate::documents::reader::is_reserved_html_path(norm_lower, file_name)
     };
     let companion_html_for_md = |md_path: &str, pool: &[&PullRequestChangedFile]| -> bool {
         let norm_lower = md_path.replace('\\', "/").to_ascii_lowercase();
@@ -350,15 +345,12 @@ pub(crate) fn pick_primary_doc(files: &[PullRequestChangedFile]) -> (Option<Stri
             })
         })
         .or_else(|| {
+            // 본문 기획 문서 변경이 없고 `docs/log.md`·`docs/index.md` 같은 보조 문서만 바뀐 PR이라도
+            // `docs/` 하위 마크다운 문서는 최후 폴백으로 연결한다(단, 동반 `.html`은 없음).
             pool.iter().find_map(|f| {
                 let norm = f.filename.replace('\\', "/");
                 let lower = norm.to_ascii_lowercase();
-                let file_name = lower.rsplit('/').next().unwrap_or(&lower);
-                (lower.starts_with("docs/")
-                    && lower.ends_with(".md")
-                    && file_name != "agents.md"
-                    && file_name != "readme.md")
-                    .then_some((norm, false))
+                (lower.starts_with("docs/") && lower.ends_with(".md")).then_some((norm, false))
             })
         })
         .or_else(|| {

@@ -59,6 +59,10 @@ function createOperationId(): string {
   return crypto.randomUUID();
 }
 
+function normalizePreferredViewPath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
 function containsPrivateValue(value: string): boolean {
   const normalized = value.toLowerCase();
   return (
@@ -117,6 +121,8 @@ export interface DocumentsContextValue {
   state: DocumentsState;
   authoringState: DocumentAuthoringState;
   preferredViewMode: "html" | "markdown" | null;
+  preferredViewTargetPath: string | null;
+  clearPreferredViewMode(expectedPath?: string): void;
   setSearchQuery(query: string): void;
   retrySearch(): void;
   selectDocument(
@@ -192,9 +198,24 @@ export function DocumentsProvider({
     }),
   );
   const [sessionAttempt, setSessionAttempt] = useState(0);
-  const [preferredViewMode, setPreferredViewMode] = useState<
-    "html" | "markdown" | null
-  >(null);
+  const [preferredViewPreference, setPreferredViewPreference] = useState<{
+    path: string;
+    mode: "html" | "markdown";
+  } | null>(null);
+  const preferredViewMode = preferredViewPreference?.mode ?? null;
+  const preferredViewTargetPath = preferredViewPreference?.path ?? null;
+  const clearPreferredViewMode = useCallback((expectedPath?: string) => {
+    setPreferredViewPreference((current) => {
+      if (!current) return null;
+      if (
+        expectedPath &&
+        current.path !== normalizePreferredViewPath(expectedPath)
+      ) {
+        return current;
+      }
+      return null;
+    });
+  }, []);
   const [editorBaselines, setEditorBaselines] = useState<
     Record<string, string | null>
   >({});
@@ -579,7 +600,7 @@ export function DocumentsProvider({
     void (async () => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null || !(await flushCurrentEditor())) return;
-      setPreferredViewMode(null);
+      setPreferredViewPreference(null);
       dispatchAuthoringAccepted({ type: "editorCloseRequested" });
       dispatchAccepted({ type: "documentsHomeRequested", sessionId });
     })();
@@ -959,7 +980,15 @@ export function DocumentsProvider({
         nextPreferredViewMode ?? (isHtmlPath ? "html" : null);
       void (async () => {
         if (!(await flushCurrentEditor()) || stateRef.current.activeSessionId !== sessionId) return;
-        setPreferredViewMode(resolvedViewMode);
+        // view 파라미터(또는 .html 경로)가 없는 일반 선택에서는 이전 선호값을 물려받지 않도록 null로 초기화한다.
+        setPreferredViewPreference(
+          resolvedViewMode
+            ? {
+                path: normalizePreferredViewPath(normalizedPath),
+                mode: resolvedViewMode,
+              }
+            : null,
+        );
         dispatchAuthoringAccepted({ type: "editorCloseRequested" });
         dispatchAccepted({
           type: "documentSelectionRequested",
@@ -974,11 +1003,12 @@ export function DocumentsProvider({
   );
 
   const retrySession = useCallback(() => {
+    setPreferredViewPreference(null);
     setSessionAttempt((attempt) => attempt + 1);
   }, []);
 
   const resetForWorkspaceSwitch = useCallback(() => {
-    setPreferredViewMode(null);
+    setPreferredViewPreference(null);
     dispatchAuthoringAccepted({ type: "workspaceAuthoringReset" });
     dispatchAccepted({ type: "searchQueryChanged", query: "" });
     pendingWorkspaceResetRef.current = true;
@@ -1316,6 +1346,8 @@ export function DocumentsProvider({
       state,
       authoringState,
       preferredViewMode,
+      preferredViewTargetPath,
+      clearPreferredViewMode,
       setSearchQuery,
       retrySearch,
       selectDocument,
@@ -1355,6 +1387,7 @@ export function DocumentsProvider({
       acceptHubConflict,
       approveAndMergeDocsPullRequest,
       authoringState,
+      clearPreferredViewMode,
       clearRecoverableError,
       closeDraftEditor,
       closeNewDocument,
@@ -1369,6 +1402,7 @@ export function DocumentsProvider({
       loadMoreHistory,
       openExternal,
       preferredViewMode,
+      preferredViewTargetPath,
       publishDocumentDraft,
       readAsset,
       refresh,

@@ -19,6 +19,7 @@ import type { DashboardNotificationItem, DashboardTaskItem } from "./model";
 const NOTIFICATION_PAGE_SIZE = 10;
 const FILTER_ME_VALUE = "__me__";
 const FILTER_ALL_VALUE = "*";
+const EMPTY_NOTIFICATIONS: DashboardNotificationItem[] = [];
 
 const STATUS_META: Record<BoardStatus, { label: string; tone: StatusTone }> = {
   backlog: { label: "Backlog", tone: "neutral" },
@@ -29,7 +30,7 @@ const STATUS_META: Record<BoardStatus, { label: string; tone: StatusTone }> = {
 };
 
 function companionHtmlName(docPath: string): string {
-  const fileName = docPath.split("/").at(-1) ?? docPath;
+  const fileName = docPath.replace(/\\/g, "/").split("/").pop() ?? docPath;
   return fileName.replace(/\.md$/i, ".html");
 }
 
@@ -77,10 +78,7 @@ function PersonalDashboardInner({
 
   const viewerLogin = dashboard?.viewerLogin ?? null;
   const tasks = dashboard?.tasks ?? [];
-  const notifications = useMemo(
-    () => dashboard?.notifications ?? [],
-    [dashboard?.notifications],
-  );
+  const notifications = dashboard?.notifications ?? EMPTY_NOTIFICATIONS;
   const visibleNotifications = useMemo(
     () =>
       unreadOnlyNotifications

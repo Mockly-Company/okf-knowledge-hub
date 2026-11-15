@@ -349,18 +349,30 @@ fn inject_csp_meta(html: &str) -> String {
     format!("{SANDBOX_CSP_META}{html}")
 }
 
-pub(crate) fn is_reserved_markdown_file(file_name: &str) -> bool {
-    file_name.eq_ignore_ascii_case("index.md")
-        || file_name.eq_ignore_ascii_case("log.md")
-        || file_name.eq_ignore_ascii_case("readme.md")
-        || file_name.eq_ignore_ascii_case("agents.md")
+fn is_reserved_stem(file_name: &str, ext: &str) -> bool {
+    let Some((stem, file_ext)) = file_name.rsplit_once('.') else {
+        return false;
+    };
+    file_ext.eq_ignore_ascii_case(ext)
+        && matches!(
+            stem.to_ascii_lowercase().as_str(),
+            "index" | "log" | "readme" | "agents"
+        )
 }
 
-pub(crate) fn is_reserved_markdown_path(relative_path: &str, file_name: &str) -> bool {
+fn is_reserved_path_for_ext(relative_path: &str, file_name: &str, ext: &str) -> bool {
     let norm = relative_path.replace('\\', "/");
     norm.get(..5)
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(".okf/"))
-        || is_reserved_markdown_file(file_name)
+        || is_reserved_stem(file_name, ext)
+}
+
+pub(crate) fn is_reserved_markdown_path(relative_path: &str, file_name: &str) -> bool {
+    is_reserved_path_for_ext(relative_path, file_name, "md")
+}
+
+pub(crate) fn is_reserved_html_path(relative_path: &str, file_name: &str) -> bool {
+    is_reserved_path_for_ext(relative_path, file_name, "html")
 }
 
 fn extract_html_attr<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {

@@ -511,6 +511,56 @@ describe("MarkdownDocument", () => {
     }
   });
 
+  it("allows native #hash navigation outside HashRouter when the target DOM id exists", async () => {
+    const originalHash = window.location.hash;
+    window.location.hash = "";
+    try {
+      const gateway = new FakeDocumentsGateway();
+      const doc: DocumentContent = {
+        summary: {
+          path: "docs/guides/guide.md",
+          fileName: "guide.md",
+          title: "Guide",
+          documentId: "guide-id",
+          frontmatterStatus: { status: "valid" },
+          modifiedAtUnixMs: 0,
+          size: 200,
+        },
+        markdown:
+          "# Guide\n\n[응답 규칙으로 이동](#응답-규칙)\n\n## 응답 규칙\n\n본문",
+        properties: {},
+        tableOfContents: [
+          { level: 1, title: "Guide", id: "guide" },
+          { level: 2, title: "응답 규칙", id: "응답-규칙" },
+        ],
+        lastCommit: null,
+      };
+
+      render(
+        <TestQueryProvider>
+          <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+            <MarkdownDocument document={doc} />
+          </DocumentsProvider>
+        </TestQueryProvider>,
+      );
+
+      const link = screen.getByRole("link", { name: "응답 규칙으로 이동" });
+      let defaultPrevented: boolean | null = null;
+      const listener = (event: MouseEvent) => {
+        defaultPrevented = event.defaultPrevented;
+      };
+      link.addEventListener("click", listener);
+      try {
+        link.click();
+      } finally {
+        link.removeEventListener("click", listener);
+      }
+      expect(defaultPrevented).toBe(false);
+    } finally {
+      window.location.hash = originalHash;
+    }
+  });
+
   it("opens tel: links externally and reports an inline status notice when an unsupported relative link is clicked", async () => {
     const user = userEvent.setup();
     const { gateway } = renderMarkdown(

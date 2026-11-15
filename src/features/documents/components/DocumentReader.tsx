@@ -49,6 +49,10 @@ function subscribeNarrow(onChange: () => void) {
 }
 function isNarrowScreen() { return window.matchMedia?.(narrowQuery).matches ?? false; }
 
+function normalizeReaderPath(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
 function lastModifiedSummary(document: DocumentContent): string {
   const commit = document.lastCommit;
   if (commit) {
@@ -77,6 +81,8 @@ export function DocumentReader({
     state,
     authoringState,
     preferredViewMode,
+    preferredViewTargetPath,
+    clearPreferredViewMode,
     copyText,
     openExternal,
     selectCurrentVersion,
@@ -84,8 +90,11 @@ export function DocumentReader({
   } = useDocuments();
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
+  const normalizedDocPath = normalizeReaderPath(document.summary.path);
+  const matchingPreferredView =
+    preferredViewTargetPath === normalizedDocPath ? preferredViewMode : null;
   const [viewMode, setViewMode] = useState<"html" | "markdown">(() =>
-    preferredViewMode === "markdown"
+    matchingPreferredView === "markdown"
       ? "markdown"
       : document.companionHtml
         ? "html"
@@ -100,21 +109,42 @@ export function DocumentReader({
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const navigationTargetRef = useRef<string | null>(null);
   const pendingHeadingIdRef = useRef<string | null>(null);
+  const lastDocumentPathRef = useRef(normalizedDocPath);
+  const hadCompanionHtmlRef = useRef(Boolean(document.companionHtml));
   useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
   useEffect(() => {
-    if (state.selectedVersion === null) {
+    const pathChanged = lastDocumentPathRef.current !== normalizedDocPath;
+    const hasCompanionNow = Boolean(document.companionHtml);
+    const companionAdded = !hadCompanionHtmlRef.current && hasCompanionNow;
+    lastDocumentPathRef.current = normalizedDocPath;
+    hadCompanionHtmlRef.current = hasCompanionNow;
+
+    if (state.selectedVersion !== null) {
+      return;
+    }
+
+    if (matchingPreferredView !== null) {
       setViewMode(
-        preferredViewMode === "markdown"
+        matchingPreferredView === "markdown"
           ? "markdown"
-          : document.companionHtml
+          : hasCompanionNow
             ? "html"
             : "markdown",
       );
+      clearPreferredViewMode(normalizedDocPath);
+      return;
+    }
+
+    if (pathChanged) {
+      setViewMode(hasCompanionNow ? "html" : "markdown");
+    } else if (companionAdded) {
+      setViewMode("html");
     }
   }, [
-    document.summary.path,
+    clearPreferredViewMode,
     document.companionHtml,
-    preferredViewMode,
+    matchingPreferredView,
+    normalizedDocPath,
     state.selectedVersion,
   ]);
 

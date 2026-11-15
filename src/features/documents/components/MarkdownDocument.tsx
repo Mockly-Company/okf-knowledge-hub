@@ -534,9 +534,25 @@ export function MarkdownDocument({
               {...props}
               href={value}
               onClick={(event) => {
-                event.preventDefault();
                 setUnsupportedLinkNotice(null);
-                scrollToMarkdownFragment(articleRef.current, value.slice(1));
+                const rawFragment = value.slice(1);
+                let decodedFragment = rawFragment;
+                try {
+                  decodedFragment = decodeURIComponent(rawFragment);
+                } catch {
+                  decodedFragment = rawFragment;
+                }
+                const ownerDoc = articleRef.current?.ownerDocument ?? window.document;
+                const hasNativeTarget = Boolean(
+                  ownerDoc.getElementById(decodedFragment) ??
+                    ownerDoc.getElementById(rawFragment),
+                );
+                // HashRouter(`#/...`) 환경에서는 location.hash 덮어쓰기로 라우트가 깨지는 것을 막고,
+                // 일반 문서/Storybook 환경에서는 실제 DOM 타깃이 있을 때 브라우저 기본 해시 이동을 허용한다.
+                if (window.location.hash.startsWith("#/") || !hasNativeTarget) {
+                  event.preventDefault();
+                  scrollToMarkdownFragment(articleRef.current, rawFragment);
+                }
               }}
             >
               {children}
