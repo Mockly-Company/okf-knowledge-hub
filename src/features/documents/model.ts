@@ -388,6 +388,7 @@ export function normalizeDocumentPath(path: string): string {
   return path
     .trim()
     .replace(/\\/g, "/")
-    .replace(/^(?:\/+|\.\/)+/, "")
-    .replace(/\/+$/, "");
+    .split("/")
+    .filter((segment) => segment.length > 0 && segment !== ".")
+    .join("/");
 }

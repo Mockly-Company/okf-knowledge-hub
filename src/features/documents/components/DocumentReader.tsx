@@ -198,7 +198,7 @@ export function DocumentReader({
       target.scrollIntoView?.({ block: "start" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [effectiveView, document.summary.path]);
+  }, [effectiveView, normalizedDocPath]);
   const headerRef = useRef<HTMLElement>(null);
   const contextToggleRef = useRef<HTMLButtonElement>(null);
   const contextCloseRef = useRef<HTMLButtonElement>(null);

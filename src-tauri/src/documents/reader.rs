@@ -16,7 +16,7 @@ use super::contract::{
 };
 use super::frontmatter::parse_document;
 
-pub(crate) const MAX_ASSET_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_ASSET_BYTES: u64 = 10 * 1024 * 1024;
 
 pub struct DocumentReader {
     repository_root: PathBuf,
@@ -182,20 +182,11 @@ impl DocumentReader {
         if is_reserved_markdown_path(&relative_path, file_name) {
             return (None, HtmlSyncStatus::NotApplicable);
         }
-        let candidate = markdown_path.with_extension("html");
-        let Ok(canonical) = candidate.canonicalize() else {
+        let Some((canonical, metadata)) =
+            resolve_companion_html(&self.repository_root, markdown_path)
+        else {
             return (None, HtmlSyncStatus::Missing);
         };
-        let Ok(metadata) = fs::metadata(&canonical) else {
-            return (None, HtmlSyncStatus::Missing);
-        };
-        if !canonical.starts_with(&self.repository_root)
-            || is_git_path(&self.repository_root, &canonical)
-            || !metadata.is_file()
-            || metadata.len() > MAX_ASSET_BYTES
-        {
-            return (None, HtmlSyncStatus::Missing);
-        }
         let Ok(bytes) = fs::read(&canonical) else {
             return (None, HtmlSyncStatus::Missing);
         };
@@ -360,13 +351,61 @@ fn is_reserved_stem(file_name: &str, ext: &str) -> bool {
         )
 }
 
-pub(crate) fn normalize_portable_doc_path(path: &str) -> String {
-    let replaced = path.trim().replace('\\', "/");
-    let mut clean = replaced.trim_start_matches('/');
-    while let Some(stripped) = clean.strip_prefix("./") {
-        clean = stripped.trim_start_matches('/');
+pub(crate) fn validate_companion_html_path(
+    canonical_root: &Path,
+    candidate: &Path,
+) -> Option<(PathBuf, fs::Metadata)> {
+    let canonical = candidate.canonicalize().ok()?;
+    if !canonical.starts_with(canonical_root) || is_git_path(canonical_root, &canonical) {
+        return None;
     }
-    clean.trim_end_matches('/').to_owned()
+    let metadata = fs::metadata(&canonical).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_ASSET_BYTES {
+        return None;
+    }
+    Some((canonical, metadata))
+}
+
+pub(crate) fn sort_companion_html_candidates(candidates: &mut [PathBuf]) {
+    candidates.sort_by(|left, right| {
+        let left_exact = left.extension().and_then(OsStr::to_str) == Some("html");
+        let right_exact = right.extension().and_then(OsStr::to_str) == Some("html");
+        right_exact
+            .cmp(&left_exact)
+            .then_with(|| left.file_name().cmp(&right.file_name()))
+    });
+}
+
+pub(crate) fn resolve_companion_html(
+    canonical_root: &Path,
+    markdown_path: &Path,
+) -> Option<(PathBuf, fs::Metadata)> {
+    if let Some(found) =
+        validate_companion_html_path(canonical_root, &markdown_path.with_extension("html"))
+    {
+        return Some(found);
+    }
+    let parent = markdown_path.parent()?;
+    let stem = markdown_path.file_stem()?;
+    let mut candidates: Vec<PathBuf> = fs::read_dir(parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.file_stem() == Some(stem) && is_extension(path, "html"))
+        .collect();
+    sort_companion_html_candidates(&mut candidates);
+    candidates
+        .into_iter()
+        .find_map(|candidate| validate_companion_html_path(canonical_root, &candidate))
+}
+
+pub(crate) fn normalize_portable_doc_path(path: &str) -> String {
+    path.trim()
+        .replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 pub(crate) fn is_okf_path(relative_path: &str) -> bool {
@@ -867,6 +906,11 @@ mod tests {
             ("docs/product/index.md", "# Index"),
             ("docs/log.md", "# Log"),
             ("docs/README.md", "# Readme"),
+            ("docs/product/UPPER.MD", "# Upper"),
+            (
+                "docs/product/UPPER.HTML",
+                "<html><body>Upper HTML</body></html>",
+            ),
         ]);
         let reader = reader(&repo);
 
@@ -876,6 +920,14 @@ mod tests {
         assert_eq!(companion.path, "docs/product/spec.html");
         assert!(companion.html.contains("body { color: #171923; }"));
         assert!(companion.html.contains("https://example.com/ext.css"));
+
+        let upper = reader.read_document("docs/product/UPPER.MD").unwrap();
+        assert_eq!(upper.html_sync_status, HtmlSyncStatus::InSync);
+        let upper_companion = upper.companion_html.expect("uppercase companion html");
+        assert!(upper_companion
+            .path
+            .eq_ignore_ascii_case("docs/product/UPPER.HTML"));
+        assert!(upper_companion.html.contains("Upper HTML"));
 
         let missing = reader.read_document("docs/product/only-md.md").unwrap();
         assert_eq!(missing.html_sync_status, HtmlSyncStatus::Missing);

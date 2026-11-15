@@ -3944,5 +3944,18 @@ mod tests {
             previous_filename: None,
         }];
         assert!(super::group_planning_pr_document_targets(&okf_only).is_empty());
+
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path(
+                "docs//domains/./documents//prd.md"
+            ),
+            "docs/domains/documents/prd.md"
+        );
+        assert_eq!(
+            crate::documents::reader::normalize_portable_doc_path(
+                "/./.OKF//./templates//human-view.html/"
+            ),
+            ".OKF/templates/human-view.html"
+        );
     }
 }

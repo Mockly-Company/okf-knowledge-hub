@@ -585,6 +585,12 @@ describe("DocumentReader", () => {
     expect(normalizeDocumentPath("///././docs/product/concept-v2.html//")).toBe(
       "docs/product/concept-v2.html",
     );
+    expect(normalizeDocumentPath("docs//domains/./documents//prd.md")).toBe(
+      "docs/domains/documents/prd.md",
+    );
+    expect(normalizeDocumentPath("/./.OKF//./templates//human-view.html/")).toBe(
+      ".OKF/templates/human-view.html",
+    );
 
     const user = userEvent.setup();
     const gateway = new FakeDocumentsGateway();
