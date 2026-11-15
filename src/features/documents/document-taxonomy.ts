@@ -183,16 +183,20 @@ export function resolveDocumentDomain(
   doc: Pick<DocumentSummary, "domain" | "path">,
 ): ResolvedDocumentDomain {
   const normalizedPath = normalizePortablePath(doc.path);
-  const lowerPath = normalizedPath.toLowerCase();
   const parentDir = parentDirectory(normalizedPath);
+  const segments = normalizedPath.split("/").filter(Boolean);
 
   const explicit = doc.domain?.trim();
   if (explicit) {
     const key = explicit.toLowerCase().replace(/\s+/g, "-");
-    const matchesDomainFolder =
-      lowerPath.startsWith(`docs/domains/${key}/`) ||
-      parentDir.toLowerCase() === "docs";
-    const folderPath = matchesDomainFolder ? `docs/domains/${key}` : parentDir;
+    const isCanonicalDomainPath =
+      segments[0]?.toLowerCase() === "docs" &&
+      segments[1]?.toLowerCase() === "domains" &&
+      segments.length >= 4 &&
+      segments[2]?.toLowerCase() === key;
+    const folderPath = isCanonicalDomainPath
+      ? `docs/domains/${segments[2]}`
+      : parentDir;
     return {
       key,
       label: FRIENDLY_DOMAIN_LABELS[key] ?? explicit,
@@ -201,7 +205,6 @@ export function resolveDocumentDomain(
     };
   }
 
-  const segments = normalizedPath.split("/").filter(Boolean);
   if (
     segments[0]?.toLowerCase() === "docs" &&
     segments[1]?.toLowerCase() === "domains" &&
@@ -258,6 +261,16 @@ export interface DocumentGroup {
   documents: DocumentSummary[];
 }
 
+function isCanonicalDomainFolder(
+  folderPath: string | null,
+  key: string,
+): boolean {
+  return (
+    folderPath !== null &&
+    folderPath.toLowerCase() === `docs/domains/${key}`
+  );
+}
+
 export function groupDocumentsByDomain(
   docs: readonly DocumentSummary[],
 ): DocumentGroup[] {
@@ -270,6 +283,17 @@ export function groupDocumentsByDomain(
       existing.documents.push(doc);
       if (resolved.isExplicitDomain && !existing.isExplicitDomain) {
         existing.isExplicitDomain = true;
+      }
+      if (
+        isCanonicalDomainFolder(resolved.folderPath, resolved.key) &&
+        !isCanonicalDomainFolder(existing.folderPath, resolved.key)
+      ) {
+        existing.folderPath = resolved.folderPath;
+      } else if (
+        !isCanonicalDomainFolder(existing.folderPath, resolved.key) &&
+        existing.folderPath !== resolved.folderPath
+      ) {
+        existing.folderPath = null;
       }
     } else {
       buckets.set(resolved.key, {

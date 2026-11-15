@@ -549,13 +549,61 @@ describe("MarkdownDocument", () => {
       const listener = (event: MouseEvent) => {
         defaultPrevented = event.defaultPrevented;
       };
-      link.addEventListener("click", listener);
+      window.addEventListener("click", listener);
       try {
         link.click();
       } finally {
-        link.removeEventListener("click", listener);
+        window.removeEventListener("click", listener);
       }
       expect(defaultPrevented).toBe(false);
+    } finally {
+      window.location.hash = originalHash;
+    }
+  });
+
+  it("prevents native #hash navigation when an id exists only outside the article scope", () => {
+    const originalHash = window.location.hash;
+    window.location.hash = "";
+    try {
+      const gateway = new FakeDocumentsGateway();
+      const doc: DocumentContent = {
+        summary: {
+          path: "docs/guides/guide.md",
+          fileName: "guide.md",
+          title: "Guide",
+          documentId: "guide-id",
+          frontmatterStatus: { status: "valid" },
+          modifiedAtUnixMs: 0,
+          size: 200,
+        },
+        markdown: "# Guide\n\n[외부로 이동](#outside-panel-id)",
+        properties: {},
+        tableOfContents: [{ level: 1, title: "Guide", id: "guide" }],
+        lastCommit: null,
+      };
+
+      render(
+        <TestQueryProvider>
+          <div id="outside-panel-id">외부 패널 요소</div>
+          <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+            <MarkdownDocument document={doc} />
+          </DocumentsProvider>
+        </TestQueryProvider>,
+      );
+
+      const link = screen.getByRole("link", { name: "외부로 이동" });
+      let defaultPrevented: boolean | null = null;
+      const listener = (event: MouseEvent) => {
+        defaultPrevented = event.defaultPrevented;
+      };
+      window.addEventListener("click", listener);
+      try {
+        link.click();
+      } finally {
+        window.removeEventListener("click", listener);
+      }
+      expect(defaultPrevented).toBe(true);
+      expect(window.location.hash).toBe("");
     } finally {
       window.location.hash = originalHash;
     }

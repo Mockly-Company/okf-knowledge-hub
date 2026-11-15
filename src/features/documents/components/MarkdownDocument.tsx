@@ -231,10 +231,24 @@ function headingSlug(title: string): string {
     .replace(/\s+/g, "-");
 }
 
+interface ResolvedFragmentTarget {
+  target: HTMLElement;
+  canNavigateNatively: boolean;
+}
+
+function findScopedElementById(scope: ParentNode, id: string): HTMLElement | null {
+  for (const element of scope.querySelectorAll<HTMLElement>("[id]")) {
+    if (element.id === id) {
+      return element;
+    }
+  }
+  return null;
+}
+
 function resolveFragmentTarget(
   article: HTMLElement,
   rawFragment: string,
-): HTMLElement | null {
+): ResolvedFragmentTarget | null {
   let decoded = rawFragment;
   try {
     decoded = decodeURIComponent(rawFragment);
@@ -242,19 +256,27 @@ function resolveFragmentTarget(
     decoded = rawFragment;
   }
   const ownerDoc = article.ownerDocument;
-  const scope = article.closest(".document-reader") ?? article;
-  const candidates = [
-    decoded,
-    rawFragment,
-    `${defaultSchema.clobberPrefix}${decoded}`,
-  ];
-  for (const id of candidates) {
-    if (!id) continue;
-    const byId = ownerDoc.getElementById(id);
-    if (byId && scope.contains(byId)) {
-      return byId;
+  const scope = article.closest<HTMLElement>(".document-reader") ?? article;
+
+  for (const exactId of [decoded, rawFragment]) {
+    if (!exactId) continue;
+    const match = findScopedElementById(scope, exactId);
+    if (match) {
+      return {
+        target: match,
+        canNavigateNatively: ownerDoc.getElementById(exactId) === match,
+      };
     }
   }
+
+  const clobberedId = decoded ? `${defaultSchema.clobberPrefix}${decoded}` : "";
+  if (clobberedId) {
+    const match = findScopedElementById(scope, clobberedId);
+    if (match) {
+      return { target: match, canNavigateNatively: false };
+    }
+  }
+
   const decodedLower = decoded.toLocaleLowerCase();
   const headings = [...article.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")];
   for (const heading of headings) {
@@ -264,24 +286,21 @@ function resolveFragmentTarget(
       (idLower.startsWith(`${decodedLower}-`) &&
         /^\d+$/.test(idLower.slice(decodedLower.length + 1)))
     ) {
-      return heading;
+      return { target: heading, canNavigateNatively: false };
     }
   }
   for (const heading of headings) {
     if (headingSlug(heading.textContent ?? "") === decodedLower) {
-      return heading;
+      return { target: heading, canNavigateNatively: false };
     }
   }
   return null;
 }
 
-function scrollToMarkdownFragment(
-  article: HTMLElement | null,
-  rawFragment: string,
+function scrollTargetIntoMarkdownView(
+  article: HTMLElement,
+  target: HTMLElement,
 ): void {
-  if (!article || !rawFragment) return;
-  const target = resolveFragmentTarget(article, rawFragment);
-  if (!target) return;
   const canvas = article.closest<HTMLElement>(".document-reader__canvas");
   if (
     canvas &&
@@ -535,23 +554,22 @@ export function MarkdownDocument({
               href={value}
               onClick={(event) => {
                 setUnsupportedLinkNotice(null);
+                const article = articleRef.current;
                 const rawFragment = value.slice(1);
-                let decodedFragment = rawFragment;
-                try {
-                  decodedFragment = decodeURIComponent(rawFragment);
-                } catch {
-                  decodedFragment = rawFragment;
-                }
-                const ownerDoc = articleRef.current?.ownerDocument ?? window.document;
-                const hasNativeTarget = Boolean(
-                  ownerDoc.getElementById(decodedFragment) ??
-                    ownerDoc.getElementById(rawFragment),
-                );
+                const resolved = article
+                  ? resolveFragmentTarget(article, rawFragment)
+                  : null;
                 // HashRouter(`#/...`) 환경에서는 location.hash 덮어쓰기로 라우트가 깨지는 것을 막고,
-                // 일반 문서/Storybook 환경에서는 실제 DOM 타깃이 있을 때 브라우저 기본 해시 이동을 허용한다.
-                if (window.location.hash.startsWith("#/") || !hasNativeTarget) {
+                // 일반 문서/Storybook 환경에서는 스코프 내부에 실제 DOM 타깃이 있을 때만 기본 해시 이동을 허용한다.
+                if (
+                  window.location.hash.startsWith("#/") ||
+                  !resolved ||
+                  !resolved.canNavigateNatively
+                ) {
                   event.preventDefault();
-                  scrollToMarkdownFragment(articleRef.current, rawFragment);
+                  if (article && resolved) {
+                    scrollTargetIntoMarkdownView(article, resolved.target);
+                  }
                 }
               }}
             >

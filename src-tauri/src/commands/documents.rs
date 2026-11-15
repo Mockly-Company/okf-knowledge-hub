@@ -1316,11 +1316,11 @@ pub(crate) struct GroupedPrDocTarget {
     pub status: String,
 }
 
-fn is_auxiliary_pr_doc(md_path: &str) -> bool {
-    let norm = md_path.replace('\\', "/").to_ascii_lowercase();
+fn is_auxiliary_pr_doc(path: &str) -> bool {
+    let norm = path.replace('\\', "/");
     let file_name = norm.rsplit('/').next().unwrap_or(&norm);
-    norm.starts_with(".okf/")
-        || matches!(file_name, "index.md" | "log.md" | "agents.md" | "readme.md")
+    crate::documents::reader::is_reserved_markdown_path(&norm, file_name)
+        || crate::documents::reader::is_reserved_html_path(&norm, file_name)
 }
 
 pub(crate) fn group_planning_pr_document_targets(
@@ -1343,13 +1343,11 @@ pub(crate) fn group_planning_pr_document_targets(
                         status: file.status.clone(),
                     });
                 }
-            } else if ext.eq_ignore_ascii_case("html") && !norm_path.starts_with(".okf/") {
+            } else if ext.eq_ignore_ascii_case("html") && !is_auxiliary_pr_doc(&norm_path) {
                 let paired_md = format!("{stem}.md");
                 if let Some(existing) = targets.iter_mut().find(|t| t.md_path == paired_md) {
-                    if !is_auxiliary_pr_doc(&existing.md_path) {
-                        existing.html_path = Some(norm_path);
-                    }
-                } else if !is_auxiliary_pr_doc(&paired_md) {
+                    existing.html_path = Some(norm_path);
+                } else {
                     targets.push(GroupedPrDocTarget {
                         md_path: paired_md,
                         html_path: Some(norm_path),
@@ -3829,6 +3827,21 @@ mod tests {
         let files = vec![
             PullRequestChangedFile {
                 filename: "docs/index.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/index.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "AGENTS.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: ".OKF/templates/human-view.html".into(),
                 status: "modified".into(),
                 previous_filename: None,
             },

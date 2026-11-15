@@ -76,6 +76,15 @@ describe("document-taxonomy", () => {
     });
 
     expect(
+      resolveDocumentDomain(makeDoc("docs/guide.md", { domain: "auth" })),
+    ).toEqual({
+      key: "auth",
+      label: "auth",
+      folderPath: "docs",
+      isExplicitDomain: true,
+    });
+
+    expect(
       resolveDocumentDomain(makeDoc("docs/architecture/system-design.md")),
     ).toEqual({
       key: "architecture",
@@ -139,5 +148,21 @@ describe("document-taxonomy", () => {
       "docs/prd.md",
       "docs/AGENTS.md",
     ]);
+  });
+
+  it("keeps canonical domain folders when mixed with root docs and clears conflicting non-canonical folders", () => {
+    const mixedWithCanonical = groupDocumentsByDomain([
+      makeDoc("docs/guide.md", { domain: "auth" }),
+      makeDoc("docs/domains/auth/prd.md", { domain: "auth" }),
+    ]);
+    expect(mixedWithCanonical).toHaveLength(1);
+    expect(mixedWithCanonical[0]?.folderPath).toBe("docs/domains/auth");
+
+    const conflictingNonCanonical = groupDocumentsByDomain([
+      makeDoc("docs/product/auth-prd.md", { domain: "auth" }),
+      makeDoc("docs/guides/auth-guide.md", { domain: "auth" }),
+    ]);
+    expect(conflictingNonCanonical).toHaveLength(1);
+    expect(conflictingNonCanonical[0]?.folderPath).toBeNull();
   });
 });
