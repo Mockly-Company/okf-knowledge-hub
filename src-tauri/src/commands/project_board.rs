@@ -1612,8 +1612,12 @@ pub(crate) async fn get_workspace_team_assignees_inner(
         Some(port) => port.viewer_principal().await.ok().map(|user| user.login),
         None => None,
     };
-    let ctx = resolve_team_assignee_workspace(settings)?;
-    let cached = settings.load_cached_team_members(&ctx.cache_key)?;
+    let ctx = resolve_team_assignee_workspace_async(settings).await?;
+    let cache_key = ctx.cache_key.clone();
+    let cached = run_settings_blocking(settings, move |local_settings| {
+        local_settings.load_cached_team_members(&cache_key)
+    })
+    .await?;
 
     let Some(docs_repo) = ctx.docs_repository_full_name.clone() else {
         return Ok(WorkspaceTeamAssigneesSnapshot {
@@ -1687,7 +1691,12 @@ pub(crate) async fn get_workspace_team_assignees_inner(
                 can_write_docs_repository: Some(can_write),
                 fetched_at: fetched_at.clone(),
             };
-            let _ = settings.save_cached_team_members(&ctx.cache_key, &entry);
+            let cache_key = ctx.cache_key.clone();
+            let entry_to_save = entry.clone();
+            let _ = run_settings_blocking(settings, move |local_settings| {
+                local_settings.save_cached_team_members(&cache_key, &entry_to_save)
+            })
+            .await;
             let stale_logins = compute_stale_logins(&ctx.assignees, &members, false);
             Ok(WorkspaceTeamAssigneesSnapshot {
                 viewer_login,
@@ -1739,14 +1748,50 @@ pub(crate) async fn warm_workspace_team_members_cache(services: &AppServices) {
             .await;
 }
 
+async fn resolve_team_assignee_workspace_async(
+    settings: &LocalSettingsService,
+) -> CommandResult<TeamAssigneeWorkspaceContext> {
+    let settings = settings.clone();
+    crate::commands::docs_repository::run_blocking(move || {
+        resolve_team_assignee_workspace(&settings)
+    })
+    .await
+}
+
+async fn run_settings_blocking<T, F>(
+    settings: &LocalSettingsService,
+    operation: F,
+) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&LocalSettingsService) -> CommandResult<T> + Send + 'static,
+{
+    let settings = settings.clone();
+    crate::commands::docs_repository::run_blocking(move || operation(&settings)).await
+}
+
+async fn run_git_blocking<T, F>(
+    git: &std::sync::Arc<dyn GitRepositoryPort>,
+    ws_dir: &std::path::Path,
+    operation: F,
+) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&dyn GitRepositoryPort, &std::path::Path) -> CommandResult<T> + Send + 'static,
+{
+    let git = std::sync::Arc::clone(git);
+    let ws_dir = ws_dir.to_path_buf();
+    crate::commands::docs_repository::run_blocking(move || operation(git.as_ref(), &ws_dir)).await
+}
+
 pub(crate) async fn save_workspace_team_assignees_inner(
     settings: &LocalSettingsService,
     auth: &dyn TeamAssigneesAuthPort,
     github: &dyn TeamAssigneesGithubPort,
-    git: &dyn GitRepositoryPort,
+    git: std::sync::Arc<dyn GitRepositoryPort>,
     payload: WorkspaceTeamAssigneesPayload,
 ) -> CommandResult<WorkspaceTeamAssigneesSnapshot> {
-    let ctx = resolve_team_assignee_workspace(settings)?;
+    let ctx = resolve_team_assignee_workspace_async(settings).await?;
     let ws_dir = ctx.workspace_dir.ok_or_else(|| {
         AppError::new(
             ErrorCode::WorkspaceInvalid,
@@ -1769,62 +1814,103 @@ pub(crate) async fn save_workspace_team_assignees_inner(
 
     let principal = auth.viewer_principal().await?;
     let remote_url = format!("https://github.com/{docs_repo}.git");
-    if let Ok(token) = auth.access_token().await {
-        let _ = git.fast_forward_default_branch(&ws_dir, &remote_url, token);
-    }
-
-    let manifest_path = ws_dir.join(".okf").join("workspace.yml");
-    let raw_yaml = std::fs::read_to_string(&manifest_path).map_err(|_| {
-        AppError::new(
-            ErrorCode::WorkspaceMissing,
-            "`.okf/workspace.yml` 파일을 읽지 못했습니다.",
-        )
-    })?;
-
-    let existing_extra = WorkspaceDocument::parse(&raw_yaml)?
-        .config
-        .assignees
-        .map(|existing| existing.extra)
-        .unwrap_or_default();
-    let domain_raw = payload.into_domain_with_extra(existing_extra);
-    let normalized_payload = WorkspaceTeamAssigneesPayload::from_domain(Some(&domain_raw));
-    let updated_yaml = update_workspace_assignees_yaml(&raw_yaml, &domain_raw)?;
-
-    if updated_yaml == raw_yaml {
-        return get_workspace_team_assignees_inner(settings, Some(auth), Some(github), false).await;
-    }
-
-    let snapshot_git = git.inspect(&ws_dir)?;
-    let base_branch = snapshot_git
-        .default_branch
-        .filter(|b| !b.trim().is_empty())
-        .unwrap_or_else(|| "main".to_owned());
+    let ff_token = auth.access_token().await.ok();
     let temp_branch = format!("chore/okf-assignees-{}", uuid::Uuid::new_v4().simple());
     let commit_message = "chore(okf): 팀 역할별 담당 설정 업데이트";
 
-    git.commit_file_on_branch(
-        &ws_dir,
-        &base_branch,
-        &temp_branch,
-        ".okf/workspace.yml",
-        &updated_yaml,
-        commit_message,
-        &RepositoryIdentity {
-            database_id: principal.id,
-            login: principal.login.clone(),
+    enum PrepareSaveOutcome {
+        Unchanged,
+        Committed {
+            base_branch: String,
+            normalized_payload: WorkspaceTeamAssigneesPayload,
         },
-    )?;
+    }
+
+    let prepare_outcome = {
+        let remote_url_blocking = remote_url.clone();
+        let temp_branch_blocking = temp_branch.clone();
+        let principal_id = principal.id;
+        let principal_login = principal.login.clone();
+        run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+            if let Some(token) = ff_token {
+                let _ = git.fast_forward_default_branch(ws_dir, &remote_url_blocking, token);
+            }
+
+            let manifest_path = ws_dir.join(".okf").join("workspace.yml");
+            let raw_yaml = std::fs::read_to_string(&manifest_path).map_err(|_| {
+                AppError::new(
+                    ErrorCode::WorkspaceMissing,
+                    "`.okf/workspace.yml` 파일을 읽지 못했습니다.",
+                )
+            })?;
+
+            let existing_extra = WorkspaceDocument::parse(&raw_yaml)?
+                .config
+                .assignees
+                .map(|existing| existing.extra)
+                .unwrap_or_default();
+            let domain_raw = payload.into_domain_with_extra(existing_extra);
+            let normalized_payload = WorkspaceTeamAssigneesPayload::from_domain(Some(&domain_raw));
+            let updated_yaml = update_workspace_assignees_yaml(&raw_yaml, &domain_raw)?;
+
+            if updated_yaml == raw_yaml {
+                return Ok(PrepareSaveOutcome::Unchanged);
+            }
+
+            let snapshot_git = git.inspect(ws_dir)?;
+            let base_branch = snapshot_git
+                .default_branch
+                .filter(|b| !b.trim().is_empty())
+                .unwrap_or_else(|| "main".to_owned());
+
+            git.commit_file_on_branch(
+                ws_dir,
+                &base_branch,
+                &temp_branch_blocking,
+                ".okf/workspace.yml",
+                &updated_yaml,
+                commit_message,
+                &RepositoryIdentity {
+                    database_id: principal_id,
+                    login: principal_login,
+                },
+            )?;
+
+            Ok(PrepareSaveOutcome::Committed {
+                base_branch,
+                normalized_payload,
+            })
+        })
+        .await?
+    };
+
+    let (base_branch, normalized_payload) = match prepare_outcome {
+        PrepareSaveOutcome::Unchanged => {
+            return get_workspace_team_assignees_inner(settings, Some(auth), Some(github), false)
+                .await;
+        }
+        PrepareSaveOutcome::Committed {
+            base_branch,
+            normalized_payload,
+        } => (base_branch, normalized_payload),
+    };
 
     let publish_result = async {
         let direct_refspec = format!("refs/heads/{temp_branch}:refs/heads/{base_branch}");
         let direct_token = auth.access_token().await?;
-        if git
-            .push_refspec(&ws_dir, &direct_refspec, &remote_url, direct_token)
-            .is_err()
-        {
+        let remote_url_direct = remote_url.clone();
+        let direct_push = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+            git.push_refspec(ws_dir, &direct_refspec, &remote_url_direct, direct_token)
+        })
+        .await;
+        if direct_push.is_err() {
             let temp_refspec = format!("refs/heads/{temp_branch}:refs/heads/{temp_branch}");
             let branch_token = auth.access_token().await?;
-            git.push_refspec(&ws_dir, &temp_refspec, &remote_url, branch_token)?;
+            let remote_url_branch = remote_url.clone();
+            run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+                git.push_refspec(ws_dir, &temp_refspec, &remote_url_branch, branch_token)
+            })
+            .await?;
             let pr = github
                 .create_pull_request(&CreatePullRequestInput {
                     repository_full_name: docs_repo.clone(),
@@ -1844,23 +1930,31 @@ pub(crate) async fn save_workspace_team_assignees_inner(
                 )
                 .await?;
             if let Ok(delete_token) = auth.access_token().await {
-                let _ = git.push_refspec(
-                    &ws_dir,
-                    &format!(":refs/heads/{temp_branch}"),
-                    &remote_url,
-                    delete_token,
-                );
+                let delete_refspec = format!(":refs/heads/{temp_branch}");
+                let remote_url_delete = remote_url.clone();
+                let _ = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+                    git.push_refspec(ws_dir, &delete_refspec, &remote_url_delete, delete_token)
+                })
+                .await;
             }
         }
         Ok::<(), AppError>(())
     }
     .await;
 
-    let _ = git.delete_local_branch(&ws_dir, &temp_branch);
+    let temp_branch_to_delete = temp_branch.clone();
+    let _ = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+        git.delete_local_branch(ws_dir, &temp_branch_to_delete)
+    })
+    .await;
     publish_result?;
 
     if let Ok(pull_token) = auth.access_token().await {
-        let _ = git.fast_forward_default_branch(&ws_dir, &remote_url, pull_token);
+        let remote_url_pull = remote_url.clone();
+        let _ = run_git_blocking(&git, &ws_dir, move |git, ws_dir| {
+            git.fast_forward_default_branch(ws_dir, &remote_url_pull, pull_token)
+        })
+        .await;
     }
 
     let mut refreshed =
@@ -1957,7 +2051,7 @@ pub(crate) async fn assign_board_issue_to_self_inner(
         .map(str::trim)
         .filter(|repo| !repo.is_empty());
 
-    let ctx = resolve_team_assignee_workspace(settings)?;
+    let ctx = resolve_team_assignee_workspace_async(settings).await?;
     let target_repo = wanted_repo
         .map(str::to_owned)
         .or_else(|| find_issue_repo_recursive(&board.issues, issue_number, None))
@@ -1973,7 +2067,14 @@ pub(crate) async fn assign_board_issue_to_self_inner(
         .add_issue_assignees(&target_repo, issue_number, &[principal.login])
         .await?;
 
-    if let Ok(Some(cached_members)) = settings.load_cached_team_members(&ctx.cache_key) {
+    let cached_members_result = {
+        let cache_key = ctx.cache_key.clone();
+        run_settings_blocking(settings, move |local_settings| {
+            local_settings.load_cached_team_members(&cache_key)
+        })
+        .await
+    };
+    if let Ok(Some(cached_members)) = cached_members_result {
         for assignee in &mut updated_assignees {
             if assignee.name.is_none() {
                 if let Some(member) = cached_members
@@ -2037,7 +2138,7 @@ pub async fn save_workspace_team_assignees(
         &state.local_settings,
         auth.as_ref(),
         github.as_ref(),
-        git.as_ref(),
+        git,
         assignees,
     )
     .await
@@ -2877,10 +2978,10 @@ mod tests {
                 }]))),
                 ..Default::default()
             };
-            let git = MockGit {
+            let git = std::sync::Arc::new(MockGit {
                 fail_direct_push: true,
                 ..Default::default()
-            };
+            });
 
             let payload = WorkspaceTeamAssigneesPayload {
                 planning: vec!["alice".into()],
@@ -2893,7 +2994,7 @@ mod tests {
                 &settings,
                 &auth,
                 &github,
-                &git,
+                git.clone(),
                 payload.clone(),
             )
             .await
@@ -2907,10 +3008,15 @@ mod tests {
                 name: Some("가람".into()),
             }]));
 
-            let saved =
-                save_workspace_team_assignees_inner(&settings, &auth, &github, &git, payload)
-                    .await
-                    .unwrap();
+            let saved = save_workspace_team_assignees_inner(
+                &settings,
+                &auth,
+                &github,
+                git.clone(),
+                payload,
+            )
+            .await
+            .unwrap();
 
             let commits = git.commits.lock().unwrap();
             assert_eq!(commits.len(), 1);

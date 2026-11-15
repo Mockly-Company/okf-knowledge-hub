@@ -656,13 +656,21 @@ export function ProjectPage({
   const teamAssigneesSnapshot = teamAssigneesQuery.data ?? null;
   const effectiveViewerLogin =
     viewerLogin ?? teamAssigneesSnapshot?.viewerLogin ?? null;
+  const isTeamAssigneesInitialLoading =
+    !isUnlinked &&
+    Boolean(gateway.getWorkspaceTeamAssignees) &&
+    teamAssigneesQuery.isPending &&
+    !teamAssigneesSnapshot;
   const teamSettingsDisabled =
     isUnlinked ||
     !gateway.getWorkspaceTeamAssignees ||
+    isTeamAssigneesInitialLoading ||
     (!teamAssigneesQuery.isError &&
       (!teamAssigneesSnapshot ||
         !teamAssigneesSnapshot.canWriteDocsRepository ||
         !teamAssigneesSnapshot.docsRepositoryFullName));
+  const teamSettingsNoPermissionTooltip =
+    !isTeamAssigneesInitialLoading && teamSettingsDisabled;
 
   const assignToSelfMutation = useMutation({
     mutationFn: async (input: {
@@ -1067,10 +1075,10 @@ export function ProjectPage({
             </span>
             <Tooltip
               content="문서 저장소 쓰기 권한이 필요합니다"
-              disabled={!teamSettingsDisabled}
+              disabled={!teamSettingsNoPermissionTooltip}
             >
               <span
-                tabIndex={teamSettingsDisabled ? 0 : undefined}
+                tabIndex={teamSettingsNoPermissionTooltip ? 0 : undefined}
                 className="inline-flex"
               >
                 <Button
@@ -1501,10 +1509,8 @@ export function ProjectPage({
                 : "담당자가 없습니다"
             }
             onOpenAutoFocus={(event) => {
-              if (aiStartConfirm.mode === "other") {
-                event.preventDefault();
-                cancelAiConfirmButtonRef.current?.focus();
-              }
+              event.preventDefault();
+              cancelAiConfirmButtonRef.current?.focus();
             }}
           >
             <DialogHeader>
@@ -1563,6 +1569,7 @@ export function ProjectPage({
               ) : (
                 <>
                   <Button
+                    ref={cancelAiConfirmButtonRef}
                     type="button"
                     variant="ghost"
                     disabled={assignToSelfMutation.isPending}

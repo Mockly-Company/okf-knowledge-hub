@@ -1329,11 +1329,18 @@ impl GithubHttpClient {
         logins: &[String],
     ) -> Result<Vec<BoardAssignee>, AppError> {
         let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let mut seen_logins = HashSet::new();
         let cleaned_logins: Vec<String> = logins
             .iter()
             .map(|login| login.trim().trim_start_matches('@').to_owned())
-            .filter(|login| !login.is_empty())
+            .filter(|login| !login.is_empty() && seen_logins.insert(login.to_ascii_lowercase()))
             .collect();
+        if cleaned_logins.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "배정할 담당자가 없습니다.",
+            ));
+        }
         let issue_number_str = issue_number.to_string();
         let response = self
             .send(
@@ -4469,5 +4476,19 @@ mod tests {
             reqs[0].body,
             Some(serde_json::json!({ "assignees": ["YoonCarrot"] }))
         );
+    }
+
+    #[tokio::test]
+    async fn add_issue_assignees_rejects_empty_logins_without_network_call() {
+        let transport = RecordingTransport::with_responses(Vec::new());
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let err = service
+            .add_issue_assignees("Acme-Org/acme-web", 77, &["  ".into(), "@".into()])
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.code, ErrorCode::WorkspaceInvalid);
+        assert!(transport.requests().is_empty());
     }
 }

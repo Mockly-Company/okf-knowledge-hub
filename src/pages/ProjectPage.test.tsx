@@ -1809,6 +1809,16 @@ describe("ProjectPage project switching", () => {
     const user = userEvent.setup();
     const readonlyGateway = FakeProjectBoardGateway.empty();
     readonlyGateway.canWriteDocsRepository = false;
+    let releaseTeamAssignees!: () => void;
+    const teamAssigneesGate = new Promise<void>((resolve) => {
+      releaseTeamAssignees = resolve;
+    });
+    const originalGetTeamAssignees =
+      readonlyGateway.getWorkspaceTeamAssignees.bind(readonlyGateway);
+    readonlyGateway.getWorkspaceTeamAssignees = async (forceRefresh) => {
+      await teamAssigneesGate;
+      return originalGetTeamAssignees(forceRefresh);
+    };
 
     const readonlyView = render(<ProjectPage gateway={readonlyGateway} />);
     const disabledSettingsBtn = await screen.findByRole("button", {
@@ -1819,8 +1829,23 @@ describe("ProjectPage project switching", () => {
       disabledSettingsBtn.compareDocumentPosition(refreshBtn) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(disabledSettingsBtn).toBeDisabled();
+    expect(disabledSettingsBtn.parentElement).not.toHaveAttribute("tabindex");
+    await user.hover(disabledSettingsBtn.parentElement!);
+    expect(
+      screen.queryByRole("tooltip", {
+        name: "문서 저장소 쓰기 권한이 필요합니다",
+      }),
+    ).toBeNull();
+    await user.unhover(disabledSettingsBtn.parentElement!);
+
+    releaseTeamAssignees();
     await waitFor(() => {
       expect(disabledSettingsBtn).toBeDisabled();
+      expect(disabledSettingsBtn.parentElement).toHaveAttribute(
+        "tabindex",
+        "0",
+      );
     });
     disabledSettingsBtn.parentElement?.focus();
     expect(
@@ -1994,6 +2019,11 @@ describe("ProjectPage project switching", () => {
         "#32를 나(@alice)에게 배정하고 시작할까요?",
       ),
     ).toBeVisible();
+    await waitFor(() => {
+      expect(
+        within(unassignedConfirm).getByRole("button", { name: "취소" }),
+      ).toHaveFocus();
+    });
     await user.click(
       within(unassignedConfirm).getByRole("button", { name: "배정 없이 시작" }),
     );
