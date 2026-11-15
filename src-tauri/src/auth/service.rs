@@ -453,6 +453,13 @@ impl AuthService {
             .ok_or_else(reauthentication_error)
     }
 
+    pub fn cached_principal_login(&self) -> Option<String> {
+        self.authenticated_principal
+            .try_lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().map(|user| user.login.clone()))
+    }
+
     pub(crate) async fn establish_authenticated_principal_if_current(
         &self,
         expected_generation: u64,

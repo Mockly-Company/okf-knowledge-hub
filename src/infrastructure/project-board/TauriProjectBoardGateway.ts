@@ -15,6 +15,8 @@ import type {
   ProjectBoard,
   ProjectList,
   ResolvedGithubProject,
+  WorkspaceTeamAssignees,
+  WorkspaceTeamAssigneesSnapshot,
 } from "@/features/project-board/model";
 import {
   MAX_ISSUE_TREE_DEPTH,
@@ -146,6 +148,79 @@ export class TauriProjectBoardGateway implements ProjectBoardGateway {
       request,
     }).then(normalizeBoard);
   }
+
+  getWorkspaceTeamAssignees(options?: {
+    forceRefresh?: boolean;
+  }): Promise<WorkspaceTeamAssigneesSnapshot> {
+    return this.invokeCommand<unknown>("get_workspace_team_assignees", {
+      forceRefresh: options?.forceRefresh ?? false,
+    }).then(normalizeTeamAssigneesSnapshot);
+  }
+
+  saveWorkspaceTeamAssignees(
+    assignees: WorkspaceTeamAssignees,
+  ): Promise<WorkspaceTeamAssigneesSnapshot> {
+    return this.invokeCommand<unknown>("save_workspace_team_assignees", {
+      assignees,
+    }).then(normalizeTeamAssigneesSnapshot);
+  }
+
+  assignIssueToSelf(input: {
+    issueNumber: number;
+    repositoryFullName?: string | null;
+  }): Promise<ProjectBoard> {
+    return this.invokeCommand<ProjectBoard>("assign_board_issue_to_self", {
+      issueNumber: input.issueNumber,
+      repositoryFullName: input.repositoryFullName ?? null,
+    }).then(normalizeBoard);
+  }
+}
+
+function normalizeStringList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const lower = trimmed.toLowerCase();
+    if (!seen.has(lower)) {
+      seen.add(lower);
+      result.push(trimmed);
+    }
+  }
+  return result;
+}
+
+function normalizeTeamAssigneesSnapshot(
+  raw: unknown,
+): WorkspaceTeamAssigneesSnapshot {
+  const obj =
+    typeof raw === "object" && raw !== null
+      ? (raw as Record<string, unknown>)
+      : {};
+  const rawAssignees =
+    typeof obj.assignees === "object" && obj.assignees !== null
+      ? (obj.assignees as Record<string, unknown>)
+      : {};
+  return {
+    viewerLogin: asNonEmptyString(obj.viewerLogin),
+    docsRepositoryFullName: asNonEmptyString(obj.docsRepositoryFullName),
+    canWriteDocsRepository: obj.canWriteDocsRepository === true,
+    members: normalizeBoardAssignees(obj.members),
+    assignees: {
+      planning: normalizeStringList(rawAssignees.planning),
+      design: normalizeStringList(rawAssignees.design),
+      frontend: normalizeStringList(rawAssignees.frontend),
+      backend: normalizeStringList(rawAssignees.backend),
+    },
+    staleLogins: normalizeStringList(obj.staleLogins),
+    memberFetchFailed: obj.memberFetchFailed === true,
+    fetchedAt: asNonEmptyString(obj.fetchedAt),
+  };
 }
 
 /** 등록되지 않은 Tauri 명령 호출 실패인지 판별한다. 구버전 백엔드 감지용.

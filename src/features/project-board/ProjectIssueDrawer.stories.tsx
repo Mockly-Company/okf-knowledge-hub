@@ -90,7 +90,44 @@ export const OpenWithLinkedDocsAndPr: Story = {
     readiness: { state: "ready", waitingOn: null },
     isUpdating: false,
     updateError: null,
+    viewerLogin: "alice",
     onUpdateField: () => {},
     onStartWithAi: () => {},
+  },
+};
+
+export const OtherAssigneeBanner: Story = {
+  args: {
+    ...OpenWithLinkedDocsAndPr.args,
+    issue: {
+      ...sampleIssue,
+      assignees: [{ login: "bob", name: "밥" }],
+    },
+    detail: {
+      ...sampleDetail,
+      assignees: [{ login: "bob", name: "밥" }],
+    },
+    viewerLogin: "alice",
+  },
+};
+
+export const UnassignedDeveloperBanner: Story = {
+  args: {
+    ...OpenWithLinkedDocsAndPr.args,
+    issue: {
+      ...sampleIssue,
+      number: 61,
+      title: "[백엔드] 알림 웹훅 발송 API 구현",
+      layer: "backend",
+      assignees: [],
+    },
+    detail: {
+      ...sampleDetail,
+      number: 61,
+      title: "[백엔드] 알림 웹훅 발송 API 구현",
+      layer: "backend",
+      assignees: [],
+    },
+    viewerLogin: "alice",
   },
 };

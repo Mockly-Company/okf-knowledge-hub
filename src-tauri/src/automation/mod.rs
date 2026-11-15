@@ -390,6 +390,7 @@ impl AutomationRuntime {
                 },
             }),
             code_repositories,
+            current_user_login: None,
         };
 
         Ok(Self {

@@ -4,9 +4,11 @@ import { useLayoutEffect, useState, type PropsWithChildren, type ReactNode } fro
 interface TooltipProps extends PropsWithChildren {
   content: ReactNode;
   followCursor?: boolean;
+  disabled?: boolean;
 }
 
-export function Tooltip({ content, children, followCursor = false }: TooltipProps) {
+export function Tooltip({ content, children, followCursor = false, disabled = false }: TooltipProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const [bubble, setBubble] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -44,7 +46,10 @@ export function Tooltip({ content, children, followCursor = false }: TooltipProp
   const trigger = <TooltipPrimitive.Trigger asChild>{children}</TooltipPrimitive.Trigger>;
   return (
     <TooltipPrimitive.Provider delayDuration={400}>
-      <TooltipPrimitive.Root>
+      <TooltipPrimitive.Root
+        open={disabled ? false : internalOpen}
+        onOpenChange={(nextOpen) => setInternalOpen(disabled ? false : nextOpen)}
+      >
         {followCursor ? <span style={{ display: "contents" }} onPointerMoveCapture={event => { if (event.pointerType === "mouse") setPointer({ x: event.clientX, y: event.clientY }); }} onFocusCapture={() => setPointer(null)}>{trigger}</span> : trigger}
         <TooltipPrimitive.Portal>
           <TooltipPrimitive.Content

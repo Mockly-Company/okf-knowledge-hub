@@ -429,4 +429,115 @@ describe("TauriProjectBoardGateway", () => {
     expect(board.issues[0].children[0].createdAt).toBeNull();
     expect(board.issues[0].children[0].updatedAt).toBeNull();
   });
+
+  it("maps team assignee get, save, and assignIssueToSelf commands and normalizes payloads", async () => {
+    const calls: Array<{ command: string; args?: Record<string, unknown> }> = [];
+    const invoke = async <T>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      calls.push({ command, args });
+      if (command === "get_workspace_team_assignees") {
+        return {
+          viewerLogin: "  alice ",
+          docsRepositoryFullName: "Acme-Org/acme-docs",
+          canWriteDocsRepository: true,
+          members: [
+            { login: "alice", avatarUrl: "https://avatars.example/alice", name: "가람" },
+            { login: "" },
+          ],
+          assignees: {
+            planning: ["alice", "ghost-user"],
+            design: null,
+          },
+          staleLogins: ["ghost-user", " "],
+          memberFetchFailed: false,
+          fetchedAt: "  2026-11-15T03:00:00Z  ",
+        } as T;
+      }
+      if (command === "save_workspace_team_assignees") {
+        return {
+          viewerLogin: "alice",
+          docsRepositoryFullName: "Acme-Org/acme-docs",
+          canWriteDocsRepository: true,
+          members: [{ login: "alice", name: "가람" }],
+          assignees: args?.assignees,
+          staleLogins: [],
+          memberFetchFailed: false,
+          fetchedAt: "2026-11-15T03:05:00Z",
+        } as T;
+      }
+      if (command === "assign_board_issue_to_self") {
+        return {
+          issues: [
+            {
+              number: 77,
+              title: "[기획] 작업",
+              url: "https://github.com/Acme-Org/acme-docs/issues/77",
+              layer: "planning",
+              status: "ready",
+              assignees: [{ login: "alice", name: "가람" }],
+              children: [],
+            },
+          ],
+          fetchedAt: "2026-11-15T03:06:00Z",
+          skipped: 0,
+          truncated: false,
+        } as T;
+      }
+      throw new Error(`unexpected command ${command}`);
+    };
+
+    const gateway = new TauriProjectBoardGateway(invoke);
+
+    const snapshot = await gateway.getWorkspaceTeamAssignees({ forceRefresh: true });
+    expect(snapshot.viewerLogin).toBe("alice");
+    expect(snapshot.members).toEqual([
+      { login: "alice", avatarUrl: "https://avatars.example/alice", name: "가람" },
+    ]);
+    expect(snapshot.assignees).toEqual({
+      planning: ["alice", "ghost-user"],
+      design: [],
+      frontend: [],
+      backend: [],
+    });
+    expect(snapshot.staleLogins).toEqual(["ghost-user"]);
+    expect(snapshot.fetchedAt).toBe("2026-11-15T03:00:00Z");
+
+    const saved = await gateway.saveWorkspaceTeamAssignees({
+      planning: ["alice"],
+      design: ["alice"],
+      frontend: [],
+      backend: [],
+    });
+    expect(saved.assignees.design).toEqual(["alice"]);
+
+    const updatedBoard = await gateway.assignIssueToSelf({
+      issueNumber: 77,
+      repositoryFullName: "Acme-Org/acme-docs",
+    });
+    expect(updatedBoard.issues[0].assignees?.[0].login).toBe("alice");
+
+    expect(calls).toEqual([
+      { command: "get_workspace_team_assignees", args: { forceRefresh: true } },
+      {
+        command: "save_workspace_team_assignees",
+        args: {
+          assignees: {
+            planning: ["alice"],
+            design: ["alice"],
+            frontend: [],
+            backend: [],
+          },
+        },
+      },
+      {
+        command: "assign_board_issue_to_self",
+        args: {
+          issueNumber: 77,
+          repositoryFullName: "Acme-Org/acme-docs",
+        },
+      },
+    ]);
+  });
 });
