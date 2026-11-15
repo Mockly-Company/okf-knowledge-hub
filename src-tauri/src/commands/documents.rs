@@ -1388,7 +1388,12 @@ pub(crate) fn group_planning_pr_document_targets(
             }
         }
     }
-    targets.sort_by_key(|target| is_auxiliary_pr_doc(&target.md_path));
+    targets.sort_by(|a, b| {
+        is_auxiliary_pr_doc(&a.md_path)
+            .cmp(&is_auxiliary_pr_doc(&b.md_path))
+            .then_with(|| a.md_path.to_lowercase().cmp(&b.md_path.to_lowercase()))
+            .then_with(|| a.md_path.cmp(&b.md_path))
+    });
     targets
 }
 
@@ -3877,6 +3882,11 @@ mod tests {
                 previous_filename: None,
             },
             PullRequestChangedFile {
+                filename: "docs/product/zebra-spec.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
                 filename: "docs/log.md".into(),
                 status: "modified".into(),
                 previous_filename: None,
@@ -3894,18 +3904,23 @@ mod tests {
         ];
 
         let grouped = super::group_planning_pr_document_targets(&files);
-        assert_eq!(grouped.len(), 4);
+        assert_eq!(grouped.len(), 5);
         assert_eq!(grouped[0].md_path, "docs/product/roadmap-v2.md");
         assert_eq!(
             grouped[0].html_path.as_deref(),
             Some("docs/product/roadmap-v2.html")
         );
-        assert_eq!(grouped[1].md_path, "docs/index.md");
-        assert_eq!(grouped[1].html_path, None);
+        assert_eq!(grouped[1].md_path, "docs/product/zebra-spec.md");
+        assert_eq!(
+            grouped[1].html_path.as_deref(),
+            Some("docs/product/zebra-spec.html")
+        );
         assert_eq!(grouped[2].md_path, "AGENTS.md");
         assert_eq!(grouped[2].html_path, None);
-        assert_eq!(grouped[3].md_path, "docs/log.md");
+        assert_eq!(grouped[3].md_path, "docs/index.md");
         assert_eq!(grouped[3].html_path, None);
+        assert_eq!(grouped[4].md_path, "docs/log.md");
+        assert_eq!(grouped[4].html_path, None);
     }
 
     #[test]

@@ -16,7 +16,7 @@ use super::contract::{
 };
 use super::frontmatter::parse_document;
 
-const MAX_ASSET_BYTES: u64 = 10 * 1024 * 1024;
+pub(crate) const MAX_ASSET_BYTES: u64 = 10 * 1024 * 1024;
 
 pub struct DocumentReader {
     repository_root: PathBuf,

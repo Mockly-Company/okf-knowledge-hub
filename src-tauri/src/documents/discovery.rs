@@ -10,7 +10,7 @@ use crate::error::{AppError, ErrorCode};
 
 use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry};
 use super::frontmatter::parse_document_reader;
-use super::reader::is_reserved_markdown_path;
+use super::reader::{is_reserved_markdown_path, MAX_ASSET_BYTES};
 
 pub fn discover_documents(
     repository_root: &Path,
@@ -169,8 +169,7 @@ fn summarize_document(
 
     let relative_path = portable_path(repository_root, path);
     let has_companion_html = !is_reserved_markdown_path(&relative_path, &file_name)
-        && fs::symlink_metadata(path.with_extension("html"))
-            .is_ok_and(|companion| companion.is_file());
+        && has_valid_companion_html(repository_root, path);
 
     Ok(DocumentSummary {
         path: relative_path,
@@ -185,6 +184,18 @@ fn summarize_document(
         modified_at_unix_ms,
         size: metadata.len(),
     })
+}
+
+fn has_valid_companion_html(repository_root: &Path, markdown_path: &Path) -> bool {
+    let candidate = markdown_path.with_extension("html");
+    let Ok(canonical) = candidate.canonicalize() else {
+        return false;
+    };
+    if !canonical.starts_with(repository_root) || is_git_path(repository_root, &canonical) {
+        return false;
+    }
+    fs::metadata(&canonical)
+        .is_ok_and(|companion| companion.is_file() && companion.len() <= MAX_ASSET_BYTES)
 }
 
 fn is_markdown(path: &Path) -> bool {
@@ -454,6 +465,72 @@ mod tests {
         assert_eq!(metadata.title, "Small header");
         assert_eq!(metadata.frontmatter_status, FrontmatterStatus::Valid);
         assert_eq!(reader.bytes_consumed, header_bytes);
+    }
+
+    #[test]
+    fn discovery_detects_companion_html_including_in_repo_symlinks_and_rejects_escaped_or_git_targets(
+    ) {
+        let outside = tempfile::tempdir().unwrap();
+        let escaped_html = outside.path().join("escaped.html");
+        fs::write(&escaped_html, "<html>escaped</html>").unwrap();
+
+        let repo = fixture_repo(&[
+            ("docs/regular.md", "# regular"),
+            ("docs/regular.html", "<html>regular</html>"),
+            ("docs/index.md", "# index"),
+            ("docs/index.html", "<html>index</html>"),
+            ("docs/linked.md", "# linked"),
+            ("shared/linked.html", "<html>linked</html>"),
+            ("docs/escaped.md", "# escaped"),
+            ("docs/git-linked.md", "# git-linked"),
+            (".git/internal.html", "<html>git</html>"),
+        ]);
+
+        let symlinks_supported = try_create_file_symlink(
+            &repo.path().join("shared/linked.html"),
+            &repo.path().join("docs/linked.html"),
+        );
+        if symlinks_supported {
+            assert!(try_create_file_symlink(
+                &escaped_html,
+                &repo.path().join("docs/escaped.html"),
+            ));
+            assert!(try_create_file_symlink(
+                &repo.path().join(".git/internal.html"),
+                &repo.path().join("docs/git-linked.html"),
+            ));
+        }
+
+        let catalog = discover_documents(repo.path(), &["docs".into()]).unwrap();
+        let has_html = |doc_path: &str| {
+            catalog
+                .documents
+                .iter()
+                .find(|doc| doc.path == doc_path)
+                .unwrap()
+                .has_companion_html
+        };
+
+        assert!(has_html("docs/regular.md"));
+        assert!(!has_html("docs/index.md"));
+        assert!(!has_html("docs/escaped.md"));
+        assert!(!has_html("docs/git-linked.md"));
+        assert_eq!(has_html("docs/linked.md"), symlinks_supported);
+    }
+
+    #[cfg(unix)]
+    fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        std::os::unix::fs::symlink(original, link).unwrap();
+        true
+    }
+
+    #[cfg(windows)]
+    fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
+        match std::os::windows::fs::symlink_file(original, link) {
+            Ok(()) => true,
+            Err(error) if error.raw_os_error() == Some(1314) => false,
+            Err(error) => panic!("unexpected windows symlink failure: {error}"),
+        }
     }
 
     fn fixture_repo(files: &[(&str, &str)]) -> TempDir {
