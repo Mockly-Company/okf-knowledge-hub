@@ -96,6 +96,7 @@ impl DocumentReader {
         );
         content.companion_html = companion_html;
         content.html_sync_status = html_sync_status;
+        content.summary.has_companion_html = content.companion_html.is_some();
         Ok(content)
     }
 
@@ -347,7 +348,7 @@ fn inject_csp_meta(html: &str) -> String {
     format!("{SANDBOX_CSP_META}{html}")
 }
 
-fn is_reserved_markdown_file(file_name: &str) -> bool {
+pub(crate) fn is_reserved_markdown_file(file_name: &str) -> bool {
     file_name == "index.md" || file_name == "log.md" || file_name.eq_ignore_ascii_case("README.md")
 }
 
@@ -393,6 +394,10 @@ pub(crate) fn document_content_from_bytes(
         title: parsed.title,
         document_id: parsed.document_id,
         frontmatter_status: parsed.frontmatter_status,
+        doc_type: parsed.doc_type,
+        domain: parsed.domain,
+        status: parsed.status,
+        has_companion_html: false,
         modified_at_unix_ms,
         size,
     };

@@ -47,6 +47,10 @@ export interface DocumentSummary {
   title: string;
   documentId: string | null;
   frontmatterStatus: FrontmatterStatus;
+  docType?: string | null;
+  domain?: string | null;
+  status?: string | null;
+  hasCompanionHtml?: boolean;
   modifiedAtUnixMs: number;
   size: number;
 }

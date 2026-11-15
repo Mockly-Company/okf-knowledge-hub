@@ -76,6 +76,7 @@ export function DocumentReader({
   const {
     state,
     authoringState,
+    preferredViewMode,
     copyText,
     openExternal,
     selectCurrentVersion,
@@ -84,7 +85,11 @@ export function DocumentReader({
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
   const [viewMode, setViewMode] = useState<"html" | "markdown">(() =>
-    document.companionHtml ? "html" : "markdown",
+    preferredViewMode === "markdown"
+      ? "markdown"
+      : document.companionHtml
+        ? "html"
+        : "markdown",
   );
   const [menuOpen, setMenuOpen] = useState(false);
   const [navigateTarget, setNavigateTarget] = useState<string | null>(null);
@@ -94,12 +99,24 @@ export function DocumentReader({
   const readerRef = useRef<HTMLElement>(null);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const navigationTargetRef = useRef<string | null>(null);
+  const pendingHeadingIdRef = useRef<string | null>(null);
   useEffect(() => { if (!isNarrow) setMobileContextOpen(false); }, [isNarrow]);
   useEffect(() => {
     if (state.selectedVersion === null) {
-      setViewMode(document.companionHtml ? "html" : "markdown");
+      setViewMode(
+        preferredViewMode === "markdown"
+          ? "markdown"
+          : document.companionHtml
+            ? "html"
+            : "markdown",
+      );
     }
-  }, [document.summary.path, document.companionHtml, state.selectedVersion]);
+  }, [
+    document.summary.path,
+    document.companionHtml,
+    preferredViewMode,
+    state.selectedVersion,
+  ]);
 
   const handleStartAiFromDoc = () => {
     setPendingAiLaunch({
@@ -117,6 +134,42 @@ export function DocumentReader({
   };
   const hasCompanionHtml = Boolean(document.companionHtml) && state.selectedVersion === null;
   const effectiveView = hasCompanionHtml ? viewMode : "markdown";
+  useEffect(() => {
+    if (effectiveView !== "markdown") return;
+    const pendingId = pendingHeadingIdRef.current;
+    if (!pendingId) return;
+    pendingHeadingIdRef.current = null;
+    const frame = window.requestAnimationFrame(() => {
+      const reader = readerRef.current;
+      const target = reader?.ownerDocument.getElementById(pendingId);
+      if (!target || !reader?.contains(target)) return;
+      const canvas = reader.querySelector<HTMLElement>(".document-reader__canvas");
+      if (
+        canvas &&
+        /(auto|scroll)/.test(getComputedStyle(canvas).overflowY) &&
+        canvas.scrollHeight > canvas.clientHeight
+      ) {
+        const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+        const desired =
+          canvas.scrollTop +
+          target.getBoundingClientRect().top -
+          canvas.getBoundingClientRect().top -
+          offset;
+        const nextScrollTop = Math.max(
+          0,
+          Math.min(desired, canvas.scrollHeight - canvas.clientHeight),
+        );
+        if (typeof canvas.scrollTo === "function") {
+          canvas.scrollTo({ top: nextScrollTop, behavior: "auto" });
+        } else {
+          canvas.scrollTop = nextScrollTop;
+        }
+        return;
+      }
+      target.scrollIntoView?.({ block: "start" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [effectiveView, document.summary.path]);
   const headerRef = useRef<HTMLElement>(null);
   const contextToggleRef = useRef<HTMLButtonElement>(null);
   const contextCloseRef = useRef<HTMLButtonElement>(null);
@@ -161,7 +214,28 @@ export function DocumentReader({
       </TabsList>
       <IconButton ref={contextCloseRef} label={isNarrow ? "문서 문맥 닫기" : "문서 문맥 접기"} tooltip={false} aria-controls="document-reader-context" aria-expanded onClick={() => isNarrow ? setMobileContextOpen(false) : setContextCollapsed(true)}><PanelRightClose aria-hidden="true" /></IconButton>
     </div>
-    {tab === "overview" ? <DocumentOverview document={document} readerRef={readerRef} onNavigate={isNarrow ? id => { navigationTargetRef.current = id; setMobileContextOpen(false); } : undefined} /> : <DocumentHistory />}
+    {tab === "overview" ? (
+      <DocumentOverview
+        document={document}
+        readerRef={readerRef}
+        onNavigate={
+          isNarrow
+            ? (id) => {
+                navigationTargetRef.current = id;
+                setMobileContextOpen(false);
+              }
+            : undefined
+        }
+        onRequestHeading={(id) => {
+          if (effectiveView === "html") {
+            pendingHeadingIdRef.current = id;
+            setViewMode("markdown");
+          }
+        }}
+      />
+    ) : (
+      <DocumentHistory />
+    )}
   </>;
 
   return (

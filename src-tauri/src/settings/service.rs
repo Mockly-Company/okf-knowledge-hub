@@ -14,6 +14,8 @@ pub const DISPLAY_DENSITY_KEY: &str = "display-density";
 pub const PENDING_INITIALIZATION_KEY: &str = "pending-initialization-context";
 pub const AI_CLI_COMMAND_KEY: &str = "ai-cli-command";
 pub const DASHBOARD_LAST_SEEN_AT_KEY: &str = "dashboard-last-seen-at";
+pub const DASHBOARD_CHECKED_NOTIFICATIONS_KEY: &str = "dashboard-checked-notifications";
+const MAX_CHECKED_NOTIFICATIONS: usize = 500;
 pub const LINKED_PROJECTS_KEY: &str = "linked-projects";
 pub const ACTIVE_PROJECT_KEY: &str = "active-project-id";
 pub const PROJECT_DOCS_REPOSITORIES_KEY: &str = "project-docs-repositories";
@@ -834,6 +836,73 @@ impl LocalSettingsService {
         match timestamp.map(str::trim).filter(|value| !value.is_empty()) {
             Some(trimmed) => self.store.write(DASHBOARD_LAST_SEEN_AT_KEY, trimmed),
             None => self.store.remove(DASHBOARD_LAST_SEEN_AT_KEY),
+        }
+    }
+
+    pub fn load_checked_dashboard_notifications(
+        &self,
+    ) -> Result<BTreeMap<String, String>, AppError> {
+        self.read_json(DASHBOARD_CHECKED_NOTIFICATIONS_KEY)
+    }
+
+    pub fn set_dashboard_notification_checked(
+        &self,
+        notification_id: &str,
+        checked: bool,
+        item_timestamp: Option<&str>,
+    ) -> Result<(), AppError> {
+        let trimmed_id = notification_id.trim();
+        if trimmed_id.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "알림 식별자가 비어 있습니다.",
+            ));
+        }
+
+        let mut entries: BTreeMap<String, String> =
+            self.read_json(DASHBOARD_CHECKED_NOTIFICATIONS_KEY)?;
+        if checked {
+            let timestamp = match item_timestamp.map(str::trim).filter(|s| !s.is_empty()) {
+                Some(raw)
+                    if crate::commands::dashboard::parse_rfc3339_unix(Some(raw)).is_some() =>
+                {
+                    raw.to_owned()
+                }
+                _ => time::OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .map_err(|_| {
+                        AppError::new(
+                            ErrorCode::LocalSettingsUnavailable,
+                            "확인 시각을 기록하지 못했습니다.",
+                        )
+                    })?,
+            };
+            entries.insert(trimmed_id.to_owned(), timestamp);
+            if entries.len() > MAX_CHECKED_NOTIFICATIONS {
+                let overflow = entries.len() - MAX_CHECKED_NOTIFICATIONS;
+                let mut ordered: Vec<(i64, String)> = entries
+                    .iter()
+                    .map(|(id, ts)| {
+                        (
+                            crate::commands::dashboard::parse_rfc3339_unix(Some(ts))
+                                .unwrap_or(i64::MIN),
+                            id.clone(),
+                        )
+                    })
+                    .collect();
+                ordered.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                for (_, oldest_id) in ordered.into_iter().take(overflow) {
+                    entries.remove(&oldest_id);
+                }
+            }
+        } else {
+            entries.remove(trimmed_id);
+        }
+
+        if entries.is_empty() {
+            self.store.remove(DASHBOARD_CHECKED_NOTIFICATIONS_KEY)
+        } else {
+            self.write_json(DASHBOARD_CHECKED_NOTIFICATIONS_KEY, &entries)
         }
     }
 
@@ -2045,5 +2114,48 @@ mod tests {
                 .unwrap(),
             Some(entry_two)
         );
+    }
+
+    #[test]
+    fn dashboard_checked_notifications_persist_toggle_and_evict_past_500_entries() {
+        let store = MemoryLocalSettingsStore::default();
+        let service = LocalSettingsService::new(store);
+
+        assert!(service
+            .load_checked_dashboard_notifications()
+            .unwrap()
+            .is_empty());
+
+        service
+            .set_dashboard_notification_checked("ws-1:open:10", true, Some("2026-11-15T01:00:00Z"))
+            .unwrap();
+        let stored = service.load_checked_dashboard_notifications().unwrap();
+        assert_eq!(
+            stored.get("ws-1:open:10").map(String::as_str),
+            Some("2026-11-15T01:00:00Z")
+        );
+
+        service
+            .set_dashboard_notification_checked("ws-1:open:10", false, None)
+            .unwrap();
+        assert!(service
+            .load_checked_dashboard_notifications()
+            .unwrap()
+            .is_empty());
+
+        for idx in 0..505 {
+            let day = (idx % 28) + 1;
+            let hour = (idx / 28) % 24;
+            let sec = idx % 60;
+            let ts = format!("2026-10-{day:02}T{hour:02}:00:{sec:02}Z");
+            service
+                .set_dashboard_notification_checked(&format!("ws-1:open:{idx:03}"), true, Some(&ts))
+                .unwrap();
+        }
+        let capped = service.load_checked_dashboard_notifications().unwrap();
+        assert_eq!(capped.len(), 500);
+        // The oldest timestamp (2026-10-01T00:00:00Z -> idx 0) must be evicted.
+        assert!(!capped.contains_key("ws-1:open:000"));
+        assert!(capped.contains_key("ws-1:open:504"));
     }
 }

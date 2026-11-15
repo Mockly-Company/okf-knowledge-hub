@@ -69,3 +69,24 @@ it("loads inline code snippets from connected code repositories when code_refs a
   );
   expect(await screen.findByText(/submitPayment/)).toBeInTheDocument();
 });
+
+it("prevents default hash navigation and calls onRequestHeading when heading is not in DOM (.html iframe view)", async () => {
+  const user = userEvent.setup();
+  const onRequestHeading = vi.fn();
+  const content = {
+    properties: {},
+    tableOfContents: [{ id: "2026-11-14-change", title: "2026-11-14 변경", level: 2 }],
+  } as unknown as DocumentContent;
+  window.location.hash = "#/documents";
+
+  render(
+    <section className="document-reader">
+      <DocumentOverview document={content} onRequestHeading={onRequestHeading} />
+    </section>,
+  );
+
+  await user.click(screen.getByRole("link", { name: "2026-11-14 변경" }));
+  expect(window.location.hash).toBe("#/documents");
+  expect(onRequestHeading).toHaveBeenCalledWith("2026-11-14-change");
+  window.location.hash = "";
+});

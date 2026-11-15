@@ -17,6 +17,7 @@
 
 ## 1. 아이디어 → PRD · 화면명세서 및 문서 2벌 원칙 (`.md` = AI 원본 / `.html` = 사람용 뷰)
 
+- **도메인 우선 폴더 구조 (`docs/domains/<domain>/`)**: 제품 기능 기획서(PRD)와 화면명세서는 도메인별 폴더(`docs/domains/<domain>/prd.md`, `screen-spec.md`)에 작성하고, 시스템 공통 원칙과 ADR은 `docs/architecture/`에 둡니다. Frontmatter에는 `type`과 권장 `domain` 키를 명시합니다.
 - **아이디어 구체화 산출물**: 아이디어를 받으면 기능 성격에 맞춰 **기획서/PRD**(`.okf/templates/product-spec.md`), **화면명세서**(`.okf/templates/screen-spec.md`), **설계/결정 기록**(`.okf/templates/design-doc.md`, `decision-record.md`)을 작성한다.
 - **AI는 `.md`만 읽고 수정한다**: 모든 지식의 유일한 원본은 `docs/**/*.md`이며, AI는 `.html`을 역파싱하지 않는다.
 - **사람을 위해 동반 `.html`을 항상 함께 생성·갱신한다**: 예약 파일(`index.md`, `log.md`, `README.md`)을 제외한 일반 문서를 작성·수정할 때는 같은 이름의 `<문서명>.html`을 표준 골격(`.okf/templates/human-view.html` + `docs/_assets/okf-doc.css`)으로 함께 생성·갱신한다.

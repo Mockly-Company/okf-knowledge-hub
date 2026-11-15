@@ -970,4 +970,169 @@ describe("HomePage (내 대시보드)", () => {
     expect(await screen.findByText("1 / 2")).toBeInTheDocument();
     expect(screen.getByText("#1 문서 알림 #1")).toBeInTheDocument();
   });
+
+  it("surfaces companion .html badge/path and quick-open .html / .md actions on merged doc notifications", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      notifications: [
+        makeNotification({
+          id: "merged_doc:PVT_alpha:31",
+          kind: "merged_doc",
+          prNumber: 31,
+          title: "대시보드 화면명세 반영",
+          primaryDocPath: "docs/specs/dashboard.md",
+          hasCompanionHtml: true,
+          isNew: false,
+        }),
+      ],
+    });
+
+    renderDashboard({
+      dashboardGateway,
+      docsRepoGateway,
+    });
+
+    expect(await screen.findByText("HTML · MD")).toBeVisible();
+    expect(
+      screen.getByText(/@alice · docs\/specs\/dashboard\.md · dashboard\.html/),
+    ).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "사람용 보기 (.html)" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("route-location")).toHaveTextContent(
+        "/documents?doc=docs%2Fspecs%2Fdashboard.md&view=html",
+      );
+    });
+
+    // 다시 홈 뷰로 렌더링해서 원문 (.md) 버튼 검증
+    const view2 = renderDashboard({
+      dashboardGateway,
+      docsRepoGateway,
+    });
+    const mdButtons = await screen.findAllByRole("button", { name: "원문 (.md)" });
+    await user.click(mdButtons[mdButtons.length - 1]);
+    await waitFor(() => {
+      const locations = screen.getAllByTestId("route-location");
+      expect(locations[locations.length - 1]).toHaveTextContent(
+        "/documents?doc=docs%2Fspecs%2Fdashboard.md&view=markdown",
+      );
+    });
+    view2.unmount();
+  });
+
+  it("toggles per-notification check state, persists acknowledgement, and filters unread items via 미확인만 보기", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      notifications: [
+        makeNotification({
+          id: "open_pr:PVT_alpha:41",
+          kind: "open_pr",
+          prNumber: 41,
+          title: "문서 계층 구조 PRD 리뷰",
+          primaryDocPath: "docs/domains/documents/prd.md",
+          hasCompanionHtml: true,
+          isNew: true,
+          isChecked: false,
+        }),
+        makeNotification({
+          id: "merged_doc:PVT_alpha:42",
+          kind: "merged_doc",
+          prNumber: 42,
+          title: "대시보드 화면명세 반영",
+          primaryDocPath: "docs/domains/dashboard/screen-spec.md",
+          hasCompanionHtml: true,
+          isNew: true,
+          isChecked: false,
+        }),
+      ],
+    });
+    const checkSpy = vi.spyOn(dashboardGateway, "setDashboardNotificationChecked");
+
+    renderDashboard({
+      dashboardGateway,
+      docsRepoGateway,
+    });
+
+    const pr41Toggle = await screen.findByRole("button", { name: "PR #41 확인 체크" });
+    expect(pr41Toggle).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getAllByText("NEW")).toHaveLength(2);
+
+    await user.click(pr41Toggle);
+
+    await waitFor(() => {
+      expect(checkSpy).toHaveBeenCalledWith(
+        "open_pr:PVT_alpha:41",
+        true,
+        "2026-11-14T02:00:00Z",
+      );
+    });
+    expect(await screen.findByText("확인됨", { selector: "span" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "PR #41 확인됨 (클릭하여 해제)" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByText("NEW")).toHaveLength(1);
+
+    const unreadFilterButton = screen.getByRole("button", { name: "미확인만 보기" });
+    await user.click(unreadFilterButton);
+    expect(unreadFilterButton).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText(/#41 문서 계층 구조 PRD 리뷰/)).toBeNull();
+    expect(screen.getByText(/#42 대시보드 화면명세 반영/)).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "PR #42 확인 체크" }));
+    expect(await screen.findByText("미확인 변경 알림이 없습니다.")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "전체 알림 보기" }));
+    expect(screen.getByText(/#41 문서 계층 구조 PRD 리뷰/)).toBeVisible();
+    expect(screen.getByText(/#42 대시보드 화면명세 반영/)).toBeVisible();
+  });
+
+  it("navigates to ?pr=<N>&view=html and ?pr=<N>&view=markdown from open_pr notification quick actions", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      notifications: [
+        makeNotification({
+          id: "open_pr:PVT_alpha:45",
+          kind: "open_pr",
+          prNumber: 45,
+          title: "대시보드 알림 확인 버튼 명세 리뷰",
+          primaryDocPath: "docs/domains/dashboard/screen-spec.md",
+          hasCompanionHtml: true,
+          isNew: true,
+          isChecked: false,
+        }),
+      ],
+    });
+
+    renderDashboard({
+      dashboardGateway,
+      docsRepoGateway,
+    });
+
+    await user.click(await screen.findByRole("button", { name: "사람용 보기 (.html)" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("route-location")).toHaveTextContent(
+        "/documents?pr=45&view=html",
+      );
+    });
+
+    const view2 = renderDashboard({
+      dashboardGateway,
+      docsRepoGateway,
+    });
+    const mdButtons = await screen.findAllByRole("button", { name: "원문 (.md)" });
+    await user.click(mdButtons[mdButtons.length - 1]);
+    await waitFor(() => {
+      const locations = screen.getAllByTestId("route-location");
+      expect(locations[locations.length - 1]).toHaveTextContent(
+        "/documents?pr=45&view=markdown",
+      );
+    });
+    view2.unmount();
+  });
 });

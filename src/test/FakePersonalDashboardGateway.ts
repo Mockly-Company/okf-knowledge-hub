@@ -114,4 +114,27 @@ export class FakePersonalDashboardGateway implements PersonalDashboardGateway {
     }));
     return next;
   }
+
+  async setDashboardNotificationChecked(
+    notificationId: string,
+    checked: boolean,
+  ): Promise<void> {
+    this.notifications = this.notifications.map((item) => {
+      if (item.id !== notificationId) return item;
+      if (checked) {
+        return { ...item, isChecked: true, isNew: false };
+      }
+      const itemMs = Date.parse(item.timestamp);
+      const lastSeenMs = this.lastSeenAt ? Date.parse(this.lastSeenAt) : Number.NaN;
+      const refMs = Date.parse(this.fetchedAt);
+      const restoredNew = Number.isFinite(itemMs)
+        ? Number.isFinite(lastSeenMs)
+          ? itemMs > lastSeenMs
+          : Number.isFinite(refMs)
+            ? itemMs >= refMs - 7 * 86_400 * 1000
+            : true
+        : false;
+      return { ...item, isChecked: false, isNew: restoredNew };
+    });
+  }
 }

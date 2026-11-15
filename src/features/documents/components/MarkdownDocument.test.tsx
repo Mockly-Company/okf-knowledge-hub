@@ -449,4 +449,65 @@ describe("MarkdownDocument", () => {
       "guide",
     );
   });
+
+  it("scrolls to Rust heading IDs on in-document #hash clicks without changing window.location.hash and opens relative .html links in html view", async () => {
+    const user = userEvent.setup();
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    window.location.hash = "#/documents";
+    try {
+      const gateway = new FakeDocumentsGateway();
+      const doc: DocumentContent = {
+        summary: {
+          path: "docs/guides/guide.md",
+          fileName: "guide.md",
+          title: "Guide",
+          documentId: "guide-id",
+          frontmatterStatus: { status: "valid" },
+          modifiedAtUnixMs: 0,
+          size: 200,
+        },
+        markdown:
+          "# Guide\n\n- [2026-11-14 변경](#2026-11-14-변경)\n- [화면명세서](./screen-spec.html)\n\n## 2026-11-14 변경\n\n내용입니다.",
+        properties: {},
+        tableOfContents: [
+          { level: 1, title: "Guide", id: "guide" },
+          { level: 2, title: "2026-11-14 변경", id: "2026-11-14-변경-2" },
+        ],
+        lastCommit: null,
+      };
+
+      let latestPreferredView: string | null = null;
+      function ViewProbe() {
+        latestPreferredView = useDocuments().preferredViewMode;
+        return null;
+      }
+
+      render(
+        <TestQueryProvider>
+          <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
+            <ViewProbe />
+            <MarkdownDocument document={doc} />
+          </DocumentsProvider>
+        </TestQueryProvider>,
+      );
+
+      await user.click(screen.getByRole("link", { name: "2026-11-14 변경" }));
+      expect(window.location.hash).toBe("#/documents");
+      const targetHeading = document.getElementById("2026-11-14-변경-2");
+      expect(targetHeading).not.toBeNull();
+      expect(scroll.mock.instances).toContain(targetHeading);
+
+      await user.click(screen.getByRole("link", { name: "화면명세서" }));
+      await waitFor(() => {
+        expect(gateway.calls).toContainEqual({
+          method: "readDocument",
+          args: ["session-id", "session-id", "docs/guides/screen-spec.md"],
+        });
+      });
+      expect(latestPreferredView).toBe("html");
+    } finally {
+      window.location.hash = "";
+      scroll.mockRestore();
+    }
+  });
 });

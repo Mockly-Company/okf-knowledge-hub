@@ -1316,39 +1316,50 @@ pub(crate) struct GroupedPrDocTarget {
     pub status: String,
 }
 
+fn is_auxiliary_pr_doc(md_path: &str) -> bool {
+    let norm = md_path.replace('\\', "/").to_ascii_lowercase();
+    let file_name = norm.rsplit('/').next().unwrap_or(&norm);
+    norm.starts_with(".okf/")
+        || matches!(file_name, "index.md" | "log.md" | "agents.md" | "readme.md")
+}
+
 pub(crate) fn group_planning_pr_document_targets(
     files: &[PullRequestChangedFile],
 ) -> Vec<GroupedPrDocTarget> {
     let mut targets: Vec<GroupedPrDocTarget> = Vec::new();
     for file in files {
-        let path = file.filename.trim();
-        if let Some(stem) = path.strip_suffix(".md") {
-            let companion = format!("{stem}.html");
-            if let Some(existing) = targets.iter_mut().find(|t| t.md_path == path) {
-                existing.status = file.status.clone();
-                existing.html_path = Some(companion);
-            } else {
-                targets.push(GroupedPrDocTarget {
-                    md_path: path.to_owned(),
-                    html_path: Some(companion),
-                    status: file.status.clone(),
-                });
-            }
-        } else if let Some(stem) = path.strip_suffix(".html") {
-            if !path.starts_with(".okf/templates/") {
-                let paired_md = format!("{stem}.md");
-                if let Some(existing) = targets.iter_mut().find(|t| t.md_path == paired_md) {
-                    existing.html_path = Some(path.to_owned());
+        let norm_path = file.filename.trim().replace('\\', "/");
+        if let Some((stem, ext)) = norm_path.rsplit_once('.') {
+            if ext.eq_ignore_ascii_case("md") {
+                let is_aux = is_auxiliary_pr_doc(&norm_path);
+                let companion = (!is_aux).then(|| format!("{stem}.html"));
+                if let Some(existing) = targets.iter_mut().find(|t| t.md_path == norm_path) {
+                    existing.status = file.status.clone();
+                    existing.html_path = companion;
                 } else {
                     targets.push(GroupedPrDocTarget {
+                        md_path: norm_path,
+                        html_path: companion,
+                        status: file.status.clone(),
+                    });
+                }
+            } else if ext.eq_ignore_ascii_case("html") && !norm_path.starts_with(".okf/") {
+                let paired_md = format!("{stem}.md");
+                if let Some(existing) = targets.iter_mut().find(|t| t.md_path == paired_md) {
+                    if !is_auxiliary_pr_doc(&existing.md_path) {
+                        existing.html_path = Some(norm_path);
+                    }
+                } else if !is_auxiliary_pr_doc(&paired_md) {
+                    targets.push(GroupedPrDocTarget {
                         md_path: paired_md,
-                        html_path: Some(path.to_owned()),
+                        html_path: Some(norm_path),
                         status: file.status.clone(),
                     });
                 }
             }
         }
     }
+    targets.sort_by_key(|target| is_auxiliary_pr_doc(&target.md_path));
     targets
 }
 
@@ -3810,5 +3821,44 @@ mod tests {
             Some("docs/product/roadmap-v2.html")
         );
         assert_eq!(grouped[0].status, "modified");
+    }
+
+    #[test]
+    fn prioritizes_spec_documents_with_html_before_auxiliary_index_and_log_files() {
+        use crate::github::model::PullRequestChangedFile;
+        let files = vec![
+            PullRequestChangedFile {
+                filename: "docs/index.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/log.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/product/roadmap-v2.html".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+            PullRequestChangedFile {
+                filename: "docs/product/roadmap-v2.md".into(),
+                status: "modified".into(),
+                previous_filename: None,
+            },
+        ];
+
+        let grouped = super::group_planning_pr_document_targets(&files);
+        assert_eq!(grouped.len(), 3);
+        assert_eq!(grouped[0].md_path, "docs/product/roadmap-v2.md");
+        assert_eq!(
+            grouped[0].html_path.as_deref(),
+            Some("docs/product/roadmap-v2.html")
+        );
+        assert_eq!(grouped[1].md_path, "docs/index.md");
+        assert_eq!(grouped[1].html_path, None);
+        assert_eq!(grouped[2].md_path, "docs/log.md");
+        assert_eq!(grouped[2].html_path, None);
     }
 }

@@ -97,11 +97,14 @@ function RouterPrDeepLinkSync({
 }: {
   ready: boolean;
   canOpenPrNumber: (prNumber: number) => boolean;
-  onOpenPr: (prNumber: number) => void;
+  onOpenPr: (prNumber: number, preferredView?: ReviewTab) => void;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const prParam = searchParams.get("pr");
+  const viewParam = searchParams.get("view");
+  const preferredView: ReviewTab | undefined =
+    viewParam === "html" || viewParam === "markdown" ? viewParam : undefined;
 
   useEffect(() => {
     if (!ready) return;
@@ -110,21 +113,22 @@ function RouterPrDeepLinkSync({
     const matchedPr =
       Number.isInteger(prNumber) && prNumber > 0 && canOpenPrNumber(prNumber);
     if (matchedPr) {
-      onOpenPr(prNumber);
+      onOpenPr(prNumber, preferredView);
     }
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
         next.delete("pr");
-        // 유효한 PR을 실제로 여는 경우에만 같은 커밋의 ?doc= 정리를 함께 보장한다(S21, S37).
+        // 유효한 PR을 실제로 여는 경우에만 같은 커밋의 ?doc=/view= 정리를 함께 보장한다(S21, S37).
         if (matchedPr) {
           next.delete("doc");
+          next.delete("view");
         }
         return next;
       },
       { replace: true },
     );
-  }, [ready, prParam, canOpenPrNumber, setSearchParams, onOpenPr]);
+  }, [ready, prParam, preferredView, canOpenPrNumber, setSearchParams, onOpenPr]);
 
   return null;
 }
@@ -141,6 +145,7 @@ export function PlanningPrReviewSection() {
   const ready = state.status === "ready" && sessionId !== null;
   const inRouter = useInRouterContext();
   const prevRepoRef = useRef(state.repositoryFullName);
+  const requestedViewTabRef = useRef<ReviewTab | null>(null);
 
   const [selectedPrNumber, setSelectedPrNumber] = useState<number | null>(null);
   const [selectedDocPath, setSelectedDocPath] = useState<string | null>(null);
@@ -181,14 +186,20 @@ export function PlanningPrReviewSection() {
     if (!detail || detail.documents.length === 0) return null;
     return (
       detail.documents.find((item) => item.path === selectedDocPath) ??
+      detail.documents.find(
+        (item) => item.hasCompanionHtml && Boolean(item.companionHtml),
+      ) ??
       detail.documents[0]
     );
   }, [detail, selectedDocPath]);
 
   const activeDocPath = activeDoc?.path ?? null;
+  const activeDocHasHtml = Boolean(
+    activeDoc?.hasCompanionHtml && activeDoc?.companionHtml,
+  );
   const activeDocDefaultTab: ReviewTab = !activeDoc
     ? "markdown"
-    : activeDoc.hasCompanionHtml && activeDoc.companionHtml
+    : activeDocHasHtml
       ? "html"
       : activeDoc.headMarkdown === null
         ? "diff"
@@ -196,8 +207,17 @@ export function PlanningPrReviewSection() {
 
   useEffect(() => {
     if (!activeDocPath) return;
-    setViewTab(activeDocDefaultTab);
-  }, [selectedPrNumber, activeDocPath, activeDocDefaultTab]);
+    const requested = requestedViewTabRef.current;
+    requestedViewTabRef.current = null;
+    if (
+      (requested === "html" && !activeDocHasHtml) ||
+      (requested === "markdown" && activeDoc?.headMarkdown === null)
+    ) {
+      setViewTab(activeDocDefaultTab);
+      return;
+    }
+    setViewTab(requested ?? activeDocDefaultTab);
+  }, [selectedPrNumber, activeDocPath, activeDocDefaultTab, activeDocHasHtml, activeDoc?.headMarkdown]);
 
   const diffRows = useMemo(() => {
     if (!activeDoc) return [];
@@ -207,7 +227,8 @@ export function PlanningPrReviewSection() {
     );
   }, [activeDoc]);
 
-  const handleOpenPr = useCallback((number: number) => {
+  const handleOpenPr = useCallback((number: number, preferredTab?: ReviewTab) => {
+    requestedViewTabRef.current = preferredTab ?? null;
     setSelectedPrNumber(number);
     setSelectedDocPath(null);
     setReviewComment("");

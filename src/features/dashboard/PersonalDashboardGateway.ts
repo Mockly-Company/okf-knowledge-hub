@@ -12,4 +12,9 @@ export interface PersonalDashboardGateway {
   ): Promise<PersonalDashboardResult>;
   getDashboardLastSeenAt(): Promise<string | null>;
   markDashboardSeen(timestamp?: string | null): Promise<string>;
+  setDashboardNotificationChecked(
+    notificationId: string,
+    checked: boolean,
+    itemTimestamp?: string | null,
+  ): Promise<void>;
 }

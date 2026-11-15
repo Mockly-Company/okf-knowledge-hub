@@ -920,4 +920,131 @@ describe("DocumentsPage", () => {
     });
     expect(screen.getByTestId("search-echo")).toHaveTextContent("?pr=17");
   });
+
+  it("supports ?view=markdown and .html ?doc= paths in Documents deep links", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const specDoc = {
+      summary: {
+        path: "docs/specs/screen-spec.md",
+        fileName: "screen-spec.md",
+        title: "화면명세서",
+        documentId: "spec-1",
+        frontmatterStatus: { status: "valid" as const },
+        modifiedAtUnixMs: 1_721_000_000_000,
+        size: 100,
+      },
+      markdown: "# 화면명세서\n\n마크다운 원문 본문",
+      properties: {},
+      tableOfContents: [{ level: 1, title: "화면명세서", id: "spec-heading" }],
+      lastCommit: null,
+      companionHtml: {
+        path: "docs/specs/screen-spec.html",
+        html: "<!doctype html><html><body><h1>HTML 화면명세서</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync" as const,
+    };
+    const readSpy = vi.spyOn(gateway, "readDocument").mockResolvedValue(specDoc);
+
+    const view1 = render(
+      <MemoryRouter initialEntries={["/documents?doc=docs%2Fspecs%2Fscreen-spec.md&view=markdown"]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("tab", { name: "원문 (.md)" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(await screen.findByText("마크다운 원문 본문")).toBeVisible();
+    view1.unmount();
+
+    readSpy.mockClear();
+    render(
+      <MemoryRouter initialEntries={["/documents?doc=docs%2Fspecs%2Fscreen-spec.html"]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(readSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        "docs/specs/screen-spec.md",
+      );
+    });
+    expect(
+      await screen.findByRole("tab", { name: "사람용 보기 (.html)" }),
+    ).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("renders structured domain groups and opens NewDocumentDialog prefilled for a domain folder", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const docsCatalog = {
+      documents: [
+        {
+          path: "docs/domains/documents/prd.md",
+          fileName: "prd.md",
+          title: "문서 도메인 PRD",
+          documentId: null,
+          frontmatterStatus: { status: "valid" as const },
+          docType: "Product Spec",
+          domain: "documents",
+          hasCompanionHtml: true,
+          modifiedAtUnixMs: 1,
+          size: 100,
+        },
+        {
+          path: "docs/domains/dashboard/screen-spec.md",
+          fileName: "screen-spec.md",
+          title: "대시보드 화면명세",
+          documentId: null,
+          frontmatterStatus: { status: "valid" as const },
+          docType: "Screen Spec",
+          domain: "dashboard",
+          hasCompanionHtml: false,
+          modifiedAtUnixMs: 1,
+          size: 100,
+        },
+      ],
+      roots: [],
+    };
+    gateway.sessionSnapshot.catalog = docsCatalog;
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter initialEntries={["/documents"]}>
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("heading", { level: 3, name: "Documents (문서)" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Dashboard (대시보드)" }),
+    ).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "docs/domains/documents 폴더에 새 문서" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      within(dialog).getByRole("button", { name: "저장 폴더 선택" }),
+    ).toHaveTextContent("docs / domains / documents");
+  });
 });

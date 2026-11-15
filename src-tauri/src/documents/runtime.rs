@@ -3518,6 +3518,10 @@ mod tests {
             title: "Session".to_owned(),
             document_id: None,
             frontmatter_status: FrontmatterStatus::Missing,
+            doc_type: None,
+            domain: None,
+            status: None,
+            has_companion_html: false,
             modified_at_unix_ms: 1,
             size: 32,
         }

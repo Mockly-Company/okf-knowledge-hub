@@ -522,4 +522,52 @@ describe("DocumentReader", () => {
       await screen.findByText(/사람용 \.html 뷰가 \.md 원본보다 오래되었습니다/),
     ).toBeVisible();
   });
+
+  it("switches to .md view and scrolls to the section when a right-hand TOC heading is clicked during .html preview", async () => {
+    const user = userEvent.setup();
+    const scroll = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    try {
+      const doc: DocumentContent = {
+        ...invalidFrontmatterDocument(),
+        summary: {
+          ...invalidFrontmatterDocument().summary,
+          path: "docs/product/roadmap-v2.md",
+          fileName: "roadmap-v2.md",
+          title: "OkHub v2 로드맵",
+        },
+        markdown: "# OkHub v2 로드맵\n\n## 2026-11-14 변경\n\n상세 내용입니다.",
+        tableOfContents: [
+          { level: 1, title: "OkHub v2 로드맵", id: "okhub-v2-roadmap" },
+          { level: 2, title: "2026-11-14 변경", id: "2026-11-14-change" },
+        ],
+        companionHtml: {
+          path: "docs/product/roadmap-v2.html",
+          html: "<!doctype html><html><body><h1>로드맵 HTML</h1></body></html>",
+          modifiedAtUnixMs: 1_721_000_000_500,
+        },
+        htmlSyncStatus: "in_sync",
+      };
+
+      renderSelectedDocument(doc);
+
+      expect(
+        await screen.findByRole("tab", { name: "사람용 보기 (.html)" }),
+      ).toHaveAttribute("aria-selected", "true");
+
+      const tocNav = screen.getByRole("navigation", { name: "목차" });
+      await user.click(within(tocNav).getByRole("link", { name: "2026-11-14 변경" }));
+
+      expect(
+        await screen.findByRole("tab", { name: "원문 (.md)" }),
+      ).toHaveAttribute("aria-selected", "true");
+      expect(await screen.findByText("상세 내용입니다.")).toBeVisible();
+      await waitFor(() => {
+        const heading = document.getElementById("2026-11-14-change");
+        expect(heading).not.toBeNull();
+        expect(scroll.mock.instances).toContain(heading);
+      });
+    } finally {
+      scroll.mockRestore();
+    }
+  });
 });

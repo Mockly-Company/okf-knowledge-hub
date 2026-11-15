@@ -213,6 +213,96 @@ function isMarkdownLink(path: string): boolean {
   return splitSuffix(path).path.toLocaleLowerCase().endsWith(".md");
 }
 
+function isHtmlLink(path: string): boolean {
+  return splitSuffix(path).path.toLocaleLowerCase().endsWith(".html");
+}
+
+function headingSlug(title: string): string {
+  return title
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]+/gu, "")
+    .trim()
+    .replace(/\s+/g, "-");
+}
+
+function resolveFragmentTarget(
+  article: HTMLElement,
+  rawFragment: string,
+): HTMLElement | null {
+  let decoded = rawFragment;
+  try {
+    decoded = decodeURIComponent(rawFragment);
+  } catch {
+    decoded = rawFragment;
+  }
+  const ownerDoc = article.ownerDocument;
+  const scope = article.closest(".document-reader") ?? article;
+  const candidates = [
+    decoded,
+    rawFragment,
+    `${defaultSchema.clobberPrefix}${decoded}`,
+  ];
+  for (const id of candidates) {
+    if (!id) continue;
+    const byId = ownerDoc.getElementById(id);
+    if (byId && scope.contains(byId)) {
+      return byId;
+    }
+  }
+  const decodedLower = decoded.toLocaleLowerCase();
+  const headings = [...article.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")];
+  for (const heading of headings) {
+    const idLower = heading.id.toLocaleLowerCase();
+    if (
+      idLower === decodedLower ||
+      (idLower.startsWith(`${decodedLower}-`) &&
+        /^\d+$/.test(idLower.slice(decodedLower.length + 1)))
+    ) {
+      return heading;
+    }
+  }
+  for (const heading of headings) {
+    if (headingSlug(heading.textContent ?? "") === decodedLower) {
+      return heading;
+    }
+  }
+  return null;
+}
+
+function scrollToMarkdownFragment(
+  article: HTMLElement | null,
+  rawFragment: string,
+): void {
+  if (!article || !rawFragment) return;
+  const target = resolveFragmentTarget(article, rawFragment);
+  if (!target) return;
+  const canvas = article.closest<HTMLElement>(".document-reader__canvas");
+  if (
+    canvas &&
+    /(auto|scroll)/.test(getComputedStyle(canvas).overflowY) &&
+    canvas.scrollHeight > canvas.clientHeight
+  ) {
+    const offset = parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+    const desired =
+      canvas.scrollTop +
+      target.getBoundingClientRect().top -
+      canvas.getBoundingClientRect().top -
+      offset;
+    const nextScrollTop = Math.max(
+      0,
+      Math.min(desired, canvas.scrollHeight - canvas.clientHeight),
+    );
+    if (typeof canvas.scrollTo === "function") {
+      canvas.scrollTo({ top: nextScrollTop, behavior: "auto" });
+    } else {
+      canvas.scrollTop = nextScrollTop;
+    }
+    return;
+  }
+  target.scrollIntoView?.({ block: "start" });
+}
+
 type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
 type HeadingProps = ComponentPropsWithoutRef<"h1"> & ExtraProps;
 
@@ -383,23 +473,37 @@ export function MarkdownDocument({
           : href ?? "#";
         const target = resolveRepositoryPath(document.summary.path, value);
         if (target) {
-          if (!isMarkdownLink(value)) {
-            return <span className="markdown-document__unsupported-link">지원하지 않는 파일 링크입니다: {children}</span>;
+          if (isMarkdownLink(value)) {
+            return (
+              <a
+                {...props}
+                href={value}
+                onClick={(event) => {
+                  event.preventDefault();
+                  selectDocument(target);
+                }}
+              >
+                {children}
+              </a>
+            );
           }
-          return (
-            <a
-              {...props}
-              href={value}
-              onClick={(event) => {
-                event.preventDefault();
-                selectDocument(target);
-              }}
-            >
-              {children}
-            </a>
-          );
+          if (isHtmlLink(value)) {
+            return (
+              <a
+                {...props}
+                href={value}
+                onClick={(event) => {
+                  event.preventDefault();
+                  selectDocument(target, undefined, "html");
+                }}
+              >
+                {children}
+              </a>
+            );
+          }
+          return <span className="markdown-document__unsupported-link">지원하지 않는 파일 링크입니다: {children}</span>;
         }
-        if (/^https?:/i.test(value)) {
+        if (/^(https?|mailto):/i.test(value)) {
           return (
             <a
               {...props}
@@ -413,7 +517,20 @@ export function MarkdownDocument({
             </a>
           );
         }
-        return <a {...props} href={value}>{children}</a>;
+        return (
+          <a
+            {...props}
+            href={value}
+            onClick={(event) => {
+              event.preventDefault();
+              if (value.startsWith("#")) {
+                scrollToMarkdownFragment(articleRef.current, value.slice(1));
+              }
+            }}
+          >
+            {children}
+          </a>
+        );
       },
       img: ({ src, alt, title }: ComponentPropsWithoutRef<"img"> & ExtraProps) => (
         <MarkdownImage

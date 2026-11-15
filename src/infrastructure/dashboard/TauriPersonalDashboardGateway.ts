@@ -157,6 +157,7 @@ function normalizeNotifications(raw: unknown): DashboardNotificationItem[] {
       hasCompanionHtml: Boolean(record.hasCompanionHtml),
       timestamp,
       isNew: Boolean(record.isNew),
+      isChecked: Boolean(record.isChecked),
     });
   }
   return items;
@@ -252,6 +253,18 @@ export class TauriPersonalDashboardGateway implements PersonalDashboardGateway {
   async markDashboardSeen(timestamp?: string | null): Promise<string> {
     return this.invokeCommand<string>("mark_dashboard_seen", {
       timestamp: timestamp ?? null,
+    });
+  }
+
+  async setDashboardNotificationChecked(
+    notificationId: string,
+    checked: boolean,
+    itemTimestamp?: string | null,
+  ): Promise<void> {
+    await this.invokeCommand<void>("set_dashboard_notification_checked", {
+      notificationId,
+      checked,
+      itemTimestamp: itemTimestamp ?? null,
     });
   }
 }

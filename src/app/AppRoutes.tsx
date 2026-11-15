@@ -1,5 +1,6 @@
 import { Suspense, lazy } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { AppFallbackScreen } from "@/components/patterns/AppFallbackScreen";
 import { AppShell } from "@/components/patterns/AppShell";
 import { DocumentsPage } from "@/pages/DocumentsPage";
 import { HomePage } from "@/pages/HomePage";
@@ -99,6 +100,20 @@ function IndexRedirect() {
   return <Navigate to={target} replace />;
 }
 
+function RouteNotFoundScreen() {
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  return (
+    <AppFallbackScreen
+      kind="not_found"
+      detail={location.pathname !== "/" ? location.pathname : null}
+      onGoHome={() => navigate("/home", { replace: true })}
+      onGoDocuments={() => navigate("/documents", { replace: true })}
+    />
+  );
+}
+
 export function AppRoutes({
   documentsGateway,
   aiGateway = sharedAiGateway,
@@ -169,8 +184,10 @@ export function AppRoutes({
           />
           <Route path="settings" element={<SettingsPage aiGateway={aiGateway} />} />
           <Route path="dev/design-system" element={<DesignSystemPage />} />
+          <Route path="*" element={<RouteNotFoundScreen />} />
         </Route>
       </Route>
+      <Route path="*" element={<RouteNotFoundScreen />} />
     </Routes>
   );
 }

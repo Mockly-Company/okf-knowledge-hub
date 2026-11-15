@@ -10,6 +10,7 @@ use crate::error::{AppError, ErrorCode};
 
 use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry};
 use super::frontmatter::parse_document_reader;
+use super::reader::is_reserved_markdown_file;
 
 pub fn discover_documents(
     repository_root: &Path,
@@ -166,12 +167,20 @@ fn summarize_document(
         Err(_) => 0,
     };
 
+    let has_companion_html = !is_reserved_markdown_file(&file_name)
+        && fs::symlink_metadata(path.with_extension("html"))
+            .is_ok_and(|companion| companion.is_file());
+
     Ok(DocumentSummary {
         path: portable_path(repository_root, path),
         file_name,
         title: parsed.title,
         document_id: parsed.document_id,
         frontmatter_status: parsed.frontmatter_status,
+        doc_type: parsed.doc_type,
+        domain: parsed.domain,
+        status: parsed.status,
+        has_companion_html,
         modified_at_unix_ms,
         size: metadata.len(),
     })

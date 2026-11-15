@@ -156,6 +156,7 @@ pub fn run() {
             settings::commands::set_display_density,
             settings::commands::get_dashboard_last_seen_at,
             settings::commands::mark_dashboard_seen,
+            settings::commands::set_dashboard_notification_checked,
             settings::commands::get_ai_config,
             settings::commands::set_ai_config,
             settings::commands::detect_ai_tools,

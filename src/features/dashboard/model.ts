@@ -41,6 +41,7 @@ export interface DashboardNotificationItem {
   hasCompanionHtml: boolean;
   timestamp: string;
   isNew: boolean;
+  isChecked?: boolean;
 }
 
 export interface DashboardWorkspaceFailure {

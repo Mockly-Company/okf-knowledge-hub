@@ -116,11 +116,13 @@ function sanitizedEvent(event: DocumentEventEnvelope): DocumentEventEnvelope {
 export interface DocumentsContextValue {
   state: DocumentsState;
   authoringState: DocumentAuthoringState;
+  preferredViewMode: "html" | "markdown" | null;
   setSearchQuery(query: string): void;
   retrySearch(): void;
   selectDocument(
     path: string,
     searchMatch?: Pick<SearchResult, "matchField" | "matchText">,
+    preferredViewMode?: "html" | "markdown",
   ): void;
   showDocumentsHome(): void;
   retrySession(): void;
@@ -190,6 +192,9 @@ export function DocumentsProvider({
     }),
   );
   const [sessionAttempt, setSessionAttempt] = useState(0);
+  const [preferredViewMode, setPreferredViewMode] = useState<
+    "html" | "markdown" | null
+  >(null);
   const [editorBaselines, setEditorBaselines] = useState<
     Record<string, string | null>
   >({});
@@ -574,6 +579,7 @@ export function DocumentsProvider({
     void (async () => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null || !(await flushCurrentEditor())) return;
+      setPreferredViewMode(null);
       dispatchAuthoringAccepted({ type: "editorCloseRequested" });
       dispatchAccepted({ type: "documentsHomeRequested", sessionId });
     })();
@@ -940,17 +946,26 @@ export function DocumentsProvider({
     (
       path: string,
       searchMatch?: Pick<SearchResult, "matchField" | "matchText">,
+      nextPreferredViewMode?: "html" | "markdown",
     ) => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null) return;
+      const trimmed = path.trim();
+      const isHtmlPath = /\.html$/i.test(trimmed);
+      const normalizedPath = isHtmlPath
+        ? trimmed.replace(/\.html$/i, ".md")
+        : path;
+      const resolvedViewMode =
+        nextPreferredViewMode ?? (isHtmlPath ? "html" : null);
       void (async () => {
         if (!(await flushCurrentEditor()) || stateRef.current.activeSessionId !== sessionId) return;
+        setPreferredViewMode(resolvedViewMode);
         dispatchAuthoringAccepted({ type: "editorCloseRequested" });
         dispatchAccepted({
           type: "documentSelectionRequested",
           sessionId,
           requestId: createId(),
-          path,
+          path: normalizedPath,
           searchMatch,
         });
       })();
@@ -963,6 +978,7 @@ export function DocumentsProvider({
   }, []);
 
   const resetForWorkspaceSwitch = useCallback(() => {
+    setPreferredViewMode(null);
     dispatchAuthoringAccepted({ type: "workspaceAuthoringReset" });
     dispatchAccepted({ type: "searchQueryChanged", query: "" });
     pendingWorkspaceResetRef.current = true;
@@ -1299,6 +1315,7 @@ export function DocumentsProvider({
     () => ({
       state,
       authoringState,
+      preferredViewMode,
       setSearchQuery,
       retrySearch,
       selectDocument,
@@ -1351,6 +1368,7 @@ export function DocumentsProvider({
       loadHistory,
       loadMoreHistory,
       openExternal,
+      preferredViewMode,
       publishDocumentDraft,
       readAsset,
       refresh,

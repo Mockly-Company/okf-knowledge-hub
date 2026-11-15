@@ -27,6 +27,11 @@ export interface PersonalDashboardContextValue {
   refresh(): Promise<void>;
   retryWorkspace(workspaceId: string): Promise<void>;
   markSeen(): Promise<void>;
+  toggleNotificationChecked(
+    notificationId: string,
+    checked: boolean,
+    itemTimestamp: string,
+  ): Promise<void>;
 }
 
 const PersonalDashboardContext =
@@ -186,6 +191,67 @@ export function PersonalDashboardProvider({
     await markDashboardSeen();
   }, [markDashboardSeen]);
 
+  const checkNotificationMutation = useMutation({
+    mutationFn: ({
+      notificationId,
+      checked,
+      itemTimestamp,
+    }: {
+      notificationId: string;
+      checked: boolean;
+      itemTimestamp: string;
+    }) =>
+      gateway.setDashboardNotificationChecked(
+        notificationId,
+        checked,
+        itemTimestamp,
+      ),
+    onSuccess: (_data, variables) => {
+      queryClient.setQueriesData<PersonalDashboardResult | undefined>(
+        { queryKey: personalDashboardKeys.all },
+        (current) => {
+          if (!current) return current;
+          const nextNotifications = current.notifications.map((item) => {
+            if (item.id !== variables.notificationId) return item;
+            if (variables.checked) {
+              return { ...item, isChecked: true, isNew: false };
+            }
+            const itemMs = Date.parse(item.timestamp);
+            const lastSeenMs = current.lastSeenAt
+              ? Date.parse(current.lastSeenAt)
+              : Number.NaN;
+            const fetchedMs = Date.parse(current.fetchedAt);
+            const restoredNew = Number.isFinite(itemMs)
+              ? Number.isFinite(lastSeenMs)
+                ? itemMs > lastSeenMs
+                : Number.isFinite(fetchedMs)
+                  ? itemMs >= fetchedMs - 7 * 86_400 * 1000
+                  : true
+              : false;
+            return { ...item, isChecked: false, isNew: restoredNew };
+          });
+          const prevUnreadNotif = current.unreadNotificationCount;
+          const nextUnreadNotif = nextNotifications.filter((n) => n.isNew).length;
+          const delta = nextUnreadNotif - prevUnreadNotif;
+          return {
+            ...current,
+            notifications: nextNotifications,
+            unreadNotificationCount: nextUnreadNotif,
+            totalUnreadCount: Math.max(0, current.totalUnreadCount + delta),
+          };
+        },
+      );
+    },
+  });
+
+  const mutateNotificationChecked = checkNotificationMutation.mutateAsync;
+  const toggleNotificationChecked = useCallback(
+    async (notificationId: string, checked: boolean, itemTimestamp: string) => {
+      await mutateNotificationChecked({ notificationId, checked, itemTimestamp });
+    },
+    [mutateNotificationChecked],
+  );
+
   const unreadCount = useMemo(() => {
     if (!query.data) return 0;
     return query.data.totalUnreadCount;
@@ -204,6 +270,7 @@ export function PersonalDashboardProvider({
       refresh,
       retryWorkspace,
       markSeen,
+      toggleNotificationChecked,
     }),
     [
       assigneeFilter,
@@ -215,6 +282,7 @@ export function PersonalDashboardProvider({
       query.isLoading,
       refresh,
       retryWorkspace,
+      toggleNotificationChecked,
       unreadCount,
     ],
   );

@@ -180,4 +180,57 @@ describe("PlanningPrReviewSection", () => {
       await screen.findByText(/검토 요청 PR #11을 생성했습니다/),
     ).toBeInTheDocument();
   });
+
+  it("opens directly on the .md tab when ?pr=<N>&view=markdown deep-link is provided", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.openPullRequests = [
+      {
+        number: 17,
+        title: "docs(v2): 기획 로드맵 및 기능 명세 제안",
+        body: "원문 탭 우선 열기 검증",
+        htmlUrl: "https://github.com/Acme-Org/acme-docs/pull/17",
+        authorLogin: "alice",
+        headRef: "draft/alice/roadmap",
+        headSha: "head17",
+        baseRef: "main",
+        baseSha: "base17",
+        isDraft: false,
+        mergeable: true,
+        updatedAt: "2026-11-14T00:00:00Z",
+      },
+    ];
+    gateway.pullRequestDetails.set(17, {
+      pullRequest: gateway.openPullRequests[0],
+      viewerLogin: "bob",
+      documents: [
+        {
+          path: "docs/domains/dashboard/screen-spec.md",
+          title: "대시보드 화면명세서",
+          status: "modified",
+          baseMarkdown: "# 대시보드 화면명세서\n\n기존\n",
+          headMarkdown: "# 대시보드 화면명세서\n\n신규 확인 버튼\n",
+          companionHtml: "<!doctype html><html><body><h1>대시보드</h1></body></html>",
+          hasCompanionHtml: true,
+        },
+      ],
+    });
+
+    render(
+      <TestQueryProvider>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+          <MemoryRouter initialEntries={["/documents?pr=17&view=markdown"]}>
+            <DocumentsProvider gateway={gateway}>
+              <PlanningPrReviewSection />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>,
+    );
+
+    const markdownTab = await screen.findByRole("tab", { name: "제안 문서 (.md)" });
+    await waitFor(() => {
+      expect(markdownTab).toHaveAttribute("aria-selected", "true");
+    });
+    expect(await screen.findByText(/신규 확인 버튼/)).toBeInTheDocument();
+  });
 });

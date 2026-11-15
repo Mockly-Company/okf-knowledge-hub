@@ -229,4 +229,72 @@ describe("DocumentSearch", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("검색 결과를 불러오지 못했습니다.");
     expect(screen.getByRole("button", { name: "검색 다시 시도" })).toBeVisible();
   });
+
+  it("groups documents by domain by default and supports switching view mode and category filters", async () => {
+    const user = userEvent.setup();
+    const docs: DocumentSummary[] = [
+      {
+        path: "docs/domains/documents/prd.md",
+        fileName: "prd.md",
+        title: "Documents PRD",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Product Spec",
+        domain: "documents",
+        hasCompanionHtml: true,
+        modifiedAtUnixMs: 1,
+        size: 100,
+      },
+      {
+        path: "docs/domains/dashboard/screen-spec.md",
+        fileName: "screen-spec.md",
+        title: "Dashboard 화면명세서",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Screen Spec",
+        domain: "dashboard",
+        hasCompanionHtml: false,
+        modifiedAtUnixMs: 1,
+        size: 100,
+      },
+    ];
+    const onNewDocumentInFolder = vi.fn();
+
+    render(
+      <DocumentSearch
+        query=""
+        documents={docs}
+        results={[]}
+        searchStatus="idle"
+        searchError={null}
+        indexStatus={{ status: "ready" }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+        onNewDocumentInFolder={onNewDocumentInFolder}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { level: 3, name: "Documents (문서)" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 3, name: "Dashboard (대시보드)" })).toBeVisible();
+    expect(screen.getByText("HTML")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "docs/domains/documents 폴더에 새 문서" }));
+    expect(onNewDocumentInFolder).toHaveBeenCalledWith("docs/domains/documents");
+
+    await user.click(screen.getByRole("button", { name: "문서 유형별" }));
+    expect(screen.getByRole("heading", { level: 3, name: "기획 · PRD" })).toBeVisible();
+    expect(screen.getByRole("heading", { level: 3, name: "화면명세" })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "전체 목록" }));
+    expect(screen.queryByRole("heading", { level: 3 })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "가이드" }));
+    expect(screen.getByText("선택한 분류에 해당하는 문서가 없습니다.")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "필터 초기화" }));
+    expect(screen.getByText("Documents PRD")).toBeVisible();
+    expect(screen.getByText("Dashboard 화면명세서")).toBeVisible();
+  });
 });
