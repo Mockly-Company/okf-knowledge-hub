@@ -60,7 +60,7 @@ function createOperationId(): string {
 }
 
 function normalizePreferredViewPath(path: string): string {
-  return path.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+  return path.trim().replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
 }
 
 function containsPrivateValue(value: string): boolean {
@@ -971,11 +971,12 @@ export function DocumentsProvider({
     ) => {
       const sessionId = stateRef.current.activeSessionId;
       if (sessionId === null) return;
-      const trimmed = path.trim();
-      const isHtmlPath = /\.html$/i.test(trimmed);
+      const basePath = normalizePreferredViewPath(path);
+      if (!basePath) return;
+      const isHtmlPath = /\.html$/i.test(basePath);
       const normalizedPath = isHtmlPath
-        ? trimmed.replace(/\.html$/i, ".md")
-        : path;
+        ? basePath.replace(/\.html$/i, ".md")
+        : basePath;
       const resolvedViewMode =
         nextPreferredViewMode ?? (isHtmlPath ? "html" : null);
       void (async () => {
@@ -984,7 +985,7 @@ export function DocumentsProvider({
         setPreferredViewPreference(
           resolvedViewMode
             ? {
-                path: normalizePreferredViewPath(normalizedPath),
+                path: normalizedPath,
                 mode: resolvedViewMode,
               }
             : null,

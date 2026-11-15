@@ -236,9 +236,7 @@ export function PersonalDashboardProvider({
           };
         },
       );
-      if (!variables.checked) {
-        void queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
-      }
+      void queryClient.invalidateQueries({ queryKey: personalDashboardKeys.all });
     },
   });
 

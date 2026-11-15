@@ -119,17 +119,26 @@ export class FakePersonalDashboardGateway implements PersonalDashboardGateway {
   async setDashboardNotificationChecked(
     notificationId: string,
     checked: boolean,
+    itemTimestamp?: string | null,
   ): Promise<void> {
+    const checkedMs = itemTimestamp ? Date.parse(itemTimestamp) : Number.NaN;
+    const refMs = Date.parse(this.fetchedAt);
+    const fallbackNowMs = Number.isFinite(refMs) ? refMs : Date.now();
     this.notifications = this.notifications.map((item) => {
       if (item.id !== notificationId) return item;
-      if (checked) {
+      const currentMs = Date.parse(item.timestamp);
+      if (
+        checked &&
+        (!Number.isFinite(checkedMs) ||
+          !Number.isFinite(currentMs) ||
+          checkedMs >= currentMs)
+      ) {
         return { ...item, isChecked: true, isNew: false };
       }
-      const refMs = Date.parse(this.fetchedAt);
       const restoredNew = isDashboardTimestampNew(
         item.timestamp,
         this.lastSeenAt,
-        Number.isFinite(refMs) ? refMs : Date.now(),
+        fallbackNowMs,
       );
       return { ...item, isChecked: false, isNew: restoredNew };
     });

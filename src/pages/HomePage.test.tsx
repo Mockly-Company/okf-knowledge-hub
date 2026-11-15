@@ -1135,4 +1135,50 @@ describe("HomePage (내 대시보드)", () => {
     });
     view2.unmount();
   });
+
+  it("resyncs via invalidateQueries after check so newer backend PR timestamps clear sticky checked state", async () => {
+    const user = userEvent.setup();
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "YoonDongGeun",
+      fetchedAt: "2026-11-14T06:00:00Z",
+      lastSeenAt: "2026-11-14T01:00:00Z",
+      notifications: [
+        makeNotification({
+          id: "open_pr:PVT_alpha:51",
+          kind: "open_pr",
+          prNumber: 51,
+          title: "PR 업데이트 후 확인 상태 재동기화",
+          primaryDocPath: "docs/domains/dashboard/screen-spec.md",
+          hasCompanionHtml: true,
+          timestamp: "2026-11-14T02:00:00Z",
+          isNew: true,
+          isChecked: false,
+        }),
+      ],
+    });
+
+    renderDashboard({
+      dashboardGateway,
+      docsRepoGateway,
+    });
+
+    const pr51Toggle = await screen.findByRole("button", { name: "PR #51 확인 체크" });
+    // 사용자가 오래된 타임스탬프 기준으로 확인하기 직전에 원격 PR이 새 커밋으로 갱신된 상황을 모사
+    dashboardGateway.notifications = dashboardGateway.notifications.map((item) => ({
+      ...item,
+      timestamp: "2026-11-14T05:00:00Z",
+      isNew: true,
+      isChecked: false,
+    }));
+
+    await user.click(pr51Toggle);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "PR #51 확인 체크" }),
+      ).toHaveAttribute("aria-pressed", "false");
+    });
+    expect(screen.getByText("NEW")).toBeVisible();
+  });
 });

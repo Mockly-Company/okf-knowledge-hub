@@ -104,9 +104,13 @@ export function DocumentSearch({
     searchError?.code === "document_index_unavailable";
   const searchFailed =
     isSearching && searchStatus === "error" && searchError !== null && !bodySearchUnavailable;
-  const titleAndPathMatches = isSearching
-    ? documents.filter((document) => matchesTitleOrPath(document, query))
-    : documents;
+  const titleAndPathMatches = useMemo(
+    () =>
+      isSearching
+        ? documents.filter((document) => matchesTitleOrPath(document, query))
+        : documents,
+    [documents, isSearching, query],
+  );
   const filteredDocuments = useMemo(
     () =>
       categoryFilter === "all"

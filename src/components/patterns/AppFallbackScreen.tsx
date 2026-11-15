@@ -89,7 +89,7 @@ export function AppFallbackScreen({
                 : "flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-info-soft)] text-[var(--color-info)]"
             }
           >
-            <Icon size={20} strokeWidth={1.75} />
+            <Icon aria-hidden="true" size={20} strokeWidth={1.75} />
           </div>
           <div className="grid min-w-0 gap-[var(--space-1)]">
             <span className="text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-muted)]">

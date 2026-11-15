@@ -1152,4 +1152,56 @@ describe("DocumentsPage", () => {
       within(dialog).getByRole("button", { name: "저장 폴더 선택" }),
     ).toHaveTextContent("docs / domains / documents");
   });
+
+  it("normalizes backslashes and ./ prefixes on .html deep-links before calling readDocument", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    const specDoc = {
+      summary: {
+        path: "docs/domains/dashboard/screen-spec.md",
+        fileName: "screen-spec.md",
+        title: "대시보드 화면명세",
+        documentId: "spec-norm",
+        frontmatterStatus: { status: "valid" as const },
+        modifiedAtUnixMs: 1_721_000_000_000,
+        size: 100,
+      },
+      markdown: "# 대시보드 화면명세\n\n원문",
+      properties: {},
+      tableOfContents: [],
+      lastCommit: null,
+      companionHtml: {
+        path: "docs/domains/dashboard/screen-spec.html",
+        html: "<!doctype html><html><body><h1>대시보드 HTML</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync" as const,
+    };
+    const readSpy = vi.spyOn(gateway, "readDocument").mockResolvedValue(specDoc);
+
+    render(
+      <MemoryRouter
+        initialEntries={[
+          "/documents?doc=%20.%5Cdocs%5Cdomains%5Cdashboard%5Cscreen-spec.html%20",
+        ]}
+      >
+        <DocumentsProvider gateway={gateway} searchDebounceMs={0}>
+          <main aria-label="OkHub">
+            <DocumentsPage />
+          </main>
+        </DocumentsProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => {
+      expect(readSpy).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        "docs/domains/dashboard/screen-spec.md",
+      );
+    });
+    expect(
+      await screen.findByRole("tab", { name: "사람용 보기 (.html)" }),
+    ).toHaveAttribute("aria-selected", "true");
+  });
 });
