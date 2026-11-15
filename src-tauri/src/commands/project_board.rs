@@ -1734,18 +1734,20 @@ pub(crate) async fn get_workspace_team_assignees_inner(
     }
 }
 
-pub(crate) async fn warm_workspace_team_members_cache(services: &AppServices) {
-    let auth_ref = services
-        .auth
-        .as_deref()
-        .map(|auth| auth as &dyn TeamAssigneesAuthPort);
-    let github_ref = services
-        .github
-        .as_deref()
-        .map(|github| github as &dyn TeamAssigneesGithubPort);
-    let _ =
-        get_workspace_team_assignees_inner(&services.local_settings, auth_ref, github_ref, true)
-            .await;
+pub(crate) fn spawn_warm_workspace_team_members_cache(services: &AppServices) {
+    let local_settings = services.local_settings.clone();
+    let auth = services.auth.clone();
+    let github = services.github.clone();
+    tauri::async_runtime::spawn(async move {
+        let auth_ref = auth
+            .as_deref()
+            .map(|auth| auth as &dyn TeamAssigneesAuthPort);
+        let github_ref = github
+            .as_deref()
+            .map(|github| github as &dyn TeamAssigneesGithubPort);
+        let _ =
+            get_workspace_team_assignees_inner(&local_settings, auth_ref, github_ref, true).await;
+    });
 }
 
 async fn resolve_team_assignee_workspace_async(

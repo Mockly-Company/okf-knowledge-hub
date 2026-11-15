@@ -904,7 +904,6 @@ export function ProjectPage({
     const repoFullName =
       confirm.detail?.repositoryFullName ??
       inferRepositoryFullNameFromUrl(confirm.issue.url) ??
-      teamAssigneesSnapshot?.docsRepositoryFullName ??
       null;
     try {
       const freshBoard = await assignToSelfMutation.mutateAsync({

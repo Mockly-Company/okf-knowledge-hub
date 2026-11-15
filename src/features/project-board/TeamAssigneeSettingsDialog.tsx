@@ -343,9 +343,10 @@ export function TeamAssigneeSettingsDialog({
               disabled={!draft || !isDirty || isSaving}
               loading={isSaving}
               onClick={() => {
-                if (draft) {
-                  void onSave(cloneTeamAssignees(draft));
-                }
+                if (!draft) return;
+                void Promise.resolve(onSave(cloneTeamAssignees(draft))).catch(
+                  () => {},
+                );
               }}
             >
               저장

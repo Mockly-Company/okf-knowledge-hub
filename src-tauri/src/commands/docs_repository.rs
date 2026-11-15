@@ -212,7 +212,7 @@ pub async fn pull_docs_repository(
     })
     .await
     .map_err(|_| pull_unavailable())??;
-    crate::commands::project_board::warm_workspace_team_members_cache(&state).await;
+    crate::commands::project_board::spawn_warm_workspace_team_members_cache(&state);
     Ok(outcome)
 }
 

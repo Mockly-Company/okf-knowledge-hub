@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceTeamAssigneesSnapshot } from "./model";
@@ -273,5 +273,19 @@ describe("TeamAssigneeSettingsDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "다시 시도" }));
     expect(onRefreshMembers).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows rejected onSave promises without leaving an unhandled rejection (#77)", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockRejectedValue(new Error("저장 실패"));
+    renderDialog({ onSave });
+
+    const aliceRow = screen.getByRole("listitem", { name: /@alice/i });
+    await user.click(within(aliceRow).getByRole("button", { name: "프론트엔드" }));
+    await user.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledTimes(1);
+    });
   });
 });
