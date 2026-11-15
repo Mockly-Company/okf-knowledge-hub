@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useNavigate } from "react-router-dom";
 import { DocumentsProvider } from "../DocumentsProvider";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { DocumentsPage } from "@/pages/DocumentsPage";
@@ -232,5 +232,78 @@ describe("PlanningPrReviewSection", () => {
       expect(markdownTab).toHaveAttribute("aria-selected", "true");
     });
     expect(await screen.findByText(/신규 확인 버튼/)).toBeInTheDocument();
+  });
+
+  it("switches view tab immediately when reopening the same PR with a different ?view= query parameter", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeDocumentsGateway();
+    gateway.openPullRequests = [
+      {
+        number: 17,
+        title: "docs(v2): 기획 로드맵 및 기능 명세 제안",
+        body: "동일 PR 재진입 뷰 전환 검증",
+        htmlUrl: "https://github.com/Acme-Org/acme-docs/pull/17",
+        authorLogin: "alice",
+        headRef: "draft/alice/roadmap",
+        headSha: "head17",
+        baseRef: "main",
+        baseSha: "base17",
+        isDraft: false,
+        mergeable: true,
+        updatedAt: "2026-11-14T00:00:00Z",
+      },
+    ];
+    gateway.pullRequestDetails.set(17, {
+      pullRequest: gateway.openPullRequests[0],
+      viewerLogin: "bob",
+      documents: [
+        {
+          path: "docs/domains/dashboard/screen-spec.md",
+          title: "대시보드 화면명세서",
+          status: "modified",
+          baseMarkdown: "# 대시보드 화면명세서\n\n기존\n",
+          headMarkdown: "# 대시보드 화면명세서\n\n신규 확인 버튼\n",
+          companionHtml: "<!doctype html><html><body><h1>대시보드 HTML</h1></body></html>",
+          hasCompanionHtml: true,
+        },
+      ],
+    });
+
+    function DeepLinkSwitcher() {
+      const navigate = useNavigate();
+      return (
+        <button
+          type="button"
+          onClick={() => navigate("/documents?pr=17&view=html")}
+        >
+          HTML 뷰로 다시 열기
+        </button>
+      );
+    }
+
+    render(
+      <TestQueryProvider>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+          <MemoryRouter initialEntries={["/documents?pr=17&view=markdown"]}>
+            <DocumentsProvider gateway={gateway}>
+              <DeepLinkSwitcher />
+              <PlanningPrReviewSection />
+            </DocumentsProvider>
+          </MemoryRouter>
+        </PreferencesProvider>
+      </TestQueryProvider>,
+    );
+
+    const markdownTab = await screen.findByRole("tab", { name: "제안 문서 (.md)" });
+    await waitFor(() => {
+      expect(markdownTab).toHaveAttribute("aria-selected", "true");
+    });
+
+    await user.click(screen.getByRole("button", { name: "HTML 뷰로 다시 열기" }));
+
+    const htmlTab = await screen.findByRole("tab", { name: "사람용 보기 (.html)" });
+    await waitFor(() => {
+      expect(htmlTab).toHaveAttribute("aria-selected", "true");
+    });
   });
 });

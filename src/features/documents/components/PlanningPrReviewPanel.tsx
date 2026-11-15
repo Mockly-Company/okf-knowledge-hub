@@ -145,9 +145,14 @@ export function PlanningPrReviewSection() {
   const ready = state.status === "ready" && sessionId !== null;
   const inRouter = useInRouterContext();
   const prevRepoRef = useRef(state.repositoryFullName);
-  const requestedViewTabRef = useRef<ReviewTab | null>(null);
+  const appliedDocKeyRef = useRef<string | null>(null);
 
   const [selectedPrNumber, setSelectedPrNumber] = useState<number | null>(null);
+  const [openViewRequest, setOpenViewRequest] = useState<{
+    prNumber: number;
+    preferredTab: ReviewTab | null;
+    nonce: number;
+  } | null>(null);
   const [selectedDocPath, setSelectedDocPath] = useState<string | null>(null);
   const [viewTab, setViewTab] = useState<ReviewTab>("html");
   const [reviewComment, setReviewComment] = useState("");
@@ -175,6 +180,7 @@ export function PlanningPrReviewSection() {
     if (prevRepoRef.current === state.repositoryFullName) return;
     prevRepoRef.current = state.repositoryFullName;
     setSelectedPrNumber(null);
+    setOpenViewRequest(null);
     setSelectedDocPath(null);
     setApproveError(null);
     setApprovalNotice(null);
@@ -206,18 +212,39 @@ export function PlanningPrReviewSection() {
         : "markdown";
 
   useEffect(() => {
-    if (!activeDocPath) return;
-    const requested = requestedViewTabRef.current;
-    requestedViewTabRef.current = null;
-    if (
-      (requested === "html" && !activeDocHasHtml) ||
-      (requested === "markdown" && activeDoc?.headMarkdown === null)
-    ) {
-      setViewTab(activeDocDefaultTab);
+    const docKey =
+      selectedPrNumber !== null && activeDocPath
+        ? `${selectedPrNumber}:${activeDocPath}`
+        : null;
+    if (!docKey) {
+      appliedDocKeyRef.current = null;
       return;
     }
-    setViewTab(requested ?? activeDocDefaultTab);
-  }, [selectedPrNumber, activeDocPath, activeDocDefaultTab, activeDocHasHtml, activeDoc?.headMarkdown]);
+    if (openViewRequest && openViewRequest.prNumber === selectedPrNumber) {
+      const requested = openViewRequest.preferredTab;
+      const nextTab =
+        !requested ||
+        (requested === "html" && !activeDocHasHtml) ||
+        (requested === "markdown" && activeDoc?.headMarkdown === null)
+          ? activeDocDefaultTab
+          : requested;
+      appliedDocKeyRef.current = docKey;
+      setViewTab(nextTab);
+      setOpenViewRequest(null);
+      return;
+    }
+    if (appliedDocKeyRef.current !== docKey) {
+      appliedDocKeyRef.current = docKey;
+      setViewTab(activeDocDefaultTab);
+    }
+  }, [
+    openViewRequest,
+    selectedPrNumber,
+    activeDocPath,
+    activeDocDefaultTab,
+    activeDocHasHtml,
+    activeDoc?.headMarkdown,
+  ]);
 
   const diffRows = useMemo(() => {
     if (!activeDoc) return [];
@@ -228,7 +255,11 @@ export function PlanningPrReviewSection() {
   }, [activeDoc]);
 
   const handleOpenPr = useCallback((number: number, preferredTab?: ReviewTab) => {
-    requestedViewTabRef.current = preferredTab ?? null;
+    setOpenViewRequest((prev) => ({
+      prNumber: number,
+      preferredTab: preferredTab ?? null,
+      nonce: (prev?.nonce ?? 0) + 1,
+    }));
     setSelectedPrNumber(number);
     setSelectedDocPath(null);
     setReviewComment("");
@@ -248,6 +279,7 @@ export function PlanningPrReviewSection() {
         trimmedComment.length > 0 ? trimmedComment : undefined,
       );
       setSelectedPrNumber(null);
+      setOpenViewRequest(null);
       setSelectedDocPath(null);
       setReviewComment("");
       setApprovalNotice(
@@ -373,6 +405,7 @@ export function PlanningPrReviewSection() {
               variant="ghost"
               onClick={() => {
                 setSelectedPrNumber(null);
+                setOpenViewRequest(null);
                 setApproveError(null);
               }}
               disabled={approving}

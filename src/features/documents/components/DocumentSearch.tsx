@@ -104,13 +104,6 @@ export function DocumentSearch({
     searchError?.code === "document_index_unavailable";
   const searchFailed =
     isSearching && searchStatus === "error" && searchError !== null && !bodySearchUnavailable;
-  const titleAndPathMatches = useMemo(
-    () =>
-      isSearching
-        ? documents.filter((document) => matchesTitleOrPath(document, query))
-        : documents,
-    [documents, isSearching, query],
-  );
   const filteredDocuments = useMemo(
     () =>
       categoryFilter === "all"
@@ -119,6 +112,29 @@ export function DocumentSearch({
             (doc) => classifyDocumentCategory(doc) === categoryFilter,
           ),
     [documents, categoryFilter],
+  );
+  const titleAndPathMatches = useMemo(
+    () =>
+      isSearching
+        ? filteredDocuments.filter((document) =>
+            matchesTitleOrPath(document, query),
+          )
+        : filteredDocuments,
+    [filteredDocuments, isSearching, query],
+  );
+  const filteredResults = useMemo(
+    () =>
+      categoryFilter === "all"
+        ? results
+        : results.filter((result) => {
+            const summary = documentByPath.get(result.path);
+            const docRef = summary ?? {
+              path: result.path,
+              fileName: result.path.split("/").pop() ?? result.path,
+            };
+            return classifyDocumentCategory(docRef) === categoryFilter;
+          }),
+    [categoryFilter, documentByPath, results],
   );
   const groupedDocuments: DocumentGroup[] = useMemo(() => {
     if (groupMode === "domain") {
@@ -133,7 +149,7 @@ export function DocumentSearch({
   const items: Array<DocumentSummary | SearchResult> = !isSearching
     ? filteredDocuments
     : searchStatus === "ready"
-      ? results
+      ? filteredResults
       : searchFailed
         ? []
         : titleAndPathMatches;
@@ -203,26 +219,28 @@ export function DocumentSearch({
         {toolbarAction}
       </div>
 
-      {!isSearching && documents.length > 0 ? (
+      {documents.length > 0 ? (
         <div className="document-search__taxonomy">
-          <div
-            className="document-search__view-switch"
-            role="group"
-            aria-label="문서 묶음 기준"
-          >
-            {GROUP_MODE_OPTIONS.map((option) => (
-              <UnstyledButton
-                key={option.mode}
-                type="button"
-                className="document-search__mode-chip"
-                data-active={groupMode === option.mode}
-                aria-pressed={groupMode === option.mode}
-                onClick={() => setGroupMode(option.mode)}
-              >
-                {option.label}
-              </UnstyledButton>
-            ))}
-          </div>
+          {!isSearching ? (
+            <div
+              className="document-search__view-switch"
+              role="group"
+              aria-label="문서 묶음 기준"
+            >
+              {GROUP_MODE_OPTIONS.map((option) => (
+                <UnstyledButton
+                  key={option.mode}
+                  type="button"
+                  className="document-search__mode-chip"
+                  data-active={groupMode === option.mode}
+                  aria-pressed={groupMode === option.mode}
+                  onClick={() => setGroupMode(option.mode)}
+                >
+                  {option.label}
+                </UnstyledButton>
+              ))}
+            </div>
+          ) : null}
           <div
             className="document-search__category-filters"
             role="group"
@@ -268,7 +286,7 @@ export function DocumentSearch({
             <p>검색 결과를 불러오지 못했습니다.</p>
           </StatusFeedback>
         ) : isAwaitingSearch && items.length === 0 ? null : items.length === 0 ? (
-          !isSearching && documents.length > 0 ? (
+          categoryFilter !== "all" && documents.length > 0 ? (
             <div className="document-search__filtered-empty">
               <p className="document-search__empty">
                 선택한 분류에 해당하는 문서가 없습니다.

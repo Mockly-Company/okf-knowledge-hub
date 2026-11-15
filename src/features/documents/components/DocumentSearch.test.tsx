@@ -297,4 +297,88 @@ describe("DocumentSearch", () => {
     expect(screen.getByText("Documents PRD")).toBeVisible();
     expect(screen.getByText("Dashboard 화면명세서")).toBeVisible();
   });
+
+  it("applies the active category filter to search results and title/path matches during search", async () => {
+    const user = userEvent.setup();
+    const docs: DocumentSummary[] = [
+      {
+        path: "docs/domains/documents/prd.md",
+        fileName: "prd.md",
+        title: "Documents PRD",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Product Spec",
+        domain: "documents",
+        modifiedAtUnixMs: 1,
+        size: 100,
+      },
+      {
+        path: "docs/domains/dashboard/screen-spec.md",
+        fileName: "screen-spec.md",
+        title: "Dashboard 화면명세서",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Screen Spec",
+        domain: "dashboard",
+        modifiedAtUnixMs: 1,
+        size: 100,
+      },
+    ];
+    const searchHits: SearchResult[] = [
+      {
+        path: "docs/domains/documents/prd.md",
+        title: "Documents PRD",
+        matchField: "body",
+        matchText: "명세",
+        snippet: "Documents PRD 본문 명세",
+      },
+      {
+        path: "docs/domains/dashboard/screen-spec.md",
+        title: "Dashboard 화면명세서",
+        matchField: "body",
+        matchText: "명세",
+        snippet: "Dashboard 화면명세서 본문",
+      },
+    ];
+
+    const view = render(
+      <DocumentSearch
+        query="docs"
+        documents={docs}
+        results={searchHits}
+        searchStatus="ready"
+        searchError={null}
+        indexStatus={{ status: "ready" }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "기획 · PRD" }));
+    expect(screen.getByRole("button", { name: /Documents PRD/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Dashboard 화면명세서/ })).toBeNull();
+
+    // indexing fallback 상태에서도 선택한 카테고리 필터가 동일하게 유지되는지 검증
+    view.rerender(
+      <DocumentSearch
+        query="docs"
+        documents={docs}
+        results={[]}
+        searchStatus="loading"
+        searchError={null}
+        indexStatus={{ status: "preparing", indexed: 1, total: 2 }}
+        onQueryChange={() => {}}
+        onSelectDocument={() => {}}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /Documents PRD/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Dashboard 화면명세서/ })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "전체" }));
+    expect(screen.getByRole("button", { name: /Dashboard 화면명세서/ })).toBeVisible();
+  });
 });

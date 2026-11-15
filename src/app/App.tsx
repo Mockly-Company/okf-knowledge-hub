@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { HashRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createQueryClient } from "@/infrastructure/query/queryClient";
@@ -70,9 +70,17 @@ export function App({
     () => personalDashboardGateway ?? createPersonalDashboardGateway(),
   );
   const [queryClient] = useState(() => createQueryClient());
+  const [hashResetKey, setHashResetKey] = useState(() => window.location.hash);
+
+  useEffect(() => {
+    const syncHash = () => setHashResetKey(window.location.hash);
+    window.addEventListener("hashchange", syncHash);
+    return () => window.removeEventListener("hashchange", syncHash);
+  }, []);
 
   return (
     <AppErrorBoundary
+      resetKey={hashResetKey}
       onGoHome={() => {
         window.location.hash = "#/home";
       }}
