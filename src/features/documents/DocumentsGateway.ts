@@ -106,6 +106,7 @@ export interface DocumentsGateway {
     path: string,
     viewMode?: "html" | "markdown",
     title?: string,
+    workspaceId?: string | null,
   ): Promise<void>;
   readStandaloneDocument?(
     workspaceId: string | null,

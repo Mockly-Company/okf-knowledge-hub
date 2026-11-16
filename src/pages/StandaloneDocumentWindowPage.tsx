@@ -107,6 +107,10 @@ export function StandaloneDocumentWindowPage({
     enabled: Boolean(
       documentsGateway.readStandaloneDocument && currentEntry?.path,
     ),
+    // workspaceId 없이 열린 창은 "현재 활성 워크스페이스"를 읽으므로, 메인 창에서 워크스페이스를
+    // 바꾼 뒤 이전 워크스페이스 캐시가 재사용되지 않도록 캐시를 유지하지 않는다.
+    staleTime: workspaceId ? undefined : 0,
+    gcTime: workspaceId ? undefined : 0,
   });
 
   const payload = docQuery.data;
@@ -289,6 +293,7 @@ export function StandaloneDocumentWindowPage({
                   currentEntry.path,
                   effectiveView,
                   doc?.summary.title,
+                  resolvedWorkspaceId,
                 )
               }
             >

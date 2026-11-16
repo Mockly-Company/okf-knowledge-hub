@@ -245,16 +245,21 @@ export class TauriDocumentsGateway implements DocumentsGateway {
     path: string,
     viewMode?: "html" | "markdown",
     title?: string,
+    workspaceId?: string | null,
   ): Promise<void> {
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      // Tauri v2 #[tauri::command] 인자는 JS 쪽에서 camelCase 키로 받는다
+      // (view_mode ← viewMode, workspace_id ← workspaceId). 기존 sessionId 등과 동일한 규칙.
       return this.invokeCommand("open_document_window", {
         path,
         viewMode: viewMode ?? null,
         title: title ?? null,
+        workspaceId: workspaceId ?? null,
       });
     }
     if (typeof window !== "undefined") {
       const params = new URLSearchParams({ doc: path });
+      if (workspaceId) params.set("workspaceId", workspaceId);
       if (viewMode) params.set("view", viewMode);
       window.open(
         `#/doc-window?${params.toString()}`,

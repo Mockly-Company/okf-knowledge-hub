@@ -1142,6 +1142,9 @@ export function DocumentsProvider({
           normalizedSelected !== null &&
           currentTarget.toLowerCase() === normalizedSelected.toLowerCase());
       if (sameTarget) {
+        // 뒤/앞 이동은 index를 먼저 옮기므로 여기서 sameTarget이 된다. 스킵 플래그를 함께 해제하지 않으면
+        // 다음 일반 문서 이동이 히스토리에 기록되지 않는다.
+        skipNextHistoryPushRef.current = false;
         return current;
       }
       if (skipNextHistoryPushRef.current) {
@@ -1233,7 +1236,12 @@ export function DocumentsProvider({
         normalized;
       if (gateway.openDocumentWindow) {
         try {
-          await gateway.openDocumentWindow(normalized, viewMode, resolvedTitle);
+          await gateway.openDocumentWindow(
+            normalized,
+            viewMode,
+            resolvedTitle,
+            stateRef.current.workspaceId,
+          );
           return;
         } catch (error) {
           throw asDocumentError(error);

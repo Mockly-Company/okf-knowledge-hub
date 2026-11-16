@@ -1337,5 +1337,20 @@ describe("DocumentsPage", () => {
     expect(
       await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
     ).toBeVisible();
+
+    // Regression (M7): after back/forward, the next normal navigation is still recorded,
+    // so "이전 문서" returns to the screen spec instead of skipping to the map home.
+    await user.click(
+      within(screen.getByRole("navigation", { name: "열린 문서 탭" })).getByRole(
+        "button",
+        { name: "이전 문서" },
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
   });
 });

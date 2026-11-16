@@ -628,8 +628,9 @@ export class FakeDocumentsGateway implements DocumentsGateway {
     path: string,
     viewMode?: "html" | "markdown",
     title?: string,
+    workspaceId?: string | null,
   ): Promise<void> {
-    this.record("openDocumentWindow", path, viewMode, title);
+    this.record("openDocumentWindow", path, viewMode, title, workspaceId);
     this.openedWindows.push({ path, viewMode, title });
   }
 
