@@ -23,6 +23,8 @@ interface WindowDocEntry {
   fragment?: string;
 }
 
+const MAX_WINDOW_HISTORY_ENTRIES = 30;
+
 function canonicalKey(path: string): string {
   return normalizeDocumentPath(path).replace(/\.html$/i, ".md").toLowerCase();
 }
@@ -64,6 +66,7 @@ export function StandaloneDocumentWindowPage({
   const [viewOverrides, setViewOverrides] = useState<
     Record<string, "html" | "markdown">
   >({});
+  const [externalError, setExternalError] = useState<string | null>(null);
 
   useEffect(() => {
     setHistory({
@@ -171,7 +174,7 @@ export function StandaloneDocumentWindowPage({
           view: target.view,
           fragment: target.fragment,
         },
-      ];
+      ].slice(-MAX_WINDOW_HISTORY_ENTRIES);
       return {
         entries: nextEntries,
         index: nextEntries.length - 1,
@@ -191,6 +194,12 @@ export function StandaloneDocumentWindowPage({
 
   const resolvedWorkspaceId: string | null =
     payload?.workspaceId ?? workspaceId ?? null;
+  const handleOpenExternal = (url: string) => {
+    setExternalError(null);
+    return documentsGateway.openExternal(url).catch(() => {
+      setExternalError(`외부 링크를 열 수 없습니다: ${url}`);
+    });
+  };
   const readWindowAsset = (documentPath: string, assetPath: string) => {
     if (!documentsGateway.readStandaloneDocumentAsset) {
       return Promise.reject(new Error("시안 에셋 리더를 사용할 수 없습니다."));
@@ -290,6 +299,12 @@ export function StandaloneDocumentWindowPage({
         </div>
       </header>
 
+      {externalError ? (
+        <StatusFeedback variant="banner" tone="warning">
+          <span>{externalError}</span>
+        </StatusFeedback>
+      ) : null}
+
       {docQuery.isPending ? (
         <p className="standalone-doc-window__status">문서를 불러오는 중…</p>
       ) : docQuery.isError || !doc ? (
@@ -303,7 +318,7 @@ export function StandaloneDocumentWindowPage({
               designs={designs}
               documentPath={doc.summary.path}
               readAsset={readWindowAsset}
-              onOpenExternal={(url) => void documentsGateway.openExternal(url)}
+              onOpenExternal={(url) => void handleOpenExternal(url)}
             />
           ) : null}
           {effectiveView === "html" && doc.companionHtml ? (
@@ -313,7 +328,7 @@ export function StandaloneDocumentWindowPage({
               documentPath={doc.summary.path}
               initialFragment={currentEntry.fragment ?? null}
               onNavigateDocument={navigateInWindow}
-              onOpenExternal={(url) => void documentsGateway.openExternal(url)}
+              onOpenExternal={(url) => void handleOpenExternal(url)}
             />
           ) : (
             <div className="standalone-doc-window__markdown">
@@ -325,7 +340,7 @@ export function StandaloneDocumentWindowPage({
                   navigateInWindow({ path, view: view ?? "markdown" })
                 }
                 readAsset={readWindowAsset}
-                onOpenExternal={(url) => documentsGateway.openExternal(url)}
+                onOpenExternal={handleOpenExternal}
                 onCopyText={(value) => documentsGateway.copyText(value)}
               />
             </div>

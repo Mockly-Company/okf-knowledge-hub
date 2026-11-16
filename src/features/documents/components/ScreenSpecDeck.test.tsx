@@ -213,4 +213,24 @@ describe("ScreenSpecDeck", () => {
     ).toBeVisible();
     expect(readDocumentPreview).toHaveBeenCalledTimes(6);
   });
+
+  it("shows fallback message instead of infinite loading when previewReader is unavailable", () => {
+    render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+        />
+      </TestQueryProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "화면명세 미리보기를 불러오지 못했습니다. 상단의 탭으로 열어 확인해 주세요.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("화면명세 본문을 불러오는 중…"),
+    ).not.toBeInTheDocument();
+  });
 });

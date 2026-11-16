@@ -117,6 +117,8 @@ describe("StandaloneDocumentWindowPage", () => {
 
   it("passes explicit null workspaceId when omitted from standalone window search params", async () => {
     const gateway = new FakeDocumentsGateway();
+    const user = userEvent.setup();
+    vi.spyOn(gateway, "openExternal").mockRejectedValueOnce(new Error("forbidden"));
     gateway.documentsByPath.set("docs/domains/dashboard/prd.md", {
       summary: {
         path: "docs/domains/dashboard/prd.md",
@@ -129,7 +131,13 @@ describe("StandaloneDocumentWindowPage", () => {
       },
       markdown: "# 대시보드 PRD\n\n본문",
       properties: {
-        designs: [{ title: "알림 시안", image: "assets/mock.svg" }],
+        designs: [
+          {
+            title: "알림 시안",
+            image: "assets/mock.svg",
+            url: "https://www.figma.com/file/123",
+          },
+        ],
       },
       tableOfContents: [],
       lastCommit: null,
@@ -169,5 +177,10 @@ describe("StandaloneDocumentWindowPage", () => {
       "docs/domains/dashboard/prd.md",
       "assets/mock.svg",
     );
+
+    await user.click(screen.getByRole("button", { name: "디자인 열기" }));
+    expect(
+      await screen.findByText("외부 링크를 열 수 없습니다: https://www.figma.com/file/123"),
+    ).toBeVisible();
   });
 });

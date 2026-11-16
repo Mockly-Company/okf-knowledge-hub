@@ -196,7 +196,10 @@ fn summarize_document(
     let mut reader = BufReader::new(file);
     let parsed = parse_document_reader(&mut reader, &file_name);
     let relative_path = portable_path(repository_root, path);
-    if matches!(parsed.frontmatter_status, FrontmatterStatus::Missing) {
+    if matches!(
+        parsed.frontmatter_status,
+        FrontmatterStatus::Missing | FrontmatterStatus::Invalid { .. }
+    ) {
         let _ = reader.rewind();
     }
     let (fallback_description, preview_headings, linked_paths) = scan_markdown_preview(
@@ -754,5 +757,29 @@ mod tests {
             self.bytes_consumed += amount;
             self.inner.consume(amount);
         }
+    }
+
+    #[test]
+    fn discovery_rewinds_and_extracts_preview_when_frontmatter_is_invalid() {
+        let repo = fixture_repo(&[(
+            "docs/invalid.md",
+            "---\ntitle: [broken\n---\n# 실제 제목\n\n## 핵심 흐름\n\n본문과 [연결 문서](other.md) 설명\n",
+        )]);
+        let catalog = discover_documents(repo.path(), &["docs".to_owned()]).unwrap();
+        let item = catalog
+            .documents
+            .iter()
+            .find(|doc| doc.path == "docs/invalid.md")
+            .unwrap();
+
+        assert!(matches!(
+            item.frontmatter_status,
+            FrontmatterStatus::Invalid { .. }
+        ));
+        assert!(item
+            .preview_headings
+            .iter()
+            .any(|heading| heading == "핵심 흐름"));
+        assert!(item.linked_paths.iter().any(|link| link == "docs/other.md"));
     }
 }

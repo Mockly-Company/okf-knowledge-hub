@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "doc-viewer",
-  "description": "Least-privilege capability for standalone OkHub document viewer windows (app #[tauri::command] IPC is allowed for local windows when has_app_acl is false in build.rs; excludes dialog/opener-path)",
+  "description": "Least-privilege capability for standalone OkHub document viewer windows (app #[tauri::command] IPC is allowed for local windows when has_app_acl is false in build.rs; permits external design/doc URLs via opener while keeping dialog/opener-path excluded)",
   "windows": [
     "doc-viewer-*"
   ],
@@ -12,13 +12,16 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "url": "https://github.com/login/device"
+          "url": "https://*"
         },
         {
-          "url": "https://github.com/settings/installations"
+          "url": "http://*"
         },
         {
-          "url": "https://github.com/Mockly-Company/okf-knowledge-hub/releases"
+          "url": "mailto:*"
+        },
+        {
+          "url": "tel:*"
         }
       ]
     }

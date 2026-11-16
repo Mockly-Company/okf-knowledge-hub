@@ -437,7 +437,7 @@ export function ScreenSpecDeck({
 
               <div className="screen-spec-card__body">
                 <div className="screen-spec-card__viewer">
-                  {query?.isPending ? (
+                  {previewReader && query?.isPending ? (
                     <p className="screen-spec-card__loading">
                       화면명세 본문을 불러오는 중…
                     </p>
