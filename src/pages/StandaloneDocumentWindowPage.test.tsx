@@ -114,4 +114,60 @@ describe("StandaloneDocumentWindowPage", () => {
     await user.click(screen.getByRole("tab", { name: "원문 (.md)" }));
     expect(await screen.findByText("화면명세 본문")).toBeVisible();
   });
+
+  it("passes explicit null workspaceId when omitted from standalone window search params", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.documentsByPath.set("docs/domains/dashboard/prd.md", {
+      summary: {
+        path: "docs/domains/dashboard/prd.md",
+        fileName: "prd.md",
+        title: "대시보드 PRD",
+        documentId: "dash-prd",
+        frontmatterStatus: { status: "valid" },
+        modifiedAtUnixMs: 1,
+        size: 120,
+      },
+      markdown: "# 대시보드 PRD\n\n본문",
+      properties: {
+        designs: [{ title: "알림 시안", image: "assets/mock.svg" }],
+      },
+      tableOfContents: [],
+      lastCommit: null,
+    });
+    const readDocSpy = vi.spyOn(gateway, "readStandaloneDocument");
+    const readAssetSpy = vi
+      .spyOn(gateway, "readStandaloneDocumentAsset")
+      .mockResolvedValue({
+        kind: "svg",
+        source: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+      });
+
+    render(
+      <TestQueryProvider>
+        <MemoryRouter
+          initialEntries={[
+            "/doc-window?doc=docs%2Fdomains%2Fdashboard%2Fprd.md&view=markdown",
+          ]}
+        >
+          <Routes>
+            <Route
+              path="doc-window"
+              element={
+                <StandaloneDocumentWindowPage documentsGateway={gateway} />
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </TestQueryProvider>,
+    );
+
+    expect(await screen.findByText("본문")).toBeVisible();
+    expect(readDocSpy).toHaveBeenCalledWith(null, "docs/domains/dashboard/prd.md");
+    expect(await screen.findByAltText("알림 시안")).toBeVisible();
+    expect(readAssetSpy).toHaveBeenCalledWith(
+      gateway.sessionSnapshot.workspaceId,
+      "docs/domains/dashboard/prd.md",
+      "assets/mock.svg",
+    );
+  });
 });

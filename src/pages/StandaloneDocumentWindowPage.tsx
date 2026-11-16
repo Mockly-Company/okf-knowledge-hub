@@ -33,7 +33,8 @@ export function StandaloneDocumentWindowPage({
   documentsGateway: DocumentsGateway;
 }) {
   const [searchParams] = useSearchParams();
-  const workspaceId = searchParams.get("workspaceId");
+  const rawWorkspaceId = searchParams.get("workspaceId")?.trim();
+  const workspaceId: string | null = rawWorkspaceId ? rawWorkspaceId : null;
   const rawDoc = searchParams.get("doc") ?? "";
   const rawView = searchParams.get("view");
   const rawFragment = searchParams.get("fragment");
@@ -188,7 +189,8 @@ export function StandaloneDocumentWindowPage({
     );
   }
 
-  const resolvedWorkspaceId = payload?.workspaceId ?? workspaceId;
+  const resolvedWorkspaceId: string | null =
+    payload?.workspaceId ?? workspaceId ?? null;
   const readWindowAsset = (documentPath: string, assetPath: string) => {
     if (!documentsGateway.readStandaloneDocumentAsset) {
       return Promise.reject(new Error("시안 에셋 리더를 사용할 수 없습니다."));

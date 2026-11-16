@@ -272,12 +272,13 @@ pub(crate) fn inline_local_images(canonical_root: &Path, html_path: &Path, html:
             if let Some(src_attr) = extract_html_attr(tag, "src") {
                 let trimmed = src_attr.trim();
                 let clean = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+                let lower = clean.to_ascii_lowercase();
                 let is_remote_or_data = clean.is_empty()
-                    || clean.starts_with("http://")
-                    || clean.starts_with("https://")
+                    || lower.starts_with("http://")
+                    || lower.starts_with("https://")
                     || clean.starts_with("//")
-                    || clean.starts_with("data:")
-                    || clean.starts_with("blob:");
+                    || lower.starts_with("data:")
+                    || lower.starts_with("blob:");
                 if !is_remote_or_data {
                     if let Some(mime) = local_image_mime(Path::new(clean)) {
                         let candidate = parent_dir.join(clean);
@@ -1630,5 +1631,21 @@ mod tests {
         let bytes = fs::read(path).unwrap();
         let modified = fs::metadata(path).unwrap().modified().unwrap();
         (bytes, modified)
+    }
+
+    #[test]
+    fn inline_local_images_skips_uppercase_remote_and_data_schemes() {
+        let repo = fixture_repo(&[
+            ("docs/spec.md", "# Spec"),
+            (
+                "docs/spec.html",
+                r#"<img src="HTTP://example.com/a.svg" alt="remote" /><img src="DATA:image/png;base64,AAA" alt="data" />"#,
+            ),
+        ]);
+        let reader = reader(&repo);
+        let doc = reader.read_document("docs/spec.md").unwrap();
+        let html = doc.companion_html.unwrap();
+        assert!(html.html.contains(r#"src="HTTP://example.com/a.svg""#));
+        assert!(html.html.contains(r#"src="DATA:image/png;base64,AAA""#));
     }
 }

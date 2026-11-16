@@ -1374,6 +1374,11 @@ pub async fn open_document_window(
     Ok(())
 }
 
+/// Standalone document read for `doc-viewer-*` windows.
+/// Because `build.rs` calls `tauri_build::build()` without `AppManifest::commands`,
+/// Tauri v2 leaves `has_app_acl == false`, so local `WebviewUrl::App` windows matched by
+/// `capabilities/doc-viewer.json` can invoke top-level `#[tauri::command]` handlers without
+/// phantom `"documents:allow-*"` permission entries (which fail ACL schema resolution).
 #[tauri::command]
 pub async fn read_standalone_document(
     app: AppHandle,

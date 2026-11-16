@@ -228,14 +228,31 @@ function DomainSectionBoard({
       setMeasuredEdges(nextEdges);
     };
 
+    let rafId: number | null = null;
+    const scheduleMeasure = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        measure();
+      });
+    };
+
     measure();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(board);
-    for (const el of cardRefs.current.values()) {
-      observer.observe(el);
-    }
-    return () => observer.disconnect();
+    const observer =
+      typeof ResizeObserver !== "undefined"
+        ? new ResizeObserver(scheduleMeasure)
+        : null;
+    observer?.observe(board);
+    board.addEventListener("scroll", scheduleMeasure, { passive: true });
+    window.addEventListener("resize", scheduleMeasure, { passive: true });
+    return () => {
+      if (rafId !== null) {
+        window.cancelAnimationFrame(rafId);
+      }
+      observer?.disconnect();
+      board.removeEventListener("scroll", scheduleMeasure);
+      window.removeEventListener("resize", scheduleMeasure);
+    };
   }, [edges, columns]);
 
   const folderPath = group.folderPath;
