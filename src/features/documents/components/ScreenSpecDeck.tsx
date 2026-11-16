@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries } from "@tanstack/react-query";
 import {
   ChevronLeft,
@@ -23,9 +23,12 @@ import {
 } from "../model";
 import { CompanionHtmlFrame } from "./CompanionHtmlFrame";
 import { DesignLinksBar, extractDesignsFromProperties } from "./DesignLinksBar";
+import { handleHorizontalTabKeyDown } from "./DocumentWorkbenchTabs";
 import { MarkdownDocument } from "./MarkdownDocument";
 
 type DeckPresentationMode = "strip" | "slide";
+
+const STRIP_BATCH_SIZE = 4;
 
 function canonicalKey(path: string): string {
   return normalizeDocumentPath(path).replace(/\.html$/i, ".md").toLowerCase();
@@ -70,10 +73,13 @@ export function ScreenSpecDeck({
   );
   const [mode, setMode] = useState<DeckPresentationMode>("strip");
   const [activeIndex, setActiveIndex] = useState(0);
+  const [stripLimit, setStripLimit] = useState(STRIP_BATCH_SIZE);
+  const stripSentinelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setDomainFilter(initialDomainFilter ?? "all");
     setActiveIndex(0);
+    setStripLimit(STRIP_BATCH_SIZE);
   }, [initialDomainFilter]);
 
   const screenSpecs = useMemo(
@@ -128,8 +134,32 @@ export function ScreenSpecDeck({
       const current = filteredSpecs[clampedIndex];
       return current ? [current] : [];
     }
-    return filteredSpecs;
-  }, [clampedIndex, filteredSpecs, mode]);
+    return filteredSpecs.slice(0, stripLimit);
+  }, [clampedIndex, filteredSpecs, mode, stripLimit]);
+
+  useEffect(() => {
+    if (
+      mode !== "strip" ||
+      visibleSpecs.length >= filteredSpecs.length ||
+      typeof IntersectionObserver === "undefined"
+    ) {
+      return;
+    }
+    const target = stripSentinelRef.current;
+    if (!target) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setStripLimit((current) =>
+            Math.min(filteredSpecs.length, current + STRIP_BATCH_SIZE),
+          );
+        }
+      },
+      { rootMargin: "400px 0px" },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [filteredSpecs.length, mode, visibleSpecs.length]);
 
   const effectiveWorkspaceKey = docsContext?.state.workspaceId ?? "standalone";
   const previewReader = readDocumentPreview ?? docsContext?.readDocumentPreview;
@@ -188,6 +218,7 @@ export function ScreenSpecDeck({
             onClick={() => {
               setDomainFilter("all");
               setActiveIndex(0);
+              setStripLimit(STRIP_BATCH_SIZE);
             }}
           >
             {`전체 (${screenSpecs.length})`}
@@ -202,6 +233,7 @@ export function ScreenSpecDeck({
               onClick={() => {
                 setDomainFilter(option.key);
                 setActiveIndex(0);
+                setStripLimit(STRIP_BATCH_SIZE);
               }}
             >
               {option.label}
@@ -278,9 +310,19 @@ export function ScreenSpecDeck({
                 type="button"
                 role="tab"
                 aria-selected={idx === clampedIndex}
+                aria-controls="screen-spec-deck-panel"
+                tabIndex={idx === clampedIndex ? 0 : -1}
                 data-active={idx === clampedIndex}
                 className="screen-spec-deck__filmstrip-item"
                 onClick={() => setActiveIndex(idx)}
+                onKeyDown={(event) =>
+                  handleHorizontalTabKeyDown(
+                    event,
+                    idx,
+                    filteredSpecs.length,
+                    setActiveIndex,
+                  )
+                }
               >
                 <span>{`${idx + 1}. ${spec.title}`}</span>
               </UnstyledButton>
@@ -289,7 +331,7 @@ export function ScreenSpecDeck({
         </div>
       ) : null}
 
-      <div className="screen-spec-deck__list">
+      <div id="screen-spec-deck-panel" className="screen-spec-deck__list">
         {visibleSpecs.map((spec, idx) => {
           const query = contentQueries[idx];
           const content = query?.data;
@@ -431,6 +473,22 @@ export function ScreenSpecDeck({
           );
         })}
       </div>
+
+      {mode === "strip" && visibleSpecs.length < filteredSpecs.length ? (
+        <div ref={stripSentinelRef} className="screen-spec-deck__more">
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() =>
+              setStripLimit((current) =>
+                Math.min(filteredSpecs.length, current + STRIP_BATCH_SIZE),
+              )
+            }
+          >
+            {`화면명세 더 불러오기 (${filteredSpecs.length - visibleSpecs.length}개 남음)`}
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

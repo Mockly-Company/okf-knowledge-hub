@@ -228,6 +228,9 @@ export function DocumentsPage({
     pullRequestUrl: string;
   } | null>(null);
   const inRouter = useInRouterContext();
+  const [pendingTabFocus, setPendingTabFocus] = useState<"home" | string | null>(
+    null,
+  );
   const deepLinkSync = inRouter ? (
     <DocumentsDeepLinkSync
       ready={state.status === "ready"}
@@ -434,6 +437,10 @@ export function DocumentsPage({
     <DocumentWorkbenchTabs
       openTabs={openTabs}
       activePath={state.selectedPath}
+      panelId="documents-workbench-panel"
+      pendingFocusTarget={pendingTabFocus}
+      onPendingFocusHandled={() => setPendingTabFocus(null)}
+      onKeyboardSelectTarget={setPendingTabFocus}
       canGoBack={canGoBackDocument}
       canGoForward={canGoForwardDocument}
       onGoBack={goBackDocument}
@@ -458,6 +465,7 @@ export function DocumentsPage({
           />
         ) : null}
         {workbenchTabsBar}
+        <div id="documents-workbench-panel" className="documents-page__workbench-panel">
         {state.selectedDocument ? (
           <DocumentReader
             document={state.selectedDocument}
@@ -504,6 +512,7 @@ export function DocumentsPage({
         ) : (
           <p className="documents-page__loading">문서를 여는 중…</p>
         )}
+        </div>
       </section>
     );
   }
@@ -563,6 +572,7 @@ export function DocumentsPage({
 
       <div className="documents-page__tools">
         {workbenchTabsBar}
+        <div id="documents-workbench-panel" className="documents-page__workbench-panel">
         <DocumentSearch
           query={state.searchQuery}
           documents={[...state.catalog.documents.filter(document => !additionalDocuments.some(extra => extra.path === document.path)), ...additionalDocuments]}
@@ -593,6 +603,7 @@ export function DocumentsPage({
             </Button>
           }
         />
+        </div>
       </div>
       {creationDialog}
     </section>

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TestQueryProvider } from "@/test/queryTestUtils";
 import type { DocumentAsset, DocumentContent, DocumentSummary } from "../model";
+import { extractDesignsFromProperties } from "./DesignLinksBar";
 import { ScreenSpecDeck } from "./ScreenSpecDeck";
 
 afterEach(cleanup);
@@ -136,5 +137,77 @@ describe("ScreenSpecDeck", () => {
     expect(
       await screen.findByRole("article", { name: "대시보드 화면명세서 화면명세" }),
     ).toBeVisible();
+  });
+
+  it("classifies string designs with the same image extensions as Rust and batches strip loading", async () => {
+    expect(
+      extractDesignsFromProperties({
+        designs: [
+          "assets/map-mock.svg",
+          "notes.txt",
+          "assets/spec.pdf",
+          "https://www.figma.com/file/123",
+        ],
+      }),
+    ).toEqual([
+      { title: "디자인 시안 1", url: null, image: "assets/map-mock.svg", status: null },
+      { title: "디자인 시안 2", url: "notes.txt", image: null, status: null },
+      { title: "디자인 시안 3", url: "assets/spec.pdf", image: null, status: null },
+      {
+        title: "디자인 시안 4",
+        url: "https://www.figma.com/file/123",
+        image: null,
+        status: null,
+      },
+    ]);
+
+    const user = userEvent.setup();
+    const specs: DocumentSummary[] = Array.from({ length: 6 }, (_, idx) => ({
+      path: `docs/domains/documents/screen-spec-${idx + 1}.md`,
+      fileName: `screen-spec-${idx + 1}.md`,
+      title: `화면명세 ${idx + 1}`,
+      documentId: null,
+      frontmatterStatus: { status: "valid" },
+      docType: "Screen Spec",
+      domain: "documents",
+      hasCompanionHtml: false,
+      modifiedAtUnixMs: idx + 1,
+      size: 100,
+    }));
+    const readDocumentPreview = vi.fn(
+      async (path: string): Promise<DocumentContent> => ({
+        summary: specs.find((item) => item.path === path)!,
+        markdown: `# ${path}`,
+        properties: { designs: ["notes.txt"] },
+        tableOfContents: [],
+        lastCommit: null,
+      }),
+    );
+
+    render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={specs}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={readDocumentPreview}
+        />
+      </TestQueryProvider>,
+    );
+
+    expect(
+      await screen.findByRole("article", { name: "화면명세 4 화면명세" }),
+    ).toBeVisible();
+    expect(readDocumentPreview).toHaveBeenCalledTimes(4);
+    expect(
+      screen.queryByRole("article", { name: "화면명세 5 화면명세" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "화면명세 더 불러오기 (2개 남음)" }),
+    );
+    expect(
+      await screen.findByRole("article", { name: "화면명세 6 화면명세" }),
+    ).toBeVisible();
+    expect(readDocumentPreview).toHaveBeenCalledTimes(6);
   });
 });

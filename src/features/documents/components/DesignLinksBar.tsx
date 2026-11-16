@@ -9,6 +9,12 @@ function isHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
 }
 
+/** Keep extension matching aligned with Rust `frontmatter::looks_like_image_asset`. */
+export function looksLikeImageAsset(path: string): boolean {
+  const clean = path.split("#")[0]?.split("?")[0]?.trim() ?? "";
+  return /\.(svg|png|jpe?g|gif|webp)$/i.test(clean);
+}
+
 export function extractDesignsFromProperties(
   properties: unknown,
 ): DocumentDesignLink[] {
@@ -21,11 +27,11 @@ export function extractDesignsFromProperties(
   rawList.forEach((entry, index) => {
     if (typeof entry === "string" && entry.trim()) {
       const trimmed = entry.trim();
-      const isRemote = isHttpUrl(trimmed);
+      const isImage = !isHttpUrl(trimmed) && looksLikeImageAsset(trimmed);
       designs.push({
         title: `디자인 시안 ${index + 1}`,
-        url: isRemote ? trimmed : null,
-        image: !isRemote ? trimmed : null,
+        url: isImage ? null : trimmed,
+        image: isImage ? trimmed : null,
         status: null,
       });
       return;
@@ -164,6 +170,8 @@ function DesignThumbnail({
             디자인 열기
           </Button>
         </div>
+      ) : !design.image && design.url ? (
+        <p className="document-design-card__ref">{design.url}</p>
       ) : null}
     </div>
   );

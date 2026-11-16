@@ -3,8 +3,7 @@
   "identifier": "default",
   "description": "Default desktop capability for OkHub",
   "windows": [
-    "main",
-    "doc-viewer-*"
+    "main"
   ],
   "permissions": [
     "core:default",

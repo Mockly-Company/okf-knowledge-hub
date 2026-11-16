@@ -1,3 +1,4 @@
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { ArrowLeft, ArrowRight, ExternalLink, Map as MapIcon, X } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/button";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
@@ -8,9 +9,40 @@ export interface OpenDocumentTab {
   title: string;
 }
 
+/** WAI-ARIA horizontal tablist keyboard navigation (ArrowLeft / ArrowRight / Home / End). */
+export function handleHorizontalTabKeyDown(
+  event: KeyboardEvent<HTMLElement>,
+  currentIndex: number,
+  totalTabs: number,
+  onSelectIndex: (nextIndex: number) => void,
+): void {
+  if (totalTabs <= 0) return;
+  let nextIndex: number | null = null;
+  if (event.key === "ArrowRight") {
+    nextIndex = (currentIndex + 1) % totalTabs;
+  } else if (event.key === "ArrowLeft") {
+    nextIndex = (currentIndex - 1 + totalTabs) % totalTabs;
+  } else if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = totalTabs - 1;
+  }
+  if (nextIndex === null) return;
+
+  event.preventDefault();
+  onSelectIndex(nextIndex);
+  const tablist = event.currentTarget.closest('[role="tablist"]');
+  const tabs = tablist?.querySelectorAll<HTMLElement>('[role="tab"]');
+  tabs?.[nextIndex]?.focus();
+}
+
 export function DocumentWorkbenchTabs({
   openTabs,
   activePath,
+  panelId,
+  pendingFocusTarget = null,
+  onPendingFocusHandled,
+  onKeyboardSelectTarget,
   canGoBack,
   canGoForward,
   onGoBack,
@@ -22,6 +54,10 @@ export function DocumentWorkbenchTabs({
 }: {
   openTabs: readonly OpenDocumentTab[];
   activePath: string | null;
+  panelId?: string;
+  pendingFocusTarget?: "home" | string | null;
+  onPendingFocusHandled?(): void;
+  onKeyboardSelectTarget?(target: "home" | string): void;
   canGoBack: boolean;
   canGoForward: boolean;
   onGoBack(): void;
@@ -31,13 +67,55 @@ export function DocumentWorkbenchTabs({
   onCloseTab(path: string): void;
   onOpenNewWindow?(path: string): void;
 }) {
-  if (openTabs.length === 0 && activePath === null) {
-    return null;
-  }
+  const tablistRef = useRef<HTMLDivElement>(null);
 
   const normalizedActive = activePath
     ? normalizeDocumentPath(activePath).toLowerCase()
     : null;
+  const normalizedPending =
+    pendingFocusTarget === null
+      ? null
+      : pendingFocusTarget === "home"
+        ? "home"
+        : normalizeDocumentPath(pendingFocusTarget).toLowerCase();
+  const focusTargetReached =
+    normalizedPending !== null &&
+    ((normalizedPending === "home" && normalizedActive === null) ||
+      (normalizedPending !== "home" && normalizedActive === normalizedPending));
+
+  useEffect(() => {
+    if (!focusTargetReached) return;
+    const activeTab = tablistRef.current?.querySelector<HTMLElement>(
+      '[role="tab"][aria-selected="true"]',
+    );
+    activeTab?.focus();
+    onPendingFocusHandled?.();
+  }, [focusTargetReached, normalizedPending, onPendingFocusHandled]);
+
+  if (openTabs.length === 0 && activePath === null) {
+    return null;
+  }
+
+  const activeTabIndex =
+    normalizedActive === null
+      ? -1
+      : openTabs.findIndex(
+          (tab) => normalizeDocumentPath(tab.path).toLowerCase() === normalizedActive,
+        );
+  const homeSelected = normalizedActive === null || activeTabIndex === -1;
+  const totalTabs = 1 + openTabs.length;
+  const selectByFlatIndex = (index: number) => {
+    if (index === 0) {
+      onKeyboardSelectTarget?.("home");
+      onSelectHome();
+      return;
+    }
+    const target = openTabs[index - 1];
+    if (target) {
+      onKeyboardSelectTarget?.(target.path);
+      onSelectTab(target.path);
+    }
+  };
 
   return (
     <div
@@ -66,20 +144,30 @@ export function DocumentWorkbenchTabs({
         </IconButton>
       </div>
 
-      <div className="document-workbench-tabs__list" role="tablist" aria-label="문서 탭 목록">
+      <div
+        ref={tablistRef}
+        className="document-workbench-tabs__list"
+        role="tablist"
+        aria-label="문서 탭 목록"
+      >
         <UnstyledButton
           type="button"
           role="tab"
           aria-selected={normalizedActive === null}
+          aria-controls={panelId}
+          tabIndex={homeSelected ? 0 : -1}
           data-active={normalizedActive === null}
           className="document-workbench-tab document-workbench-tab--home"
           onClick={onSelectHome}
+          onKeyDown={(event) =>
+            handleHorizontalTabKeyDown(event, 0, totalTabs, selectByFlatIndex)
+          }
         >
           <MapIcon aria-hidden="true" size={14} />
           <span>문서 맵</span>
         </UnstyledButton>
 
-        {openTabs.map((tab) => {
+        {openTabs.map((tab, tabIndex) => {
           const isActive =
             normalizedActive === normalizeDocumentPath(tab.path).toLowerCase();
           return (
@@ -92,9 +180,19 @@ export function DocumentWorkbenchTabs({
                 type="button"
                 role="tab"
                 aria-selected={isActive}
+                aria-controls={panelId}
+                tabIndex={isActive ? 0 : -1}
                 data-active={isActive}
                 className="document-workbench-tab"
                 onClick={() => onSelectTab(tab.path)}
+                onKeyDown={(event) =>
+                  handleHorizontalTabKeyDown(
+                    event,
+                    tabIndex + 1,
+                    totalTabs,
+                    selectByFlatIndex,
+                  )
+                }
                 onAuxClick={(event) => {
                   if (event.button === 1) {
                     event.preventDefault();

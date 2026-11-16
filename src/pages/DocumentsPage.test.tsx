@@ -1260,12 +1260,33 @@ describe("DocumentsPage", () => {
     ).toBeVisible();
 
     const updatedTabsNav = screen.getByRole("navigation", { name: "열린 문서 탭" });
+    const prdTab = within(updatedTabsNav).getByRole("tab", { name: "문서 도메인 PRD" });
+    const specTab = within(updatedTabsNav).getByRole("tab", {
+      name: "문서 도메인 화면명세서",
+    });
+    expect(prdTab).toHaveAttribute("aria-selected", "false");
+    expect(prdTab).toHaveAttribute("tabindex", "-1");
+    expect(specTab).toHaveAttribute("aria-selected", "true");
+    expect(specTab).toHaveAttribute("tabindex", "0");
+    expect(specTab).toHaveAttribute("aria-controls", "documents-workbench-panel");
+
+    // Keyboard navigation moves across tablist with ArrowLeft/Home/End.
+    specTab.focus();
+    await user.keyboard("{ArrowLeft}");
     expect(
-      within(updatedTabsNav).getByRole("tab", { name: "문서 도메인 PRD" }),
-    ).toHaveAttribute("aria-selected", "false");
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+    await user.keyboard("{Home}");
     expect(
-      within(updatedTabsNav).getByRole("tab", { name: "문서 도메인 화면명세서" }),
-    ).toHaveAttribute("aria-selected", "true");
+      await screen.findByRole("heading", { name: "Documents" }),
+    ).toBeVisible();
+    await user.keyboard("{End}");
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
 
     // Back / Forward history moves across visited documents & map home.
     await user.click(

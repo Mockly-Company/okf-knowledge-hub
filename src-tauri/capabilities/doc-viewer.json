@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "doc-viewer",
+  "description": "Least-privilege capability for standalone OkHub document viewer windows",
+  "windows": [
+    "doc-viewer-*"
+  ],
+  "permissions": [
+    "core:default",
+    "clipboard-manager:allow-write-text"
+  ]
+}

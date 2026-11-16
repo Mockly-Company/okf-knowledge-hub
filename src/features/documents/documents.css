@@ -3042,3 +3042,16 @@
   margin: 0;
   color: var(--color-text-muted);
 }
+
+.screen-spec-deck__more {
+  display: flex;
+  justify-content: center;
+  padding-top: var(--space-2);
+}
+
+.document-design-card__ref {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+  word-break: break-all;
+}

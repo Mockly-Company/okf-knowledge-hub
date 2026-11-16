@@ -1174,15 +1174,12 @@ fn normalize_standalone_doc_path(raw_path: &str) -> Result<(String, Option<Strin
 }
 
 fn resolve_registered_document_workspace(
-    services: &AppServices,
+    local_settings: &crate::settings::service::LocalSettingsService,
     app_data: &Path,
     requested_workspace_id: Option<Uuid>,
 ) -> CommandResult<(ConnectedDocumentWorkspace, String)> {
-    let hubs = services
-        .local_settings
-        .load_hub_workspaces()
-        .unwrap_or_default();
-    if let Ok(connected) = services.local_settings.load_connected_document_workspace() {
+    let hubs = local_settings.load_hub_workspaces().unwrap_or_default();
+    if let Ok(connected) = local_settings.load_connected_document_workspace() {
         if requested_workspace_id.is_none()
             || requested_workspace_id == Some(connected.workspace_id)
         {
@@ -1260,28 +1257,25 @@ pub(crate) async fn read_standalone_document_inner(
     path: String,
 ) -> CommandResult<StandaloneDocumentPayload> {
     let (normalized_path, _) = normalize_standalone_doc_path(&path)?;
-    let (connected, workspace_title) =
-        resolve_registered_document_workspace(services, app_data, workspace_id)?;
-    let repository_root = connected.repository_root.clone();
-    let document_roots = connected.document_roots.clone();
-    let repository_full_name = connected.repository_full_name.clone();
-    let resolved_workspace_id = connected.workspace_id;
-    let document = run_blocking(move || {
-        let reader = DocumentReader::new(&repository_root, &document_roots)?;
-        let mut content = reader.read_document(&normalized_path)?;
-        let history = DocumentHistory::open(&repository_root)?;
-        content.last_commit =
-            history.latest_change(&content.summary.path, content.summary.document_id)?;
-        Ok(content)
+    let local_settings = services.local_settings.clone();
+    let app_data = app_data.to_path_buf();
+    run_blocking(move || {
+        let (connected, workspace_title) =
+            resolve_registered_document_workspace(&local_settings, &app_data, workspace_id)?;
+        let reader = DocumentReader::new(&connected.repository_root, &connected.document_roots)?;
+        let mut document = reader.read_document(&normalized_path)?;
+        let history = DocumentHistory::open(&connected.repository_root)?;
+        document.last_commit =
+            history.latest_change(&document.summary.path, document.summary.document_id)?;
+        Ok(StandaloneDocumentPayload {
+            workspace_id: connected.workspace_id,
+            workspace_title,
+            repository_full_name: connected.repository_full_name,
+            document,
+        })
     })
     .await
-    .map_err(sanitize_document_error)?;
-    Ok(StandaloneDocumentPayload {
-        workspace_id: resolved_workspace_id,
-        workspace_title,
-        repository_full_name,
-        document,
-    })
+    .map_err(sanitize_document_error)
 }
 
 pub(crate) async fn read_standalone_document_asset_inner(
@@ -1292,12 +1286,14 @@ pub(crate) async fn read_standalone_document_asset_inner(
     asset_path: String,
 ) -> CommandResult<DocumentAsset> {
     let (normalized_doc, _) = normalize_standalone_doc_path(&document_path)?;
-    let (connected, _) = resolve_registered_document_workspace(services, app_data, workspace_id)?;
     let resolved_asset_path = resolve_asset_path(&normalized_doc, &asset_path)?;
-    let repository_root = connected.repository_root;
-    let document_roots = connected.document_roots;
+    let local_settings = services.local_settings.clone();
+    let app_data = app_data.to_path_buf();
     run_blocking(move || {
-        DocumentReader::new(&repository_root, &document_roots)?.read_asset(&resolved_asset_path)
+        let (connected, _) =
+            resolve_registered_document_workspace(&local_settings, &app_data, workspace_id)?;
+        DocumentReader::new(&connected.repository_root, &connected.document_roots)?
+            .read_asset(&resolved_asset_path)
     })
     .await
     .map_err(sanitize_document_error)
@@ -1315,7 +1311,11 @@ pub async fn open_document_window(
     let _access = state.acquire_authenticated_command().await?;
     let app_data = app_data_dir(&app)?;
     let (normalized_path, inferred_view) = normalize_standalone_doc_path(&path)?;
-    let (connected, _) = resolve_registered_document_workspace(&state, &app_data, workspace_id)?;
+    let local_settings = state.local_settings.clone();
+    let (connected, _) = run_blocking(move || {
+        resolve_registered_document_workspace(&local_settings, &app_data, workspace_id)
+    })
+    .await?;
 
     let mut hasher = DefaultHasher::new();
     connected.workspace_id.hash(&mut hasher);

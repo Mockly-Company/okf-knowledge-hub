@@ -46,12 +46,20 @@ describe("CompanionHtmlFrame", () => {
     ).toBeNull();
   });
 
-  it("strips author scripts, injects nonce CSP, and adds the sandbox navigation bridge", () => {
+  it("strips author scripts, inline event handlers, unsafe URLs, and injects nonce CSP", () => {
     const html =
-      '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="script-src *" /><script>alert(1)</script></head><body><a href="#sec-04">04 완료 조건</a><h2 id="sec-04">완료 조건</h2></body></html>';
+      '<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="script-src *" /><meta http-equiv="refresh" content="0;url=https://evil.test" /><script>alert(1)</script></head><body onload="alert(2)"><img src="x" onerror="alert(3)" /><img src="data:image/svg+xml;utf8,%3Csvg%3E%3C/svg%3E" alt="valid" /><svg onload="alert(4)"></svg><a href="&#106;avascript:alert(5)" onclick="alert(6)">악성 링크</a><a href="#sec-04">04 완료 조건</a><h2 id="sec-04">완료 조건</h2></body></html>';
     const prepared = prepareInteractiveCompanionHtml(html, "chan-1", "nonce123");
 
     expect(prepared).not.toContain("alert(1)");
+    expect(prepared).not.toContain("alert(2)");
+    expect(prepared).not.toContain("alert(3)");
+    expect(prepared).not.toContain("alert(4)");
+    expect(prepared).not.toContain("alert(5)");
+    expect(prepared).not.toContain("alert(6)");
+    expect(prepared).not.toMatch(/\bon(?:load|error|click)\s*=/i);
+    expect(prepared).not.toContain("http-equiv=\"refresh\"");
+    expect(prepared).toContain("data:image/svg+xml");
     expect(prepared).toContain("script-src 'nonce-nonce123'");
     expect(prepared).toContain('<script nonce="nonce123">');
     expect(prepared).toContain('"chan-1"');
