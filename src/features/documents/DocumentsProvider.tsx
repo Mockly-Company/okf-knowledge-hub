@@ -1241,6 +1241,8 @@ export function DocumentsProvider({
       }
       if (typeof window !== "undefined") {
         const params = new URLSearchParams({ doc: normalized });
+        const workspaceId = stateRef.current.workspaceId;
+        if (workspaceId) params.set("workspaceId", workspaceId);
         if (viewMode) params.set("view", viewMode);
         window.open(
           `#/doc-window?${params.toString()}`,
