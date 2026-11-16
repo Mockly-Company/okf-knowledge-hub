@@ -23,6 +23,7 @@ import type {
   PublishDocumentDraftRequest,
   PublishDocumentDraftResponse,
   ApproveAndMergeDocsPrResponse,
+  StandaloneDocumentPayload,
   Unlisten,
 } from "./model";
 
@@ -101,4 +102,18 @@ export interface DocumentsGateway {
     number: number,
     comment?: string,
   ): Promise<ApproveAndMergeDocsPrResponse>;
+  openDocumentWindow?(
+    path: string,
+    viewMode?: "html" | "markdown",
+    title?: string,
+  ): Promise<void>;
+  readStandaloneDocument?(
+    workspaceId: string | null,
+    path: string,
+  ): Promise<StandaloneDocumentPayload>;
+  readStandaloneDocumentAsset?(
+    workspaceId: string | null,
+    documentPath: string,
+    assetPath: string,
+  ): Promise<DocumentAsset>;
 }

@@ -10,6 +10,7 @@ import { DocumentDraftSwitcher } from "@/features/documents/components/DocumentD
 import { NewDocumentDialog } from "@/features/documents/components/NewDocumentDialog";
 import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
 import { DocumentReader } from "@/features/documents/components/DocumentReader";
+import { DocumentWorkbenchTabs } from "@/features/documents/components/DocumentWorkbenchTabs";
 import { PlanningPrReviewSection } from "@/features/documents/components/PlanningPrReviewPanel";
 import { useDocuments } from "@/features/documents/DocumentsProvider";
 import { documentsKeys } from "@/features/documents/queryKeys";
@@ -189,6 +190,13 @@ export function DocumentsPage({
   const {
     state,
     authoringState,
+    openTabs,
+    canGoBackDocument,
+    canGoForwardDocument,
+    closeDocumentTab,
+    goBackDocument,
+    goForwardDocument,
+    openDocumentInNewWindow,
     setSearchQuery,
     retrySearch,
     selectDocument,
@@ -422,6 +430,21 @@ export function DocumentsPage({
     );
   }
 
+  const workbenchTabsBar = (
+    <DocumentWorkbenchTabs
+      openTabs={openTabs}
+      activePath={state.selectedPath}
+      canGoBack={canGoBackDocument}
+      canGoForward={canGoForwardDocument}
+      onGoBack={goBackDocument}
+      onGoForward={goForwardDocument}
+      onSelectHome={showDocumentsHome}
+      onSelectTab={(path) => selectDocument(path)}
+      onCloseTab={closeDocumentTab}
+      onOpenNewWindow={(path) => void openDocumentInNewWindow(path)}
+    />
+  );
+
   if (state.selectedPath !== null) {
     return (
       <section className="documents-page documents-page--reader" aria-labelledby="documents-title">
@@ -434,6 +457,7 @@ export function DocumentsPage({
             repositoryGateway={repositoryGateway}
           />
         ) : null}
+        {workbenchTabsBar}
         {state.selectedDocument ? (
           <DocumentReader
             document={state.selectedDocument}
@@ -538,6 +562,7 @@ export function DocumentsPage({
       ) : null}
 
       <div className="documents-page__tools">
+        {workbenchTabsBar}
         <DocumentSearch
           query={state.searchQuery}
           documents={[...state.catalog.documents.filter(document => !additionalDocuments.some(extra => extra.path === document.path)), ...additionalDocuments]}
@@ -545,8 +570,11 @@ export function DocumentsPage({
           searchStatus={state.searchStatus}
           searchError={state.searchError}
           indexStatus={state.indexStatus}
+          defaultGroupMode="map"
           onQueryChange={setSearchQuery}
-          onSelectDocument={selectDocument}
+          onSelectDocument={(path, preferredView) =>
+            selectDocument(path, undefined, preferredView)
+          }
           onSelectResult={(result) =>
             selectDocument(result.path, {
               matchField: result.matchField,
@@ -555,6 +583,9 @@ export function DocumentsPage({
           }
           onRetry={retrySearch}
           onNewDocumentInFolder={openNewDocument}
+          onOpenInNewWindow={(path, viewMode, title) =>
+            void openDocumentInNewWindow(path, viewMode, title)
+          }
           toolbarAction={
             <Button className="documents-page__new-document" onClick={() => openNewDocument("docs")}>
               <FilePlus2 aria-hidden="true" />

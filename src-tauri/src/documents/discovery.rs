@@ -2,17 +2,17 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::BufReader;
+use std::io::{BufReader, Seek};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::error::{AppError, ErrorCode};
 
-use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry};
+use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry, FrontmatterStatus};
 use super::frontmatter::parse_document_reader;
 use super::reader::{
-    is_reserved_markdown_path, lower_stem_key, resolve_companion_html,
-    sort_companion_html_candidates, validate_companion_html_path,
+    is_reserved_markdown_path, lower_stem_key, resolve_companion_html, scan_markdown_preview,
+    sort_companion_html_candidates, validate_companion_html_path, MAX_PREVIEW_SCAN_BYTES,
 };
 
 pub fn discover_documents(
@@ -193,7 +193,18 @@ fn summarize_document(
         .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_owned();
-    let parsed = parse_document_reader(&mut BufReader::new(file), &file_name);
+    let mut reader = BufReader::new(file);
+    let parsed = parse_document_reader(&mut reader, &file_name);
+    let relative_path = portable_path(repository_root, path);
+    if matches!(parsed.frontmatter_status, FrontmatterStatus::Missing) {
+        let _ = reader.rewind();
+    }
+    let (fallback_description, preview_headings, linked_paths) = scan_markdown_preview(
+        &mut reader,
+        MAX_PREVIEW_SCAN_BYTES,
+        &relative_path,
+        &parsed.frontmatter_links,
+    );
     let modified_at_unix_ms = match metadata.modified() {
         Ok(modified) => match modified.duration_since(UNIX_EPOCH) {
             Ok(duration) => duration.as_millis().min(i64::MAX as u128) as i64,
@@ -202,7 +213,6 @@ fn summarize_document(
         Err(_) => 0,
     };
 
-    let relative_path = portable_path(repository_root, path);
     let has_companion_html = !is_reserved_markdown_path(&relative_path, &file_name)
         && match sibling_html_candidates {
             Some(candidates) => candidates.iter().any(|candidate| {
@@ -220,6 +230,10 @@ fn summarize_document(
         doc_type: parsed.doc_type,
         domain: parsed.domain,
         status: parsed.status,
+        description: parsed.description.or(fallback_description),
+        preview_headings,
+        linked_paths,
+        designs: parsed.designs,
         has_companion_html,
         modified_at_unix_ms,
         size: metadata.len(),
@@ -619,6 +633,56 @@ mod tests {
             &repo_alias,
             &repo_alias.join("docs/git-linked.md"),
         ));
+    }
+
+    #[test]
+    fn discovery_extracts_preview_headings_links_and_designs_without_breaking_frontmatter_bounds() {
+        let repo = fixture_repo(&[
+            (
+                "docs/domains/dashboard/prd.md",
+                "---\ntitle: 대시보드 PRD\ntype: Product Spec\ndomain: dashboard\nrelated_docs:\n  - ./screen-spec.html\n  - ../../architecture/adr-001.md\n  - ../../index.md\n  - ../../../../outside.md\n---\n\n대시보드 핵심 요구사항 요약 문장입니다.\n\n## [NEW] 1. 배경 및 목표\n\n### 2. 상세 규칙\n\n함께 보는 [화면명세](./screen-spec.md) 및 [외부](https://example.com) 링크.\n",
+            ),
+            (
+                "docs/domains/dashboard/screen-spec.md",
+                "---\ntitle: 대시보드 화면명세\ntype: Screen Spec\ndomain: dashboard\ndesigns:\n  - title: 대시보드 목업\n    image: assets/dashboard-mock.svg\n    status: approved\n---\n\n## 1. 화면 구성\n",
+            ),
+            (
+                "docs/architecture/adr-001.md",
+                "---\ntitle: 문서 구조 ADR\ntype: ADR\n---\n\n## 결정\n",
+            ),
+        ]);
+
+        let catalog = discover_documents(repo.path(), &["docs".into()]).unwrap();
+        let prd = catalog
+            .documents
+            .iter()
+            .find(|doc| doc.path == "docs/domains/dashboard/prd.md")
+            .unwrap();
+        assert_eq!(
+            prd.description.as_deref(),
+            Some("대시보드 핵심 요구사항 요약 문장입니다.")
+        );
+        assert_eq!(prd.preview_headings, ["1. 배경 및 목표", "2. 상세 규칙"]);
+        assert_eq!(
+            prd.linked_paths,
+            [
+                "docs/domains/dashboard/screen-spec.md",
+                "docs/architecture/adr-001.md"
+            ]
+        );
+
+        let spec = catalog
+            .documents
+            .iter()
+            .find(|doc| doc.path == "docs/domains/dashboard/screen-spec.md")
+            .unwrap();
+        assert_eq!(spec.designs.len(), 1);
+        assert_eq!(spec.designs[0].title, "대시보드 목업");
+        assert_eq!(
+            spec.designs[0].image.as_deref(),
+            Some("assets/dashboard-mock.svg")
+        );
+        assert_eq!(spec.designs[0].status.as_deref(), Some("approved"));
     }
 
     #[cfg(unix)]

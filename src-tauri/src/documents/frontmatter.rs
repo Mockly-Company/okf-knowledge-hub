@@ -3,7 +3,9 @@ use std::io::BufRead;
 use serde_yaml_ng::Value;
 use uuid::Uuid;
 
-use super::contract::{FrontmatterError, FrontmatterStatus, ParsedDocumentMetadata};
+use super::contract::{
+    DocumentDesignLink, FrontmatterError, FrontmatterStatus, ParsedDocumentMetadata,
+};
 
 const MAX_UNTERMINATED_FRONTMATTER_BYTES: usize = 256 * 1024;
 
@@ -25,6 +27,9 @@ pub(crate) fn parse_document_reader<R: BufRead>(
             doc_type: None,
             domain: None,
             status: None,
+            description: None,
+            frontmatter_links: Vec::new(),
+            designs: Vec::new(),
         },
         FrontmatterRead::Invalid(error) => ParsedDocumentMetadata {
             title: fallback_title,
@@ -33,6 +38,9 @@ pub(crate) fn parse_document_reader<R: BufRead>(
             doc_type: None,
             domain: None,
             status: None,
+            description: None,
+            frontmatter_links: Vec::new(),
+            designs: Vec::new(),
         },
         FrontmatterRead::Present(source) => parse_frontmatter(&source, fallback_title),
     }
@@ -45,6 +53,101 @@ fn optional_non_empty_str(value: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
+}
+
+fn collect_string_list(value: &Value, keys: &[&str]) -> Vec<String> {
+    let mut items = Vec::new();
+    for key in keys {
+        let Some(entry) = value.get(*key) else {
+            continue;
+        };
+        match entry {
+            Value::String(text) => {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    items.push(trimmed.to_owned());
+                }
+            }
+            Value::Sequence(sequence) => {
+                for item in sequence {
+                    if let Some(text) = item.as_str().map(str::trim).filter(|t| !t.is_empty()) {
+                        items.push(text.to_owned());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    items
+}
+
+fn looks_like_image_asset(target: &str) -> bool {
+    let clean = target.split(['?', '#']).next().unwrap_or(target);
+    let Some((_, ext)) = clean.rsplit_once('.') else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "svg" | "png" | "jpg" | "jpeg" | "gif" | "webp"
+    )
+}
+
+fn extract_design_links(value: &Value) -> Vec<DocumentDesignLink> {
+    let mut designs = Vec::new();
+    if let Some(sequence) = value.get("designs").and_then(Value::as_sequence) {
+        for (index, item) in sequence.iter().enumerate() {
+            match item {
+                Value::String(raw) => {
+                    let trimmed = raw.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let is_image = looks_like_image_asset(trimmed)
+                        && !trimmed.starts_with("http://")
+                        && !trimmed.starts_with("https://");
+                    designs.push(DocumentDesignLink {
+                        title: format!("디자인 시안 {}", index + 1),
+                        url: (!is_image).then(|| trimmed.to_owned()),
+                        image: is_image.then(|| trimmed.to_owned()),
+                        status: None,
+                    });
+                }
+                Value::Mapping(_) => {
+                    let url = optional_non_empty_str(item, "url")
+                        .or_else(|| optional_non_empty_str(item, "href"));
+                    let image = optional_non_empty_str(item, "image")
+                        .or_else(|| optional_non_empty_str(item, "asset"));
+                    if url.is_none() && image.is_none() {
+                        continue;
+                    }
+                    let title = optional_non_empty_str(item, "title")
+                        .or_else(|| optional_non_empty_str(item, "label"))
+                        .unwrap_or_else(|| format!("디자인 시안 {}", index + 1));
+                    let status = optional_non_empty_str(item, "status");
+                    designs.push(DocumentDesignLink {
+                        title,
+                        url,
+                        image,
+                        status,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+    if designs.is_empty() {
+        if let Some(single_url) = optional_non_empty_str(value, "design_url")
+            .or_else(|| optional_non_empty_str(value, "figma_url"))
+        {
+            designs.push(DocumentDesignLink {
+                title: "디자인 시안".to_owned(),
+                url: Some(single_url),
+                image: None,
+                status: None,
+            });
+        }
+    }
+    designs
 }
 
 fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMetadata {
@@ -63,6 +166,9 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
                 doc_type: None,
                 domain: None,
                 status: None,
+                description: None,
+                frontmatter_links: Vec::new(),
+                designs: Vec::new(),
             };
         }
     };
@@ -86,6 +192,9 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
         doc_type: optional_non_empty_str(&value, "type"),
         domain: optional_non_empty_str(&value, "domain"),
         status: optional_non_empty_str(&value, "status"),
+        description: optional_non_empty_str(&value, "description"),
+        frontmatter_links: collect_string_list(&value, &["related_docs", "links"]),
+        designs: extract_design_links(&value),
     }
 }
 

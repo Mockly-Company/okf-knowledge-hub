@@ -1,13 +1,16 @@
+use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use uuid::{Uuid, Variant, Version};
 
+use crate::commands::docs_repository::{app_data_dir, clone_matches};
 use crate::documents::authoring::{
     load_document_templates, validate_document_target, DocumentTargetValidation,
     DocumentTemplateCatalog,
@@ -21,18 +24,21 @@ use crate::documents::drafts::{
 };
 use crate::documents::history::{DocumentHistory, DEFAULT_HISTORY_PAGE_LIMIT};
 use crate::documents::reader::{
-    extract_local_stylesheet_hrefs, sanitize_and_inline_html, DocumentReader,
+    extract_local_stylesheet_hrefs, normalize_portable_doc_path, sanitize_and_inline_html,
+    DocumentReader,
 };
 use crate::documents::runtime::{DocumentRuntime, DocumentRuntimeGeneration, DocumentWorkspace};
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
 use crate::github::model::{
     CreatePullRequestInput, DocsPullRequestSummary, PullRequestChangedFile,
 };
+use crate::repository::managed::managed_clone_dir;
 use crate::settings::service::ConnectedDocumentWorkspace;
 use crate::state::{
     AppServices, DocumentCommandSessionContext, DocumentCommandSessionRegistry,
     DocumentCommandWorkspaceContext, DocumentSessionListener,
 };
+use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
 pub const DOCUMENT_EVENT: &str = "okhub://documents/event";
 
@@ -1136,6 +1142,254 @@ pub async fn read_document_asset(
 ) -> CommandResult<DocumentAsset> {
     let _access = state.acquire_authenticated_command().await?;
     read_document_asset_inner(&state, session_id, document_path, asset_path).await
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StandaloneDocumentPayload {
+    pub workspace_id: Uuid,
+    pub workspace_title: String,
+    pub repository_full_name: String,
+    pub document: DocumentContent,
+}
+
+fn normalize_standalone_doc_path(raw_path: &str) -> Result<(String, Option<String>), AppError> {
+    let clean = normalize_portable_doc_path(raw_path);
+    if clean.is_empty() {
+        return Err(document_path_invalid(raw_path));
+    }
+    let _validated = normalized_repository_path(Path::new(&clean))?;
+    let lower = clean.to_ascii_lowercase();
+    if lower.ends_with(".html") {
+        let stem_len = clean.len() - 5;
+        return Ok((
+            format!("{}.md", &clean[..stem_len]),
+            Some("html".to_owned()),
+        ));
+    }
+    if lower.ends_with(".md") {
+        return Ok((clean, None));
+    }
+    Err(document_path_invalid(raw_path))
+}
+
+fn resolve_registered_document_workspace(
+    services: &AppServices,
+    app_data: &Path,
+    requested_workspace_id: Option<Uuid>,
+) -> CommandResult<(ConnectedDocumentWorkspace, String)> {
+    let hubs = services
+        .local_settings
+        .load_hub_workspaces()
+        .unwrap_or_default();
+    if let Ok(connected) = services.local_settings.load_connected_document_workspace() {
+        if requested_workspace_id.is_none()
+            || requested_workspace_id == Some(connected.workspace_id)
+        {
+            let title = hubs
+                .iter()
+                .find(|ws| {
+                    ws.docs_repository.as_ref().is_some_and(|repo| {
+                        repo.full_name
+                            .eq_ignore_ascii_case(&connected.repository_full_name)
+                    })
+                })
+                .map(|ws| ws.title.clone())
+                .unwrap_or_else(|| connected.repository_full_name.clone());
+            return Ok((connected, title));
+        }
+    }
+
+    if let Some(target_id) = requested_workspace_id {
+        for ws in hubs {
+            let Some(repo) = ws.docs_repository.as_ref() else {
+                continue;
+            };
+            let Ok(dir) = managed_clone_dir(app_data, &repo.full_name) else {
+                continue;
+            };
+            if !clone_matches(&dir, &repo.full_name) {
+                continue;
+            }
+            match WorkspaceService::inspect(&dir) {
+                Ok(WorkspaceInspection::Ready { summary }) if summary.id == target_id => {
+                    return Ok((
+                        ConnectedDocumentWorkspace {
+                            repository_root: dir,
+                            workspace_id: summary.id,
+                            document_roots: summary.document_roots,
+                            repository_full_name: repo.full_name.clone(),
+                        },
+                        ws.title,
+                    ));
+                }
+                Ok(
+                    WorkspaceInspection::InitializationRequired
+                    | WorkspaceInspection::Invalid { .. },
+                ) => {
+                    let non_okf_id =
+                        Uuid::new_v5(&Uuid::NAMESPACE_URL, repo.repository_id.as_bytes());
+                    if non_okf_id == target_id {
+                        return Ok((
+                            ConnectedDocumentWorkspace {
+                                repository_root: dir,
+                                workspace_id: non_okf_id,
+                                document_roots: vec![".".to_owned()],
+                                repository_full_name: repo.full_name.clone(),
+                            },
+                            ws.title,
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Err(AppError::new(
+        ErrorCode::WorkspaceMissing,
+        "요청한 문서 워크스페이스를 찾을 수 없습니다.",
+    )
+    .with_recovery(RecoveryAction::Retry))
+}
+
+pub(crate) async fn read_standalone_document_inner(
+    services: &AppServices,
+    app_data: &Path,
+    workspace_id: Option<Uuid>,
+    path: String,
+) -> CommandResult<StandaloneDocumentPayload> {
+    let (normalized_path, _) = normalize_standalone_doc_path(&path)?;
+    let (connected, workspace_title) =
+        resolve_registered_document_workspace(services, app_data, workspace_id)?;
+    let repository_root = connected.repository_root.clone();
+    let document_roots = connected.document_roots.clone();
+    let repository_full_name = connected.repository_full_name.clone();
+    let resolved_workspace_id = connected.workspace_id;
+    let document = run_blocking(move || {
+        let reader = DocumentReader::new(&repository_root, &document_roots)?;
+        let mut content = reader.read_document(&normalized_path)?;
+        let history = DocumentHistory::open(&repository_root)?;
+        content.last_commit =
+            history.latest_change(&content.summary.path, content.summary.document_id)?;
+        Ok(content)
+    })
+    .await
+    .map_err(sanitize_document_error)?;
+    Ok(StandaloneDocumentPayload {
+        workspace_id: resolved_workspace_id,
+        workspace_title,
+        repository_full_name,
+        document,
+    })
+}
+
+pub(crate) async fn read_standalone_document_asset_inner(
+    services: &AppServices,
+    app_data: &Path,
+    workspace_id: Option<Uuid>,
+    document_path: String,
+    asset_path: String,
+) -> CommandResult<DocumentAsset> {
+    let (normalized_doc, _) = normalize_standalone_doc_path(&document_path)?;
+    let (connected, _) = resolve_registered_document_workspace(services, app_data, workspace_id)?;
+    let resolved_asset_path = resolve_asset_path(&normalized_doc, &asset_path)?;
+    let repository_root = connected.repository_root;
+    let document_roots = connected.document_roots;
+    run_blocking(move || {
+        DocumentReader::new(&repository_root, &document_roots)?.read_asset(&resolved_asset_path)
+    })
+    .await
+    .map_err(sanitize_document_error)
+}
+
+#[tauri::command]
+pub async fn open_document_window(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    path: String,
+    view_mode: Option<String>,
+    title: Option<String>,
+    workspace_id: Option<Uuid>,
+) -> CommandResult<()> {
+    let _access = state.acquire_authenticated_command().await?;
+    let app_data = app_data_dir(&app)?;
+    let (normalized_path, inferred_view) = normalize_standalone_doc_path(&path)?;
+    let (connected, _) = resolve_registered_document_workspace(&state, &app_data, workspace_id)?;
+
+    let mut hasher = DefaultHasher::new();
+    connected.workspace_id.hash(&mut hasher);
+    normalized_path.to_ascii_lowercase().hash(&mut hasher);
+    let label = format!("doc-viewer-{:012x}", hasher.finish() & 0xFFFF_FFFF_FFFF);
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        let _ = existing.unminimize();
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
+
+    let resolved_view = view_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|view| *view == "html" || *view == "markdown")
+        .map(str::to_owned)
+        .or(inferred_view);
+
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    serializer.append_pair("workspaceId", &connected.workspace_id.to_string());
+    serializer.append_pair("doc", &normalized_path);
+    if let Some(view) = resolved_view.as_deref() {
+        serializer.append_pair("view", view);
+    }
+    let route = format!("index.html#/doc-window?{}", serializer.finish());
+    let window_title = title
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| format!("{text} — OkHub Docs"))
+        .unwrap_or_else(|| format!("{normalized_path} — OkHub Docs"));
+
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(PathBuf::from(route)))
+        .title(&window_title)
+        .inner_size(1080.0, 820.0)
+        .min_inner_size(680.0, 480.0)
+        .build()
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::LocalSettingsUnavailable,
+                "새 문서 창을 열지 못했습니다.",
+            )
+            .with_detail("reason", error.to_string())
+        })?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn read_standalone_document(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    workspace_id: Option<Uuid>,
+    path: String,
+) -> CommandResult<StandaloneDocumentPayload> {
+    let _access = state.acquire_authenticated_command().await?;
+    let app_data = app_data_dir(&app)?;
+    read_standalone_document_inner(&state, &app_data, workspace_id, path).await
+}
+
+#[tauri::command]
+pub async fn read_standalone_document_asset(
+    app: AppHandle,
+    state: State<'_, AppServices>,
+    workspace_id: Option<Uuid>,
+    document_path: String,
+    asset_path: String,
+) -> CommandResult<DocumentAsset> {
+    let _access = state.acquire_authenticated_command().await?;
+    let app_data = app_data_dir(&app)?;
+    read_standalone_document_asset_inner(&state, &app_data, workspace_id, document_path, asset_path)
+        .await
 }
 
 pub(crate) async fn list_document_history_inner(
@@ -3970,5 +4224,96 @@ mod tests {
             crate::documents::reader::normalize_portable_doc_path("docs/../../outside.md"),
             ""
         );
+    }
+
+    #[tokio::test]
+    async fn standalone_document_read_stays_isolated_from_active_session_and_rejects_unknown_workspace(
+    ) {
+        let temp = TempDir::new().unwrap();
+        let repo_root = temp.path().join("repo");
+        let ws_id = Uuid::new_v4();
+        write_workspace(&repo_root, ws_id);
+        fs::create_dir_all(repo_root.join("docs/domains/dashboard")).unwrap();
+        fs::write(
+            repo_root.join("docs/domains/dashboard/prd.md"),
+            "---\ntitle: 대시보드 PRD\ndomain: dashboard\n---\n\n# 대시보드 PRD\n\n본문입니다.\n",
+        )
+        .unwrap();
+        fs::write(
+            repo_root.join("docs/domains/dashboard/prd.html"),
+            "<html><body><h1>대시보드 PRD</h1></body></html>",
+        )
+        .unwrap();
+        initialize_repository(&repo_root);
+
+        let settings = LocalSettingsService::new(MemorySettings::default());
+        settings
+            .set_current_for_repository(
+                &repo_root,
+                KnowledgeRepository {
+                    id: "repo-1".into(),
+                    full_name: REPOSITORY_FULL_NAME.into(),
+                },
+            )
+            .unwrap();
+        let services = AppServices::new(settings)
+            .with_documents(DocumentRuntime::new(), temp.path().join("cache"));
+
+        let session = start_document_session_inner(&services, Uuid::new_v4())
+            .await
+            .unwrap();
+        let _active_doc = read_document_inner(
+            &services,
+            session.session_id,
+            Uuid::new_v4().to_string(),
+            "docs/other.md".into(),
+        )
+        .await
+        .unwrap();
+
+        let app_data = temp.path().join("app-data");
+        fs::create_dir_all(&app_data).unwrap();
+        let standalone = super::read_standalone_document_inner(
+            &services,
+            &app_data,
+            Some(ws_id),
+            "docs/domains/dashboard/prd.html".into(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(standalone.workspace_id, ws_id);
+        assert_eq!(
+            standalone.document.summary.path,
+            "docs/domains/dashboard/prd.md"
+        );
+        assert!(standalone.document.companion_html.is_some());
+
+        // Reading in a standalone window must NOT overwrite last_opened_path of the active main session.
+        let snapshot = services
+            .document_runtime
+            .snapshot(session.session_id)
+            .unwrap();
+        assert_eq!(snapshot.last_opened_path.as_deref(), Some("docs/other.md"));
+
+        let unknown_ws = Uuid::new_v4();
+        let err = super::read_standalone_document_inner(
+            &services,
+            &app_data,
+            Some(unknown_ws),
+            "docs/domains/dashboard/prd.md".into(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkspaceMissing);
+
+        let escape_err = super::read_standalone_document_inner(
+            &services,
+            &app_data,
+            Some(ws_id),
+            "../../../etc/passwd.md".into(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(escape_err.code, ErrorCode::DocumentPathInvalid);
     }
 }

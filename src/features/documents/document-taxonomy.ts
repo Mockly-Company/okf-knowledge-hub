@@ -7,7 +7,7 @@ export type DocumentCategory =
   | "guide"
   | "reference";
 
-export type DocumentGroupMode = "domain" | "type" | "flat";
+export type DocumentGroupMode = "map" | "screen_specs" | "domain" | "type" | "flat";
 export type DocumentCategoryFilter = "all" | DocumentCategory;
 
 export const DOCUMENT_CATEGORY_ORDER: readonly DocumentCategory[] = [

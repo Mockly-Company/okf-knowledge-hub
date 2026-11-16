@@ -1,4 +1,4 @@
-import { EllipsisVertical, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { EllipsisVertical, ExternalLink, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -20,6 +20,8 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDocuments } from "../DocumentsProvider";
 import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
+import { CompanionHtmlFrame } from "./CompanionHtmlFrame";
+import { DesignLinksBar, extractDesignsFromProperties } from "./DesignLinksBar";
 import { MarkdownDocument } from "./MarkdownDocument";
 import { DocumentHistory } from "./DocumentHistory";
 import { DocumentOverview } from "./DocumentOverview";
@@ -81,11 +83,19 @@ export function DocumentReader({
     clearPreferredViewMode,
     copyText,
     openExternal,
+    readAsset,
+    selectDocument,
     selectCurrentVersion,
     editSelectedDocument,
+    openDocumentInNewWindow,
   } = useDocuments();
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
+  const [pendingHtmlFragment, setPendingHtmlFragment] = useState<{
+    targetPath: string;
+    fragment: string;
+    seq: number;
+  } | null>(null);
   const normalizedDocPath = normalizeDocumentPath(document.summary.path);
   const hasCompanionNow = Boolean(document.companionHtml);
   const matchingPreferredView =
@@ -326,6 +336,20 @@ export function DocumentReader({
               <Button
                 type="button"
                 variant="secondary"
+                onClick={() =>
+                  void openDocumentInNewWindow(
+                    document.summary.path,
+                    effectiveView,
+                    document.summary.title,
+                  )
+                }
+              >
+                <ExternalLink aria-hidden="true" size={14} />
+                새 창으로 열기
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
                 onClick={handleStartAiFromDoc}
               >
                 AI로 작업 시작
@@ -416,13 +440,57 @@ export function DocumentReader({
           <span>최신 내용은 원문 (.md)에서 확인하고 다음 PR에서 함께 갱신해 주세요.</span>
         </div>
       ) : null}
+          {state.selectedVersion === null &&
+          ((document.summary.designs?.length ?? 0) > 0 ||
+            extractDesignsFromProperties(document.properties).length > 0) ? (
+            <DesignLinksBar
+              designs={
+                document.summary.designs && document.summary.designs.length > 0
+                  ? document.summary.designs
+                  : extractDesignsFromProperties(document.properties)
+              }
+              documentPath={document.summary.path}
+              readAsset={readAsset}
+              onOpenExternal={(url) => void openExternal(url)}
+            />
+          ) : null}
           {effectiveView === "html" && document.companionHtml ? (
-            <iframe
-              className="document-reader__html-frame"
-              sandbox=""
-              referrerPolicy="no-referrer"
-              srcDoc={document.companionHtml.html}
+            <CompanionHtmlFrame
+              html={document.companionHtml.html}
               title={`${document.summary.title} 사람용 보기`}
+              documentPath={document.summary.path}
+              initialFragment={
+                pendingHtmlFragment &&
+                pendingHtmlFragment.targetPath.toLowerCase() ===
+                  normalizedDocPath.toLowerCase()
+                  ? pendingHtmlFragment.fragment
+                  : null
+              }
+              onNavigateDocument={(target) => {
+                const normalizedTarget = normalizeDocumentPath(target.path);
+                setPendingHtmlFragment(
+                  target.fragment
+                    ? {
+                        targetPath: normalizedTarget,
+                        fragment: target.fragment,
+                        seq: Date.now(),
+                      }
+                    : null,
+                );
+                if (
+                  normalizedTarget.toLowerCase() ===
+                  normalizedDocPath.toLowerCase()
+                ) {
+                  setViewMode(
+                    target.view === "html" && hasCompanionNow
+                      ? "html"
+                      : "markdown",
+                  );
+                  return;
+                }
+                selectDocument(normalizedTarget, undefined, target.view);
+              }}
+              onOpenExternal={(url) => void openExternal(url)}
             />
           ) : (
             <MarkdownDocument document={document} hideHeader suppressSourceTitle />

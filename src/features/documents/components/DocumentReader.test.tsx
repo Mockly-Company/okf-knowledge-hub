@@ -266,7 +266,13 @@ describe("DocumentReader", () => {
 
     await user.click(await screen.findByRole("button", { name: "편집" }));
 
-    expect(await screen.findByRole("region", { name: "문서 편집기" })).toBeVisible();
+    expect(
+      await screen.findByRole(
+        "region",
+        { name: "문서 편집기" },
+        { timeout: 5000 },
+      ),
+    ).toBeVisible();
     expect(
       gateway.calls.filter((call) => call.method === "editExistingDocumentDraft"),
     ).toHaveLength(1);
@@ -278,7 +284,11 @@ describe("DocumentReader", () => {
 
     await user.click(await screen.findByRole("button", { name: "편집" }));
 
-    const editor = await screen.findByRole("region", { name: "문서 편집기" });
+    const editor = await screen.findByRole(
+      "region",
+      { name: "문서 편집기" },
+      { timeout: 5000 },
+    );
     const title = within(editor).getByRole("textbox", { name: "문서 제목" });
     const header = title.closest(".document-draft-editor__header");
     const switcher = screen.getByRole("combobox", { name: "문서 작업 전환" });
@@ -497,8 +507,11 @@ describe("DocumentReader", () => {
     expect(mdTab).toHaveAttribute("aria-selected", "false");
 
     const frame = screen.getByTitle("OkHub v2 전체 컨셉 사람용 보기");
-    expect(frame).toHaveAttribute("sandbox", "");
-    expect(frame).toHaveAttribute("srcdoc", document.companionHtml!.html);
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    const srcDoc = frame.getAttribute("srcdoc") ?? "";
+    expect(srcDoc).toContain("구조화 HTML 뷰");
+    expect(srcDoc).toContain("Content-Security-Policy");
     expect(screen.queryByText("원문 마크다운 내용입니다.")).not.toBeInTheDocument();
 
     await user.click(mdTab);

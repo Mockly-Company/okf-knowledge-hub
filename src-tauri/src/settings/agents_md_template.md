@@ -17,10 +17,15 @@
 
 ## 1. 아이디어 → PRD · 화면명세서 및 문서 2벌 원칙 (`.md` = AI 원본 / `.html` = 사람용 뷰)
 
-- **도메인 우선 폴더 구조 (`docs/domains/<domain>/`)**: 제품 기능 기획서(PRD)와 화면명세서는 도메인별 폴더(`docs/domains/<domain>/prd.md`, `screen-spec.md`)에 작성하고, 시스템 공통 원칙과 ADR은 `docs/architecture/`에 둡니다. Frontmatter에는 `type`과 권장 `domain` 키를 명시합니다.
+- **도메인 우선 폴더 구조 (`docs/domains/<domain>/`)**: 제품 기능 기획서(PRD)와 화면명세서는 도메인별 폴더(`docs/domains/<domain>/prd.md`, `screen-spec.md`)에 작성하고, 시스템 공통 원칙과 ADR은 `docs/architecture/`에 둡니다. Frontmatter에는 `type`, `domain`, 권장 `description`(1~2문장 핵심 요약), `related_docs`(연결 문서 `.md` 상대/저장소 경로 목록)를 명시합니다.
+- **화면명세서 ↔ 디자인 연결(`designs`)**: 화면명세서의 frontmatter에는 `designs: [{ title, image, url, status }]`를 연결할 수 있으며, `image`는 같은 폴더의 `assets/*.svg|png|webp` 시안 파일 경로를 가리킵니다.
 - **아이디어 구체화 산출물**: 아이디어를 받으면 기능 성격에 맞춰 **기획서/PRD**(`.okf/templates/product-spec.md`), **화면명세서**(`.okf/templates/screen-spec.md`), **설계/결정 기록**(`.okf/templates/design-doc.md`, `decision-record.md`)을 작성한다.
 - **AI는 `.md`만 읽고 수정한다**: 모든 지식의 유일한 원본은 `docs/**/*.md`이며, AI는 `.html`을 역파싱하지 않는다.
-- **사람을 위해 동반 `.html`을 항상 함께 생성·갱신한다**: 예약 파일(`index.md`, `log.md`, `README.md`)을 제외한 일반 문서를 작성·수정할 때는 같은 이름의 `<문서명>.html`을 표준 골격(`.okf/templates/human-view.html` + `docs/_assets/okf-doc.css`)으로 함께 생성·갱신한다.
+- **사람을 위해 동반 `.html`을 항상 함께 생성·갱신한다**: 예약 파일(`index.md`, `log.md`, `README.md`)을 제외한 일반 문서를 작성·수정할 때는 같은 이름의 `<문서명>.html`을 표준 골격(일반 문서는 `.okf/templates/human-view.html`, 화면명세서는 `.okf/templates/screen-spec-view.html` + `docs/_assets/okf-doc.css`)으로 함께 생성·갱신한다.
+- **깔끔한 `.html` 작성 · 연결 규칙**:
+  - `.html`의 메타 알약·사이드바·푸터에 raw 저장소 경로(`docs/...`, `AI 단일 원본`)를 장황하게 노출하지 않는다.
+  - 본문 텍스트에 마크다운 백틱(`` ` ``) 기호를 그대로 남기지 않고 의미에 맞는 HTML 태그(`<code>` 등) 또는 자연어로 렌더링한다.
+  - 다른 문서를 링크할 때는 raw 경로 대신 **문서 제목**을 앵커 텍스트로 두고 상대 `.html` 경로(`<문서명>.html`, `../other/prd.html`)로 바로 이동 가능하게 연결한다.
 
 ## 2. 이번 PR 변경점 표시 · 교체 규칙 (`Reset → Mark`)
 

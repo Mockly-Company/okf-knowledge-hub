@@ -28,6 +28,7 @@ import type {
   PublishDocumentDraftRequest,
   PublishDocumentDraftResponse,
   ApproveAndMergeDocsPrResponse,
+  StandaloneDocumentPayload,
   Unlisten,
 } from "@/features/documents/model";
 
@@ -237,6 +238,52 @@ export class TauriDocumentsGateway implements DocumentsGateway {
       sessionId,
       number,
       comment: comment ?? null,
+    });
+  }
+
+  openDocumentWindow(
+    path: string,
+    viewMode?: "html" | "markdown",
+    title?: string,
+  ): Promise<void> {
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      return this.invokeCommand("open_document_window", {
+        path,
+        viewMode: viewMode ?? null,
+        title: title ?? null,
+      });
+    }
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams({ doc: path });
+      if (viewMode) params.set("view", viewMode);
+      window.open(
+        `#/doc-window?${params.toString()}`,
+        "_blank",
+        "noopener,noreferrer",
+      );
+    }
+    return Promise.resolve();
+  }
+
+  readStandaloneDocument(
+    workspaceId: string | null,
+    path: string,
+  ): Promise<StandaloneDocumentPayload> {
+    return this.invokeCommand("read_standalone_document", {
+      workspaceId,
+      path,
+    });
+  }
+
+  readStandaloneDocumentAsset(
+    workspaceId: string | null,
+    documentPath: string,
+    assetPath: string,
+  ): Promise<DocumentAsset> {
+    return this.invokeCommand("read_standalone_document_asset", {
+      workspaceId,
+      documentPath,
+      assetPath,
     });
   }
 }
