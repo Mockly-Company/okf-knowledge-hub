@@ -4,6 +4,7 @@ import {
   CompanionHtmlFrame,
   prepareInteractiveCompanionHtml,
   resolveCompanionDocumentLink,
+  sanitizeCompanionHtmlFallback,
 } from "./CompanionHtmlFrame";
 
 afterEach(cleanup);
@@ -64,6 +65,18 @@ describe("CompanionHtmlFrame", () => {
     expect(prepared).toContain('<script nonce="nonce123">');
     expect(prepared).toContain('"chan-1"');
     expect(prepared).toContain("#sec-04");
+  });
+
+  it("strips unquoted and entity-encoded unsafe URLs in the non-DOMParser fallback sanitizer", () => {
+    const html =
+      '<img src=x onerror=alert(1)><a href=javascript:alert(2)>unquoted</a><a href="&#106;avascript:alert(3)">decimal</a><a href="&#x6a;avascript&colon;alert(4)">hex</a><a href="prd.html#sec-04">safe doc</a><img src="data:image/png;base64,AAA" alt="safe">';
+    const cleaned = sanitizeCompanionHtmlFallback(html);
+
+    expect(cleaned).not.toContain("alert(");
+    expect(cleaned).not.toMatch(/\bonerror\s*=/i);
+    expect(cleaned).not.toMatch(/href\s*=.*javascript/i);
+    expect(cleaned).toContain('href="prd.html#sec-04"');
+    expect(cleaned).toContain("data:image/png;base64,AAA");
   });
 
   it("handles trusted postMessage link navigation and ignores untrusted sources", () => {

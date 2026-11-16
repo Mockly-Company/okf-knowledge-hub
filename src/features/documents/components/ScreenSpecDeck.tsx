@@ -308,6 +308,7 @@ export function ScreenSpecDeck({
               <UnstyledButton
                 key={spec.path}
                 type="button"
+                id={`screen-spec-tab-${idx}`}
                 role="tab"
                 aria-selected={idx === clampedIndex}
                 aria-controls="screen-spec-deck-panel"
@@ -331,7 +332,17 @@ export function ScreenSpecDeck({
         </div>
       ) : null}
 
-      <div id="screen-spec-deck-panel" className="screen-spec-deck__list">
+      <div
+        id="screen-spec-deck-panel"
+        className="screen-spec-deck__list"
+        role={mode === "slide" && filteredSpecs.length > 0 ? "tabpanel" : undefined}
+        tabIndex={mode === "slide" && filteredSpecs.length > 0 ? 0 : undefined}
+        aria-labelledby={
+          mode === "slide" && filteredSpecs.length > 0
+            ? `screen-spec-tab-${clampedIndex}`
+            : undefined
+        }
+      >
         {visibleSpecs.map((spec, idx) => {
           const query = contentQueries[idx];
           const content = query?.data;

@@ -152,6 +152,7 @@ export function DocumentWorkbenchTabs({
       >
         <UnstyledButton
           type="button"
+          id={panelId ? `${panelId}-tab-0` : undefined}
           role="tab"
           aria-selected={normalizedActive === null}
           aria-controls={panelId}
@@ -178,6 +179,7 @@ export function DocumentWorkbenchTabs({
             >
               <UnstyledButton
                 type="button"
+                id={panelId ? `${panelId}-tab-${tabIndex + 1}` : undefined}
                 role="tab"
                 aria-selected={isActive}
                 aria-controls={panelId}

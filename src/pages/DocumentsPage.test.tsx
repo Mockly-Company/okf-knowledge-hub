@@ -1269,6 +1269,9 @@ describe("DocumentsPage", () => {
     expect(specTab).toHaveAttribute("aria-selected", "true");
     expect(specTab).toHaveAttribute("tabindex", "0");
     expect(specTab).toHaveAttribute("aria-controls", "documents-workbench-panel");
+    expect(
+      screen.getByRole("tabpanel", { name: "문서 도메인 화면명세서" }),
+    ).toHaveAttribute("tabindex", "0");
 
     // Keyboard navigation moves across tablist with ArrowLeft/Home/End.
     specTab.focus();

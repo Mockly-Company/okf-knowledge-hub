@@ -137,20 +137,96 @@ function sanitizeInlineCss(cssText: string): string {
     );
 }
 
-function sanitizeCompanionHtmlFallback(rawHtml: string): string {
+const BASIC_HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  colon: ":",
+  tab: "\t",
+  newline: "\n",
+};
+
+function decodeBasicHtmlEntities(value: string): string {
+  return value.replace(
+    /&(#x[0-9a-f]+|#[0-9]+|[a-z]+);?/gi,
+    (match, token: string) => {
+      const lower = token.toLowerCase();
+      if (lower.startsWith("#x")) {
+        const code = Number.parseInt(lower.slice(2), 16);
+        return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+          ? String.fromCodePoint(code)
+          : match;
+      }
+      if (lower.startsWith("#")) {
+        const code = Number.parseInt(lower.slice(1), 10);
+        return Number.isFinite(code) && code >= 0 && code <= 0x10ffff
+          ? String.fromCodePoint(code)
+          : match;
+      }
+      return BASIC_HTML_ENTITIES[lower] ?? match;
+    },
+  );
+}
+
+export function sanitizeCompanionHtmlFallback(rawHtml: string): string {
   return rawHtml
     .replace(/<script\b[\s\S]*?<\/script>/gi, "")
     .replace(/<script\b[^>]*\/?>/gi, "")
-    .replace(/<(?:iframe|object|embed|applet|frame|frameset)\b[\s\S]*?<\/(?:iframe|object|embed|applet|frame|frameset)>/gi, "")
-    .replace(/<(?:iframe|object|embed|applet|base|frame|frameset)\b[^>]*\/?>/gi, "")
+    .replace(
+      /<(?:iframe|object|embed|applet|frame|frameset)\b[\s\S]*?<\/(?:iframe|object|embed|applet|frame|frameset)>/gi,
+      "",
+    )
+    .replace(
+      /<(?:iframe|object|embed|applet|base|frame|frameset)\b[^>]*\/?>/gi,
+      "",
+    )
     .replace(
       /<meta\b[^>]*http-equiv\s*=\s*(?:"(?:content-security-policy|refresh)"|'(?:content-security-policy|refresh)'|content-security-policy|refresh)[^>]*>/gi,
       "",
     )
-    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     .replace(
-      /\s+(href|src|xlink:href|action|formaction|poster|data)\s*=\s*(?:"\s*(?:javascript|vbscript):[^"]*"|'\s*(?:javascript|vbscript):[^']*')/gi,
+      /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+      (_, open: string, css: string, close: string) =>
+        `${open}${sanitizeInlineCss(css)}${close}`,
+    )
+    .replace(
+      /\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+)/gi,
       "",
+    )
+    .replace(/\s+srcdoc\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+)/gi, "")
+    .replace(
+      /\s+(style)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
+      (_, attr: string, dq?: string, sq?: string, uq?: string) => {
+        const raw = dq ?? sq ?? uq ?? "";
+        return ` ${attr}="${sanitizeInlineCss(raw).replace(/"/g, "&quot;")}"`;
+      },
+    )
+    .replace(
+      /\s+(href|src|xlink:href|action|formaction|poster|data|background|srcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
+      (
+        match: string,
+        attr: string,
+        dq?: string,
+        sq?: string,
+        uq?: string,
+      ) => {
+        const attrName = attr.toLowerCase();
+        const raw = dq ?? sq ?? uq ?? "";
+        const decoded = decodeBasicHtmlEntities(raw);
+        if (attrName === "srcset") {
+          const safeParts = decoded
+            .split(",")
+            .map((part) => part.trim())
+            .filter((part) => {
+              const urlPart = part.split(/\s+/)[0] ?? "";
+              return urlPart.length > 0 && isSafeAttributeUrl("src", urlPart);
+            });
+          return safeParts.length > 0 ? ` srcset="${safeParts.join(", ")}"` : "";
+        }
+        return isSafeAttributeUrl(attrName, decoded) ? match : "";
+      },
     );
 }
 

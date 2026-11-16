@@ -1,10 +1,9 @@
-use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -1299,6 +1298,18 @@ pub(crate) async fn read_standalone_document_asset_inner(
     .map_err(sanitize_document_error)
 }
 
+fn doc_viewer_window_label(workspace_id: Uuid, normalized_path: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(workspace_id.as_bytes());
+    hasher.update(normalized_path.to_ascii_lowercase().as_bytes());
+    let digest = hasher.finalize();
+    let suffix: String = digest[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("doc-viewer-{suffix}")
+}
+
 #[tauri::command]
 pub async fn open_document_window(
     app: AppHandle,
@@ -1317,10 +1328,7 @@ pub async fn open_document_window(
     })
     .await?;
 
-    let mut hasher = DefaultHasher::new();
-    connected.workspace_id.hash(&mut hasher);
-    normalized_path.to_ascii_lowercase().hash(&mut hasher);
-    let label = format!("doc-viewer-{:012x}", hasher.finish() & 0xFFFF_FFFF_FFFF);
+    let label = doc_viewer_window_label(connected.workspace_id, &normalized_path);
 
     if let Some(existing) = app.get_webview_window(&label) {
         let _ = existing.unminimize();
@@ -4315,5 +4323,22 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(escape_err.code, ErrorCode::DocumentPathInvalid);
+    }
+
+    #[test]
+    fn doc_viewer_window_label_is_deterministic_across_calls() {
+        let ws_a = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let ws_b = Uuid::parse_str("22222222-2222-4222-8222-222222222222").unwrap();
+        let first = super::doc_viewer_window_label(ws_a, "docs/domains/documents/screen-spec.md");
+        let second = super::doc_viewer_window_label(ws_a, "docs/domains/documents/SCREEN-SPEC.md");
+        let different_ws =
+            super::doc_viewer_window_label(ws_b, "docs/domains/documents/screen-spec.md");
+        let different_doc = super::doc_viewer_window_label(ws_a, "docs/domains/documents/prd.md");
+
+        assert!(first.starts_with("doc-viewer-"));
+        assert_eq!(first.len(), "doc-viewer-".len() + 12);
+        assert_eq!(first, second);
+        assert_ne!(first, different_ws);
+        assert_ne!(first, different_doc);
     }
 }

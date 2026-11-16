@@ -129,6 +129,9 @@ describe("ScreenSpecDeck", () => {
     await user.click(screen.getByRole("button", { name: "한 화면씩 넘기기" }));
     expect(screen.getByText("1 / 2")).toBeVisible();
     expect(
+      screen.getByRole("tabpanel", { name: "1. 문서 화면명세서" }),
+    ).toBeInTheDocument();
+    expect(
       screen.queryByRole("article", { name: "대시보드 화면명세서 화면명세" }),
     ).not.toBeInTheDocument();
 

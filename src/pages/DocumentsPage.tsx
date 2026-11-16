@@ -30,7 +30,7 @@ import { DocsPullNotice } from "@/features/docs-repository/DocsPullNotice";
 import { WorkspaceContextBar } from "@/features/workspace-setup/WorkspaceContextBar";
 import { WorkspaceSetupFlow } from "@/features/workspace-setup/WorkspaceSetupFlow";
 import "@/features/documents/documents.css";
-import type { DocumentSummary } from "@/features/documents/model";
+import { normalizeDocumentPath, type DocumentSummary } from "@/features/documents/model";
 
 const DocumentDraftEditor = lazy(() =>
   import("@/features/documents/components/DocumentDraftEditor").then(
@@ -433,6 +433,29 @@ export function DocumentsPage({
     );
   }
 
+  const hasWorkbenchTabs = openTabs.length > 0 || state.selectedPath !== null;
+  const normalizedSelectedPath = state.selectedPath
+    ? normalizeDocumentPath(state.selectedPath).toLowerCase()
+    : null;
+  const activeTabFlatIndex =
+    normalizedSelectedPath === null
+      ? 0
+      : Math.max(
+          0,
+          openTabs.findIndex(
+            (tab) =>
+              normalizeDocumentPath(tab.path).toLowerCase() ===
+              normalizedSelectedPath,
+          ) + 1,
+        );
+  const workbenchPanelA11yProps = hasWorkbenchTabs
+    ? {
+        role: "tabpanel" as const,
+        tabIndex: 0,
+        "aria-labelledby": `documents-workbench-panel-tab-${activeTabFlatIndex}`,
+      }
+    : {};
+
   const workbenchTabsBar = (
     <DocumentWorkbenchTabs
       openTabs={openTabs}
@@ -465,7 +488,11 @@ export function DocumentsPage({
           />
         ) : null}
         {workbenchTabsBar}
-        <div id="documents-workbench-panel" className="documents-page__workbench-panel">
+        <div
+          id="documents-workbench-panel"
+          className="documents-page__workbench-panel"
+          {...workbenchPanelA11yProps}
+        >
         {state.selectedDocument ? (
           <DocumentReader
             document={state.selectedDocument}
@@ -572,7 +599,11 @@ export function DocumentsPage({
 
       <div className="documents-page__tools">
         {workbenchTabsBar}
-        <div id="documents-workbench-panel" className="documents-page__workbench-panel">
+        <div
+          id="documents-workbench-panel"
+          className="documents-page__workbench-panel"
+          {...workbenchPanelA11yProps}
+        >
         <DocumentSearch
           query={state.searchQuery}
           documents={[...state.catalog.documents.filter(document => !additionalDocuments.some(extra => extra.path === document.path)), ...additionalDocuments]}

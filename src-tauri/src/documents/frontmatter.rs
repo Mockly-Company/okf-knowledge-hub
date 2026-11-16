@@ -81,7 +81,15 @@ fn collect_string_list(value: &Value, keys: &[&str]) -> Vec<String> {
     items
 }
 
+fn is_http_url(target: &str) -> bool {
+    let lower = target.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 fn looks_like_image_asset(target: &str) -> bool {
+    if is_http_url(target) {
+        return false;
+    }
     let clean = target.split(['?', '#']).next().unwrap_or(target);
     let Some((_, ext)) = clean.rsplit_once('.') else {
         return false;
@@ -102,9 +110,7 @@ fn extract_design_links(value: &Value) -> Vec<DocumentDesignLink> {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let is_image = looks_like_image_asset(trimmed)
-                        && !trimmed.starts_with("http://")
-                        && !trimmed.starts_with("https://");
+                    let is_image = looks_like_image_asset(trimmed);
                     designs.push(DocumentDesignLink {
                         title: format!("디자인 시안 {}", index + 1),
                         url: (!is_image).then(|| trimmed.to_owned()),
@@ -375,5 +381,36 @@ mod tests {
             self.bytes_consumed += amount;
             self.inner.consume(amount);
         }
+    }
+
+    #[test]
+    fn extract_design_links_handles_case_insensitive_http_urls_and_local_images() {
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            r#"
+designs:
+  - assets/map-mock.svg?v=1
+  - notes.txt
+  - HTTP://example.com/mock.svg
+  - HTTPS://example.com/mock.png
+"#,
+        )
+        .unwrap();
+
+        let designs = super::extract_design_links(&value);
+        assert_eq!(designs.len(), 4);
+        assert_eq!(designs[0].image.as_deref(), Some("assets/map-mock.svg?v=1"));
+        assert_eq!(designs[0].url, None);
+        assert_eq!(designs[1].image, None);
+        assert_eq!(designs[1].url.as_deref(), Some("notes.txt"));
+        assert_eq!(designs[2].image, None);
+        assert_eq!(
+            designs[2].url.as_deref(),
+            Some("HTTP://example.com/mock.svg")
+        );
+        assert_eq!(designs[3].image, None);
+        assert_eq!(
+            designs[3].url.as_deref(),
+            Some("HTTPS://example.com/mock.png")
+        );
     }
 }
