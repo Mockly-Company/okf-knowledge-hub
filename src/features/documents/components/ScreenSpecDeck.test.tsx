@@ -12,7 +12,16 @@ import type { DocumentAsset, DocumentContent, DocumentSummary } from "../model";
 import { extractDesignsFromProperties } from "./DesignLinksBar";
 import { ScreenSpecDeck } from "./ScreenSpecDeck";
 
-afterEach(cleanup);
+const docsContextMock = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("../DocumentsProvider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../DocumentsProvider")>()),
+  useOptionalDocuments: () => docsContextMock.current,
+}));
+
+afterEach(() => {
+  cleanup();
+  docsContextMock.current = null;
+});
 
 const prdDoc: DocumentSummary = {
   path: "docs/domains/documents/prd.md",
@@ -267,5 +276,30 @@ describe("ScreenSpecDeck", () => {
     );
     await waitFor(() => expect(readerB).toHaveBeenCalledTimes(1));
   });
+  it("refetches previews when the active session changes while the workspace is unknown (S24)", async () => {
+    const reader = vi.fn(async () => mockContents["docs/domains/dashboard/screen-spec.md"]!);
+    const renderDeck = () => (
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={reader}
+        />
+      </TestQueryProvider>
+    );
+    docsContextMock.current = {
+      state: { workspaceId: null, activeSessionId: "session-a" },
+    };
+    const { rerender } = render(renderDeck());
+    await waitFor(() => expect(reader).toHaveBeenCalledTimes(1));
+
+    // The main window switched workspaces: same (unknown) workspace id, new session.
+    docsContextMock.current = {
+      state: { workspaceId: null, activeSessionId: "session-b" },
+    };
+    rerender(renderDeck());
+    await waitFor(() => expect(reader).toHaveBeenCalledTimes(2));
+  });
 });
+
 

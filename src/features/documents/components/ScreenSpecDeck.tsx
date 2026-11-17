@@ -162,7 +162,11 @@ export function ScreenSpecDeck({
   }, [filteredSpecs.length, mode, visibleSpecs.length]);
 
   const knownWorkspaceId = docsContext?.state.workspaceId ?? null;
-  const effectiveWorkspaceKey = knownWorkspaceId ?? "unknown-workspace";
+  // Without a workspace id the reader follows the active session, so key by session instead:
+  // switching workspaces opens a new session and must refetch even while this deck stays mounted.
+  const effectiveWorkspaceKey =
+    knownWorkspaceId ??
+    `unknown-workspace:${docsContext?.state.activeSessionId ?? "none"}`;
   const previewReader = readDocumentPreview ?? docsContext?.readDocumentPreview;
   const assetReader =
     readPreviewAsset ??

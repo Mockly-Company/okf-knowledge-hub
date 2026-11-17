@@ -11,8 +11,8 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use crate::error::{AppError, ErrorCode};
 
 use super::contract::{
-    CompanionHtml, DocumentAsset, DocumentContent, DocumentSummary, HtmlSyncStatus,
-    TableOfContentsItem,
+    CompanionHtml, DocumentAsset, DocumentContent, DocumentSummary, FrontmatterStatus,
+    HtmlSyncStatus, TableOfContentsItem,
 };
 use super::frontmatter::parse_document;
 
@@ -918,12 +918,18 @@ pub(crate) fn document_content_from_bytes(
         .to_owned();
     let parsed = parse_document(&markdown, &file_name);
     let body_slice = strip_leading_frontmatter(&markdown);
+    // Invalid frontmatter that `strip_leading_frontmatter` could not remove has no closing
+    // delimiter; like discovery, never turn its YAML lines into a description.
+    let unterminated_frontmatter =
+        matches!(parsed.frontmatter_status, FrontmatterStatus::Invalid { .. })
+            && body_slice.len() == markdown.len();
     let (fallback_description, preview_headings, linked_paths) = scan_markdown_preview(
         body_slice.as_bytes(),
         MAX_PREVIEW_SCAN_BYTES,
         repository_relative_path,
         &parsed.frontmatter_links,
     );
+    let fallback_description = fallback_description.filter(|_| !unterminated_frontmatter);
     let summary = DocumentSummary {
         path: repository_relative_path.to_owned(),
         file_name,
@@ -1737,6 +1743,36 @@ mod tests {
         assert!(
             html.contains(r#"src="data:image/svg+xml;base64,"#),
             "{html}"
+        );
+    }
+
+    #[test]
+    fn read_document_drops_fallback_description_for_unterminated_frontmatter() {
+        let repo = fixture_repo(&[
+            (
+                "docs/unterminated.md",
+                "---\ntitle: [broken frontmatter value\n## 남은 제목\n",
+            ),
+            (
+                "docs/plain.md",
+                "# 제목\n\n프론트매터 없는 문서의 첫 문단입니다\n",
+            ),
+        ]);
+        let reader = reader(&repo);
+
+        let unterminated = reader.read_document("docs/unterminated.md").unwrap();
+        assert_eq!(unterminated.summary.description, None);
+        assert!(unterminated
+            .summary
+            .preview_headings
+            .iter()
+            .any(|heading| heading == "남은 제목"));
+
+        // Documents without frontmatter keep their first-paragraph description.
+        let plain = reader.read_document("docs/plain.md").unwrap();
+        assert_eq!(
+            plain.summary.description.as_deref(),
+            Some("프론트매터 없는 문서의 첫 문단입니다")
         );
     }
 }
