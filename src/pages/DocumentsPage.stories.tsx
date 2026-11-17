@@ -33,8 +33,9 @@ export const Home: Story = {
     await userEvent.tab();
     await expect(newDocument).toHaveFocus();
     await userEvent.tab();
+    // "도메인 맵" is the first grouping mode chip (and the default view).
     await expect(
-      canvas.getByRole("button", { name: "도메인별" }),
+      canvas.getByRole("button", { name: "도메인 맵" }),
     ).toHaveFocus();
     await expect(
       canvas.getByRole("button", { name: /지도 검색 API 계약/ }),

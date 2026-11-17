@@ -185,16 +185,29 @@ export function DocumentWorkbenchTabs({
                 aria-controls={panelId}
                 tabIndex={isActive ? 0 : -1}
                 data-active={isActive}
+                aria-keyshortcuts="Delete"
                 className="document-workbench-tab"
                 onClick={() => onSelectTab(tab.path)}
-                onKeyDown={(event) =>
+                onKeyDown={(event) => {
+                  if (event.key === "Delete") {
+                    event.preventDefault();
+                    // Keep keyboard focus in the tablist: move it to the tab that the provider
+                    // selects after closing (next, then previous, then the map home tab).
+                    const neighbor =
+                      openTabs[tabIndex + 1] ?? openTabs[tabIndex - 1] ?? null;
+                    if (isActive) {
+                      onKeyboardSelectTarget?.(neighbor ? neighbor.path : "home");
+                    }
+                    onCloseTab(tab.path);
+                    return;
+                  }
                   handleHorizontalTabKeyDown(
                     event,
                     tabIndex + 1,
                     totalTabs,
                     selectByFlatIndex,
-                  )
-                }
+                  );
+                }}
                 onAuxClick={(event) => {
                   if (event.button === 1) {
                     event.preventDefault();
@@ -204,9 +217,13 @@ export function DocumentWorkbenchTabs({
               >
                 <span className="document-workbench-tab__title">{tab.title}</span>
               </UnstyledButton>
+              {/* A tablist may only own tabs (aria-required-children), so the close button is a
+                  pointer-only affordance; keyboard/AT users close the focused tab with Delete. */}
               <IconButton
                 type="button"
-                label="탭 닫기"
+                label={`${tab.title} 탭 닫기`}
+                aria-hidden="true"
+                tabIndex={-1}
                 tooltip={false}
                 className="document-workbench-tab__close"
                 onClick={() => onCloseTab(tab.path)}

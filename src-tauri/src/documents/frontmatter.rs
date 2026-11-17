@@ -7,7 +7,7 @@ use super::contract::{
     DocumentDesignLink, FrontmatterError, FrontmatterStatus, ParsedDocumentMetadata,
 };
 
-const MAX_UNTERMINATED_FRONTMATTER_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_UNTERMINATED_FRONTMATTER_BYTES: usize = 256 * 1024;
 
 pub fn parse_document(source: &str, file_name: &str) -> ParsedDocumentMetadata {
     let mut reader = std::io::Cursor::new(source.as_bytes());

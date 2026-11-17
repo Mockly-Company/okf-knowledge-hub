@@ -232,18 +232,24 @@ export function StandaloneDocumentWindowPage({
     (url: string) => void handleOpenExternal(url),
     [handleOpenExternal],
   );
+  // Assets are only requested from DesignLinksBar/MarkdownDocument, which render after the
+  // document payload has loaded; always read them against the workspace that served the payload.
+  const assetWorkspaceId = payload?.workspaceId ?? null;
   const readWindowAsset = useCallback(
     (documentPath: string, assetPath: string) => {
       if (!documentsGateway.readStandaloneDocumentAsset) {
         return Promise.reject(new Error("시안 에셋 리더를 사용할 수 없습니다."));
       }
+      if (!assetWorkspaceId) {
+        return Promise.reject(new Error("문서 워크스페이스가 아직 확정되지 않았습니다."));
+      }
       return documentsGateway.readStandaloneDocumentAsset(
-        resolvedWorkspaceId,
+        assetWorkspaceId,
         documentPath,
         assetPath,
       );
     },
-    [documentsGateway, resolvedWorkspaceId],
+    [assetWorkspaceId, documentsGateway],
   );
 
   if (!currentEntry) {

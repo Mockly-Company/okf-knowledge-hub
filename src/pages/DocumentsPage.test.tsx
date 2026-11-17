@@ -1331,8 +1331,14 @@ describe("DocumentsPage", () => {
     )
       .getByRole("tab", { name: "문서 도메인 화면명세서" })
       .closest<HTMLElement>(".document-workbench-tab-group")!;
+    // The close button is pointer-only: a tablist may only own tabs (aria-required-children).
+    expect(
+      within(activeTabGroup).queryByRole("button", {
+        name: "문서 도메인 화면명세서 탭 닫기",
+      }),
+    ).not.toBeInTheDocument();
     await user.click(
-      within(activeTabGroup).getByRole("button", { name: "탭 닫기" }),
+      within(activeTabGroup).getByLabelText("문서 도메인 화면명세서 탭 닫기"),
     );
     expect(
       await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
@@ -1417,6 +1423,27 @@ describe("DocumentsPage", () => {
     expect(
       await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
     ).toBeVisible();
+
+    // Keyboard users close the focused tab with Delete; focus follows the next selected tab.
+    const prdTab = within(
+      screen.getByRole("navigation", { name: "열린 문서 탭" }),
+    ).getByRole("tab", { name: "문서 도메인 PRD" });
+    prdTab.focus();
+    await user.keyboard("{Delete}");
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("tab", { name: "문서 도메인 PRD" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("tab", { name: "문서 도메인 화면명세서" }),
+      ).toHaveFocus(),
+    );
   });
 });
 

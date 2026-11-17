@@ -177,6 +177,13 @@ describe("StandaloneDocumentWindowPage", () => {
       "docs/domains/dashboard/prd.md",
       "assets/mock.svg",
     );
+    // M11: assets are never read against an unresolved (null) workspace first.
+    expect(readAssetSpy).toHaveBeenCalledTimes(1);
+    expect(readAssetSpy).not.toHaveBeenCalledWith(
+      null,
+      expect.anything(),
+      expect.anything(),
+    );
 
     await user.click(screen.getByRole("button", { name: "디자인 열기" }));
     expect(

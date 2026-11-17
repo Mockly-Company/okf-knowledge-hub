@@ -9,16 +9,12 @@ use std::time::UNIX_EPOCH;
 use crate::error::{AppError, ErrorCode};
 
 use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry, FrontmatterStatus};
-use super::frontmatter::parse_document_reader;
+use super::frontmatter::{parse_document_reader, MAX_UNTERMINATED_FRONTMATTER_BYTES};
 use super::reader::{
     is_reserved_markdown_path, lower_stem_key, resolve_companion_html, scan_markdown_preview,
     sort_companion_html_candidates, strip_leading_frontmatter, validate_companion_html_path,
     MAX_PREVIEW_SCAN_BYTES,
 };
-
-/// Extra bytes read for documents with invalid frontmatter so the broken block can be skipped
-/// while still leaving roughly `MAX_PREVIEW_SCAN_BYTES` of body to preview.
-const INVALID_FRONTMATTER_SCAN_SLACK_BYTES: usize = 64 * 1024;
 
 pub fn discover_documents(
     repository_root: &Path,
@@ -205,19 +201,25 @@ fn summarize_document(
         FrontmatterStatus::Invalid { .. } => {
             // The parser stopped somewhere inside the broken block, so re-read from the start and
             // drop the delimited block the same way `document_content_from_bytes` does; otherwise
-            // YAML lines such as `title: [broken` become the fallback description.
+            // YAML lines such as `title: [broken` become the fallback description. Read as much as
+            // the frontmatter parser may accept so the closing delimiter is always within reach.
             let _ = reader.rewind();
             let mut head = Vec::new();
             let _ = (&mut reader)
-                .take((MAX_PREVIEW_SCAN_BYTES + INVALID_FRONTMATTER_SCAN_SLACK_BYTES) as u64)
+                .take((MAX_UNTERMINATED_FRONTMATTER_BYTES + MAX_PREVIEW_SCAN_BYTES) as u64)
                 .read_to_end(&mut head);
             let source = String::from_utf8_lossy(&head);
-            scan_markdown_preview(
-                strip_leading_frontmatter(&source).as_bytes(),
+            let body = strip_leading_frontmatter(&source);
+            let terminated = body.len() != source.len();
+            let (description, headings, links) = scan_markdown_preview(
+                body.as_bytes(),
                 MAX_PREVIEW_SCAN_BYTES,
                 &relative_path,
                 &parsed.frontmatter_links,
-            )
+            );
+            // Without a closing delimiter the body cannot be told apart from YAML lines, so keep
+            // headings/links but never derive a description from it.
+            (terminated.then_some(description).flatten(), headings, links)
         }
         _ => {
             if matches!(parsed.frontmatter_status, FrontmatterStatus::Missing) {
@@ -809,5 +811,52 @@ mod tests {
             description.starts_with("본문과"),
             "invalid frontmatter must not leak into description: {description:?}"
         );
+    }
+
+    #[test]
+    fn discovery_skips_large_invalid_frontmatter_and_drops_description_when_unterminated() {
+        // ~120 KiB broken block (still under the 256 KiB unterminated limit) followed by a body.
+        let mut large = String::from("---\ntitle: [broken\n");
+        while large.len() < 120 * 1024 {
+            large.push_str("note: filler value that keeps the yaml block large\n");
+        }
+        large.push_str("---\n# 제목\n\n큰 블록 뒤의 실제 본문 설명입니다\n");
+        let repo = fixture_repo(&[
+            ("docs/large.md", large.as_str()),
+            (
+                "docs/unterminated.md",
+                "---\ntitle: [broken frontmatter value\n## 남은 제목\n",
+            ),
+        ]);
+        let catalog = discover_documents(repo.path(), &["docs".to_owned()]).unwrap();
+        let find = |path: &str| {
+            catalog
+                .documents
+                .iter()
+                .find(|doc| doc.path == path)
+                .unwrap()
+                .clone()
+        };
+
+        let large = find("docs/large.md");
+        assert!(matches!(
+            large.frontmatter_status,
+            FrontmatterStatus::Invalid { .. }
+        ));
+        assert_eq!(
+            large.description.as_deref(),
+            Some("큰 블록 뒤의 실제 본문 설명입니다")
+        );
+
+        let unterminated = find("docs/unterminated.md");
+        assert!(matches!(
+            unterminated.frontmatter_status,
+            FrontmatterStatus::Invalid { .. }
+        ));
+        assert_eq!(unterminated.description, None);
+        assert!(unterminated
+            .preview_headings
+            .iter()
+            .any(|heading| heading == "남은 제목"));
     }
 }
