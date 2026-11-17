@@ -208,6 +208,8 @@ export function DesignLinksBar({
     );
   }
 
+  const expandedExternalUrl = expanded?.externalUrl ?? null;
+
   return (
     <section className="document-designs-strip" aria-label={heading}>
       <div className="document-designs-strip__header">
@@ -258,12 +260,12 @@ export function DesignLinksBar({
                 alt={expanded.title}
               />
             ) : null}
-            {expanded?.externalUrl ? (
+            {expandedExternalUrl ? (
               <div className="document-design-dialog__footer">
                 <Button
                   type="button"
                   variant="secondary"
-                  onClick={() => onOpenExternal?.(expanded.externalUrl!)}
+                  onClick={() => onOpenExternal?.(expandedExternalUrl)}
                 >
                   <ExternalLink aria-hidden="true" />
                   원본 디자인 링크 열기

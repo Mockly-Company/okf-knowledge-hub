@@ -296,6 +296,21 @@ describe("StandaloneDocumentWindowPage", () => {
     ).toBeVisible();
     expect(screen.getByRole("button", { name: "이전 문서" })).toBeEnabled();
 
+    // S26: re-rendering the page (view override on the same document) must not re-subscribe
+    // the companion frame's message listener.
+    const addListenerSpy = vi.spyOn(window, "addEventListener");
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("okhub:doc-window-navigate", {
+          detail: { path: "docs/domains/dashboard/screen-spec.md", view: "html" },
+        }),
+      );
+    });
+    expect(
+      addListenerSpy.mock.calls.filter(([type]) => type === "message"),
+    ).toHaveLength(0);
+    addListenerSpy.mockRestore();
+
     // Malformed payloads are ignored.
     act(() => {
       window.dispatchEvent(

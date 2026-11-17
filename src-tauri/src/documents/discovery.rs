@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufRead, BufReader, Read, Seek};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -12,9 +12,47 @@ use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry, Front
 use super::frontmatter::{parse_document_reader, MAX_UNTERMINATED_FRONTMATTER_BYTES};
 use super::reader::{
     is_reserved_markdown_path, lower_stem_key, resolve_companion_html, scan_markdown_preview,
-    sort_companion_html_candidates, strip_leading_frontmatter, validate_companion_html_path,
-    MAX_PREVIEW_SCAN_BYTES,
+    sort_companion_html_candidates, validate_companion_html_path, MAX_PREVIEW_SCAN_BYTES,
 };
+
+/// Advances `reader` past a leading `---` … `---`/`...` block, mirroring
+/// `strip_leading_frontmatter` without buffering the block. Returns `false` when the block has
+/// no closing delimiter within `MAX_UNTERMINATED_FRONTMATTER_BYTES` (reader position is then
+/// unspecified).
+fn skip_leading_frontmatter_block<R: BufRead>(reader: &mut R) -> bool {
+    let is_marker = |line: &[u8], markers: &[&[u8]]| {
+        let end = line
+            .iter()
+            .rposition(|byte| !matches!(byte, b'\r' | b'\n'))
+            .map_or(0, |index| index + 1);
+        markers.contains(&&line[..end])
+    };
+    let mut line = Vec::new();
+    let mut consumed = 0usize;
+    let mut first = true;
+    loop {
+        line.clear();
+        let remaining = MAX_UNTERMINATED_FRONTMATTER_BYTES.saturating_sub(consumed);
+        if remaining == 0 {
+            return false;
+        }
+        match (&mut *reader)
+            .take(remaining as u64)
+            .read_until(b'\n', &mut line)
+        {
+            Ok(0) | Err(_) => return false,
+            Ok(read) => consumed += read,
+        }
+        if first {
+            if !is_marker(&line, &[b"---"]) {
+                return false;
+            }
+            first = false;
+        } else if is_marker(&line, &[b"---", b"..."]) {
+            return true;
+        }
+    }
+}
 
 pub fn discover_documents(
     repository_root: &Path,
@@ -201,25 +239,28 @@ fn summarize_document(
         FrontmatterStatus::Invalid { .. } => {
             // The parser stopped somewhere inside the broken block, so re-read from the start and
             // drop the delimited block the same way `document_content_from_bytes` does; otherwise
-            // YAML lines such as `title: [broken` become the fallback description. Read as much as
-            // the frontmatter parser may accept so the closing delimiter is always within reach.
+            // YAML lines such as `title: [broken` become the fallback description. The block is
+            // skipped line by line (no buffering of the whole block) up to the parser's limit.
             let _ = reader.rewind();
-            let mut head = Vec::new();
-            let _ = (&mut reader)
-                .take((MAX_UNTERMINATED_FRONTMATTER_BYTES + MAX_PREVIEW_SCAN_BYTES) as u64)
-                .read_to_end(&mut head);
-            let source = String::from_utf8_lossy(&head);
-            let body = strip_leading_frontmatter(&source);
-            let terminated = body.len() != source.len();
-            let (description, headings, links) = scan_markdown_preview(
-                body.as_bytes(),
-                MAX_PREVIEW_SCAN_BYTES,
-                &relative_path,
-                &parsed.frontmatter_links,
-            );
-            // Without a closing delimiter the body cannot be told apart from YAML lines, so keep
-            // headings/links but never derive a description from it.
-            (terminated.then_some(description).flatten(), headings, links)
+            if skip_leading_frontmatter_block(&mut reader) {
+                scan_markdown_preview(
+                    &mut reader,
+                    MAX_PREVIEW_SCAN_BYTES,
+                    &relative_path,
+                    &parsed.frontmatter_links,
+                )
+            } else {
+                // Without a closing delimiter the body cannot be told apart from YAML lines, so
+                // keep headings/links but never derive a description from it.
+                let _ = reader.rewind();
+                let (_, headings, links) = scan_markdown_preview(
+                    &mut reader,
+                    MAX_PREVIEW_SCAN_BYTES,
+                    &relative_path,
+                    &parsed.frontmatter_links,
+                );
+                (None, headings, links)
+            }
         }
         _ => {
             if matches!(parsed.frontmatter_status, FrontmatterStatus::Missing) {
@@ -858,5 +899,22 @@ mod tests {
             .preview_headings
             .iter()
             .any(|heading| heading == "남은 제목"));
+    }
+
+    #[test]
+    fn skip_leading_frontmatter_block_streams_to_the_closing_delimiter() {
+        use std::io::{Cursor, Read};
+
+        let mut crlf = Cursor::new(b"---\r\ntitle: [x\r\n...\r\nbody\r\n".to_vec());
+        assert!(super::skip_leading_frontmatter_block(&mut crlf));
+        let mut rest = String::new();
+        crlf.read_to_string(&mut rest).unwrap();
+        assert_eq!(rest, "body\r\n");
+
+        let mut unterminated = Cursor::new(b"---\ntitle: [x\n# heading\n".to_vec());
+        assert!(!super::skip_leading_frontmatter_block(&mut unterminated));
+
+        let mut no_frontmatter = Cursor::new(b"# heading\n---\n".to_vec());
+        assert!(!super::skip_leading_frontmatter_block(&mut no_frontmatter));
     }
 }

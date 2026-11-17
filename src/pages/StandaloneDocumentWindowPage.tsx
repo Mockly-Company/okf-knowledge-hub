@@ -206,6 +206,12 @@ export function StandaloneDocumentWindowPage({
 
   const navigateInWindowRef = useRef(navigateInWindow);
   navigateInWindowRef.current = navigateInWindow;
+  // Stable identity for children whose effects subscribe with it (CompanionHtmlFrame listener).
+  const navigateInWindowStable = useCallback(
+    (target: Parameters<typeof navigateInWindow>[0]) =>
+      navigateInWindowRef.current(target),
+    [],
+  );
   useEffect(() => {
     const handleNavigate = (event: Event) => {
       const target = parseNavigateDetail((event as CustomEvent<unknown>).detail);
@@ -379,7 +385,7 @@ export function StandaloneDocumentWindowPage({
               title={`${doc.summary.title} 사람용 보기`}
               documentPath={doc.summary.path}
               initialFragment={currentEntry.fragment ?? null}
-              onNavigateDocument={navigateInWindow}
+              onNavigateDocument={navigateInWindowStable}
               onOpenExternal={handleOpenExternalVoid}
             />
           ) : (
