@@ -339,28 +339,72 @@ fn local_image_mime(path: &Path) -> Option<&'static str> {
     }
 }
 
+/// Byte range of `attr_name`'s value inside one start tag (`<tag ...>`).
+///
+/// Walks the tag attribute by attribute so that only whole attribute names match
+/// (`data-src` never matches `src`) and text inside other attributes' quoted values
+/// (`alt="a src=x"`) is never mistaken for an attribute.
+fn html_attr_value_range(tag: &str, attr_name: &str) -> Option<(usize, usize)> {
+    let bytes = tag.as_bytes();
+    let len = bytes.len();
+    let mut i = usize::from(bytes.first() == Some(&b'<'));
+    while i < len && !bytes[i].is_ascii_whitespace() && !matches!(bytes[i], b'>' | b'/') {
+        i += 1;
+    }
+    loop {
+        while i < len && (bytes[i].is_ascii_whitespace() || bytes[i] == b'/') {
+            i += 1;
+        }
+        if i >= len || bytes[i] == b'>' {
+            return None;
+        }
+        let name_start = i;
+        while i < len && !bytes[i].is_ascii_whitespace() && !matches!(bytes[i], b'=' | b'>' | b'/')
+        {
+            i += 1;
+        }
+        let name = &tag[name_start..i];
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len || bytes[i] != b'=' {
+            // Boolean attribute without a value.
+            continue;
+        }
+        i += 1;
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len {
+            return None;
+        }
+        let (value_start, value_end) = if matches!(bytes[i], b'"' | b'\'') {
+            let quote = bytes[i];
+            let start = i + 1;
+            let end = start + bytes[start..].iter().position(|byte| *byte == quote)?;
+            i = end + 1;
+            (start, end)
+        } else {
+            let start = i;
+            while i < len && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                i += 1;
+            }
+            // `src=a.png/>`: treat the trailing `/` as the self-closing marker, not the value.
+            let end = if i > start && bytes[i - 1] == b'/' && bytes.get(i) == Some(&b'>') {
+                i - 1
+            } else {
+                i
+            };
+            (start, end)
+        };
+        if name.eq_ignore_ascii_case(attr_name) {
+            return Some((value_start, value_end));
+        }
+    }
+}
+
 fn replace_html_attr_value(tag: &str, attr_name: &str, new_value: &str) -> Option<String> {
-    let lower = tag.to_ascii_lowercase();
-    let needle = format!("{attr_name}=");
-    let pos = lower.find(&needle)?;
-    let prefix_end = pos + needle.len();
-    let ws_len = tag[prefix_end..].len() - tag[prefix_end..].trim_start().len();
-    let value_start = prefix_end + ws_len;
-    let after = &tag[value_start..];
-    let quote = after.chars().next()?;
-    let (replace_start, replace_end) = if quote == '"' || quote == '\'' {
-        let rest = &after[quote.len_utf8()..];
-        let end = rest.find(quote)?;
-        (
-            value_start + quote.len_utf8(),
-            value_start + quote.len_utf8() + end,
-        )
-    } else {
-        let end = after
-            .find(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/')
-            .unwrap_or(after.len());
-        (value_start, value_start + end)
-    };
+    let (replace_start, replace_end) = html_attr_value_range(tag, attr_name)?;
     let mut out = String::with_capacity(tag.len() + new_value.len());
     out.push_str(&tag[..replace_start]);
     out.push_str(new_value);
@@ -851,21 +895,8 @@ pub(crate) fn is_reserved_html_path(relative_path: &str, file_name: &str) -> boo
 }
 
 fn extract_html_attr<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
-    let lower = tag.to_ascii_lowercase();
-    let needle = format!("{attr_name}=");
-    let pos = lower.find(&needle)?;
-    let after = &tag[pos + needle.len()..].trim_start();
-    let quote = after.chars().next()?;
-    if quote == '"' || quote == '\'' {
-        let rest = &after[quote.len_utf8()..];
-        let end = rest.find(quote)?;
-        Some(&rest[..end])
-    } else {
-        let end = after
-            .find(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/')
-            .unwrap_or(after.len());
-        Some(&after[..end])
-    }
+    let (start, end) = html_attr_value_range(tag, attr_name)?;
+    Some(&tag[start..end])
 }
 
 pub(crate) fn document_content_from_bytes(
@@ -1095,7 +1126,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::DocumentReader;
+    use super::{extract_html_attr, replace_html_attr_value, DocumentReader};
     use crate::documents::contract::DocumentAsset;
     use crate::error::ErrorCode;
 
@@ -1647,5 +1678,65 @@ mod tests {
         let html = doc.companion_html.unwrap();
         assert!(html.html.contains(r#"src="HTTP://example.com/a.svg""#));
         assert!(html.html.contains(r#"src="DATA:image/png;base64,AAA""#));
+    }
+
+    #[test]
+    fn html_attr_helpers_respect_attribute_name_boundaries() {
+        let tag = r#"<img data-src="lazy.png" alt='a src=x' src="real.png">"#;
+        assert_eq!(extract_html_attr(tag, "src"), Some("real.png"));
+        assert_eq!(
+            replace_html_attr_value(tag, "src", "data:image/png;base64,AAA").as_deref(),
+            Some(r#"<img data-src="lazy.png" alt='a src=x' src="data:image/png;base64,AAA">"#)
+        );
+
+        let unquoted = "<IMG Data-Src=lazy.png SRC = real.png/>";
+        assert_eq!(extract_html_attr(unquoted, "src"), Some("real.png"));
+        assert_eq!(
+            replace_html_attr_value(unquoted, "src", "x").as_deref(),
+            Some("<IMG Data-Src=lazy.png SRC = x/>")
+        );
+
+        assert_eq!(
+            extract_html_attr("<img src=img/a.png>", "src"),
+            Some("img/a.png")
+        );
+        assert_eq!(
+            extract_html_attr(r#"<img data-src="only.png">"#, "src"),
+            None
+        );
+        assert_eq!(
+            replace_html_attr_value(r#"<img data-src="only.png">"#, "src", "x"),
+            None
+        );
+        assert_eq!(
+            extract_html_attr(
+                r#"<link data-rel="icon" rel="stylesheet" href="a.css">"#,
+                "rel"
+            ),
+            Some("stylesheet")
+        );
+    }
+
+    #[test]
+    fn inline_local_images_keeps_data_src_when_inlining_src() {
+        let repo = fixture_repo(&[
+            ("docs/spec.md", "# Spec"),
+            (
+                "docs/real.svg",
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+            ),
+            (
+                "docs/spec.html",
+                r#"<img data-src="lazy.svg" src="real.svg" alt="screen" />"#,
+            ),
+        ]);
+        let reader = reader(&repo);
+        let doc = reader.read_document("docs/spec.md").unwrap();
+        let html = doc.companion_html.unwrap().html;
+        assert!(html.contains(r#"data-src="lazy.svg""#), "{html}");
+        assert!(
+            html.contains(r#"src="data:image/svg+xml;base64,"#),
+            "{html}"
+        );
     }
 }

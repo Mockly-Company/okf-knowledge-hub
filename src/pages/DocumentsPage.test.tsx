@@ -1353,4 +1353,70 @@ describe("DocumentsPage", () => {
       }),
     ).toBeVisible();
   });
+  it("moves back two entries when 이전 문서 is clicked twice before re-render (S21)", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.sessionSnapshot.catalog = {
+      documents: [
+        {
+          path: "docs/domains/documents/prd.md",
+          fileName: "prd.md",
+          title: "문서 도메인 PRD",
+          documentId: null,
+          frontmatterStatus: { status: "valid" },
+          docType: "Product Spec",
+          domain: "documents",
+          hasCompanionHtml: false,
+          modifiedAtUnixMs: 1,
+          size: 100,
+        },
+        {
+          path: "docs/domains/documents/screen-spec.md",
+          fileName: "screen-spec.md",
+          title: "문서 도메인 화면명세서",
+          documentId: null,
+          frontmatterStatus: { status: "valid" },
+          docType: "Screen Spec",
+          domain: "documents",
+          hasCompanionHtml: false,
+          modifiedAtUnixMs: 2,
+          size: 120,
+        },
+      ],
+      roots: [],
+    };
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(
+      await screen.findByRole("button", { name: /문서 도메인 PRD/ }),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+    const tabsNav = screen.getByRole("navigation", { name: "열린 문서 탭" });
+    await user.click(within(tabsNav).getByRole("tab", { name: "문서 맵" }));
+    await user.click(
+      await screen.findByRole("button", { name: /문서 도메인 화면명세서/ }),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+
+    // History: [home, PRD, home, spec]. Two clicks in one batch must land on PRD, not home.
+    const backButton = within(
+      screen.getByRole("navigation", { name: "열린 문서 탭" }),
+    ).getByRole("button", { name: "이전 문서" });
+    act(() => {
+      fireEvent.click(backButton);
+      fireEvent.click(backButton);
+    });
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+  });
 });
+

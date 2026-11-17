@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, ExternalLink } from "lucide-react";
@@ -24,6 +24,21 @@ interface WindowDocEntry {
 }
 
 const MAX_WINDOW_HISTORY_ENTRIES = 30;
+
+/** Rust `open_document_window` dispatches this when it reuses an already-open doc-viewer window. */
+const DOC_WINDOW_NAVIGATE_EVENT = "okhub:doc-window-navigate";
+
+function parseNavigateDetail(
+  detail: unknown,
+): { path: string; view?: "html" | "markdown" } | null {
+  if (typeof detail !== "object" || detail === null) return null;
+  const { path, view } = detail as { path?: unknown; view?: unknown };
+  if (typeof path !== "string" || !path.trim()) return null;
+  return {
+    path,
+    view: view === "html" || view === "markdown" ? view : undefined,
+  };
+}
 
 function canonicalKey(path: string): string {
   return normalizeDocumentPath(path).replace(/\.html$/i, ".md").toLowerCase();
@@ -142,7 +157,7 @@ export function StandaloneDocumentWindowPage({
 
   const navigateInWindow = (target: {
     path: string;
-    view: "html" | "markdown";
+    view?: "html" | "markdown";
     fragment?: string;
   }) => {
     const normalizedTarget = normalizeDocumentPath(target.path).replace(
@@ -155,10 +170,13 @@ export function StandaloneDocumentWindowPage({
       currentEntry &&
       canonicalKey(normalizedTarget) === canonicalKey(currentEntry.path)
     ) {
-      setViewOverrides((prev) => ({
-        ...prev,
-        [canonicalKey(normalizedTarget)]: target.view,
-      }));
+      const nextView = target.view;
+      if (nextView) {
+        setViewOverrides((prev) => ({
+          ...prev,
+          [canonicalKey(normalizedTarget)]: nextView,
+        }));
+      }
       if (target.fragment) {
         setHistory((prev) => ({
           ...prev,
@@ -186,6 +204,48 @@ export function StandaloneDocumentWindowPage({
     });
   };
 
+  const navigateInWindowRef = useRef(navigateInWindow);
+  navigateInWindowRef.current = navigateInWindow;
+  useEffect(() => {
+    const handleNavigate = (event: Event) => {
+      const target = parseNavigateDetail((event as CustomEvent<unknown>).detail);
+      if (target) navigateInWindowRef.current(target);
+    };
+    window.addEventListener(DOC_WINDOW_NAVIGATE_EVENT, handleNavigate);
+    return () =>
+      window.removeEventListener(DOC_WINDOW_NAVIGATE_EVENT, handleNavigate);
+  }, []);
+
+  const resolvedWorkspaceId: string | null =
+    payload?.workspaceId ?? workspaceId ?? null;
+  // Stable identities: DesignLinksBar thumbnails refetch whenever `readAsset` changes.
+  const handleOpenExternal = useCallback(
+    (url: string) => {
+      setExternalError(null);
+      return documentsGateway.openExternal(url).catch(() => {
+        setExternalError(`외부 링크를 열 수 없습니다: ${url}`);
+      });
+    },
+    [documentsGateway],
+  );
+  const handleOpenExternalVoid = useCallback(
+    (url: string) => void handleOpenExternal(url),
+    [handleOpenExternal],
+  );
+  const readWindowAsset = useCallback(
+    (documentPath: string, assetPath: string) => {
+      if (!documentsGateway.readStandaloneDocumentAsset) {
+        return Promise.reject(new Error("시안 에셋 리더를 사용할 수 없습니다."));
+      }
+      return documentsGateway.readStandaloneDocumentAsset(
+        resolvedWorkspaceId,
+        documentPath,
+        assetPath,
+      );
+    },
+    [documentsGateway, resolvedWorkspaceId],
+  );
+
   if (!currentEntry) {
     return (
       <main className="standalone-doc-window">
@@ -195,25 +255,6 @@ export function StandaloneDocumentWindowPage({
       </main>
     );
   }
-
-  const resolvedWorkspaceId: string | null =
-    payload?.workspaceId ?? workspaceId ?? null;
-  const handleOpenExternal = (url: string) => {
-    setExternalError(null);
-    return documentsGateway.openExternal(url).catch(() => {
-      setExternalError(`외부 링크를 열 수 없습니다: ${url}`);
-    });
-  };
-  const readWindowAsset = (documentPath: string, assetPath: string) => {
-    if (!documentsGateway.readStandaloneDocumentAsset) {
-      return Promise.reject(new Error("시안 에셋 리더를 사용할 수 없습니다."));
-    }
-    return documentsGateway.readStandaloneDocumentAsset(
-      resolvedWorkspaceId,
-      documentPath,
-      assetPath,
-    );
-  };
 
   return (
     <main className="standalone-doc-window" aria-label="문서 새 창 보기">
@@ -323,7 +364,7 @@ export function StandaloneDocumentWindowPage({
               designs={designs}
               documentPath={doc.summary.path}
               readAsset={readWindowAsset}
-              onOpenExternal={(url) => void handleOpenExternal(url)}
+              onOpenExternal={handleOpenExternalVoid}
             />
           ) : null}
           {effectiveView === "html" && doc.companionHtml ? (
@@ -333,7 +374,7 @@ export function StandaloneDocumentWindowPage({
               documentPath={doc.summary.path}
               initialFragment={currentEntry.fragment ?? null}
               onNavigateDocument={navigateInWindow}
-              onOpenExternal={(url) => void handleOpenExternal(url)}
+              onOpenExternal={handleOpenExternalVoid}
             />
           ) : (
             <div className="standalone-doc-window__markdown">

@@ -1199,7 +1199,10 @@ export function DocumentsProvider({
     const nextIndex = current.index - 1;
     const target = current.entries[nextIndex] ?? null;
     skipNextHistoryPushRef.current = true;
-    setNavHistory({ ...current, index: nextIndex });
+    // Advance the ref synchronously so a second click before re-render moves one more step.
+    const next = { ...current, index: nextIndex };
+    navHistoryRef.current = next;
+    setNavHistory(next);
     if (target === null) {
       showDocumentsHome();
     } else {
@@ -1213,7 +1216,9 @@ export function DocumentsProvider({
     const nextIndex = current.index + 1;
     const target = current.entries[nextIndex] ?? null;
     skipNextHistoryPushRef.current = true;
-    setNavHistory({ ...current, index: nextIndex });
+    const next = { ...current, index: nextIndex };
+    navHistoryRef.current = next;
+    setNavHistory(next);
     if (target === null) {
       showDocumentsHome();
     } else {

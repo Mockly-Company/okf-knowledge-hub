@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TestQueryProvider } from "@/test/queryTestUtils";
@@ -233,4 +239,33 @@ describe("ScreenSpecDeck", () => {
       screen.queryByText("화면명세 본문을 불러오는 중…"),
     ).not.toBeInTheDocument();
   });
+  it("does not reuse cached previews across mounts when the workspace is unknown (M10)", async () => {
+    const readerA = vi.fn(async () => mockContents["docs/domains/dashboard/screen-spec.md"]!);
+    const readerB = vi.fn(async () => mockContents["docs/domains/dashboard/screen-spec.md"]!);
+    const { rerender } = render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          key="a"
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={readerA}
+        />
+      </TestQueryProvider>,
+    );
+    await waitFor(() => expect(readerA).toHaveBeenCalledTimes(1));
+
+    // Same path, but the reader may now point at a different workspace.
+    rerender(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          key="b"
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={readerB}
+        />
+      </TestQueryProvider>,
+    );
+    await waitFor(() => expect(readerB).toHaveBeenCalledTimes(1));
+  });
 });
+

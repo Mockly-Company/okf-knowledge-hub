@@ -1310,6 +1310,22 @@ fn doc_viewer_window_label(workspace_id: Uuid, normalized_path: &str) -> String 
     format!("doc-viewer-{suffix}")
 }
 
+/// Event the standalone document page (`StandaloneDocumentWindowPage`) listens for when an
+/// already-open `doc-viewer-*` window is reused.
+const DOC_WINDOW_NAVIGATE_EVENT: &str = "okhub:doc-window-navigate";
+
+fn doc_viewer_navigate_script(normalized_path: &str, view: Option<&str>) -> String {
+    // serde_json escapes quotes/backslashes; escaping `<` additionally keeps the literal inert
+    // even if the script were ever embedded in markup.
+    let detail = serde_json::json!({ "path": normalized_path, "view": view })
+        .to_string()
+        .replace('<', "\\u003c");
+    format!(
+        "window.dispatchEvent(new CustomEvent({}, {{ detail: {detail} }}))",
+        serde_json::Value::from(DOC_WINDOW_NAVIGATE_EVENT)
+    )
+}
+
 #[tauri::command]
 pub async fn open_document_window(
     app: AppHandle,
@@ -1330,19 +1346,25 @@ pub async fn open_document_window(
 
     let label = doc_viewer_window_label(connected.workspace_id, &normalized_path);
 
-    if let Some(existing) = app.get_webview_window(&label) {
-        let _ = existing.unminimize();
-        let _ = existing.show();
-        let _ = existing.set_focus();
-        return Ok(());
-    }
-
     let resolved_view = view_mode
         .as_deref()
         .map(str::trim)
         .filter(|view| *view == "html" || *view == "markdown")
         .map(str::to_owned)
         .or(inferred_view);
+
+    if let Some(existing) = app.get_webview_window(&label) {
+        // The window may have navigated elsewhere or be showing the other view; ask its page to
+        // return to the requested document/view without resetting its in-window history.
+        let _ = existing.eval(doc_viewer_navigate_script(
+            &normalized_path,
+            resolved_view.as_deref(),
+        ));
+        let _ = existing.unminimize();
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return Ok(());
+    }
 
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     serializer.append_pair("workspaceId", &connected.workspace_id.to_string());
@@ -4345,5 +4367,24 @@ mod tests {
         assert_eq!(first, second);
         assert_ne!(first, different_ws);
         assert_ne!(first, different_doc);
+    }
+
+    #[test]
+    fn doc_viewer_navigate_script_dispatches_json_encoded_detail() {
+        let script = super::doc_viewer_navigate_script("docs/a\"b'</script>.md", Some("markdown"));
+        assert!(script.contains("okhub:doc-window-navigate"));
+        let start = script.find("detail:").unwrap() + "detail:".len();
+        let end = script.rfind(" }))").unwrap();
+        let detail: serde_json::Value = serde_json::from_str(script[start..end].trim()).unwrap();
+        assert_eq!(detail["path"], "docs/a\"b'</script>.md");
+        assert_eq!(detail["view"], "markdown");
+        assert!(!script.contains("</script>"));
+
+        let without_view = super::doc_viewer_navigate_script("docs/prd.md", None);
+        let start = without_view.find("detail:").unwrap() + "detail:".len();
+        let end = without_view.rfind(" }))").unwrap();
+        let detail: serde_json::Value =
+            serde_json::from_str(without_view[start..end].trim()).unwrap();
+        assert!(detail["view"].is_null());
     }
 }

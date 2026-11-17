@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::{BufReader, Seek};
+use std::io::{BufReader, Read, Seek};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -12,8 +12,13 @@ use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry, Front
 use super::frontmatter::parse_document_reader;
 use super::reader::{
     is_reserved_markdown_path, lower_stem_key, resolve_companion_html, scan_markdown_preview,
-    sort_companion_html_candidates, validate_companion_html_path, MAX_PREVIEW_SCAN_BYTES,
+    sort_companion_html_candidates, strip_leading_frontmatter, validate_companion_html_path,
+    MAX_PREVIEW_SCAN_BYTES,
 };
+
+/// Extra bytes read for documents with invalid frontmatter so the broken block can be skipped
+/// while still leaving roughly `MAX_PREVIEW_SCAN_BYTES` of body to preview.
+const INVALID_FRONTMATTER_SCAN_SLACK_BYTES: usize = 64 * 1024;
 
 pub fn discover_documents(
     repository_root: &Path,
@@ -196,18 +201,36 @@ fn summarize_document(
     let mut reader = BufReader::new(file);
     let parsed = parse_document_reader(&mut reader, &file_name);
     let relative_path = portable_path(repository_root, path);
-    if matches!(
-        parsed.frontmatter_status,
-        FrontmatterStatus::Missing | FrontmatterStatus::Invalid { .. }
-    ) {
-        let _ = reader.rewind();
-    }
-    let (fallback_description, preview_headings, linked_paths) = scan_markdown_preview(
-        &mut reader,
-        MAX_PREVIEW_SCAN_BYTES,
-        &relative_path,
-        &parsed.frontmatter_links,
-    );
+    let (fallback_description, preview_headings, linked_paths) = match parsed.frontmatter_status {
+        FrontmatterStatus::Invalid { .. } => {
+            // The parser stopped somewhere inside the broken block, so re-read from the start and
+            // drop the delimited block the same way `document_content_from_bytes` does; otherwise
+            // YAML lines such as `title: [broken` become the fallback description.
+            let _ = reader.rewind();
+            let mut head = Vec::new();
+            let _ = (&mut reader)
+                .take((MAX_PREVIEW_SCAN_BYTES + INVALID_FRONTMATTER_SCAN_SLACK_BYTES) as u64)
+                .read_to_end(&mut head);
+            let source = String::from_utf8_lossy(&head);
+            scan_markdown_preview(
+                strip_leading_frontmatter(&source).as_bytes(),
+                MAX_PREVIEW_SCAN_BYTES,
+                &relative_path,
+                &parsed.frontmatter_links,
+            )
+        }
+        _ => {
+            if matches!(parsed.frontmatter_status, FrontmatterStatus::Missing) {
+                let _ = reader.rewind();
+            }
+            scan_markdown_preview(
+                &mut reader,
+                MAX_PREVIEW_SCAN_BYTES,
+                &relative_path,
+                &parsed.frontmatter_links,
+            )
+        }
+    };
     let modified_at_unix_ms = match metadata.modified() {
         Ok(modified) => match modified.duration_since(UNIX_EPOCH) {
             Ok(duration) => duration.as_millis().min(i64::MAX as u128) as i64,
@@ -781,5 +804,10 @@ mod tests {
             .iter()
             .any(|heading| heading == "핵심 흐름"));
         assert!(item.linked_paths.iter().any(|link| link == "docs/other.md"));
+        let description = item.description.as_deref().unwrap_or_default();
+        assert!(
+            description.starts_with("본문과"),
+            "invalid frontmatter must not leak into description: {description:?}"
+        );
     }
 }

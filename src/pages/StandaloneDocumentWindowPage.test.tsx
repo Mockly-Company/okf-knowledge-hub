@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -183,4 +183,134 @@ describe("StandaloneDocumentWindowPage", () => {
       await screen.findByText("외부 링크를 열 수 없습니다: https://www.figma.com/file/123"),
     ).toBeVisible();
   });
+
+  it("does not refetch design assets when the page re-renders (M9)", async () => {
+    const gateway = new FakeDocumentsGateway();
+    const user = userEvent.setup();
+    vi.spyOn(gateway, "openExternal").mockRejectedValue(new Error("forbidden"));
+    gateway.documentsByPath.set("docs/domains/dashboard/prd.md", {
+      summary: {
+        path: "docs/domains/dashboard/prd.md",
+        fileName: "prd.md",
+        title: "대시보드 PRD",
+        documentId: "dash-prd",
+        frontmatterStatus: { status: "valid" },
+        modifiedAtUnixMs: 1,
+        size: 120,
+      },
+      markdown: "# 대시보드 PRD\n\n본문",
+      properties: {
+        designs: [
+          {
+            title: "알림 시안",
+            image: "assets/mock.svg",
+            url: "https://www.figma.com/file/123",
+          },
+        ],
+      },
+      tableOfContents: [],
+      lastCommit: null,
+    });
+    const readAssetSpy = vi
+      .spyOn(gateway, "readStandaloneDocumentAsset")
+      .mockResolvedValue({
+        kind: "svg",
+        source: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+      });
+
+    renderWindow(
+      gateway,
+      "/doc-window?workspaceId=ws-1&doc=docs%2Fdomains%2Fdashboard%2Fprd.md&view=markdown",
+    );
+
+    expect(await screen.findByAltText("알림 시안")).toBeVisible();
+    const callsAfterLoad = readAssetSpy.mock.calls.length;
+
+    // Showing the external-link error re-renders the whole page.
+    await user.click(screen.getByRole("button", { name: "디자인 열기" }));
+    expect(
+      await screen.findByText("외부 링크를 열 수 없습니다: https://www.figma.com/file/123"),
+    ).toBeVisible();
+    expect(readAssetSpy).toHaveBeenCalledTimes(callsAfterLoad);
+  });
+
+  it("switches view or document when an existing window is reused (S19)", async () => {
+    const gateway = new FakeDocumentsGateway();
+    for (const [name, title] of [
+      ["prd", "대시보드 PRD"],
+      ["screen-spec", "대시보드 화면명세서"],
+    ] as const) {
+      gateway.documentsByPath.set(`docs/domains/dashboard/${name}.md`, {
+        summary: {
+          path: `docs/domains/dashboard/${name}.md`,
+          fileName: `${name}.md`,
+          title,
+          documentId: name,
+          frontmatterStatus: { status: "valid" },
+          modifiedAtUnixMs: 1,
+          size: 120,
+        },
+        markdown: `# ${title}\n\n${title} 원문`,
+        properties: {},
+        tableOfContents: [],
+        lastCommit: null,
+        companionHtml: {
+          path: `docs/domains/dashboard/${name}.html`,
+          html: `<html><body><h1>${title} HTML</h1></body></html>`,
+          modifiedAtUnixMs: 2,
+        },
+      });
+    }
+
+    renderWindow(
+      gateway,
+      "/doc-window?workspaceId=ws-1&doc=docs%2Fdomains%2Fdashboard%2Fprd.md&view=html",
+    );
+    expect(await screen.findByTitle("대시보드 PRD 사람용 보기")).toBeVisible();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("okhub:doc-window-navigate", {
+          detail: { path: "docs/domains/dashboard/prd.md", view: "markdown" },
+        }),
+      );
+    });
+    expect(await screen.findByText("대시보드 PRD 원문")).toBeVisible();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("okhub:doc-window-navigate", {
+          detail: { path: "docs/domains/dashboard/screen-spec.md", view: "html" },
+        }),
+      );
+    });
+    expect(
+      await screen.findByTitle("대시보드 화면명세서 사람용 보기"),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "이전 문서" })).toBeEnabled();
+
+    // Malformed payloads are ignored.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("okhub:doc-window-navigate", { detail: { path: 42 } }),
+      );
+    });
+    expect(screen.getByTitle("대시보드 화면명세서 사람용 보기")).toBeVisible();
+  });
 });
+
+function renderWindow(gateway: FakeDocumentsGateway, initialEntry: string) {
+  return render(
+    <TestQueryProvider>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route
+            path="doc-window"
+            element={<StandaloneDocumentWindowPage documentsGateway={gateway} />}
+          />
+        </Routes>
+      </MemoryRouter>
+    </TestQueryProvider>,
+  );
+}
+

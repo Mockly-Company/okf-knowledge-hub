@@ -161,7 +161,8 @@ export function ScreenSpecDeck({
     return () => observer.disconnect();
   }, [filteredSpecs.length, mode, visibleSpecs.length]);
 
-  const effectiveWorkspaceKey = docsContext?.state.workspaceId ?? "standalone";
+  const knownWorkspaceId = docsContext?.state.workspaceId ?? null;
+  const effectiveWorkspaceKey = knownWorkspaceId ?? "unknown-workspace";
   const previewReader = readDocumentPreview ?? docsContext?.readDocumentPreview;
   const assetReader =
     readPreviewAsset ??
@@ -187,7 +188,10 @@ export function ScreenSpecDeck({
         return previewReader(spec.path);
       },
       enabled: Boolean(previewReader),
-      staleTime: 30_000,
+      // Without a known workspace the reader resolves "whatever is active", so the same path may
+      // belong to a different workspace next time; never serve such previews from cache.
+      staleTime: knownWorkspaceId ? 30_000 : 0,
+      gcTime: knownWorkspaceId ? undefined : 0,
     })),
   });
 
