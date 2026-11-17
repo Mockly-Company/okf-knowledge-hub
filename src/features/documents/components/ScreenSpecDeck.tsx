@@ -367,8 +367,8 @@ export function ScreenSpecDeck({
             .map((linkedPath) => lookupByPath.get(canonicalKey(linkedPath)))
             .filter(
               (target): target is DocumentSummary =>
-                Boolean(target) &&
-                canonicalKey(target!.path) !== canonicalKey(spec.path),
+                target !== undefined &&
+                canonicalKey(target.path) !== canonicalKey(spec.path),
             )
             .slice(0, 4);
 

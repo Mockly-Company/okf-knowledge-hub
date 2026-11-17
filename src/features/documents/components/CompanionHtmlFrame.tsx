@@ -334,6 +334,11 @@ export function CompanionHtmlFrame({
     [html, channelId],
   );
 
+  // Callers usually pass inline callbacks; read the latest ones through a ref so the window
+  // message listener is subscribed once per channel/document instead of on every render.
+  const callbacksRef = useRef({ onNavigateDocument, onOpenExternal });
+  callbacksRef.current = { onNavigateDocument, onOpenExternal };
+
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const iframeWindow = iframeRef.current?.contentWindow;
@@ -357,20 +362,20 @@ export function CompanionHtmlFrame({
       }
       if (data.kind === "external") {
         if (/^(https?|mailto|tel):/i.test(data.href.trim())) {
-          onOpenExternal?.(data.href.trim());
+          callbacksRef.current.onOpenExternal?.(data.href.trim());
         }
         return;
       }
       if (data.kind === "document") {
         const resolved = resolveCompanionDocumentLink(documentPath, data.href);
         if (resolved) {
-          onNavigateDocument?.(resolved);
+          callbacksRef.current.onNavigateDocument?.(resolved);
         }
       }
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [channelId, documentPath, onNavigateDocument, onOpenExternal]);
+  }, [channelId, documentPath]);
 
   useEffect(() => {
     if (!initialFragment) return;

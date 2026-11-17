@@ -1303,7 +1303,8 @@ fn doc_viewer_window_label(workspace_id: Uuid, normalized_path: &str) -> String 
     hasher.update(workspace_id.as_bytes());
     hasher.update(normalized_path.to_ascii_lowercase().as_bytes());
     let digest = hasher.finalize();
-    let suffix: String = digest[..6]
+    // 128 bits: a reused label must never point at another document's window.
+    let suffix: String = digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
@@ -4363,7 +4364,7 @@ mod tests {
         let different_doc = super::doc_viewer_window_label(ws_a, "docs/domains/documents/prd.md");
 
         assert!(first.starts_with("doc-viewer-"));
-        assert_eq!(first.len(), "doc-viewer-".len() + 12);
+        assert_eq!(first.len(), "doc-viewer-".len() + 32);
         assert_eq!(first, second);
         assert_ne!(first, different_ws);
         assert_ne!(first, different_doc);

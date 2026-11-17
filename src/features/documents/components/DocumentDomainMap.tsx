@@ -79,8 +79,9 @@ function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
     (doc) => !isAuxiliaryDocument(doc) && classifyDocumentCategory(doc) === "adr",
   );
 
-  if (prds.length > 0 && specs.length > 0) {
-    const anchorPrd = canonicalKey(prds[0]!.path);
+  const [firstPrd] = prds;
+  if (firstPrd && specs.length > 0) {
+    const anchorPrd = canonicalKey(firstPrd.path);
     for (const spec of specs) {
       const specKey = canonicalKey(spec.path);
       const hasPrdLink = prds.some((prd) =>
@@ -96,8 +97,9 @@ function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
     }
   }
 
-  if (specs.length > 0 && adrs.length > 0) {
-    const anchorSpec = canonicalKey(specs[0]!.path);
+  const [firstSpec] = specs;
+  if (firstSpec && adrs.length > 0) {
+    const anchorSpec = canonicalKey(firstSpec.path);
     for (const adr of adrs) {
       const adrKey = canonicalKey(adr.path);
       const hasSpecLink = specs.some((spec) =>

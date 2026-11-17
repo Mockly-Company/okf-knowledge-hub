@@ -150,4 +150,41 @@ describe("CompanionHtmlFrame", () => {
       "https://github.com/Mockly-Company/hub-knowledge",
     );
   });
+  it("keeps one message subscription across re-renders with inline callbacks and calls the latest one (S30)", () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const first = vi.fn();
+    const latest = vi.fn();
+    const renderFrame = (onNavigate: (target: unknown) => void) => (
+      <CompanionHtmlFrame
+        html="<html><body><h1>문서</h1></body></html>"
+        title="문서 사람용 보기"
+        documentPath="docs/domains/documents/screen-spec.md"
+        onNavigateDocument={(target) => onNavigate(target)}
+        onOpenExternal={(url) => void url}
+      />
+    );
+    const { rerender } = render(renderFrame(first));
+    rerender(renderFrame(latest));
+    rerender(renderFrame(latest));
+    expect(
+      addSpy.mock.calls.filter(([type]) => type === "message"),
+    ).toHaveLength(1);
+    addSpy.mockRestore();
+
+    const frame = screen.getByTitle("문서 사람용 보기") as HTMLIFrameElement;
+    const channel = /var ch="([^"]+)"/.exec(frame.getAttribute("srcdoc") ?? "")?.[1];
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "okhub:companion-link", channel, kind: "document", href: "prd.html" },
+      }),
+    );
+    expect(first).not.toHaveBeenCalled();
+    expect(latest).toHaveBeenCalledWith({
+      path: "docs/domains/documents/prd.md",
+      view: "html",
+      fragment: undefined,
+    });
+  });
 });
+
