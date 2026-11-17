@@ -282,7 +282,8 @@ export function DesignLinksBar({
       <div className="document-designs-strip__grid">
         {designs.map((design, index) => (
           <DesignThumbnail
-            key={`${design.title}-${design.image ?? design.url ?? index}`}
+            // Frontmatter may list the same title/image twice; the position keeps keys unique.
+            key={`${index}-${design.title}-${design.image ?? design.url ?? ""}`}
             design={design}
             documentPath={documentPath}
             readAsset={readAsset}
