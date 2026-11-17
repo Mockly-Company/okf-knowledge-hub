@@ -186,6 +186,7 @@ export function DocumentWorkbenchTabs({
                 tabIndex={isActive ? 0 : -1}
                 data-active={isActive}
                 aria-keyshortcuts="Delete"
+                title={tab.title}
                 className="document-workbench-tab"
                 onClick={() => onSelectTab(tab.path)}
                 onKeyDown={(event) => {

@@ -2366,13 +2366,21 @@
   border-color: var(--color-primary);
 }
 
+.document-workbench-tab-group .document-workbench-tab {
+  /* Let a long title shrink inside the 240px group so the close button stays visible. */
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .document-workbench-tab span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .document-workbench-tab__close {
+  flex: 0 0 auto;
   width: 28px;
   height: var(--control-height);
   border-radius: 0;
