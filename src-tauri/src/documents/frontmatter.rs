@@ -4,7 +4,8 @@ use serde_yaml_ng::Value;
 use uuid::Uuid;
 
 use super::contract::{
-    DocumentDesignLink, FrontmatterError, FrontmatterStatus, ParsedDocumentMetadata,
+    DocumentDesignLink, DocumentWireframe, FrontmatterError, FrontmatterStatus,
+    ParsedDocumentMetadata,
 };
 
 pub(crate) const MAX_UNTERMINATED_FRONTMATTER_BYTES: usize = 256 * 1024;
@@ -30,6 +31,7 @@ pub(crate) fn parse_document_reader<R: BufRead>(
             description: None,
             frontmatter_links: Vec::new(),
             designs: Vec::new(),
+            wireframes: Vec::new(),
         },
         FrontmatterRead::Invalid(error) => ParsedDocumentMetadata {
             title: fallback_title,
@@ -41,6 +43,7 @@ pub(crate) fn parse_document_reader<R: BufRead>(
             description: None,
             frontmatter_links: Vec::new(),
             designs: Vec::new(),
+            wireframes: Vec::new(),
         },
         FrontmatterRead::Present(source) => parse_frontmatter(&source, fallback_title),
     }
@@ -116,6 +119,7 @@ fn extract_design_links(value: &Value) -> Vec<DocumentDesignLink> {
                         url: (!is_image).then(|| trimmed.to_owned()),
                         image: is_image.then(|| trimmed.to_owned()),
                         status: None,
+                        wireframe: None,
                     });
                 }
                 Value::Mapping(_) => {
@@ -130,11 +134,13 @@ fn extract_design_links(value: &Value) -> Vec<DocumentDesignLink> {
                         .or_else(|| optional_non_empty_str(item, "label"))
                         .unwrap_or_else(|| format!("디자인 시안 {}", index + 1));
                     let status = optional_non_empty_str(item, "status");
+                    let wireframe = optional_non_empty_str(item, "wireframe");
                     designs.push(DocumentDesignLink {
                         title,
                         url,
                         image,
                         status,
+                        wireframe,
                     });
                 }
                 _ => {}
@@ -150,10 +156,38 @@ fn extract_design_links(value: &Value) -> Vec<DocumentDesignLink> {
                 url: Some(single_url),
                 image: None,
                 status: None,
+                wireframe: None,
             });
         }
     }
     designs
+}
+
+fn extract_wireframes(value: &Value) -> Vec<DocumentWireframe> {
+    let Some(sequence) = value.get("wireframes").and_then(Value::as_sequence) else {
+        return Vec::new();
+    };
+    sequence
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let (title, image) = match item {
+                Value::String(raw) => (None, Some(raw.trim().to_owned())),
+                Value::Mapping(_) => (
+                    optional_non_empty_str(item, "title")
+                        .or_else(|| optional_non_empty_str(item, "label")),
+                    optional_non_empty_str(item, "image")
+                        .or_else(|| optional_non_empty_str(item, "asset")),
+                ),
+                _ => return None,
+            };
+            let image = image.filter(|image| looks_like_image_asset(image))?;
+            Some(DocumentWireframe {
+                title: title.unwrap_or_else(|| format!("와이어프레임 {}", index + 1)),
+                image,
+            })
+        })
+        .collect()
 }
 
 fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMetadata {
@@ -175,6 +209,7 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
                 description: None,
                 frontmatter_links: Vec::new(),
                 designs: Vec::new(),
+                wireframes: Vec::new(),
             };
         }
     };
@@ -201,6 +236,7 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
         description: optional_non_empty_str(&value, "description"),
         frontmatter_links: collect_string_list(&value, &["related_docs", "links"]),
         designs: extract_design_links(&value),
+        wireframes: extract_wireframes(&value),
     }
 }
 
@@ -412,5 +448,34 @@ designs:
             designs[3].url.as_deref(),
             Some("HTTPS://example.com/mock.png")
         );
+    }
+
+    #[test]
+    fn extract_wireframes_reads_image_entries_and_designs_keep_wireframe_reference() {
+        let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(
+            r#"
+wireframes:
+  - title: 목록 화면
+    image: assets/list-wireframe.svg
+  - assets/detail-wireframe.png
+  - title: 이미지 없는 항목
+  - notes.txt
+designs:
+  - title: 목록 시안
+    image: assets/list-design.png
+    wireframe: 목록 화면
+"#,
+        )
+        .unwrap();
+
+        let wireframes = super::extract_wireframes(&value);
+        assert_eq!(wireframes.len(), 2);
+        assert_eq!(wireframes[0].title, "목록 화면");
+        assert_eq!(wireframes[0].image, "assets/list-wireframe.svg");
+        assert_eq!(wireframes[1].title, "와이어프레임 2");
+        assert_eq!(wireframes[1].image, "assets/detail-wireframe.png");
+
+        let designs = super::extract_design_links(&value);
+        assert_eq!(designs[0].wireframe.as_deref(), Some("목록 화면"));
     }
 }

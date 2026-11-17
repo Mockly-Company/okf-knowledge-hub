@@ -363,6 +363,10 @@ export function ScreenSpecDeck({
               : content
                 ? extractDesignsFromProperties(content.properties)
                 : (spec.designs ?? []);
+          const wireframes =
+            content?.summary.wireframes && content.summary.wireframes.length > 0
+              ? content.summary.wireframes
+              : (spec.wireframes ?? []);
           const relatedDocs = (spec.linkedPaths ?? [])
             .map((linkedPath) => lookupByPath.get(canonicalKey(linkedPath)))
             .filter(
@@ -387,6 +391,15 @@ export function ScreenSpecDeck({
                         HTML
                       </span>
                     ) : null}
+                    {wireframes.length > 0 ? (
+                      <span className="document-map-card__badge document-map-card__badge--wireframe">
+                        {`와이어프레임 ${wireframes.length}`}
+                      </span>
+                    ) : (
+                      <span className="document-map-card__badge document-map-card__badge--warning">
+                        와이어프레임 없음
+                      </span>
+                    )}
                     {designs.length > 0 ? (
                       <span className="document-map-card__badge document-map-card__badge--design">
                         {`디자인 ${designs.length}`}
@@ -478,6 +491,16 @@ export function ScreenSpecDeck({
                 </div>
 
                 <div className="screen-spec-card__designs">
+                  <DesignLinksBar
+                    designs={wireframes.map((wireframe) => ({
+                      title: wireframe.title,
+                      image: wireframe.image,
+                    }))}
+                    documentPath={spec.path}
+                    readAsset={assetReader}
+                    heading="화면 와이어프레임"
+                    emptyNotice="와이어프레임이 아직 없습니다. 화면마다 frontmatter의 wireframes 항목에 와이어프레임 이미지를 등록해 주세요."
+                  />
                   <DesignLinksBar
                     designs={designs}
                     documentPath={spec.path}

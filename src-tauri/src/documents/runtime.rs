@@ -3525,6 +3525,7 @@ mod tests {
             preview_headings: Vec::new(),
             linked_paths: Vec::new(),
             designs: Vec::new(),
+            wireframes: Vec::new(),
             has_companion_html: false,
             modified_at_unix_ms: 1,
             size: 32,

@@ -18,7 +18,9 @@
 ## 1. 아이디어 → PRD · 화면명세서 및 문서 2벌 원칙 (`.md` = AI 원본 / `.html` = 사람용 뷰)
 
 - **도메인 우선 폴더 구조 (`docs/domains/<domain>/`)**: 제품 기능 기획서(PRD)와 화면명세서는 도메인별 폴더(`docs/domains/<domain>/prd.md`, `screen-spec.md`)에 작성하고, 시스템 공통 원칙과 ADR은 `docs/architecture/`에 둡니다. Frontmatter에는 `type`, `domain`, 권장 `description`(1~2문장 핵심 요약), `related_docs`(연결 문서 `.md` 상대/저장소 경로 목록)를 명시합니다.
-- **화면명세서 ↔ 디자인 연결(`designs`)**: 화면명세서의 frontmatter에는 `designs: [{ title, image, url, status }]`를 연결할 수 있으며, `image`는 같은 폴더의 `assets/*.svg|png|webp` 시안 파일 경로를 가리킵니다.
+- **문서 흐름 (개요 → 기획 → 화면명세 → 디자인)**: 도메인 폴더의 `index.md`(개요)에서 시작해 PRD(무엇을·왜) → 화면명세서(화면별 와이어프레임 + 상태별 UI·인터랙션) → 디자인 시안 순서로 이어지게 작성합니다. PRD에는 와이어프레임을 넣지 않고 요구사항·정책만 적습니다.
+- **화면명세서 와이어프레임 필수(`wireframes`)**: 화면명세서는 **화면마다 와이어프레임을 최소 1개** 포함해야 합니다. 와이어프레임은 같은 폴더의 `assets/<화면>-wireframe.svg`(권장: 회색 박스·텍스트 라벨로 그린 저충실도 SVG)로 저장하고, frontmatter에 `wireframes: [{ title, image }]`로 등록한 뒤 본문 해당 화면 섹션에도 이미지로 삽입합니다. 와이어프레임이 없는 화면명세서는 완료로 보지 않습니다.
+- **디자인 시안은 와이어프레임에 연결(`designs`)**: 화면명세서의 frontmatter에는 `designs: [{ title, image, url, status, wireframe }]`를 연결할 수 있으며, `image`는 같은 폴더의 `assets/*.svg|png|webp` 시안 파일 경로를, `wireframe`은 시안이 기반으로 한 `wireframes[].title`을 가리킵니다.
 - **아이디어 구체화 산출물**: 아이디어를 받으면 기능 성격에 맞춰 **기획서/PRD**(`.okf/templates/product-spec.md`), **화면명세서**(`.okf/templates/screen-spec.md`), **설계/결정 기록**(`.okf/templates/design-doc.md`, `decision-record.md`)을 작성한다.
 - **AI는 `.md`만 읽고 수정한다**: 모든 지식의 유일한 원본은 `docs/**/*.md`이며, AI는 `.html`을 역파싱하지 않는다.
 - **사람을 위해 동반 `.html`을 항상 함께 생성·갱신한다**: 예약 파일(`index.md`, `log.md`, `README.md`)을 제외한 일반 문서를 작성·수정할 때는 같은 이름의 `<문서명>.html`을 표준 골격(일반 문서는 `.okf/templates/human-view.html`, 화면명세서는 `.okf/templates/screen-spec-view.html` + `docs/_assets/okf-doc.css`)으로 함께 생성·갱신한다.

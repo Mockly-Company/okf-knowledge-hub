@@ -1197,6 +1197,8 @@ mod tests {
         assert!(AGENTS_MD_TEMPLATE.contains("[백엔드]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[프론트엔드]"));
         assert!(AGENTS_MD_TEMPLATE.contains("코드 구현을 하지 않는다"));
+        assert!(AGENTS_MD_TEMPLATE.contains("wireframes: [{ title, image }]"));
+        assert!(AGENTS_MD_TEMPLATE.contains("와이어프레임을 최소 1개"));
         assert!(!AGENTS_MD_TEMPLATE.contains("Mockly-Company"));
     }
 

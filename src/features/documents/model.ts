@@ -46,6 +46,14 @@ export interface DocumentDesignLink {
   url?: string | null;
   image?: string | null;
   status?: string | null;
+  /** Title of the `wireframes` entry this design was drawn from. */
+  wireframe?: string | null;
+}
+
+/** Per-screen wireframe image declared in a screen spec's `wireframes` frontmatter. */
+export interface DocumentWireframe {
+  title: string;
+  image: string;
 }
 
 export interface DocumentSummary {
@@ -61,6 +69,7 @@ export interface DocumentSummary {
   previewHeadings?: string[];
   linkedPaths?: string[];
   designs?: DocumentDesignLink[];
+  wireframes?: DocumentWireframe[];
   hasCompanionHtml?: boolean;
   modifiedAtUnixMs: number;
   size: number;

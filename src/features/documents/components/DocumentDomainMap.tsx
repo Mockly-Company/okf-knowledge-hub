@@ -7,28 +7,74 @@ import {
 import { ExternalLink, FilePlus2, LayoutGrid } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/button";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
+import { useOptionalDocuments } from "../DocumentsProvider";
 import {
   classifyDocumentCategory,
   DOCUMENT_CATEGORY_LABELS,
   groupDocumentsByDomain,
   isAuxiliaryDocument,
-  type DocumentCategory,
+  isOverviewDocument,
   type DocumentGroup,
 } from "../document-taxonomy";
-import { normalizeDocumentPath, type DocumentSummary } from "../model";
+import {
+  normalizeDocumentPath,
+  type DocumentAsset,
+  type DocumentDesignLink,
+  type DocumentSummary,
+  type DocumentWireframe,
+} from "../model";
+import {
+  DesignPreviewDialog,
+  documentAssetSrc,
+  safeHttpUrl,
+  useDocumentAsset,
+  type DocumentAssetReader,
+  type ExpandedDesignPreview,
+} from "./DesignLinksBar";
 
-interface StageBucket {
-  key: "prd" | "screen_spec" | "adr" | "guide_ref";
-  label: string;
-  categories: readonly DocumentCategory[];
+type StageKey = "overview" | "prd" | "screen_spec" | "design" | "adr" | "guide_ref";
+
+/** Left-to-right reading order: overview → planning → screen spec → design, then side records. */
+const STAGE_LABELS: Record<StageKey, string> = {
+  overview: "개요",
+  prd: "기획 · PRD",
+  screen_spec: "화면명세",
+  design: "디자인",
+  adr: "설계 · ADR",
+  guide_ref: "가이드 · 참고",
+};
+
+const STAGE_ORDER: readonly StageKey[] = [
+  "overview",
+  "prd",
+  "screen_spec",
+  "design",
+  "adr",
+  "guide_ref",
+];
+
+function documentStage(doc: DocumentSummary): Exclude<StageKey, "design"> {
+  if (isOverviewDocument(doc)) return "overview";
+  switch (classifyDocumentCategory(doc)) {
+    case "prd":
+      return "prd";
+    case "screen_spec":
+      return "screen_spec";
+    case "adr":
+      return "adr";
+    default:
+      return "guide_ref";
+  }
 }
 
-const STAGE_BUCKETS: readonly StageBucket[] = [
-  { key: "prd", label: "기획 · PRD", categories: ["prd"] },
-  { key: "screen_spec", label: "화면명세", categories: ["screen_spec"] },
-  { key: "adr", label: "설계 · ADR", categories: ["adr"] },
-  { key: "guide_ref", label: "가이드 · 참고", categories: ["guide", "reference"] },
-];
+type MapCard =
+  | { kind: "document"; key: string; doc: DocumentSummary }
+  | {
+      kind: "design";
+      key: string;
+      spec: DocumentSummary;
+      design: DocumentDesignLink;
+    };
 
 interface DomainEdge {
   id: string;
@@ -43,8 +89,20 @@ interface MeasuredEdge {
   kind: "explicit" | "flow";
 }
 
+const unavailableAssetReader: DocumentAssetReader = async (): Promise<DocumentAsset> => {
+  throw new Error("문서 에셋 리더를 사용할 수 없습니다.");
+};
+
 function canonicalKey(path: string): string {
   return normalizeDocumentPath(path).replace(/\.html$/i, ".md").toLowerCase();
+}
+
+function designCardKey(specKey: string, index: number): string {
+  return `design:${specKey}#${index}`;
+}
+
+function preferredViewOf(doc: DocumentSummary): "html" | "markdown" {
+  return doc.hasCompanionHtml ? "html" : "markdown";
 }
 
 function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
@@ -52,67 +110,60 @@ function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
   const edges: DomainEdge[] = [];
   const seen = new Set<string>();
   const explicitPairs = new Set<string>();
+  const pushEdge = (fromKey: string, toKey: string, kind: DomainEdge["kind"]) => {
+    const edgeId = `${fromKey}->${toKey}`;
+    if (seen.has(edgeId)) return;
+    seen.add(edgeId);
+    edges.push({ id: edgeId, fromKey, toKey, kind });
+  };
 
   for (const doc of documents) {
     const fromKey = canonicalKey(doc.path);
     for (const linked of doc.linkedPaths ?? []) {
       const toKey = canonicalKey(linked);
       if (toKey === fromKey || !domainKeys.has(toKey)) continue;
-      const edgeId = `${fromKey}->${toKey}`;
-      if (!seen.has(edgeId)) {
-        seen.add(edgeId);
-        explicitPairs.add(edgeId);
-        explicitPairs.add(`${toKey}->${fromKey}`);
-        edges.push({ id: edgeId, fromKey, toKey, kind: "explicit" });
-      }
+      explicitPairs.add(`${fromKey}->${toKey}`);
+      explicitPairs.add(`${toKey}->${fromKey}`);
+      pushEdge(fromKey, toKey, "explicit");
     }
   }
 
-  const prds = documents.filter(
-    (doc) => !isAuxiliaryDocument(doc) && classifyDocumentCategory(doc) === "prd",
-  );
-  const specs = documents.filter(
-    (doc) =>
-      !isAuxiliaryDocument(doc) && classifyDocumentCategory(doc) === "screen_spec",
-  );
-  const adrs = documents.filter(
-    (doc) => !isAuxiliaryDocument(doc) && classifyDocumentCategory(doc) === "adr",
-  );
+  const byStage = (stage: StageKey) =>
+    documents.filter(
+      (doc) => documentStage(doc) === stage && (stage === "overview" || !isAuxiliaryDocument(doc)),
+    );
+  const overviews = byStage("overview");
+  const prds = byStage("prd");
+  const specs = byStage("screen_spec");
+  const adrs = byStage("adr");
 
-  const [firstPrd] = prds;
-  if (firstPrd && specs.length > 0) {
-    const anchorPrd = canonicalKey(firstPrd.path);
-    for (const spec of specs) {
-      const specKey = canonicalKey(spec.path);
-      const hasPrdLink = prds.some((prd) =>
-        explicitPairs.has(`${canonicalKey(prd.path)}->${specKey}`),
+  // Implied reading-flow edges from the first document of one stage to each document of the
+  // next stage, unless an explicit related_docs link already connects them.
+  const linkFlow = (
+    anchors: readonly DocumentSummary[],
+    targets: readonly DocumentSummary[],
+  ) => {
+    const [anchor] = anchors;
+    if (!anchor) return;
+    const anchorKey = canonicalKey(anchor.path);
+    for (const target of targets) {
+      const targetKey = canonicalKey(target.path);
+      const linked = anchors.some((candidate) =>
+        explicitPairs.has(`${canonicalKey(candidate.path)}->${targetKey}`),
       );
-      if (!hasPrdLink) {
-        const edgeId = `${anchorPrd}->${specKey}`;
-        if (!seen.has(edgeId)) {
-          seen.add(edgeId);
-          edges.push({ id: edgeId, fromKey: anchorPrd, toKey: specKey, kind: "flow" });
-        }
-      }
+      if (!linked) pushEdge(anchorKey, targetKey, "flow");
     }
-  }
+  };
 
-  const [firstSpec] = specs;
-  if (firstSpec && adrs.length > 0) {
-    const anchorSpec = canonicalKey(firstSpec.path);
-    for (const adr of adrs) {
-      const adrKey = canonicalKey(adr.path);
-      const hasSpecLink = specs.some((spec) =>
-        explicitPairs.has(`${canonicalKey(spec.path)}->${adrKey}`),
-      );
-      if (!hasSpecLink) {
-        const edgeId = `${anchorSpec}->${adrKey}`;
-        if (!seen.has(edgeId)) {
-          seen.add(edgeId);
-          edges.push({ id: edgeId, fromKey: anchorSpec, toKey: adrKey, kind: "flow" });
-        }
-      }
-    }
+  linkFlow(overviews, prds.length > 0 ? prds.slice(0, 1) : specs.slice(0, 1));
+  linkFlow(prds, specs);
+  linkFlow(specs, adrs);
+
+  for (const spec of specs) {
+    const specKey = canonicalKey(spec.path);
+    (spec.designs ?? []).forEach((_, index) => {
+      pushEdge(specKey, designCardKey(specKey, index), "explicit");
+    });
   }
 
   return edges;
@@ -146,16 +197,138 @@ function computeEdgePath(
   return `M ${x1} ${fromY} C ${archX} ${fromY}, ${archX} ${toY}, ${x2} ${toY}`;
 }
 
+function ThumbChrome() {
+  return (
+    <div className="document-map-card__thumb-chrome" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+    </div>
+  );
+}
+
+function WireframeThumb({
+  documentPath,
+  wireframe,
+  readAsset,
+}: {
+  documentPath: string;
+  wireframe: DocumentWireframe;
+  readAsset: DocumentAssetReader;
+}) {
+  const { asset, failed } = useDocumentAsset(documentPath, wireframe.image, readAsset);
+  return (
+    <div className="document-map-card__thumb document-map-card__thumb--image">
+      {asset ? (
+        <img src={documentAssetSrc(asset)} alt={wireframe.title} />
+      ) : (
+        <span className="document-map-card__thumb-status">
+          {failed ? "와이어프레임을 불러올 수 없습니다." : "와이어프레임 불러오는 중…"}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function DesignMapCard({
+  spec,
+  design,
+  readAsset,
+  registerRef,
+  onSelectDocument,
+  onOpenExternal,
+  onExpand,
+}: {
+  spec: DocumentSummary;
+  design: DocumentDesignLink;
+  readAsset: DocumentAssetReader;
+  registerRef: (node: HTMLElement | null) => void;
+  onSelectDocument: (path: string, preferredViewMode?: "html" | "markdown") => void;
+  onOpenExternal?: (url: string) => void;
+  onExpand: (preview: ExpandedDesignPreview) => void;
+}) {
+  const { asset, failed } = useDocumentAsset(spec.path, design.image, readAsset);
+  const externalUrl = safeHttpUrl(design.url);
+
+  return (
+    <article
+      ref={registerRef}
+      className="document-map-card document-map-card--design"
+      aria-label={`${design.title} 디자인 시안`}
+      data-category="design"
+    >
+      <div className="document-map-card__top">
+        <div className="document-map-card__badges">
+          <span className="document-map-card__badge document-map-card__badge--design">
+            디자인
+          </span>
+          {design.status ? (
+            <span className="document-map-card__badge">{design.status}</span>
+          ) : null}
+        </div>
+        {externalUrl && onOpenExternal ? (
+          <IconButton
+            type="button"
+            label={`${design.title} 원본 디자인 열기`}
+            tooltip={false}
+            className="document-map-card__popout"
+            onClick={() => onOpenExternal(externalUrl)}
+          >
+            <ExternalLink aria-hidden="true" />
+          </IconButton>
+        ) : null}
+      </div>
+
+      <strong className="document-map-card__title">{design.title}</strong>
+      {design.image ? (
+        asset ? (
+          <UnstyledButton
+            type="button"
+            className="document-map-card__thumb document-map-card__thumb--image"
+            aria-label={`${design.title} 크게 보기`}
+            onClick={() => onExpand({ asset, title: design.title, externalUrl })}
+          >
+            <img src={documentAssetSrc(asset)} alt={design.title} />
+          </UnstyledButton>
+        ) : (
+          <div className="document-map-card__thumb document-map-card__thumb--image">
+            <span className="document-map-card__thumb-status">
+              {failed ? "시안 이미지를 불러올 수 없습니다." : "디자인 시안 불러오는 중…"}
+            </span>
+          </div>
+        )
+      ) : null}
+      {design.wireframe ? (
+        <p className="document-map-card__meta">{`와이어프레임 · ${design.wireframe}`}</p>
+      ) : null}
+
+      <div className="document-map-card__links">
+        <UnstyledButton
+          type="button"
+          className="document-map-card__link-chip"
+          onClick={() => onSelectDocument(spec.path, preferredViewOf(spec))}
+        >
+          {`← ${spec.title}`}
+        </UnstyledButton>
+      </div>
+    </article>
+  );
+}
+
 function DomainSectionBoard({
   group,
   lookupByPath,
+  readAsset,
   onSelectDocument,
   onSelectScreenSpecs,
   onOpenInNewWindow,
   onNewDocumentInFolder,
+  onOpenExternal,
+  onExpandDesign,
 }: {
   group: DocumentGroup;
   lookupByPath: ReadonlyMap<string, DocumentSummary>;
+  readAsset: DocumentAssetReader;
   onSelectDocument: (
     path: string,
     preferredViewMode?: "html" | "markdown",
@@ -167,6 +340,8 @@ function DomainSectionBoard({
     title?: string,
   ) => void;
   onNewDocumentInFolder?: (folderPath: string) => void;
+  onOpenExternal?: (url: string) => void;
+  onExpandDesign: (preview: ExpandedDesignPreview) => void;
 }) {
   const boardRef = useRef<HTMLDivElement>(null);
   const cardRefs = useRef(new Map<string, HTMLElement>());
@@ -177,12 +352,30 @@ function DomainSectionBoard({
   const [measuredEdges, setMeasuredEdges] = useState<MeasuredEdge[]>([]);
 
   const columns = useMemo(() => {
-    return STAGE_BUCKETS.map((bucket) => ({
-      ...bucket,
-      documents: group.documents.filter((doc) =>
-        bucket.categories.includes(classifyDocumentCategory(doc)),
-      ),
-    })).filter((column) => column.documents.length > 0);
+    const cardsByStage = new Map<StageKey, MapCard[]>(
+      STAGE_ORDER.map((stage) => [stage, []]),
+    );
+    for (const doc of group.documents) {
+      cardsByStage
+        .get(documentStage(doc))
+        ?.push({ kind: "document", key: canonicalKey(doc.path), doc });
+    }
+    for (const card of cardsByStage.get("screen_spec") ?? []) {
+      if (card.kind !== "document" || isAuxiliaryDocument(card.doc)) continue;
+      (card.doc.designs ?? []).forEach((design, index) => {
+        cardsByStage.get("design")?.push({
+          kind: "design",
+          key: designCardKey(card.key, index),
+          spec: card.doc,
+          design,
+        });
+      });
+    }
+    return STAGE_ORDER.map((stage) => ({
+      key: stage,
+      label: STAGE_LABELS[stage],
+      cards: cardsByStage.get(stage) ?? [],
+    })).filter((column) => column.cards.length > 0);
   }, [group.documents]);
 
   const edges = useMemo(() => buildDomainEdges(group.documents), [group.documents]);
@@ -195,6 +388,14 @@ function DomainSectionBoard({
       ),
     [group.documents],
   );
+
+  const registerCard = (key: string) => (node: HTMLElement | null) => {
+    if (node) {
+      cardRefs.current.set(key, node);
+    } else {
+      cardRefs.current.delete(key);
+    }
+  };
 
   useLayoutEffect(() => {
     const board = boardRef.current;
@@ -245,6 +446,10 @@ function DomainSectionBoard({
         ? new ResizeObserver(scheduleMeasure)
         : null;
     observer?.observe(board);
+    // Thumbnails load asynchronously and grow individual cards without resizing the board.
+    for (const card of cardRefs.current.values()) {
+      observer?.observe(card);
+    }
     board.addEventListener("scroll", scheduleMeasure, { passive: true });
     window.addEventListener("resize", scheduleMeasure, { passive: true });
     return () => {
@@ -357,15 +562,36 @@ function DomainSectionBoard({
 
         <div className="document-domain-map__columns">
           {columns.map((column) => (
-            <div key={column.key} className="document-domain-map__column">
-              <div className="document-domain-map__column-title">
+            <div
+              key={column.key}
+              role="group"
+              aria-label={column.label}
+              className="document-domain-map__column"
+            >
+              <div className="document-domain-map__column-title" aria-hidden="true">
                 <span>{column.label}</span>
-                <small>{`${column.documents.length}`}</small>
+                <small>{`${column.cards.length}`}</small>
               </div>
               <div className="document-domain-map__cards">
-                {column.documents.map((doc) => {
+                {column.cards.map((card) => {
+                  if (card.kind === "design") {
+                    return (
+                      <DesignMapCard
+                        key={card.key}
+                        spec={card.spec}
+                        design={card.design}
+                        readAsset={readAsset}
+                        registerRef={registerCard(card.key)}
+                        onSelectDocument={onSelectDocument}
+                        onOpenExternal={onOpenExternal}
+                        onExpand={onExpandDesign}
+                      />
+                    );
+                  }
+
+                  const { doc, key } = card;
                   const category = classifyDocumentCategory(doc);
-                  const key = canonicalKey(doc.path);
+                  const isScreenSpec = column.key === "screen_spec";
                   const relatedDocs: DocumentSummary[] = [];
                   const seenRelated = new Set<string>([key]);
                   for (const linkedPath of doc.linkedPaths ?? []) {
@@ -379,35 +605,42 @@ function DomainSectionBoard({
                     if (relatedDocs.length >= 4) break;
                   }
 
-                  const preferredView: "html" | "markdown" = doc.hasCompanionHtml
-                    ? "html"
-                    : "markdown";
+                  const preferredView = preferredViewOf(doc);
                   const headings = (doc.previewHeadings ?? []).slice(0, 3);
                   const designCount = doc.designs?.length ?? 0;
+                  const wireframes = doc.wireframes ?? [];
+                  const [firstWireframe] = wireframes;
 
                   return (
                     <article
                       key={doc.path}
-                      ref={(node) => {
-                        if (node) {
-                          cardRefs.current.set(key, node);
-                        } else {
-                          cardRefs.current.delete(key);
-                        }
-                      }}
+                      ref={registerCard(key)}
                       className="document-map-card"
                       aria-label={doc.title}
-                      data-category={category}
+                      data-category={column.key === "overview" ? "overview" : category}
                     >
                       <div className="document-map-card__top">
                         <div className="document-map-card__badges">
                           <span className="document-map-card__badge">
-                            {DOCUMENT_CATEGORY_LABELS[category]}
+                            {column.key === "overview"
+                              ? STAGE_LABELS.overview
+                              : DOCUMENT_CATEGORY_LABELS[category]}
                           </span>
                           {doc.hasCompanionHtml ? (
                             <span className="document-map-card__badge document-map-card__badge--html">
                               HTML
                             </span>
+                          ) : null}
+                          {isScreenSpec ? (
+                            wireframes.length > 0 ? (
+                              <span className="document-map-card__badge document-map-card__badge--wireframe">
+                                {`와이어프레임 ${wireframes.length}`}
+                              </span>
+                            ) : (
+                              <span className="document-map-card__badge document-map-card__badge--warning">
+                                와이어프레임 없음
+                              </span>
+                            )
                           ) : null}
                           {designCount > 0 ? (
                             <span className="document-map-card__badge document-map-card__badge--design">
@@ -438,36 +671,37 @@ function DomainSectionBoard({
                         <strong className="document-map-card__title">
                           {doc.title}
                         </strong>
-                        <div className="document-map-card__thumb">
-                          <div
-                            className="document-map-card__thumb-chrome"
-                            aria-hidden="true"
-                          >
-                            <span />
-                            <span />
-                            <span />
+                        {isScreenSpec && firstWireframe ? (
+                          <WireframeThumb
+                            documentPath={doc.path}
+                            wireframe={firstWireframe}
+                            readAsset={readAsset}
+                          />
+                        ) : (
+                          <div className="document-map-card__thumb">
+                            <ThumbChrome />
+                            {doc.description ? (
+                              <p className="document-map-card__desc">
+                                {doc.description}
+                              </p>
+                            ) : null}
+                            {headings.length > 0 ? (
+                              <ul className="document-map-card__headings">
+                                {headings.map((heading, idx) => (
+                                  <li key={`${idx}-${heading}`}>{heading}</li>
+                                ))}
+                              </ul>
+                            ) : !doc.description ? (
+                              <div
+                                className="document-map-card__wireframe"
+                                aria-hidden="true"
+                              >
+                                <span />
+                                <span />
+                              </div>
+                            ) : null}
                           </div>
-                          {doc.description ? (
-                            <p className="document-map-card__desc">
-                              {doc.description}
-                            </p>
-                          ) : null}
-                          {headings.length > 0 ? (
-                            <ul className="document-map-card__headings">
-                              {headings.map((heading, idx) => (
-                                <li key={`${idx}-${heading}`}>{heading}</li>
-                              ))}
-                            </ul>
-                          ) : !doc.description ? (
-                            <div
-                              className="document-map-card__wireframe"
-                              aria-hidden="true"
-                            >
-                              <span />
-                              <span />
-                            </div>
-                          ) : null}
-                        </div>
+                        )}
                       </UnstyledButton>
 
                       {relatedDocs.length > 0 ? (
@@ -481,10 +715,7 @@ function DomainSectionBoard({
                               type="button"
                               className="document-map-card__link-chip"
                               onClick={() =>
-                                onSelectDocument(
-                                  target.path,
-                                  target.hasCompanionHtml ? "html" : "markdown",
-                                )
+                                onSelectDocument(target.path, preferredViewOf(target))
                               }
                             >
                               {`→ ${target.title}`}
@@ -507,13 +738,16 @@ function DomainSectionBoard({
 export function DocumentDomainMap({
   documents,
   allDocuments,
+  readAsset,
   onSelectDocument,
   onSelectScreenSpecs,
   onOpenInNewWindow,
   onNewDocumentInFolder,
+  onOpenExternal,
 }: {
   documents: readonly DocumentSummary[];
   allDocuments?: readonly DocumentSummary[];
+  readAsset?: DocumentAssetReader;
   onSelectDocument: (
     path: string,
     preferredViewMode?: "html" | "markdown",
@@ -525,7 +759,16 @@ export function DocumentDomainMap({
     title?: string,
   ) => void;
   onNewDocumentInFolder?: (folderPath: string) => void;
+  onOpenExternal?: (url: string) => void;
 }) {
+  const docsContext = useOptionalDocuments();
+  const assetReader = readAsset ?? docsContext?.readAsset ?? unavailableAssetReader;
+  const externalOpener =
+    onOpenExternal ??
+    (docsContext ? (url: string) => void docsContext.openExternal(url) : undefined);
+  const [expandedDesign, setExpandedDesign] = useState<ExpandedDesignPreview | null>(
+    null,
+  );
   const groups = useMemo(() => groupDocumentsByDomain(documents), [documents]);
   const lookupByPath = useMemo(() => {
     const map = new Map<string, DocumentSummary>();
@@ -550,12 +793,20 @@ export function DocumentDomainMap({
           key={group.key}
           group={group}
           lookupByPath={lookupByPath}
+          readAsset={assetReader}
           onSelectDocument={onSelectDocument}
           onSelectScreenSpecs={onSelectScreenSpecs}
           onOpenInNewWindow={onOpenInNewWindow}
           onNewDocumentInFolder={onNewDocumentInFolder}
+          onOpenExternal={externalOpener}
+          onExpandDesign={setExpandedDesign}
         />
       ))}
+      <DesignPreviewDialog
+        preview={expandedDesign}
+        onClose={() => setExpandedDesign(null)}
+        onOpenExternal={externalOpener}
+      />
     </div>
   );
 }

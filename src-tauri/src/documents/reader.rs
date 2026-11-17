@@ -943,6 +943,7 @@ pub(crate) fn document_content_from_bytes(
         preview_headings,
         linked_paths,
         designs: parsed.designs,
+        wireframes: parsed.wireframes,
         has_companion_html: false,
         modified_at_unix_ms,
         size,

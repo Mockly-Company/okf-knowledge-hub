@@ -11,6 +11,17 @@ pub struct DocumentDesignLink {
     pub image: Option<String>,
     #[serde(default)]
     pub status: Option<String>,
+    /// Title of the `wireframes` entry this design was drawn from.
+    #[serde(default)]
+    pub wireframe: Option<String>,
+}
+
+/// Per-screen wireframe image declared in a screen spec's `wireframes` frontmatter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentWireframe {
+    pub title: String,
+    pub image: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,6 +46,8 @@ pub struct DocumentSummary {
     pub linked_paths: Vec<String>,
     #[serde(default)]
     pub designs: Vec<DocumentDesignLink>,
+    #[serde(default)]
+    pub wireframes: Vec<DocumentWireframe>,
     #[serde(default)]
     pub has_companion_html: bool,
     pub modified_at_unix_ms: i64,
@@ -175,6 +188,7 @@ pub struct ParsedDocumentMetadata {
     pub description: Option<String>,
     pub frontmatter_links: Vec<String>,
     pub designs: Vec<DocumentDesignLink>,
+    pub wireframes: Vec<DocumentWireframe>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

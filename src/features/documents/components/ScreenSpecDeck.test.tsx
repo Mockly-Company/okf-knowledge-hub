@@ -100,6 +100,48 @@ const svgAsset: DocumentAsset = {
 };
 
 describe("ScreenSpecDeck", () => {
+  it("shows each spec's wireframes next to the viewer and flags specs without wireframes", async () => {
+    const readPreviewAsset = vi.fn(async () => svgAsset);
+    const wiredSpec: DocumentSummary = {
+      ...docSpecSummary,
+      wireframes: [
+        { title: "도메인 맵 와이어프레임", image: "assets/map-wireframe.svg" },
+      ],
+    };
+
+    render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={[prdDoc, wiredSpec, dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={async (path) =>
+            path === wiredSpec.path
+              ? { ...mockContents[path]!, summary: wiredSpec }
+              : mockContents[path]!
+          }
+          readPreviewAsset={readPreviewAsset}
+        />
+      </TestQueryProvider>,
+    );
+
+    const wiredCard = await screen.findByRole("article", {
+      name: "문서 화면명세서 화면명세",
+    });
+    expect(within(wiredCard).getByText("와이어프레임 1")).toBeVisible();
+    expect(
+      await within(wiredCard).findByAltText("도메인 맵 와이어프레임"),
+    ).toBeVisible();
+    expect(readPreviewAsset).toHaveBeenCalledWith(
+      wiredSpec.path,
+      "assets/map-wireframe.svg",
+    );
+
+    const bareCard = await screen.findByRole("article", {
+      name: "대시보드 화면명세서 화면명세",
+    });
+    expect(within(bareCard).getByText("와이어프레임 없음")).toBeVisible();
+  });
+
   it("renders all screen specs in continuous strip mode with design previews and switches to slide mode", async () => {
     const user = userEvent.setup();
     const onSelectDocument = vi.fn();

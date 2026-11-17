@@ -61,7 +61,11 @@ export function extractDesignsFromProperties(
         typeof obj.status === "string" && obj.status.trim()
           ? obj.status.trim()
           : null;
-      designs.push({ title, url, image, status });
+      const wireframe =
+        typeof obj.wireframe === "string" && obj.wireframe.trim()
+          ? obj.wireframe.trim()
+          : null;
+      designs.push({ title, url, image, status, wireframe });
     }
   });
   if (designs.length === 0) {
@@ -83,31 +87,26 @@ export function extractDesignsFromProperties(
   return designs;
 }
 
-function DesignThumbnail({
-  design,
-  documentPath,
-  readAsset,
-  onOpenExternal,
-  onExpand,
-}: {
-  design: DocumentDesignLink;
-  documentPath: string;
-  readAsset: (documentPath: string, assetPath: string) => Promise<DocumentAsset>;
-  onOpenExternal?: (url: string) => void;
-  onExpand: (asset: DocumentAsset, title: string, externalUrl?: string | null) => void;
-}) {
+export type DocumentAssetReader = (
+  documentPath: string,
+  assetPath: string,
+) => Promise<DocumentAsset>;
+
+/** Loads a document-relative image asset; `asset` stays null while loading or after failure. */
+export function useDocumentAsset(
+  documentPath: string,
+  assetPath: string | null | undefined,
+  readAsset: DocumentAssetReader,
+): { asset: DocumentAsset | null; failed: boolean } {
   const [asset, setAsset] = useState<DocumentAsset | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!design.image) {
-      setAsset(null);
-      setFailed(false);
-      return;
-    }
-    let active = true;
+    setAsset(null);
     setFailed(false);
-    void readAsset(documentPath, design.image).then(
+    if (!assetPath) return;
+    let active = true;
+    void readAsset(documentPath, assetPath).then(
       (loaded) => {
         if (active) setAsset(loaded);
       },
@@ -118,10 +117,86 @@ function DesignThumbnail({
     return () => {
       active = false;
     };
-  }, [design.image, documentPath, readAsset]);
+  }, [assetPath, documentPath, readAsset]);
 
-  const safeExternalUrl =
-    design.url && isHttpUrl(design.url) ? design.url.trim() : null;
+  return { asset, failed };
+}
+
+export function documentAssetSrc(asset: DocumentAsset): string {
+  return asset.kind === "raster"
+    ? `data:${asset.mimeType};base64,${asset.base64}`
+    : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(asset.source)}`;
+}
+
+export interface ExpandedDesignPreview {
+  asset: DocumentAsset;
+  title: string;
+  externalUrl?: string | null;
+}
+
+export function safeHttpUrl(url: string | null | undefined): string | null {
+  return url && isHttpUrl(url) ? url.trim() : null;
+}
+
+/** Full-size preview dialog shared by the design strip and the domain map design cards. */
+export function DesignPreviewDialog({
+  preview,
+  onClose,
+  onOpenExternal,
+}: {
+  preview: ExpandedDesignPreview | null;
+  onClose(): void;
+  onOpenExternal?: (url: string) => void;
+}) {
+  const externalUrl = preview?.externalUrl ?? null;
+  return (
+    <Dialog open={preview !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent
+        className="document-design-dialog"
+        aria-label={preview?.title ?? "디자인 시안 미리보기"}
+      >
+        <DialogHeader>
+          <DialogTitle>{preview?.title}</DialogTitle>
+          <IconButton type="button" label="미리보기 닫기" tooltip={false} onClick={onClose}>
+            <X aria-hidden="true" />
+          </IconButton>
+        </DialogHeader>
+        <DialogBody className="document-design-dialog__body">
+          {preview ? <img src={documentAssetSrc(preview.asset)} alt={preview.title} /> : null}
+          {externalUrl ? (
+            <div className="document-design-dialog__footer">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => onOpenExternal?.(externalUrl)}
+              >
+                <ExternalLink aria-hidden="true" />
+                원본 디자인 링크 열기
+              </Button>
+            </div>
+          ) : null}
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DesignThumbnail({
+  design,
+  documentPath,
+  readAsset,
+  onOpenExternal,
+  onExpand,
+}: {
+  design: DocumentDesignLink;
+  documentPath: string;
+  readAsset: DocumentAssetReader;
+  onOpenExternal?: (url: string) => void;
+  onExpand: (asset: DocumentAsset, title: string, externalUrl?: string | null) => void;
+}) {
+  const { asset, failed } = useDocumentAsset(documentPath, design.image, readAsset);
+
+  const safeExternalUrl = safeHttpUrl(design.url);
 
   return (
     <div className="document-design-card">
@@ -140,17 +215,7 @@ function DesignThumbnail({
             aria-label={`${design.title} 크게 보기`}
             onClick={() => onExpand(asset, design.title, safeExternalUrl)}
           >
-            {asset.kind === "raster" ? (
-              <img
-                src={`data:${asset.mimeType};base64,${asset.base64}`}
-                alt={design.title}
-              />
-            ) : (
-              <img
-                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(asset.source)}`}
-                alt={design.title}
-              />
-            )}
+            <img src={documentAssetSrc(asset)} alt={design.title} />
           </UnstyledButton>
         ) : (
           <div className="document-design-card__placeholder">
@@ -192,11 +257,7 @@ export function DesignLinksBar({
   heading?: string;
   emptyNotice?: string;
 }) {
-  const [expanded, setExpanded] = useState<{
-    asset: DocumentAsset;
-    title: string;
-    externalUrl?: string | null;
-  } | null>(null);
+  const [expanded, setExpanded] = useState<ExpandedDesignPreview | null>(null);
 
   if (designs.length === 0) {
     if (!emptyNotice) return null;
@@ -207,8 +268,6 @@ export function DesignLinksBar({
       </div>
     );
   }
-
-  const expandedExternalUrl = expanded?.externalUrl ?? null;
 
   return (
     <section className="document-designs-strip" aria-label={heading}>
@@ -235,46 +294,11 @@ export function DesignLinksBar({
         ))}
       </div>
 
-      <Dialog open={expanded !== null} onOpenChange={(open) => !open && setExpanded(null)}>
-        <DialogContent className="document-design-dialog" aria-label={expanded?.title ?? "디자인 시안 미리보기"}>
-          <DialogHeader>
-            <DialogTitle>{expanded?.title}</DialogTitle>
-            <IconButton
-              type="button"
-              label="미리보기 닫기"
-              tooltip={false}
-              onClick={() => setExpanded(null)}
-            >
-              <X aria-hidden="true" />
-            </IconButton>
-          </DialogHeader>
-          <DialogBody className="document-design-dialog__body">
-            {expanded?.asset.kind === "raster" ? (
-              <img
-                src={`data:${expanded.asset.mimeType};base64,${expanded.asset.base64}`}
-                alt={expanded.title}
-              />
-            ) : expanded?.asset.kind === "svg" ? (
-              <img
-                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(expanded.asset.source)}`}
-                alt={expanded.title}
-              />
-            ) : null}
-            {expandedExternalUrl ? (
-              <div className="document-design-dialog__footer">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => onOpenExternal?.(expandedExternalUrl)}
-                >
-                  <ExternalLink aria-hidden="true" />
-                  원본 디자인 링크 열기
-                </Button>
-              </div>
-            ) : null}
-          </DialogBody>
-        </DialogContent>
-      </Dialog>
+      <DesignPreviewDialog
+        preview={expanded}
+        onClose={() => setExpanded(null)}
+        onOpenExternal={onOpenExternal}
+      />
     </section>
   );
 }

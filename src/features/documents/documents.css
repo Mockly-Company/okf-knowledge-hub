@@ -2538,6 +2538,48 @@
   color: var(--color-info);
 }
 
+.document-map-card__badge--wireframe {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-default);
+}
+
+.document-map-card__badge--warning {
+  border-color: var(--color-warning-action-border);
+  background: var(--color-warning-soft);
+  color: var(--color-warning-action-text);
+}
+
+.document-map-card__thumb--image {
+  place-items: center;
+  padding: var(--space-2);
+  overflow: hidden;
+}
+
+.document-map-card__thumb--image img {
+  display: block;
+  width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+}
+
+.document-map-card__thumb-status {
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+  line-height: var(--font-meta-line);
+}
+
+button.document-map-card__thumb--image {
+  cursor: zoom-in;
+}
+
+.document-map-card__meta {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-meta-size);
+  line-height: var(--font-meta-line);
+  overflow-wrap: anywhere;
+}
+
 .document-map-card__popout {
   flex: 0 0 auto;
 }

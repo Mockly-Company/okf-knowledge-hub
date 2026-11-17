@@ -303,6 +303,7 @@ fn summarize_document(
         preview_headings,
         linked_paths,
         designs: parsed.designs,
+        wireframes: parsed.wireframes,
         has_companion_html,
         modified_at_unix_ms,
         size: metadata.len(),
@@ -713,7 +714,7 @@ mod tests {
             ),
             (
                 "docs/domains/dashboard/screen-spec.md",
-                "---\ntitle: 대시보드 화면명세\ntype: Screen Spec\ndomain: dashboard\ndesigns:\n  - title: 대시보드 목업\n    image: assets/dashboard-mock.svg\n    status: approved\n---\n\n## 1. 화면 구성\n",
+                "---\ntitle: 대시보드 화면명세\ntype: Screen Spec\ndomain: dashboard\nwireframes:\n  - title: 대시보드 기본\n    image: assets/dashboard-wireframe.svg\ndesigns:\n  - title: 대시보드 목업\n    image: assets/dashboard-mock.svg\n    status: approved\n    wireframe: 대시보드 기본\n---\n\n## 1. 화면 구성\n",
             ),
             (
                 "docs/architecture/adr-001.md",
@@ -752,6 +753,10 @@ mod tests {
             Some("assets/dashboard-mock.svg")
         );
         assert_eq!(spec.designs[0].status.as_deref(), Some("approved"));
+        assert_eq!(spec.designs[0].wireframe.as_deref(), Some("대시보드 기본"));
+        assert_eq!(spec.wireframes.len(), 1);
+        assert_eq!(spec.wireframes[0].title, "대시보드 기본");
+        assert_eq!(spec.wireframes[0].image, "assets/dashboard-wireframe.svg");
     }
 
     #[cfg(unix)]
