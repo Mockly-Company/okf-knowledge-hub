@@ -41,6 +41,21 @@ export interface AppError {
   details: Record<string, string>;
 }
 
+export interface DocumentDesignLink {
+  title: string;
+  url?: string | null;
+  image?: string | null;
+  status?: string | null;
+  /** Title of the `wireframes` entry this design was drawn from. */
+  wireframe?: string | null;
+}
+
+/** Per-screen wireframe image declared in a screen spec's `wireframes` frontmatter. */
+export interface DocumentWireframe {
+  title: string;
+  image: string;
+}
+
 export interface DocumentSummary {
   path: string;
   fileName: string;
@@ -50,9 +65,21 @@ export interface DocumentSummary {
   docType?: string | null;
   domain?: string | null;
   status?: string | null;
+  description?: string | null;
+  previewHeadings?: string[];
+  linkedPaths?: string[];
+  designs?: DocumentDesignLink[];
+  wireframes?: DocumentWireframe[];
   hasCompanionHtml?: boolean;
   modifiedAtUnixMs: number;
   size: number;
+}
+
+export interface StandaloneDocumentPayload {
+  workspaceId: string;
+  workspaceTitle: string;
+  repositoryFullName: string;
+  document: DocumentContent;
 }
 
 export type FrontmatterStatus =

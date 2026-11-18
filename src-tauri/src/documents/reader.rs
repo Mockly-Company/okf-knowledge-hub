@@ -11,8 +11,8 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use crate::error::{AppError, ErrorCode};
 
 use super::contract::{
-    CompanionHtml, DocumentAsset, DocumentContent, DocumentSummary, HtmlSyncStatus,
-    TableOfContentsItem,
+    CompanionHtml, DocumentAsset, DocumentContent, DocumentSummary, FrontmatterStatus,
+    HtmlSyncStatus, TableOfContentsItem,
 };
 use super::frontmatter::parse_document;
 
@@ -200,7 +200,8 @@ impl DocumentReader {
             return (None, HtmlSyncStatus::Missing);
         };
         let html_modified_ms = modified_at_unix_ms(&metadata);
-        let html = self.inline_local_stylesheets(&canonical_root, &canonical, &raw_html);
+        let inlined_css = self.inline_local_stylesheets(&canonical_root, &canonical, &raw_html);
+        let html = inline_local_images(&canonical_root, &canonical, &inlined_css);
         // Allow 5s tolerance for git checkout/fast-forward mtime jitter.
         let sync_status = if html_modified_ms.saturating_add(5_000) >= markdown_modified_ms {
             HtmlSyncStatus::InSync
@@ -243,6 +244,436 @@ impl DocumentReader {
     }
 }
 
+const MAX_INLINED_IMAGES: usize = 16;
+const MAX_TOTAL_INLINED_IMAGE_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MAX_PREVIEW_SCAN_BYTES: usize = 16 * 1024;
+
+pub(crate) fn inline_local_images(canonical_root: &Path, html_path: &Path, html: &str) -> String {
+    let Some(parent_dir) = html_path.parent() else {
+        return html.to_owned();
+    };
+    let lower_html = html.to_ascii_lowercase();
+    let mut output = String::with_capacity(html.len());
+    let mut cursor = 0;
+    let mut inlined_count = 0usize;
+    let mut inlined_bytes = 0usize;
+
+    while let Some(rel_idx) = lower_html[cursor..].find("<img") {
+        let tag_start = cursor + rel_idx;
+        output.push_str(&html[cursor..tag_start]);
+        let Some(end_offset) = html[tag_start..].find('>') else {
+            output.push_str(&html[tag_start..]);
+            return output;
+        };
+        let tag_end = tag_start + end_offset + 1;
+        let tag = &html[tag_start..tag_end];
+        let mut replaced_tag = None;
+        if inlined_count < MAX_INLINED_IMAGES {
+            if let Some(src_attr) = extract_html_attr(tag, "src") {
+                let trimmed = src_attr.trim();
+                let clean = trimmed.split(['?', '#']).next().unwrap_or(trimmed);
+                let lower = clean.to_ascii_lowercase();
+                let is_remote_or_data = clean.is_empty()
+                    || lower.starts_with("http://")
+                    || lower.starts_with("https://")
+                    || clean.starts_with("//")
+                    || lower.starts_with("data:")
+                    || lower.starts_with("blob:");
+                if !is_remote_or_data {
+                    if let Some(mime) = local_image_mime(Path::new(clean)) {
+                        let candidate = parent_dir.join(clean);
+                        if let Ok(canonical_img) = candidate.canonicalize() {
+                            if canonical_img.starts_with(canonical_root)
+                                && !is_git_path(canonical_root, &canonical_img)
+                            {
+                                if let Ok(metadata) = fs::metadata(&canonical_img) {
+                                    if metadata.is_file()
+                                        && metadata.len() <= MAX_ASSET_BYTES
+                                        && inlined_bytes.saturating_add(metadata.len() as usize)
+                                            <= MAX_TOTAL_INLINED_IMAGE_BYTES
+                                    {
+                                        if let Ok(bytes) = fs::read(&canonical_img) {
+                                            inlined_count += 1;
+                                            inlined_bytes += bytes.len();
+                                            let data_uri = format!(
+                                                "data:{mime};base64,{}",
+                                                STANDARD.encode(bytes)
+                                            );
+                                            if let Some(swapped) =
+                                                replace_html_attr_value(tag, "src", &data_uri)
+                                            {
+                                                replaced_tag = Some(swapped);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(next_tag) = replaced_tag {
+            output.push_str(&next_tag);
+        } else {
+            output.push_str(tag);
+        }
+        cursor = tag_end;
+    }
+    output.push_str(&html[cursor..]);
+    output
+}
+
+fn local_image_mime(path: &Path) -> Option<&'static str> {
+    let ext = path
+        .extension()
+        .and_then(OsStr::to_str)?
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "svg" => Some("image/svg+xml"),
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// Byte range of `attr_name`'s value inside one start tag (`<tag ...>`).
+///
+/// Walks the tag attribute by attribute so that only whole attribute names match
+/// (`data-src` never matches `src`) and text inside other attributes' quoted values
+/// (`alt="a src=x"`) is never mistaken for an attribute.
+fn html_attr_value_range(tag: &str, attr_name: &str) -> Option<(usize, usize)> {
+    let bytes = tag.as_bytes();
+    let len = bytes.len();
+    let mut i = usize::from(bytes.first() == Some(&b'<'));
+    while i < len && !bytes[i].is_ascii_whitespace() && !matches!(bytes[i], b'>' | b'/') {
+        i += 1;
+    }
+    loop {
+        while i < len && (bytes[i].is_ascii_whitespace() || bytes[i] == b'/') {
+            i += 1;
+        }
+        if i >= len || bytes[i] == b'>' {
+            return None;
+        }
+        let name_start = i;
+        while i < len && !bytes[i].is_ascii_whitespace() && !matches!(bytes[i], b'=' | b'>' | b'/')
+        {
+            i += 1;
+        }
+        let name = &tag[name_start..i];
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len || bytes[i] != b'=' {
+            // Boolean attribute without a value.
+            continue;
+        }
+        i += 1;
+        while i < len && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= len {
+            return None;
+        }
+        let (value_start, value_end) = if matches!(bytes[i], b'"' | b'\'') {
+            let quote = bytes[i];
+            let start = i + 1;
+            let end = start + bytes[start..].iter().position(|byte| *byte == quote)?;
+            i = end + 1;
+            (start, end)
+        } else {
+            let start = i;
+            while i < len && !bytes[i].is_ascii_whitespace() && bytes[i] != b'>' {
+                i += 1;
+            }
+            // `src=a.png/>`: treat the trailing `/` as the self-closing marker, not the value.
+            let end = if i > start && bytes[i - 1] == b'/' && bytes.get(i) == Some(&b'>') {
+                i - 1
+            } else {
+                i
+            };
+            (start, end)
+        };
+        if name.eq_ignore_ascii_case(attr_name) {
+            return Some((value_start, value_end));
+        }
+    }
+}
+
+fn replace_html_attr_value(tag: &str, attr_name: &str, new_value: &str) -> Option<String> {
+    let (replace_start, replace_end) = html_attr_value_range(tag, attr_name)?;
+    let mut out = String::with_capacity(tag.len() + new_value.len());
+    out.push_str(&tag[..replace_start]);
+    out.push_str(new_value);
+    out.push_str(&tag[replace_end..]);
+    Some(out)
+}
+
+pub(crate) fn scan_markdown_preview<R: Read>(
+    reader: R,
+    max_bytes: usize,
+    doc_relative_path: &str,
+    frontmatter_links: &[String],
+) -> (Option<String>, Vec<String>, Vec<String>) {
+    let mut bytes = Vec::with_capacity(max_bytes.min(16 * 1024));
+    let _ = reader.take(max_bytes as u64).read_to_end(&mut bytes);
+    let source = String::from_utf8_lossy(&bytes);
+
+    let mut preview_headings = Vec::new();
+    let mut fallback_description: Option<String> = None;
+    let mut linked_paths = Vec::new();
+    let mut seen_links = HashSet::new();
+    let mut push_link = |raw_href: &str, is_frontmatter: bool| {
+        if let Some(resolved) =
+            resolve_relative_doc_target(doc_relative_path, raw_href, is_frontmatter)
+        {
+            let key = resolved.to_ascii_lowercase();
+            if seen_links.insert(key) {
+                linked_paths.push(resolved);
+            }
+        }
+    };
+
+    for link in frontmatter_links {
+        push_link(link, true);
+    }
+
+    let mut in_fence = false;
+    let mut active_fence = "";
+    for raw_line in source.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            let marker = if trimmed.starts_with("```") {
+                "```"
+            } else {
+                "~~~"
+            };
+            if !in_fence {
+                in_fence = true;
+                active_fence = marker;
+            } else if active_fence == marker {
+                in_fence = false;
+            }
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+
+        for href in extract_inline_markdown_links(trimmed) {
+            push_link(href, false);
+        }
+
+        if let Some((level, heading_text)) = parse_atx_heading(trimmed) {
+            if matches!(level, 2 | 3) && preview_headings.len() < 4 {
+                let clean = clean_markdown_inline_text(heading_text);
+                if !clean.is_empty()
+                    && clean != "이번 변경 요약"
+                    && !preview_headings.contains(&clean)
+                {
+                    preview_headings.push(truncate_chars(&clean, 64));
+                }
+            }
+            continue;
+        }
+
+        if fallback_description.is_none()
+            && !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && !trimmed.starts_with('>')
+            && !trimmed.starts_with('|')
+            && !trimmed.starts_with("<!--")
+            && !trimmed.starts_with("---")
+            && !trimmed.starts_with("***")
+            && !trimmed.starts_with("- ")
+            && !trimmed.starts_with("* ")
+            && !trimmed.starts_with("![")
+        {
+            let clean = clean_markdown_inline_text(trimmed);
+            if clean.chars().count() >= 10 {
+                fallback_description = Some(truncate_chars(&clean, 140));
+            }
+        }
+    }
+
+    (fallback_description, preview_headings, linked_paths)
+}
+
+pub(crate) fn strip_leading_frontmatter(source: &str) -> &str {
+    let mut offset = 0usize;
+    let mut lines = source.split_inclusive('\n');
+    let Some(first) = lines.next() else {
+        return source;
+    };
+    if first.trim_end_matches(['\r', '\n']) != "---" {
+        return source;
+    }
+    offset += first.len();
+    for line in lines {
+        offset += line.len();
+        let marker = line.trim_end_matches(['\r', '\n']);
+        if marker == "---" || marker == "..." {
+            return &source[offset..];
+        }
+    }
+    source
+}
+
+fn parse_atx_heading(line: &str) -> Option<(u8, &str)> {
+    let hashes = line.bytes().take_while(|byte| *byte == b'#').count();
+    if !(1..=6).contains(&hashes) {
+        return None;
+    }
+    let rest = line[hashes..].strip_prefix(' ')?;
+    let trimmed = rest.trim().trim_end_matches('#').trim();
+    (!trimmed.is_empty()).then_some((hashes as u8, trimmed))
+}
+
+fn clean_markdown_inline_text(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let chars: Vec<char> = input.chars().collect();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '[' {
+            if let Some(close_bracket) = chars[i + 1..].iter().position(|c| *c == ']') {
+                let bracket_end = i + 1 + close_bracket;
+                if bracket_end + 1 < chars.len() && chars[bracket_end + 1] == '(' {
+                    if let Some(close_paren) =
+                        chars[bracket_end + 2..].iter().position(|c| *c == ')')
+                    {
+                        for ch in &chars[i + 1..bracket_end] {
+                            result.push(*ch);
+                        }
+                        i = bracket_end + 2 + close_paren + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        let ch = chars[i];
+        if ch != '`' {
+            result.push(ch);
+        }
+        i += 1;
+    }
+    let collapsed = result
+        .replace("**", "")
+        .replace("__", "")
+        .replace("[NEW]", "")
+        .replace("[CHANGED]", "");
+    collapsed.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= max_chars {
+            out.push('…');
+            break;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn extract_inline_markdown_links(line: &str) -> Vec<&str> {
+    let mut links = Vec::new();
+    let bytes = line.as_bytes();
+    let mut cursor = 0usize;
+    while let Some(rel_idx) = line[cursor..].find("](") {
+        let open_paren = cursor + rel_idx + 2;
+        if let Some(rel_close) = line[open_paren..].find(')') {
+            let close_paren = open_paren + rel_close;
+            let bracket_pos = cursor + rel_idx;
+            // Skip image embeds ![alt](...)
+            let is_image = line[..bracket_pos]
+                .rfind('[')
+                .is_some_and(|open| open > 0 && bytes[open - 1] == b'!');
+            if !is_image {
+                let inside = line[open_paren..close_paren].trim();
+                let href = inside.split_whitespace().next().unwrap_or("");
+                if !href.is_empty() {
+                    links.push(href);
+                }
+            }
+            cursor = close_paren + 1;
+        } else {
+            break;
+        }
+    }
+    links
+}
+
+pub(crate) fn resolve_relative_doc_target(
+    doc_relative_path: &str,
+    raw_href: &str,
+    is_frontmatter_link: bool,
+) -> Option<String> {
+    let trimmed = raw_href.trim().trim_matches(|ch| ch == '<' || ch == '>');
+    let without_fragment = trimmed.split(['#', '?']).next().unwrap_or("").trim();
+    if without_fragment.is_empty() || without_fragment.starts_with('#') {
+        return None;
+    }
+    let lower_scheme = without_fragment.to_ascii_lowercase();
+    if lower_scheme.starts_with("http://")
+        || lower_scheme.starts_with("https://")
+        || lower_scheme.starts_with("mailto:")
+        || lower_scheme.starts_with("tel:")
+        || lower_scheme.starts_with("data:")
+    {
+        return None;
+    }
+
+    let joined = if let Some(stripped) = without_fragment.strip_prefix('/') {
+        stripped.to_owned()
+    } else if is_frontmatter_link
+        && !without_fragment.starts_with("./")
+        && !without_fragment.starts_with("../")
+        && without_fragment.to_ascii_lowercase().starts_with("docs/")
+    {
+        without_fragment.to_owned()
+    } else {
+        let parent = Path::new(doc_relative_path)
+            .parent()
+            .and_then(Path::to_str)
+            .unwrap_or("");
+        if parent.is_empty() {
+            without_fragment.to_owned()
+        } else {
+            format!("{parent}/{without_fragment}")
+        }
+    };
+
+    let normalized = normalize_portable_doc_path(&joined);
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let resolved_md = if normalized.to_ascii_lowercase().ends_with(".html") {
+        let stem_len = normalized.len() - 5;
+        format!("{}.md", &normalized[..stem_len])
+    } else if normalized.to_ascii_lowercase().ends_with(".md") {
+        normalized
+    } else {
+        return None;
+    };
+
+    let doc_clean = normalize_portable_doc_path(doc_relative_path);
+    if resolved_md.eq_ignore_ascii_case(&doc_clean) {
+        return None;
+    }
+    let file_name = Path::new(&resolved_md)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("");
+    if is_reserved_markdown_path(&resolved_md, file_name) {
+        return None;
+    }
+    Some(resolved_md)
+}
 const MAX_INLINED_STYLESHEETS: usize = 10;
 const MAX_TOTAL_INLINED_CSS_BYTES: usize = 2 * 1024 * 1024;
 const SANDBOX_CSP_META: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:;\" />";
@@ -464,21 +895,8 @@ pub(crate) fn is_reserved_html_path(relative_path: &str, file_name: &str) -> boo
 }
 
 fn extract_html_attr<'a>(tag: &'a str, attr_name: &str) -> Option<&'a str> {
-    let lower = tag.to_ascii_lowercase();
-    let needle = format!("{attr_name}=");
-    let pos = lower.find(&needle)?;
-    let after = &tag[pos + needle.len()..].trim_start();
-    let quote = after.chars().next()?;
-    if quote == '"' || quote == '\'' {
-        let rest = &after[quote.len_utf8()..];
-        let end = rest.find(quote)?;
-        Some(&rest[..end])
-    } else {
-        let end = after
-            .find(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/')
-            .unwrap_or(after.len());
-        Some(&after[..end])
-    }
+    let (start, end) = html_attr_value_range(tag, attr_name)?;
+    Some(&tag[start..end])
 }
 
 pub(crate) fn document_content_from_bytes(
@@ -499,6 +917,19 @@ pub(crate) fn document_content_from_bytes(
         .unwrap_or_default()
         .to_owned();
     let parsed = parse_document(&markdown, &file_name);
+    let body_slice = strip_leading_frontmatter(&markdown);
+    // Invalid frontmatter that `strip_leading_frontmatter` could not remove has no closing
+    // delimiter; like discovery, never turn its YAML lines into a description.
+    let unterminated_frontmatter =
+        matches!(parsed.frontmatter_status, FrontmatterStatus::Invalid { .. })
+            && body_slice.len() == markdown.len();
+    let (fallback_description, preview_headings, linked_paths) = scan_markdown_preview(
+        body_slice.as_bytes(),
+        MAX_PREVIEW_SCAN_BYTES,
+        repository_relative_path,
+        &parsed.frontmatter_links,
+    );
+    let fallback_description = fallback_description.filter(|_| !unterminated_frontmatter);
     let summary = DocumentSummary {
         path: repository_relative_path.to_owned(),
         file_name,
@@ -508,6 +939,11 @@ pub(crate) fn document_content_from_bytes(
         doc_type: parsed.doc_type,
         domain: parsed.domain,
         status: parsed.status,
+        description: parsed.description.or(fallback_description),
+        preview_headings,
+        linked_paths,
+        designs: parsed.designs,
+        wireframes: parsed.wireframes,
         has_companion_html: false,
         modified_at_unix_ms,
         size,
@@ -697,7 +1133,7 @@ mod tests {
 
     use tempfile::TempDir;
 
-    use super::DocumentReader;
+    use super::{extract_html_attr, replace_html_attr_value, DocumentReader};
     use crate::documents::contract::DocumentAsset;
     use crate::error::ErrorCode;
 
@@ -1155,6 +1591,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn companion_html_inlines_safe_local_images_and_skips_escaped_or_git_images() {
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("secret.svg"), "<svg>secret</svg>").unwrap();
+        let repo = fixture_repo(&[
+            (
+                "docs/domains/dashboard/assets/mock.svg",
+                "<svg><rect width=\"10\" height=\"10\"/></svg>",
+            ),
+            ("docs/domains/dashboard/spec.md", "# Spec"),
+            (
+                "docs/domains/dashboard/spec.html",
+                r#"<html><body><img src="assets/mock.svg" alt="Mock" /><img src="../../../outside.svg" alt="Escaped" /><img src="https://example.com/ext.png" alt="Ext" /></body></html>"#,
+            ),
+        ]);
+
+        let reader = reader(&repo);
+        let doc = reader
+            .read_document("docs/domains/dashboard/spec.md")
+            .unwrap();
+        let html = doc.companion_html.unwrap().html;
+        assert!(html.contains("data:image/svg+xml;base64,"));
+        assert!(html.contains(r#"src="../../../outside.svg""#));
+        assert!(html.contains(r#"src="https://example.com/ext.png""#));
+    }
+
     #[cfg(unix)]
     fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
         std::os::unix::fs::symlink(original, link).unwrap();
@@ -1207,5 +1669,111 @@ mod tests {
         let bytes = fs::read(path).unwrap();
         let modified = fs::metadata(path).unwrap().modified().unwrap();
         (bytes, modified)
+    }
+
+    #[test]
+    fn inline_local_images_skips_uppercase_remote_and_data_schemes() {
+        let repo = fixture_repo(&[
+            ("docs/spec.md", "# Spec"),
+            (
+                "docs/spec.html",
+                r#"<img src="HTTP://example.com/a.svg" alt="remote" /><img src="DATA:image/png;base64,AAA" alt="data" />"#,
+            ),
+        ]);
+        let reader = reader(&repo);
+        let doc = reader.read_document("docs/spec.md").unwrap();
+        let html = doc.companion_html.unwrap();
+        assert!(html.html.contains(r#"src="HTTP://example.com/a.svg""#));
+        assert!(html.html.contains(r#"src="DATA:image/png;base64,AAA""#));
+    }
+
+    #[test]
+    fn html_attr_helpers_respect_attribute_name_boundaries() {
+        let tag = r#"<img data-src="lazy.png" alt='a src=x' src="real.png">"#;
+        assert_eq!(extract_html_attr(tag, "src"), Some("real.png"));
+        assert_eq!(
+            replace_html_attr_value(tag, "src", "data:image/png;base64,AAA").as_deref(),
+            Some(r#"<img data-src="lazy.png" alt='a src=x' src="data:image/png;base64,AAA">"#)
+        );
+
+        let unquoted = "<IMG Data-Src=lazy.png SRC = real.png/>";
+        assert_eq!(extract_html_attr(unquoted, "src"), Some("real.png"));
+        assert_eq!(
+            replace_html_attr_value(unquoted, "src", "x").as_deref(),
+            Some("<IMG Data-Src=lazy.png SRC = x/>")
+        );
+
+        assert_eq!(
+            extract_html_attr("<img src=img/a.png>", "src"),
+            Some("img/a.png")
+        );
+        assert_eq!(
+            extract_html_attr(r#"<img data-src="only.png">"#, "src"),
+            None
+        );
+        assert_eq!(
+            replace_html_attr_value(r#"<img data-src="only.png">"#, "src", "x"),
+            None
+        );
+        assert_eq!(
+            extract_html_attr(
+                r#"<link data-rel="icon" rel="stylesheet" href="a.css">"#,
+                "rel"
+            ),
+            Some("stylesheet")
+        );
+    }
+
+    #[test]
+    fn inline_local_images_keeps_data_src_when_inlining_src() {
+        let repo = fixture_repo(&[
+            ("docs/spec.md", "# Spec"),
+            (
+                "docs/real.svg",
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+            ),
+            (
+                "docs/spec.html",
+                r#"<img data-src="lazy.svg" src="real.svg" alt="screen" />"#,
+            ),
+        ]);
+        let reader = reader(&repo);
+        let doc = reader.read_document("docs/spec.md").unwrap();
+        let html = doc.companion_html.unwrap().html;
+        assert!(html.contains(r#"data-src="lazy.svg""#), "{html}");
+        assert!(
+            html.contains(r#"src="data:image/svg+xml;base64,"#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn read_document_drops_fallback_description_for_unterminated_frontmatter() {
+        let repo = fixture_repo(&[
+            (
+                "docs/unterminated.md",
+                "---\ntitle: [broken frontmatter value\n## 남은 제목\n",
+            ),
+            (
+                "docs/plain.md",
+                "# 제목\n\n프론트매터 없는 문서의 첫 문단입니다\n",
+            ),
+        ]);
+        let reader = reader(&repo);
+
+        let unterminated = reader.read_document("docs/unterminated.md").unwrap();
+        assert_eq!(unterminated.summary.description, None);
+        assert!(unterminated
+            .summary
+            .preview_headings
+            .iter()
+            .any(|heading| heading == "남은 제목"));
+
+        // Documents without frontmatter keep their first-paragraph description.
+        let plain = reader.read_document("docs/plain.md").unwrap();
+        assert_eq!(
+            plain.summary.description.as_deref(),
+            Some("프론트매터 없는 문서의 첫 문단입니다")
+        );
     }
 }

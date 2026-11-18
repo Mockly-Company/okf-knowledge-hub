@@ -9,11 +9,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use super::contract::{
-    DocumentSummary, ReconcileDelta, SearchMatchField, SearchResponse, SearchResult,
+    DocumentDesignLink, DocumentSummary, DocumentWireframe, ReconcileDelta, SearchMatchField,
+    SearchResponse, SearchResult,
 };
 use super::search_text::markdown_to_plain_text;
 
-const INDEX_VERSION: i64 = 2;
+const INDEX_VERSION: i64 = 4;
 
 #[derive(Debug, Error)]
 pub enum CacheError {
@@ -81,6 +82,11 @@ impl DocumentCache {
                doc_type TEXT,
                domain TEXT,
                status TEXT,
+               description TEXT,
+               preview_headings_json TEXT NOT NULL DEFAULT '[]',
+               linked_paths_json TEXT NOT NULL DEFAULT '[]',
+               designs_json TEXT NOT NULL DEFAULT '[]',
+               wireframes_json TEXT NOT NULL DEFAULT '[]',
                has_companion_html INTEGER NOT NULL DEFAULT 0,
                modified_at_unix_ms INTEGER NOT NULL,
                size INTEGER NOT NULL,
@@ -154,8 +160,9 @@ impl DocumentCache {
     pub fn cached_summaries(&self) -> Result<Vec<DocumentSummary>, CacheError> {
         let mut statement = self.connection.prepare(
             "SELECT path, file_name, title, document_id, frontmatter_status_json,
-                    doc_type, domain, status, has_companion_html,
-                    modified_at_unix_ms, size
+                    doc_type, domain, status, description,
+                    preview_headings_json, linked_paths_json, designs_json,
+                    has_companion_html, modified_at_unix_ms, size, wireframes_json
              FROM documents
              ORDER BY path",
         )?;
@@ -169,9 +176,14 @@ impl DocumentCache {
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, Option<String>>(6)?,
                 row.get::<_, Option<String>>(7)?,
-                row.get::<_, i64>(8)?,
-                row.get::<_, i64>(9)?,
-                row.get::<_, i64>(10)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, String>(10)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, i64>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, i64>(14)?,
+                row.get::<_, String>(15)?,
             ))
         })?;
         rows.map(|row| {
@@ -184,9 +196,14 @@ impl DocumentCache {
                 doc_type,
                 domain,
                 status,
+                description,
+                preview_headings_json,
+                linked_paths_json,
+                designs_json,
                 has_companion_html,
                 modified_at_unix_ms,
                 size,
+                wireframes_json,
             ) = row?;
             Ok(DocumentSummary {
                 path,
@@ -197,6 +214,11 @@ impl DocumentCache {
                 doc_type,
                 domain,
                 status,
+                description,
+                preview_headings: serde_json::from_str(&preview_headings_json)?,
+                linked_paths: serde_json::from_str(&linked_paths_json)?,
+                designs: serde_json::from_str::<Vec<DocumentDesignLink>>(&designs_json)?,
+                wireframes: serde_json::from_str::<Vec<DocumentWireframe>>(&wireframes_json)?,
                 has_companion_html: has_companion_html != 0,
                 modified_at_unix_ms,
                 size: u64::try_from(size).unwrap_or_default(),
@@ -282,6 +304,10 @@ impl DocumentCache {
             summary: &'a DocumentSummary,
             document_id: Option<String>,
             frontmatter_status_json: String,
+            preview_headings_json: String,
+            linked_paths_json: String,
+            designs_json: String,
+            wireframes_json: String,
             size: i64,
         }
 
@@ -308,6 +334,10 @@ impl DocumentCache {
                 summary,
                 document_id: summary.document_id.map(|id| id.to_string()),
                 frontmatter_status_json: serde_json::to_string(&summary.frontmatter_status)?,
+                preview_headings_json: serde_json::to_string(&summary.preview_headings)?,
+                linked_paths_json: serde_json::to_string(&summary.linked_paths)?,
+                designs_json: serde_json::to_string(&summary.designs)?,
+                wireframes_json: serde_json::to_string(&summary.wireframes)?,
                 size: sqlite_size(summary.size)?,
             });
         }
@@ -386,9 +416,10 @@ impl DocumentCache {
                         "UPDATE documents SET
                            file_name = ?2, title = ?3, document_id = ?4,
                            frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
-                           status = ?8, has_companion_html = ?9,
-                           modified_at_unix_ms = ?10, size = ?11,
-                           content_hash = ?12, body_text = ?13
+                           status = ?8, description = ?9, preview_headings_json = ?10,
+                           linked_paths_json = ?11, designs_json = ?12,
+                           has_companion_html = ?13, modified_at_unix_ms = ?14, size = ?15,
+                           content_hash = ?16, body_text = ?17, wireframes_json = ?18
                          WHERE path = ?1",
                         params![
                             summary.path,
@@ -399,11 +430,16 @@ impl DocumentCache {
                             summary.doc_type,
                             summary.domain,
                             summary.status,
+                            summary.description,
+                            prepared.preview_headings_json,
+                            prepared.linked_paths_json,
+                            prepared.designs_json,
                             i64::from(summary.has_companion_html),
                             summary.modified_at_unix_ms,
                             prepared.size,
                             content.content_hash,
                             content.body_text,
+                            prepared.wireframes_json,
                         ],
                     )?;
                     transaction.execute(
@@ -415,9 +451,10 @@ impl DocumentCache {
                     transaction.execute(
                         "INSERT INTO documents (
                            path, file_name, title, document_id, frontmatter_status_json,
-                           doc_type, domain, status, has_companion_html,
-                           modified_at_unix_ms, size, content_hash, body_text
-                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                           doc_type, domain, status, description, preview_headings_json,
+                           linked_paths_json, designs_json, has_companion_html,
+                           modified_at_unix_ms, size, content_hash, body_text, wireframes_json
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                         params![
                             summary.path,
                             summary.file_name,
@@ -427,11 +464,16 @@ impl DocumentCache {
                             summary.doc_type,
                             summary.domain,
                             summary.status,
+                            summary.description,
+                            prepared.preview_headings_json,
+                            prepared.linked_paths_json,
+                            prepared.designs_json,
                             i64::from(summary.has_companion_html),
                             summary.modified_at_unix_ms,
                             prepared.size,
                             content.content_hash,
                             content.body_text,
+                            prepared.wireframes_json,
                         ],
                     )?;
                     transaction.last_insert_rowid()
@@ -446,8 +488,10 @@ impl DocumentCache {
                     "UPDATE documents SET
                        file_name = ?2, title = ?3, document_id = ?4,
                        frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
-                       status = ?8, has_companion_html = ?9,
-                       modified_at_unix_ms = ?10, size = ?11
+                       status = ?8, description = ?9, preview_headings_json = ?10,
+                       linked_paths_json = ?11, designs_json = ?12,
+                       has_companion_html = ?13, modified_at_unix_ms = ?14, size = ?15,
+                       wireframes_json = ?16
                      WHERE path = ?1",
                     params![
                         summary.path,
@@ -458,9 +502,14 @@ impl DocumentCache {
                         summary.doc_type,
                         summary.domain,
                         summary.status,
+                        summary.description,
+                        prepared.preview_headings_json,
+                        prepared.linked_paths_json,
+                        prepared.designs_json,
                         i64::from(summary.has_companion_html),
                         summary.modified_at_unix_ms,
                         prepared.size,
+                        prepared.wireframes_json,
                     ],
                 )?;
                 if updated != 1 {
@@ -510,6 +559,10 @@ impl DocumentCache {
         let document_id = summary.document_id.map(|id| id.to_string());
         let frontmatter_status_json = serde_json::to_string(&summary.frontmatter_status)
             .expect("serializing enum cannot fail");
+        let preview_headings_json = serde_json::to_string(&summary.preview_headings)?;
+        let linked_paths_json = serde_json::to_string(&summary.linked_paths)?;
+        let designs_json = serde_json::to_string(&summary.designs)?;
+        let wireframes_json = serde_json::to_string(&summary.wireframes)?;
 
         let transaction = self.connection.transaction()?;
         let stored = transaction
@@ -526,8 +579,10 @@ impl DocumentCache {
                     "UPDATE documents SET
                        file_name = ?2, title = ?3, document_id = ?4,
                        frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
-                       status = ?8, has_companion_html = ?9,
-                       modified_at_unix_ms = ?10, size = ?11
+                       status = ?8, description = ?9, preview_headings_json = ?10,
+                       linked_paths_json = ?11, designs_json = ?12,
+                       has_companion_html = ?13, modified_at_unix_ms = ?14, size = ?15,
+                       wireframes_json = ?16
                      WHERE path = ?1",
                     params![
                         summary.path,
@@ -538,9 +593,14 @@ impl DocumentCache {
                         summary.doc_type,
                         summary.domain,
                         summary.status,
+                        summary.description,
+                        preview_headings_json,
+                        linked_paths_json,
+                        designs_json,
                         i64::from(summary.has_companion_html),
                         summary.modified_at_unix_ms,
                         size,
+                        wireframes_json,
                     ],
                 )?;
                 transaction.commit()?;
@@ -553,9 +613,10 @@ impl DocumentCache {
                 "UPDATE documents SET
                    file_name = ?2, title = ?3, document_id = ?4,
                    frontmatter_status_json = ?5, doc_type = ?6, domain = ?7,
-                   status = ?8, has_companion_html = ?9,
-                   modified_at_unix_ms = ?10, size = ?11,
-                   content_hash = ?12, body_text = ?13
+                   status = ?8, description = ?9, preview_headings_json = ?10,
+                   linked_paths_json = ?11, designs_json = ?12,
+                   has_companion_html = ?13, modified_at_unix_ms = ?14, size = ?15,
+                   content_hash = ?16, body_text = ?17, wireframes_json = ?18
                  WHERE path = ?1",
                 params![
                     summary.path,
@@ -566,11 +627,16 @@ impl DocumentCache {
                     summary.doc_type,
                     summary.domain,
                     summary.status,
+                    summary.description,
+                    preview_headings_json,
+                    linked_paths_json,
+                    designs_json,
                     i64::from(summary.has_companion_html),
                     summary.modified_at_unix_ms,
                     size,
                     content_hash,
                     body_text,
+                    wireframes_json,
                 ],
             )?;
             transaction.execute(
@@ -582,9 +648,10 @@ impl DocumentCache {
             transaction.execute(
                 "INSERT INTO documents (
                    path, file_name, title, document_id, frontmatter_status_json,
-                   doc_type, domain, status, has_companion_html,
-                   modified_at_unix_ms, size, content_hash, body_text
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                   doc_type, domain, status, description, preview_headings_json,
+                   linked_paths_json, designs_json, has_companion_html,
+                   modified_at_unix_ms, size, content_hash, body_text, wireframes_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                 params![
                     summary.path,
                     summary.file_name,
@@ -594,11 +661,16 @@ impl DocumentCache {
                     summary.doc_type,
                     summary.domain,
                     summary.status,
+                    summary.description,
+                    preview_headings_json,
+                    linked_paths_json,
+                    designs_json,
                     i64::from(summary.has_companion_html),
                     summary.modified_at_unix_ms,
                     size,
                     content_hash,
                     body_text,
+                    wireframes_json,
                 ],
             )?;
             transaction.last_insert_rowid()
@@ -688,12 +760,17 @@ fn is_summary_unchanged(
     let size = sqlite_size(summary.size)?;
     let document_id = summary.document_id.map(|id| id.to_string());
     let frontmatter_status_json = serde_json::to_string(&summary.frontmatter_status)?;
+    let preview_headings_json = serde_json::to_string(&summary.preview_headings)?;
+    let linked_paths_json = serde_json::to_string(&summary.linked_paths)?;
+    let designs_json = serde_json::to_string(&summary.designs)?;
+    let wireframes_json = serde_json::to_string(&summary.wireframes)?;
     let has_companion_html = i64::from(summary.has_companion_html);
     let stored = connection
         .query_row(
             "SELECT file_name, title, document_id, frontmatter_status_json,
-                    doc_type, domain, status, has_companion_html,
-                    modified_at_unix_ms, size
+                    doc_type, domain, status, description, preview_headings_json,
+                    linked_paths_json, designs_json, has_companion_html,
+                    modified_at_unix_ms, size, wireframes_json
              FROM documents WHERE path = ?1",
             params![summary.path],
             |row| {
@@ -705,9 +782,14 @@ fn is_summary_unchanged(
                     row.get::<_, Option<String>>(4)?,
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, Option<String>>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, i64>(8)?,
-                    row.get::<_, i64>(9)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, String>(14)?,
                 ))
             },
         )
@@ -722,9 +804,14 @@ fn is_summary_unchanged(
             doc_type,
             domain,
             status,
+            description,
+            stored_preview_headings,
+            stored_linked_paths,
+            stored_designs,
             stored_has_companion_html,
             modified,
-            stored_size
+            stored_size,
+            stored_wireframes
         )) if file_name == summary.file_name
             && title == summary.title
             && stored_document_id == document_id
@@ -732,9 +819,14 @@ fn is_summary_unchanged(
             && doc_type == summary.doc_type
             && domain == summary.domain
             && status == summary.status
+            && description == summary.description
+            && stored_preview_headings == preview_headings_json
+            && stored_linked_paths == linked_paths_json
+            && stored_designs == designs_json
             && stored_has_companion_html == has_companion_html
             && modified == summary.modified_at_unix_ms
             && stored_size == size
+            && stored_wireframes == wireframes_json
     ))
 }
 
@@ -927,7 +1019,9 @@ fn invalid_cache_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use crate::documents::contract::{DocumentSummary, FrontmatterStatus, SearchMatchField};
+    use crate::documents::contract::{
+        DocumentDesignLink, DocumentSummary, DocumentWireframe, FrontmatterStatus, SearchMatchField,
+    };
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -952,6 +1046,11 @@ mod tests {
             doc_type: None,
             domain: None,
             status: None,
+            description: None,
+            preview_headings: Vec::new(),
+            linked_paths: Vec::new(),
+            designs: Vec::new(),
+            wireframes: Vec::new(),
             has_companion_html: false,
             modified_at_unix_ms,
             size,
@@ -993,7 +1092,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let cache =
             DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
-        assert_eq!(cache.index_version().unwrap(), 2);
+        assert_eq!(cache.index_version().unwrap(), 4);
         assert!(cache.has_table("documents").unwrap());
         assert!(cache.has_table("document_search").unwrap());
     }
@@ -1001,7 +1100,7 @@ mod tests {
     #[test]
     fn identity_mismatches_preserve_invalid_database_and_create_clean_cache() {
         for (case, key, value) in [
-            ("next_version", "index_version", "3"),
+            ("next_version", "index_version", "5"),
             ("version", "index_version", "999"),
             (
                 "workspace",
@@ -1025,7 +1124,7 @@ mod tests {
             drop(connection);
 
             let rebuilt = DocumentCache::open(&path, workspace_id()).unwrap();
-            assert_eq!(rebuilt.index_version().unwrap(), 2);
+            assert_eq!(rebuilt.index_version().unwrap(), 4);
             assert!(!rebuilt.has_table("marker").unwrap());
             assert_eq!(
                 std::fs::read_dir(&case_dir)
@@ -1047,7 +1146,7 @@ mod tests {
         let path = temp.path().join("search.sqlite3");
         drop(DocumentCache::open(&path, workspace_id()).unwrap());
 
-        for invalid_version in ["3", "998", "999"] {
+        for invalid_version in ["5", "998", "999"] {
             let connection = rusqlite::Connection::open(&path).unwrap();
             connection
                 .execute(
@@ -1134,6 +1233,49 @@ mod tests {
         assert_eq!(cache.search("old body", 10).unwrap().items.len(), 1);
         assert!(cache.search("new body", 10).unwrap().items.is_empty());
         assert_eq!(cache.cached_summaries().unwrap(), vec![original]);
+    }
+
+    #[test]
+    fn cached_summaries_round_trip_wireframes_and_design_wireframe_links() {
+        let temp = tempdir().unwrap();
+        let mut cache =
+            DocumentCache::open(temp.path().join("search.sqlite3"), workspace_id()).unwrap();
+        let mut spec = summary("docs/spec.md", 100, 8);
+        spec.wireframes = vec![DocumentWireframe {
+            title: "list".to_owned(),
+            image: "assets/list-wireframe.svg".to_owned(),
+        }];
+        spec.designs = vec![DocumentDesignLink {
+            title: "list design".to_owned(),
+            url: None,
+            image: Some("assets/list-design.png".to_owned()),
+            status: None,
+            wireframe: Some("list".to_owned()),
+        }];
+        cache.upsert_content(&spec, b"spec body").unwrap();
+        assert_eq!(cache.cached_summaries().unwrap(), vec![spec.clone()]);
+
+        let mut reconciled = spec.clone();
+        reconciled.modified_at_unix_ms = 200;
+        reconciled.wireframes.push(DocumentWireframe {
+            title: "detail".to_owned(),
+            image: "assets/detail-wireframe.svg".to_owned(),
+        });
+        cache
+            .apply_reconcile(
+                std::slice::from_ref(&reconciled),
+                &[IndexedContent {
+                    summary: reconciled.clone(),
+                    markdown: b"spec body v2".to_vec(),
+                }],
+            )
+            .unwrap();
+        assert_eq!(cache.cached_summaries().unwrap(), vec![reconciled.clone()]);
+        assert!(cache
+            .plan_reconcile(std::slice::from_ref(&reconciled))
+            .unwrap()
+            .to_index
+            .is_empty());
     }
 
     #[test]

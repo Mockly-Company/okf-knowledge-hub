@@ -23,6 +23,8 @@ import {
   type SearchResult,
 } from "../model";
 import type { AsyncStatus } from "../documents-reducer";
+import { DocumentDomainMap } from "./DocumentDomainMap";
+import { ScreenSpecDeck } from "./ScreenSpecDeck";
 
 interface DocumentSearchProps {
   query: string;
@@ -31,15 +33,26 @@ interface DocumentSearchProps {
   searchStatus: AsyncStatus;
   searchError: AppError | null;
   indexStatus: IndexStatus;
+  defaultGroupMode?: DocumentGroupMode;
   onQueryChange(query: string): void;
-  onSelectDocument(path: string): void;
+  onSelectDocument(
+    path: string,
+    preferredViewMode?: "html" | "markdown",
+  ): void;
   onSelectResult(result: SearchResult): void;
   onRetry(): void;
   onNewDocumentInFolder?: (folderPath: string) => void;
+  onOpenInNewWindow?: (
+    path: string,
+    viewMode?: "html" | "markdown",
+    title?: string,
+  ) => void;
   toolbarAction?: ReactNode;
 }
 
 const GROUP_MODE_OPTIONS: ReadonlyArray<{ mode: DocumentGroupMode; label: string }> = [
+  { mode: "map", label: "도메인 맵" },
+  { mode: "screen_specs", label: "화면명세 보드" },
   { mode: "domain", label: "도메인별" },
   { mode: "type", label: "문서 유형별" },
   { mode: "flat", label: "전체 목록" },
@@ -80,14 +93,17 @@ export function DocumentSearch({
   results,
   searchStatus,
   searchError,
+  defaultGroupMode = "domain",
   onQueryChange,
   onSelectDocument,
   onSelectResult,
   onRetry,
   onNewDocumentInFolder,
+  onOpenInNewWindow,
   toolbarAction,
 }: DocumentSearchProps) {
-  const [groupMode, setGroupMode] = useState<DocumentGroupMode>("domain");
+  const [groupMode, setGroupMode] = useState<DocumentGroupMode>(defaultGroupMode);
+  const [screenSpecDomain, setScreenSpecDomain] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] =
     useState<DocumentCategoryFilter>("all");
 
@@ -211,7 +227,12 @@ export function DocumentSearch({
         <UnstyledButton
           className="document-search__result-row"
           onClick={() =>
-            result ? onSelectResult(result) : onSelectDocument(item.path)
+            result
+              ? onSelectResult(result)
+              : onSelectDocument(
+                  item.path,
+                  hasCompanionHtml ? "html" : "markdown",
+                )
           }
         >
           <FileText aria-hidden="true" />
@@ -296,33 +317,35 @@ export function DocumentSearch({
               ))}
             </div>
           ) : null}
-          <div
-            className="document-search__category-filters"
-            role="group"
-            aria-label="문서 종류 필터"
-          >
-            <UnstyledButton
-              type="button"
-              className="document-search__filter-chip"
-              data-active={categoryFilter === "all"}
-              aria-pressed={categoryFilter === "all"}
-              onClick={() => setCategoryFilter("all")}
+          {isSearching || groupMode !== "screen_specs" ? (
+            <div
+              className="document-search__category-filters"
+              role="group"
+              aria-label="문서 종류 필터"
             >
-              전체
-            </UnstyledButton>
-            {DOCUMENT_CATEGORY_ORDER.map((category) => (
               <UnstyledButton
-                key={category}
                 type="button"
                 className="document-search__filter-chip"
-                data-active={categoryFilter === category}
-                aria-pressed={categoryFilter === category}
-                onClick={() => setCategoryFilter(category)}
+                data-active={categoryFilter === "all"}
+                aria-pressed={categoryFilter === "all"}
+                onClick={() => setCategoryFilter("all")}
               >
-                {DOCUMENT_CATEGORY_LABELS[category]}
+                전체
               </UnstyledButton>
-            ))}
-          </div>
+              {DOCUMENT_CATEGORY_ORDER.map((category) => (
+                <UnstyledButton
+                  key={category}
+                  type="button"
+                  className="document-search__filter-chip"
+                  data-active={categoryFilter === category}
+                  aria-pressed={categoryFilter === category}
+                  onClick={() => setCategoryFilter(category)}
+                >
+                  {DOCUMENT_CATEGORY_LABELS[category]}
+                </UnstyledButton>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -340,6 +363,13 @@ export function DocumentSearch({
           >
             <p>검색 결과를 불러오지 못했습니다.</p>
           </StatusFeedback>
+        ) : !isSearching && groupMode === "screen_specs" ? (
+          <ScreenSpecDeck
+            documents={documents}
+            initialDomainFilter={screenSpecDomain}
+            onSelectDocument={onSelectDocument}
+            onOpenInNewWindow={onOpenInNewWindow}
+          />
         ) : isAwaitingSearch && items.length === 0 ? null : items.length === 0 ? (
           categoryFilter !== "all" && unfilteredSearchCount > 0 ? (
             <div className="document-search__filtered-empty">
@@ -361,6 +391,18 @@ export function DocumentSearch({
                 : "표시할 문서가 없습니다."}
             </p>
           )
+        ) : !isSearching && groupMode === "map" ? (
+          <DocumentDomainMap
+            documents={filteredDocuments}
+            allDocuments={documents}
+            onSelectDocument={onSelectDocument}
+            onSelectScreenSpecs={(domainKey) => {
+              setScreenSpecDomain(domainKey);
+              setGroupMode("screen_specs");
+            }}
+            onOpenInNewWindow={onOpenInNewWindow}
+            onNewDocumentInFolder={onNewDocumentInFolder}
+          />
         ) : !isSearching && groupMode !== "flat" ? (
           <div className="document-search__groups">
             {groupedDocuments.map((group) => {

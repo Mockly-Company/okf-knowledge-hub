@@ -12,6 +12,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
 import type { DocumentsGateway } from "./DocumentsGateway";
+import type { OpenDocumentTab } from "./components/DocumentWorkbenchTabs";
 import { documentsKeys } from "./queryKeys";
 import {
   createInitialDocumentsState,
@@ -27,6 +28,7 @@ import {
   type DocsPullRequestDetail,
   type DocsPullRequestSummary,
   type DocumentAsset,
+  type DocumentContent,
   type DocumentEventEnvelope,
   type HistoryItem,
   type PublishDocumentDraftResponse,
@@ -126,9 +128,20 @@ function sanitizedEvent(event: DocumentEventEnvelope): DocumentEventEnvelope {
 export interface DocumentsContextValue {
   state: DocumentsState;
   authoringState: DocumentAuthoringState;
+  openTabs: readonly OpenDocumentTab[];
+  canGoBackDocument: boolean;
+  canGoForwardDocument: boolean;
   preferredViewMode: "html" | "markdown" | null;
   preferredViewTargetPath: string | null;
   clearPreferredViewMode(expectedPath?: string): void;
+  closeDocumentTab(path: string): void;
+  goBackDocument(): void;
+  goForwardDocument(): void;
+  openDocumentInNewWindow(
+    path: string,
+    viewMode?: "html" | "markdown",
+    title?: string,
+  ): Promise<void>;
   setSearchQuery(query: string): void;
   retrySearch(): void;
   selectDocument(
@@ -147,6 +160,8 @@ export interface DocumentsContextValue {
   loadMoreHistory(): void;
   refresh(): Promise<void>;
   readAsset(documentPath: string, assetPath: string): Promise<DocumentAsset>;
+  readDocumentPreview(path: string): Promise<DocumentContent>;
+  readPreviewAsset(documentPath: string, assetPath: string): Promise<DocumentAsset>;
   copyText(value: string): Promise<void>;
   openExternal(url: string): Promise<void>;
   clearRecoverableError(): void;
@@ -223,6 +238,16 @@ export function DocumentsProvider({
       return null;
     });
   }, []);
+  const [openTabs, setOpenTabs] = useState<OpenDocumentTab[]>([]);
+  const [navHistory, setNavHistory] = useState<{
+    entries: Array<string | null>;
+    index: number;
+  }>({ entries: [null], index: 0 });
+  const navHistoryRef = useRef(navHistory);
+  navHistoryRef.current = navHistory;
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
+  const skipNextHistoryPushRef = useRef(false);
   const [editorBaselines, setEditorBaselines] = useState<
     Record<string, string | null>
   >({});
@@ -1017,11 +1042,230 @@ export function DocumentsProvider({
 
   const resetForWorkspaceSwitch = useCallback(() => {
     setPreferredViewPreference(null);
+    setOpenTabs([]);
+    setNavHistory({ entries: [null], index: 0 });
+    skipNextHistoryPushRef.current = false;
     dispatchAuthoringAccepted({ type: "workspaceAuthoringReset" });
     dispatchAccepted({ type: "searchQueryChanged", query: "" });
     pendingWorkspaceResetRef.current = true;
     setSessionAttempt((attempt) => attempt + 1);
   }, [dispatchAccepted, dispatchAuthoringAccepted]);
+
+  const titleByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const summary of state.catalog.documents) {
+      map.set(normalizeDocumentPath(summary.path).toLowerCase(), summary.title);
+    }
+    if (state.selectedDocument) {
+      map.set(
+        normalizeDocumentPath(state.selectedDocument.summary.path).toLowerCase(),
+        state.selectedDocument.summary.title,
+      );
+    }
+    return map;
+  }, [state.catalog.documents, state.selectedDocument]);
+
+  useEffect(() => {
+    const normalizedSelected = state.selectedPath
+      ? normalizeDocumentPath(state.selectedPath)
+      : null;
+
+    setOpenTabs((currentTabs) => {
+      const catalogSet =
+        state.catalog.documents.length > 0
+          ? new Set(
+              state.catalog.documents.map((doc) =>
+                normalizeDocumentPath(doc.path).toLowerCase(),
+              ),
+            )
+          : null;
+
+      let next = currentTabs
+        .filter((tab) => {
+          const key = normalizeDocumentPath(tab.path).toLowerCase();
+          if (normalizedSelected && key === normalizedSelected.toLowerCase()) {
+            return true;
+          }
+          return !catalogSet || catalogSet.has(key);
+        })
+        .map((tab) => {
+          const key = normalizeDocumentPath(tab.path).toLowerCase();
+          const refreshedTitle = titleByPath.get(key);
+          return refreshedTitle && refreshedTitle !== tab.title
+            ? { ...tab, title: refreshedTitle }
+            : tab;
+        });
+
+      if (normalizedSelected) {
+        const selectedKey = normalizedSelected.toLowerCase();
+        const existingIdx = next.findIndex(
+          (tab) => normalizeDocumentPath(tab.path).toLowerCase() === selectedKey,
+        );
+        const resolvedTitle =
+          titleByPath.get(selectedKey) ??
+          (normalizedSelected.split("/").pop()?.replace(/\.md$/i, "") ||
+            normalizedSelected);
+        if (existingIdx === -1) {
+          if (next.length >= 12) {
+            next = next.slice(next.length - 11);
+          }
+          next = [...next, { path: normalizedSelected, title: resolvedTitle }];
+        } else if (next[existingIdx]!.title !== resolvedTitle) {
+          next = next.map((tab, idx) =>
+            idx === existingIdx ? { ...tab, title: resolvedTitle } : tab,
+          );
+        }
+      }
+
+      if (
+        next.length === currentTabs.length &&
+        next.every(
+          (tab, idx) =>
+            tab.path === currentTabs[idx]?.path &&
+            tab.title === currentTabs[idx]?.title,
+        )
+      ) {
+        return currentTabs;
+      }
+      return next;
+    });
+
+    if (state.status !== "ready") {
+      return;
+    }
+
+    setNavHistory((current) => {
+      const currentTarget = current.entries[current.index] ?? null;
+      const sameTarget =
+        (currentTarget === null && normalizedSelected === null) ||
+        (currentTarget !== null &&
+          normalizedSelected !== null &&
+          currentTarget.toLowerCase() === normalizedSelected.toLowerCase());
+      if (sameTarget) {
+        // 뒤/앞 이동은 index를 먼저 옮기므로 여기서 sameTarget이 된다. 스킵 플래그를 함께 해제하지 않으면
+        // 다음 일반 문서 이동이 히스토리에 기록되지 않는다.
+        skipNextHistoryPushRef.current = false;
+        return current;
+      }
+      if (skipNextHistoryPushRef.current) {
+        skipNextHistoryPushRef.current = false;
+        return current;
+      }
+      const nextEntries = [
+        ...current.entries.slice(0, current.index + 1),
+        normalizedSelected,
+      ].slice(-30);
+      return {
+        entries: nextEntries,
+        index: nextEntries.length - 1,
+      };
+    });
+  }, [state.catalog.documents, state.selectedPath, state.status, titleByPath]);
+
+  const closeDocumentTab = useCallback(
+    (rawPath: string) => {
+      const targetKey = normalizeDocumentPath(rawPath).toLowerCase();
+      if (!targetKey) return;
+      const currentTabs = openTabsRef.current;
+      const closeIndex = currentTabs.findIndex(
+        (tab) => normalizeDocumentPath(tab.path).toLowerCase() === targetKey,
+      );
+      if (closeIndex === -1) return;
+      const remaining = currentTabs.filter((_, idx) => idx !== closeIndex);
+      setOpenTabs(remaining);
+
+      const activeKey = stateRef.current.selectedPath
+        ? normalizeDocumentPath(stateRef.current.selectedPath).toLowerCase()
+        : null;
+      if (activeKey === targetKey) {
+        const fallbackTab =
+          remaining[closeIndex] ?? remaining[closeIndex - 1] ?? null;
+        if (fallbackTab) {
+          selectDocument(fallbackTab.path);
+        } else {
+          showDocumentsHome();
+        }
+      }
+    },
+    [selectDocument, showDocumentsHome],
+  );
+
+  const canGoBackDocument = navHistory.index > 0;
+  const canGoForwardDocument = navHistory.index < navHistory.entries.length - 1;
+
+  const goBackDocument = useCallback(() => {
+    const current = navHistoryRef.current;
+    if (current.index <= 0) return;
+    const nextIndex = current.index - 1;
+    const target = current.entries[nextIndex] ?? null;
+    skipNextHistoryPushRef.current = true;
+    // Advance the ref synchronously so a second click before re-render moves one more step.
+    const next = { ...current, index: nextIndex };
+    navHistoryRef.current = next;
+    setNavHistory(next);
+    if (target === null) {
+      showDocumentsHome();
+    } else {
+      selectDocument(target);
+    }
+  }, [selectDocument, showDocumentsHome]);
+
+  const goForwardDocument = useCallback(() => {
+    const current = navHistoryRef.current;
+    if (current.index >= current.entries.length - 1) return;
+    const nextIndex = current.index + 1;
+    const target = current.entries[nextIndex] ?? null;
+    skipNextHistoryPushRef.current = true;
+    const next = { ...current, index: nextIndex };
+    navHistoryRef.current = next;
+    setNavHistory(next);
+    if (target === null) {
+      showDocumentsHome();
+    } else {
+      selectDocument(target);
+    }
+  }, [selectDocument, showDocumentsHome]);
+
+  const openDocumentInNewWindow = useCallback(
+    async (
+      rawPath: string,
+      viewMode?: "html" | "markdown",
+      title?: string,
+    ) => {
+      const normalized = normalizeDocumentPath(rawPath).replace(/\.html$/i, ".md");
+      if (!normalized) return;
+      const resolvedTitle =
+        title ??
+        titleByPath.get(normalized.toLowerCase()) ??
+        normalized.split("/").pop()?.replace(/\.md$/i, "") ??
+        normalized;
+      if (gateway.openDocumentWindow) {
+        try {
+          await gateway.openDocumentWindow(
+            normalized,
+            viewMode,
+            resolvedTitle,
+            stateRef.current.workspaceId,
+          );
+          return;
+        } catch (error) {
+          throw asDocumentError(error);
+        }
+      }
+      if (typeof window !== "undefined") {
+        const params = new URLSearchParams({ doc: normalized });
+        const workspaceId = stateRef.current.workspaceId;
+        if (workspaceId) params.set("workspaceId", workspaceId);
+        if (viewMode) params.set("view", viewMode);
+        window.open(
+          `#/doc-window?${params.toString()}`,
+          "_blank",
+          "noopener,noreferrer",
+        );
+      }
+    },
+    [gateway, titleByPath],
+  );
 
   const selectCurrentVersion = useCallback(() => {
     const sessionId = stateRef.current.activeSessionId;
@@ -1118,6 +1362,46 @@ export function DocumentsProvider({
       }
     },
     [gateway],
+  );
+
+  const readDocumentPreview = useCallback(
+    async (path: string): Promise<DocumentContent> => {
+      const normalized = normalizeDocumentPath(path).replace(/\.html$/i, ".md");
+      if (!normalized) throw fallbackDocumentError();
+      try {
+        if (gateway.readStandaloneDocument) {
+          const payload = await gateway.readStandaloneDocument(
+            stateRef.current.workspaceId,
+            normalized,
+          );
+          return payload.document;
+        }
+        const sessionId = stateRef.current.activeSessionId;
+        if (sessionId === null) throw fallbackDocumentError();
+        return await gateway.readDocument(sessionId, createId(), normalized);
+      } catch (error) {
+        throw asDocumentError(error);
+      }
+    },
+    [createId, gateway],
+  );
+
+  const readPreviewAsset = useCallback(
+    async (documentPath: string, assetPath: string): Promise<DocumentAsset> => {
+      try {
+        if (gateway.readStandaloneDocumentAsset) {
+          return await gateway.readStandaloneDocumentAsset(
+            stateRef.current.workspaceId,
+            documentPath,
+            assetPath,
+          );
+        }
+        return await readAsset(documentPath, assetPath);
+      } catch (error) {
+        throw asDocumentError(error);
+      }
+    },
+    [gateway, readAsset],
   );
 
   const copyText = useCallback(
@@ -1353,9 +1637,16 @@ export function DocumentsProvider({
     () => ({
       state,
       authoringState,
+      openTabs,
+      canGoBackDocument,
+      canGoForwardDocument,
       preferredViewMode,
       preferredViewTargetPath,
       clearPreferredViewMode,
+      closeDocumentTab,
+      goBackDocument,
+      goForwardDocument,
+      openDocumentInNewWindow,
       setSearchQuery,
       retrySearch,
       selectDocument,
@@ -1368,6 +1659,8 @@ export function DocumentsProvider({
       loadMoreHistory,
       refresh,
       readAsset,
+      readDocumentPreview,
+      readPreviewAsset,
       copyText,
       openExternal,
       clearRecoverableError,
@@ -1395,8 +1688,11 @@ export function DocumentsProvider({
       acceptHubConflict,
       approveAndMergeDocsPullRequest,
       authoringState,
+      canGoBackDocument,
+      canGoForwardDocument,
       clearPreferredViewMode,
       clearRecoverableError,
+      closeDocumentTab,
       closeDraftEditor,
       closeNewDocument,
       createNewDocument,
@@ -1405,14 +1701,20 @@ export function DocumentsProvider({
       copyText,
       duplicateTeamTemplate,
       getDocsPullRequestDetail,
+      goBackDocument,
+      goForwardDocument,
       listDocsPullRequests,
       loadHistory,
       loadMoreHistory,
+      openDocumentInNewWindow,
       openExternal,
+      openTabs,
       preferredViewMode,
       preferredViewTargetPath,
       publishDocumentDraft,
       readAsset,
+      readDocumentPreview,
+      readPreviewAsset,
       refresh,
       selectCurrentVersion,
       selectDocument,

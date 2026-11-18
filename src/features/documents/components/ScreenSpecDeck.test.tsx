@@ -1,0 +1,347 @@
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { TestQueryProvider } from "@/test/queryTestUtils";
+import type { DocumentAsset, DocumentContent, DocumentSummary } from "../model";
+import { extractDesignsFromProperties } from "./DesignLinksBar";
+import { ScreenSpecDeck } from "./ScreenSpecDeck";
+
+const docsContextMock = vi.hoisted(() => ({ current: null as unknown }));
+vi.mock("../DocumentsProvider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../DocumentsProvider")>()),
+  useOptionalDocuments: () => docsContextMock.current,
+}));
+
+afterEach(() => {
+  cleanup();
+  docsContextMock.current = null;
+});
+
+const prdDoc: DocumentSummary = {
+  path: "docs/domains/documents/prd.md",
+  fileName: "prd.md",
+  title: "문서 도메인 PRD",
+  documentId: null,
+  frontmatterStatus: { status: "valid" },
+  docType: "Product Spec",
+  domain: "documents",
+  hasCompanionHtml: true,
+  modifiedAtUnixMs: 1,
+  size: 100,
+};
+
+const docSpecSummary: DocumentSummary = {
+  path: "docs/domains/documents/screen-spec.md",
+  fileName: "screen-spec.md",
+  title: "문서 화면명세서",
+  description: "도메인 맵과 화면명세 보드 UI",
+  linkedPaths: ["docs/domains/documents/prd.md"],
+  designs: [
+    {
+      title: "도메인 맵 시안",
+      image: "assets/map-mock.svg",
+      status: "approved",
+    },
+  ],
+  documentId: null,
+  frontmatterStatus: { status: "valid" },
+  docType: "Screen Spec",
+  domain: "documents",
+  hasCompanionHtml: true,
+  modifiedAtUnixMs: 2,
+  size: 150,
+};
+
+const dashSpecSummary: DocumentSummary = {
+  path: "docs/domains/dashboard/screen-spec.md",
+  fileName: "screen-spec.md",
+  title: "대시보드 화면명세서",
+  description: "알림 바로 보기 UI",
+  documentId: null,
+  frontmatterStatus: { status: "valid" },
+  docType: "Screen Spec",
+  domain: "dashboard",
+  hasCompanionHtml: false,
+  modifiedAtUnixMs: 3,
+  size: 120,
+};
+
+const mockContents: Record<string, DocumentContent> = {
+  "docs/domains/documents/screen-spec.md": {
+    summary: docSpecSummary,
+    markdown: "# 문서 화면명세서",
+    properties: {},
+    tableOfContents: [],
+    lastCommit: null,
+    companionHtml: {
+      path: "docs/domains/documents/screen-spec.html",
+      html: "<html><body><h1>문서 화면명세 HTML</h1></body></html>",
+      modifiedAtUnixMs: 2,
+    },
+  },
+  "docs/domains/dashboard/screen-spec.md": {
+    summary: dashSpecSummary,
+    markdown: "# 대시보드 화면명세서\n\n알림 카드 상세 내용",
+    properties: {},
+    tableOfContents: [],
+    lastCommit: null,
+  },
+};
+
+const svgAsset: DocumentAsset = {
+  kind: "svg",
+  source: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>',
+};
+
+describe("ScreenSpecDeck", () => {
+  it("shows each spec's wireframes next to the viewer and flags specs without wireframes", async () => {
+    const readPreviewAsset = vi.fn(async () => svgAsset);
+    const wiredSpec: DocumentSummary = {
+      ...docSpecSummary,
+      wireframes: [
+        { title: "도메인 맵 와이어프레임", image: "assets/map-wireframe.svg" },
+      ],
+    };
+
+    render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={[prdDoc, wiredSpec, dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={async (path) =>
+            path === wiredSpec.path
+              ? { ...mockContents[path]!, summary: wiredSpec }
+              : mockContents[path]!
+          }
+          readPreviewAsset={readPreviewAsset}
+        />
+      </TestQueryProvider>,
+    );
+
+    const wiredCard = await screen.findByRole("article", {
+      name: "문서 화면명세서 화면명세",
+    });
+    expect(within(wiredCard).getByText("와이어프레임 1")).toBeVisible();
+    expect(
+      await within(wiredCard).findByAltText("도메인 맵 와이어프레임"),
+    ).toBeVisible();
+    expect(readPreviewAsset).toHaveBeenCalledWith(
+      wiredSpec.path,
+      "assets/map-wireframe.svg",
+    );
+
+    const bareCard = await screen.findByRole("article", {
+      name: "대시보드 화면명세서 화면명세",
+    });
+    expect(within(bareCard).getByText("와이어프레임 없음")).toBeVisible();
+  });
+
+  it("renders all screen specs in continuous strip mode with design previews and switches to slide mode", async () => {
+    const user = userEvent.setup();
+    const onSelectDocument = vi.fn();
+    const readPreviewAsset = vi.fn(async () => svgAsset);
+
+    render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={[prdDoc, docSpecSummary, dashSpecSummary]}
+          onSelectDocument={onSelectDocument}
+          readDocumentPreview={async (path) => mockContents[path]!}
+          readPreviewAsset={readPreviewAsset}
+        />
+      </TestQueryProvider>,
+    );
+
+    const firstCard = await screen.findByRole("article", {
+      name: "문서 화면명세서 화면명세",
+    });
+    const secondCard = await screen.findByRole("article", {
+      name: "대시보드 화면명세서 화면명세",
+    });
+
+    expect(firstCard).toBeVisible();
+    expect(secondCard).toBeVisible();
+    expect(
+      within(firstCard).getByTitle("문서 화면명세서 화면명세 보기"),
+    ).toBeInTheDocument();
+    expect(await within(firstCard).findByAltText("도메인 맵 시안")).toBeVisible();
+    expect(await within(secondCard).findByText("알림 카드 상세 내용")).toBeVisible();
+
+    // Linked PRD chip opens connected PRD directly.
+    await user.click(
+      within(firstCard).getByRole("button", { name: "연결 · 문서 도메인 PRD" }),
+    );
+    expect(onSelectDocument).toHaveBeenCalledWith(
+      "docs/domains/documents/prd.md",
+      "html",
+    );
+
+    // Switch to slide-by-slide mode.
+    await user.click(screen.getByRole("button", { name: "한 화면씩 넘기기" }));
+    expect(screen.getByText("1 / 2")).toBeVisible();
+    expect(
+      screen.getByRole("tabpanel", { name: "1. 문서 화면명세서" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: "대시보드 화면명세서 화면명세" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "다음 화면명세" }));
+    expect(screen.getByText("2 / 2")).toBeVisible();
+    expect(
+      await screen.findByRole("article", { name: "대시보드 화면명세서 화면명세" }),
+    ).toBeVisible();
+  });
+
+  it("classifies string designs with the same image extensions as Rust and batches strip loading", async () => {
+    expect(
+      extractDesignsFromProperties({
+        designs: [
+          "assets/map-mock.svg",
+          "notes.txt",
+          "assets/spec.pdf",
+          "https://www.figma.com/file/123",
+        ],
+      }),
+    ).toEqual([
+      { title: "디자인 시안 1", url: null, image: "assets/map-mock.svg", status: null },
+      { title: "디자인 시안 2", url: "notes.txt", image: null, status: null },
+      { title: "디자인 시안 3", url: "assets/spec.pdf", image: null, status: null },
+      {
+        title: "디자인 시안 4",
+        url: "https://www.figma.com/file/123",
+        image: null,
+        status: null,
+      },
+    ]);
+
+    const user = userEvent.setup();
+    const specs: DocumentSummary[] = Array.from({ length: 6 }, (_, idx) => ({
+      path: `docs/domains/documents/screen-spec-${idx + 1}.md`,
+      fileName: `screen-spec-${idx + 1}.md`,
+      title: `화면명세 ${idx + 1}`,
+      documentId: null,
+      frontmatterStatus: { status: "valid" },
+      docType: "Screen Spec",
+      domain: "documents",
+      hasCompanionHtml: false,
+      modifiedAtUnixMs: idx + 1,
+      size: 100,
+    }));
+    const readDocumentPreview = vi.fn(
+      async (path: string): Promise<DocumentContent> => ({
+        summary: specs.find((item) => item.path === path)!,
+        markdown: `# ${path}`,
+        properties: { designs: ["notes.txt"] },
+        tableOfContents: [],
+        lastCommit: null,
+      }),
+    );
+
+    render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={specs}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={readDocumentPreview}
+        />
+      </TestQueryProvider>,
+    );
+
+    expect(
+      await screen.findByRole("article", { name: "화면명세 4 화면명세" }),
+    ).toBeVisible();
+    expect(readDocumentPreview).toHaveBeenCalledTimes(4);
+    expect(
+      screen.queryByRole("article", { name: "화면명세 5 화면명세" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "화면명세 더 불러오기 (2개 남음)" }),
+    );
+    expect(
+      await screen.findByRole("article", { name: "화면명세 6 화면명세" }),
+    ).toBeVisible();
+    expect(readDocumentPreview).toHaveBeenCalledTimes(6);
+  });
+
+  it("shows fallback message instead of infinite loading when previewReader is unavailable", () => {
+    render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+        />
+      </TestQueryProvider>,
+    );
+
+    expect(
+      screen.getByText(
+        "화면명세 미리보기를 불러오지 못했습니다. 상단의 탭으로 열어 확인해 주세요.",
+      ),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("화면명세 본문을 불러오는 중…"),
+    ).not.toBeInTheDocument();
+  });
+  it("does not reuse cached previews across mounts when the workspace is unknown (M10)", async () => {
+    const readerA = vi.fn(async () => mockContents["docs/domains/dashboard/screen-spec.md"]!);
+    const readerB = vi.fn(async () => mockContents["docs/domains/dashboard/screen-spec.md"]!);
+    const { rerender } = render(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          key="a"
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={readerA}
+        />
+      </TestQueryProvider>,
+    );
+    await waitFor(() => expect(readerA).toHaveBeenCalledTimes(1));
+
+    // Same path, but the reader may now point at a different workspace.
+    rerender(
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          key="b"
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={readerB}
+        />
+      </TestQueryProvider>,
+    );
+    await waitFor(() => expect(readerB).toHaveBeenCalledTimes(1));
+  });
+  it("refetches previews when the active session changes while the workspace is unknown (S24)", async () => {
+    const reader = vi.fn(async () => mockContents["docs/domains/dashboard/screen-spec.md"]!);
+    const renderDeck = () => (
+      <TestQueryProvider>
+        <ScreenSpecDeck
+          documents={[dashSpecSummary]}
+          onSelectDocument={vi.fn()}
+          readDocumentPreview={reader}
+        />
+      </TestQueryProvider>
+    );
+    docsContextMock.current = {
+      state: { workspaceId: null, activeSessionId: "session-a" },
+    };
+    const { rerender } = render(renderDeck());
+    await waitFor(() => expect(reader).toHaveBeenCalledTimes(1));
+
+    // The main window switched workspaces: same (unknown) workspace id, new session.
+    docsContextMock.current = {
+      state: { workspaceId: null, activeSessionId: "session-b" },
+    };
+    rerender(renderDeck());
+    await waitFor(() => expect(reader).toHaveBeenCalledTimes(2));
+  });
+});
+
+

@@ -12,7 +12,7 @@ const screens = [
   ["pages-settingspage--connections", ".github-account-card"],
   ["pages-settingspage--app-information", "dl"],
   ["pages-settingspage--logout-confirmation", '[role="alertdialog"]'],
-  ["pages-documentspage--home", ".document-search__result-row"],
+  ["pages-documentspage--home", ".document-domain-map__section"],
   ["pages-documentspage--search-results", "mark"],
   ["pages-documentspage--empty-search", ".document-search__empty"],
   ["pages-documentdetail--default", ".mermaid-block__svg svg"],

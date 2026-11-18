@@ -1204,4 +1204,246 @@ describe("DocumentsPage", () => {
       await screen.findByRole("tab", { name: "사람용 보기 (.html)" }),
     ).toHaveAttribute("aria-selected", "true");
   });
+
+  it("maintains workbench tabs, back/forward history, and new-window popout actions", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.sessionSnapshot.catalog = {
+      documents: [
+        {
+          path: "docs/domains/documents/prd.md",
+          fileName: "prd.md",
+          title: "문서 도메인 PRD",
+          documentId: null,
+          frontmatterStatus: { status: "valid" },
+          docType: "Product Spec",
+          domain: "documents",
+          hasCompanionHtml: false,
+          modifiedAtUnixMs: 1,
+          size: 100,
+        },
+        {
+          path: "docs/domains/documents/screen-spec.md",
+          fileName: "screen-spec.md",
+          title: "문서 도메인 화면명세서",
+          documentId: null,
+          frontmatterStatus: { status: "valid" },
+          docType: "Screen Spec",
+          domain: "documents",
+          hasCompanionHtml: false,
+          modifiedAtUnixMs: 2,
+          size: 120,
+        },
+      ],
+      roots: [],
+    };
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(
+      await screen.findByRole("button", { name: /문서 도메인 PRD/ }),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+
+    const tabsNav = screen.getByRole("navigation", { name: "열린 문서 탭" });
+    await user.click(within(tabsNav).getByRole("tab", { name: "문서 맵" }));
+    await user.click(
+      await screen.findByRole("button", { name: /문서 도메인 화면명세서/ }),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+
+    const updatedTabsNav = screen.getByRole("navigation", { name: "열린 문서 탭" });
+    const prdTab = within(updatedTabsNav).getByRole("tab", { name: "문서 도메인 PRD" });
+    const specTab = within(updatedTabsNav).getByRole("tab", {
+      name: "문서 도메인 화면명세서",
+    });
+    expect(prdTab).toHaveAttribute("aria-selected", "false");
+    expect(prdTab).toHaveAttribute("tabindex", "-1");
+    expect(specTab).toHaveAttribute("aria-selected", "true");
+    expect(specTab).toHaveAttribute("tabindex", "0");
+    expect(specTab).toHaveAttribute("aria-controls", "documents-workbench-panel");
+    expect(
+      screen.getByRole("tabpanel", { name: "문서 도메인 화면명세서" }),
+    ).toHaveAttribute("tabindex", "0");
+
+    // Keyboard navigation moves across tablist with ArrowLeft/Home/End.
+    specTab.focus();
+    await user.keyboard("{ArrowLeft}");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+    await user.keyboard("{Home}");
+    expect(
+      await screen.findByRole("heading", { name: "Documents" }),
+    ).toBeVisible();
+    await user.keyboard("{End}");
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+
+    // Back / Forward history moves across visited documents & map home.
+    await user.click(
+      within(updatedTabsNav).getByRole("button", { name: "이전 문서" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Documents" }),
+    ).toBeVisible();
+
+    await user.click(
+      within(screen.getByRole("navigation", { name: "열린 문서 탭" })).getByRole(
+        "button",
+        { name: "다음 문서" },
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+
+    // Popout opens current document in an independent OS window.
+    await user.click(
+      within(screen.getByRole("navigation", { name: "열린 문서 탭" })).getByRole(
+        "button",
+        { name: "새 창으로 열기" },
+      ),
+    );
+    expect(gateway.openedWindows).toContainEqual({
+      path: "docs/domains/documents/screen-spec.md",
+      viewMode: undefined,
+      title: "문서 도메인 화면명세서",
+    });
+
+    // Closing the active tab selects the neighbor tab.
+    const activeTabGroup = within(
+      screen.getByRole("navigation", { name: "열린 문서 탭" }),
+    )
+      .getByRole("tab", { name: "문서 도메인 화면명세서" })
+      .closest<HTMLElement>(".document-workbench-tab-group")!;
+    // The close button is pointer-only: a tablist may only own tabs (aria-required-children).
+    expect(
+      within(activeTabGroup).queryByRole("button", {
+        name: "문서 도메인 화면명세서 탭 닫기",
+      }),
+    ).not.toBeInTheDocument();
+    await user.click(
+      within(activeTabGroup).getByLabelText("문서 도메인 화면명세서 탭 닫기"),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+
+    // Regression (M7): after back/forward, the next normal navigation is still recorded,
+    // so "이전 문서" returns to the screen spec instead of skipping to the map home.
+    await user.click(
+      within(screen.getByRole("navigation", { name: "열린 문서 탭" })).getByRole(
+        "button",
+        { name: "이전 문서" },
+      ),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+  });
+  it("moves back two entries when 이전 문서 is clicked twice before re-render (S21)", async () => {
+    const gateway = new FakeDocumentsGateway();
+    gateway.sessionSnapshot.lastOpenedPath = null;
+    gateway.sessionSnapshot.catalog = {
+      documents: [
+        {
+          path: "docs/domains/documents/prd.md",
+          fileName: "prd.md",
+          title: "문서 도메인 PRD",
+          documentId: null,
+          frontmatterStatus: { status: "valid" },
+          docType: "Product Spec",
+          domain: "documents",
+          hasCompanionHtml: false,
+          modifiedAtUnixMs: 1,
+          size: 100,
+        },
+        {
+          path: "docs/domains/documents/screen-spec.md",
+          fileName: "screen-spec.md",
+          title: "문서 도메인 화면명세서",
+          documentId: null,
+          frontmatterStatus: { status: "valid" },
+          docType: "Screen Spec",
+          domain: "documents",
+          hasCompanionHtml: false,
+          modifiedAtUnixMs: 2,
+          size: 120,
+        },
+      ],
+      roots: [],
+    };
+    const user = userEvent.setup();
+    renderPage(gateway);
+
+    await user.click(
+      await screen.findByRole("button", { name: /문서 도메인 PRD/ }),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+    const tabsNav = screen.getByRole("navigation", { name: "열린 문서 탭" });
+    await user.click(within(tabsNav).getByRole("tab", { name: "문서 맵" }));
+    await user.click(
+      await screen.findByRole("button", { name: /문서 도메인 화면명세서/ }),
+    );
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+
+    // History: [home, PRD, home, spec]. Two clicks in one batch must land on PRD, not home.
+    const backButton = within(
+      screen.getByRole("navigation", { name: "열린 문서 탭" }),
+    ).getByRole("button", { name: "이전 문서" });
+    act(() => {
+      fireEvent.click(backButton);
+      fireEvent.click(backButton);
+    });
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "문서 도메인 PRD" }),
+    ).toBeVisible();
+
+    // Keyboard users close the focused tab with Delete; focus follows the next selected tab.
+    const prdTab = within(
+      screen.getByRole("navigation", { name: "열린 문서 탭" }),
+    ).getByRole("tab", { name: "문서 도메인 PRD" });
+    prdTab.focus();
+    await user.keyboard("{Delete}");
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "문서 도메인 화면명세서",
+      }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("tab", { name: "문서 도메인 PRD" }),
+    ).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("tab", { name: "문서 도메인 화면명세서" }),
+      ).toHaveFocus(),
+    );
+  });
 });
+

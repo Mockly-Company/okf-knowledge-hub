@@ -7,7 +7,7 @@ export type DocumentCategory =
   | "guide"
   | "reference";
 
-export type DocumentGroupMode = "domain" | "type" | "flat";
+export type DocumentGroupMode = "map" | "screen_specs" | "domain" | "type" | "flat";
 export type DocumentCategoryFilter = "all" | DocumentCategory;
 
 export const DOCUMENT_CATEGORY_ORDER: readonly DocumentCategory[] = [
@@ -67,6 +67,23 @@ export function isAuxiliaryDocument(
     normalizedPath.split("/").pop() ||
     "";
   return isReservedDocumentFileName(rawFileName);
+}
+
+const OVERVIEW_STEMS = new Set(["index", "readme"]);
+
+/** `index.md` / `README.md` outside `.okf/`: the entry point that introduces a domain folder. */
+export function isOverviewDocument(
+  doc: Pick<DocumentSummary, "fileName" | "path">,
+): boolean {
+  const normalizedPath = normalizePortablePath(doc.path).toLowerCase();
+  if (normalizedPath.startsWith(".okf/")) return false;
+  const fileName = normalizedPath.split("/").pop() ?? "";
+  const dotIndex = fileName.lastIndexOf(".");
+  if (dotIndex <= 0) return false;
+  return (
+    OVERVIEW_STEMS.has(fileName.slice(0, dotIndex)) &&
+    RESERVED_EXTENSIONS.has(fileName.slice(dotIndex + 1))
+  );
 }
 
 function classifyByDocType(docType: string | null | undefined): DocumentCategory | null {
