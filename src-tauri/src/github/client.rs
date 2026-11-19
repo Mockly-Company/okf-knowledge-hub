@@ -1375,34 +1375,39 @@ impl GithubHttpClient {
                 Some(json!({ "assignees": cleaned_logins })),
             )
             .await?;
-        if !(200..300).contains(&response.status) {
-            return Err(map_http_error(
-                HttpFailureContext::Repository,
-                response.status,
-                &response.headers,
+        parse_issue_assignees_response(response)
+    }
+
+    /// 이슈 담당자를 지정한 목록으로 교체한다. 빈 slice를 주면 기존 담당자를 모두 해제한다.
+    pub async fn set_issue_assignees(
+        &self,
+        repository_full_name: &str,
+        issue_number: u64,
+        logins: &[String],
+    ) -> Result<Vec<BoardAssignee>, AppError> {
+        if issue_number == 0 {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "이슈 번호는 1 이상이어야 합니다.",
             ));
         }
-        let parsed: GithubIssueAssigneesResponse =
-            deserialize_response(response).map_err(|_| github_unavailable_error())?;
-        Ok(parsed
-            .assignees
-            .into_iter()
-            .filter_map(|item| {
-                let login = item.login.trim().to_owned();
-                if login.is_empty() {
-                    return None;
-                }
-                let avatar_url = item
-                    .avatar_url
-                    .map(|raw| raw.trim().to_owned())
-                    .filter(|s| !s.is_empty());
-                Some(BoardAssignee {
-                    login,
-                    avatar_url,
-                    name: None,
-                })
-            })
-            .collect())
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let mut seen_logins = HashSet::new();
+        let cleaned_logins: Vec<String> = logins
+            .iter()
+            .map(|login| login.trim().trim_start_matches('@').to_owned())
+            .filter(|login| !login.is_empty() && seen_logins.insert(login.to_ascii_lowercase()))
+            .collect();
+        let issue_number_str = issue_number.to_string();
+        let response = self
+            .send(
+                HttpMethod::Patch,
+                &["repos", owner, name, "issues", &issue_number_str],
+                &[],
+                Some(json!({ "assignees": cleaned_logins })),
+            )
+            .await?;
+        parse_issue_assignees_response(response)
     }
 
     pub async fn update_issue(
@@ -3045,6 +3050,37 @@ impl GithubHttpClient {
             .await
             .map_err(|_| github_unavailable_error())
     }
+}
+
+fn parse_issue_assignees_response(response: HttpResponse) -> Result<Vec<BoardAssignee>, AppError> {
+    if !(200..300).contains(&response.status) {
+        return Err(map_http_error(
+            HttpFailureContext::Repository,
+            response.status,
+            &response.headers,
+        ));
+    }
+    let parsed: GithubIssueAssigneesResponse =
+        deserialize_response(response).map_err(|_| github_unavailable_error())?;
+    Ok(parsed
+        .assignees
+        .into_iter()
+        .filter_map(|item| {
+            let login = item.login.trim().to_owned();
+            if login.is_empty() {
+                return None;
+            }
+            let avatar_url = item
+                .avatar_url
+                .map(|raw| raw.trim().to_owned())
+                .filter(|s| !s.is_empty());
+            Some(BoardAssignee {
+                login,
+                avatar_url,
+                name: None,
+            })
+        })
+        .collect())
 }
 
 fn deserialize_response<T: DeserializeOwned>(
@@ -4701,5 +4737,44 @@ mod tests {
             reqs[1].body,
             Some(serde_json::json!({ "body": "검토 코멘트" }))
         );
+    }
+
+    #[tokio::test]
+    async fn set_issue_assignees_replaces_and_clears_via_patch() {
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"assignees":[{"login":"KANCHOEUN","avatar_url":null}]}"#,
+            ),
+            response(200, r#"{"assignees":[]}"#),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let replaced = service
+            .set_issue_assignees(
+                "Acme-Org/acme-web",
+                77,
+                &[" @KANCHOEUN ".into(), "kanchoeun".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(replaced.len(), 1);
+        assert_eq!(replaced[0].login, "KANCHOEUN");
+
+        let cleared = service
+            .set_issue_assignees("Acme-Org/acme-web", 77, &[])
+            .await
+            .unwrap();
+        assert!(cleared.is_empty());
+
+        let reqs = transport.requests();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0].method, HttpMethod::Patch);
+        assert_eq!(
+            reqs[0].body,
+            Some(serde_json::json!({ "assignees": ["KANCHOEUN"] }))
+        );
+        assert_eq!(reqs[1].method, HttpMethod::Patch);
+        assert_eq!(reqs[1].body, Some(serde_json::json!({ "assignees": [] })));
     }
 }

@@ -380,7 +380,20 @@ async fn run_command(
             let parent_repo = find_flag_value(rest, "--parent-repo");
             let depends_on = parse_optional_u64_flag(rest, "--depends-on")?;
             let assignees = find_flag_values(rest, "--assignee");
-            let assignees = (!assignees.is_empty()).then_some(assignees);
+            let no_assignee = rest.iter().any(|arg| arg == "--no-assignee");
+            if no_assignee && !assignees.is_empty() {
+                return Err(AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "`--assignee`와 `--no-assignee`는 함께 지정할 수 없습니다.",
+                ));
+            }
+            let assignees = if no_assignee {
+                Some(Vec::new())
+            } else if !assignees.is_empty() {
+                Some(assignees)
+            } else {
+                None
+            };
             let created = runtime
                 .create_board_issue(
                     repo.as_deref(),
@@ -609,7 +622,7 @@ okhub-cli — OkHub 동적 프로젝트·저장소 자동화 CLI 및 STDIO MCP �
   board schema                                   선택된 GitHub Project의 Status·영역·타입·Priority 옵션 조회
   board list [--layer <...>] [--status <...>]    선택된 GitHub Project 보드 항목 조회
   board ready [--layer <...>]                    선행 단계가 완료된 시작 가능(Ready) 백로그 조회
-  board create-issue --title <제목> [...]         이슈 생성 (`--parent`, `--parent-repo`, `--depends-on`, `--assignee`)
+  board create-issue --title <제목> [...]         이슈 생성 (`--parent`, `--parent-repo`, `--depends-on`, `--assignee`, `--no-assignee`: 무담당)
   board derive-backlog <상위번호> [--repo <...>]   완료된 기획/디자인 이슈에서 백엔드·프론트 백로그 일괄 파생
   board update-status <번호> <상태> [...]          선택된 GitHub Project 이슈 상태/영역/타입 변경
   mcp                                            STDIO 기반 MCP(Model Context Protocol) 서버 실행

@@ -702,7 +702,7 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "okhub_board_create_backlog_tree",
-            "description": "Epic([Epic])과 [기획]/[디자인]/[백엔드]/[프론트엔드] 하위 Sub-issues 및 `이전 단계: #N` 의존성 체인을 한 번에 순서대로 생성합니다.",
+            "description": "Epic([Epic])과 [기획]/[디자인]/[백엔드]/[프론트엔드] 하위 Sub-issues 및 `이전 단계: #N` 의존성 체인을 순서대로 생성합니다. 순차 API 호출이므로 멱등하지 않으며, 중간 실패 시 이미 생성된 이슈 번호를 오류 상세에 반환합니다.",
             "inputSchema": {
                 "type": "object",
                 "required": ["items"],
@@ -746,7 +746,11 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
                     "body": { "type": "string" },
                     "state": { "type": "string", "enum": ["open", "closed"] },
                     "comment": { "type": "string" },
-                    "assignees": { "type": "array", "items": { "type": "string" } }
+                    "assignees": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "GitHub 로그인 목록으로 담당자를 교체합니다. 빈 배열([])을 지정하면 기존 담당자를 모두 해제합니다."
+                    }
                 }
             }
         }),

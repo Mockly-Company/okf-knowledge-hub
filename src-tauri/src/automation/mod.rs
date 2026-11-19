@@ -89,8 +89,8 @@ pub struct UpdatedBoardIssueResult {
     pub updated_issue: Option<UpdatedIssue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_comment: Option<CreatedIssueComment>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub assignees: Vec<BoardAssignee>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignees: Option<Vec<BoardAssignee>>,
 }
 
 #[derive(Debug, Clone)]
@@ -830,12 +830,9 @@ impl AutomationRuntime {
             || body.map(str::trim).is_some_and(|s| !s.is_empty())
             || state.map(str::trim).is_some_and(|s| !s.is_empty());
         let trimmed_comment = comment.map(str::trim).filter(|s| !s.is_empty());
-        let cleaned_assignees = assignees
-            .as_deref()
-            .map(clean_assignee_list)
-            .unwrap_or_default();
+        let cleaned_assignees = assignees.as_deref().map(clean_assignee_list);
 
-        if !has_issue_patch && trimmed_comment.is_none() && cleaned_assignees.is_empty() {
+        if !has_issue_patch && trimmed_comment.is_none() && cleaned_assignees.is_none() {
             return Err(AppError::new(
                 ErrorCode::WorkspaceInvalid,
                 "수정할 제목, 본문, 상태, 코멘트 또는 담당자 중 하나 이상을 입력해 주세요.",
@@ -904,12 +901,13 @@ impl AutomationRuntime {
             None
         };
 
-        let updated_assignees = if !cleaned_assignees.is_empty() {
-            github
-                .add_issue_assignees(&repo, issue_number, &cleaned_assignees)
-                .await?
-        } else {
-            Vec::new()
+        let updated_assignees = match cleaned_assignees {
+            Some(ref list) => Some(
+                github
+                    .set_issue_assignees(&repo, issue_number, list)
+                    .await?,
+            ),
+            None => None,
         };
 
         Ok(UpdatedBoardIssueResult {
@@ -1011,7 +1009,7 @@ impl AutomationRuntime {
             let resolved_assignees = resolve_effective_assignees(item.assignees.as_deref(), || {
                 self.default_assignees_for_layer(item.layer)
             });
-            let issue = github
+            let issue = match github
                 .create_project_issue(&CreateProjectIssueInput {
                     project_scope: project.scope,
                     project_owner: project.owner.clone(),
@@ -1027,7 +1025,30 @@ impl AutomationRuntime {
                     parent_issue_repository,
                     assignees: resolved_assignees,
                 })
-                .await?;
+                .await
+            {
+                Ok(issue) => issue,
+                Err(err) => {
+                    if created.is_empty() {
+                        return Err(err);
+                    }
+                    let summary_refs: Vec<String> = created
+                        .iter()
+                        .map(|done| format!("#{}({})", done.number, done.repository_full_name))
+                        .collect();
+                    let summary_text = summary_refs.join(", ");
+                    return Err(AppError::new(
+                        err.code,
+                        format!(
+                            "백로그 트리 생성 중 일부 실패했습니다. 이미 {}개 이슈가 생성되었으며 멱등하지 않으므로 재시도 전 기존 항목을 정리해 주세요 ({summary_text}): {}",
+                            created.len(),
+                            err.message
+                        ),
+                    )
+                    .with_detail("createdCount", created.len().to_string())
+                    .with_detail("createdIssues", summary_text));
+                }
+            };
             created.push(issue);
         }
 
