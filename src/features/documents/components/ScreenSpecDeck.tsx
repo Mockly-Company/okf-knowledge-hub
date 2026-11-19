@@ -467,6 +467,7 @@ export function ScreenSpecDeck({
                       html={content.companionHtml.html}
                       title={`${spec.title} 화면명세 보기`}
                       documentPath={spec.path}
+                      autoResize={false}
                       onNavigateDocument={(target) =>
                         onSelectDocument(target.path, target.view)
                       }

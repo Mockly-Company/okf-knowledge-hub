@@ -804,4 +804,74 @@ describe("DocumentReader", () => {
       cancelSpy.mockRestore();
     }
   });
+
+  it("moves wireframes and designs into the right context panel tab and shows a 1-line summary bar above the reader", async () => {
+    const user = userEvent.setup();
+    const specDoc: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      summary: {
+        ...invalidFrontmatterDocument().summary,
+        path: "docs/domains/documents/screen-spec.md",
+        fileName: "screen-spec.md",
+        title: "문서 워크벤치 화면명세서",
+        docType: "Screen Spec",
+        wireframes: [
+          { title: "도메인 맵 와이어프레임", image: "assets/wireframe.svg" },
+        ],
+        designs: [
+          {
+            title: "도메인 맵 시안",
+            image: "assets/design.svg",
+            status: "approved",
+            wireframe: "도메인 맵 와이어프레임",
+          },
+        ],
+      },
+      markdown: "# 문서 워크벤치 화면명세서\n\n화면 상세 스펙 본문",
+      companionHtml: {
+        path: "docs/domains/documents/screen-spec.html",
+        html: "<!doctype html><html><body><h1>화면명세 HTML</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync",
+    };
+
+    const gateway = renderSelectedDocument(specDoc);
+    vi.spyOn(gateway, "readDocumentAsset").mockResolvedValue({
+      kind: "svg",
+      source: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+    });
+
+    const summaryBar = await screen.findByRole("region", {
+      name: "와이어프레임 및 디자인 요약",
+    });
+    expect(within(summaryBar).getByText("와이어프레임 1")).toBeVisible();
+    expect(within(summaryBar).getByText("디자인 1")).toBeVisible();
+    // Large wireframe/design preview galleries stay out of the main reader flow until opened.
+    expect(screen.queryByAltText("도메인 맵 와이어프레임")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("도메인 맵 시안")).not.toBeInTheDocument();
+
+    // Context panel exposes the `시안 (2)` tab.
+    expect(screen.getByRole("tab", { name: "시안 (2)" })).toBeVisible();
+
+    // Collapse the context panel first, then click "우측 패널에서 보기" — it should reopen and switch to `시안 (2)`.
+    await user.click(screen.getByRole("button", { name: "문서 문맥 접기" }));
+    expect(screen.queryByRole("complementary", { name: "문서 문맥" })).toBeNull();
+
+    await user.click(
+      within(summaryBar).getByRole("button", { name: "우측 패널에서 보기" }),
+    );
+    const contextPanel = await screen.findByRole("complementary", {
+      name: "문서 문맥",
+    });
+    expect(
+      within(contextPanel).getByRole("tab", { name: "시안 (2)" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      await within(contextPanel).findByAltText("도메인 맵 와이어프레임"),
+    ).toBeVisible();
+    expect(
+      await within(contextPanel).findByAltText("도메인 맵 시안"),
+    ).toBeVisible();
+  });
 });

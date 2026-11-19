@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CompanionHtmlFrame,
@@ -185,6 +185,59 @@ describe("CompanionHtmlFrame", () => {
       view: "html",
       fragment: undefined,
     });
+  });
+
+  it("resizes iframe height from trusted companion-height messages when autoResize is enabled", () => {
+    const prepared = prepareInteractiveCompanionHtml(
+      "<html><body><h1>높이 측정</h1></body></html>",
+      "chan-h",
+      "nonce-h",
+    );
+    expect(prepared).toContain("okhub:companion-height");
+
+    const { rerender } = render(
+      <CompanionHtmlFrame
+        html="<html><body><h1>긴 화면명세</h1></body></html>"
+        title="자동 높이 프레임"
+        documentPath="docs/domains/documents/screen-spec.md"
+      />,
+    );
+
+    const frame = screen.getByTitle("자동 높이 프레임") as HTMLIFrameElement;
+    expect(frame).toHaveClass("document-reader__html-frame--auto-height");
+    const channel = /var ch="([^"]+)"/.exec(frame.getAttribute("srcdoc") ?? "")?.[1];
+
+    // Untrusted source must be ignored.
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: window,
+        data: { type: "okhub:companion-height", channel, height: 1400 },
+      }),
+    );
+    expect(frame.style.height).toBe("");
+
+    // Trusted source updates inline height (+24px padding buffer).
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          source: frame.contentWindow,
+          data: { type: "okhub:companion-height", channel, height: 1400 },
+        }),
+      );
+    });
+    expect(frame.style.height).toBe("1424px");
+
+    // Switching autoResize={false} disables height adjustment cleanly.
+    rerender(
+      <CompanionHtmlFrame
+        html="<html><body><h1>긴 화면명세</h1></body></html>"
+        title="자동 높이 프레임"
+        documentPath="docs/domains/documents/screen-spec.md"
+        autoResize={false}
+      />,
+    );
+    expect(frame).not.toHaveClass("document-reader__html-frame--auto-height");
+    expect(frame.style.height).toBe("");
   });
 });
 

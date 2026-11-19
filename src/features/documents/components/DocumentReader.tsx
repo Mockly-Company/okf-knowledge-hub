@@ -45,7 +45,7 @@ function ReaderRouterRedirect({
   return null;
 }
 
-type ContextTab = "overview" | "history";
+type ContextTab = "overview" | "assets" | "history";
 
 const narrowQuery = "(max-width: 760px)";
 function subscribeNarrow(onChange: () => void) {
@@ -119,6 +119,34 @@ export function DocumentReader({
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const isNarrow = useSyncExternalStore(subscribeNarrow, isNarrowScreen, () => false);
   const [mobileContextOpen, setMobileContextOpen] = useState(false);
+  const wireframes =
+    state.selectedVersion === null
+      ? document.summary.wireframes && document.summary.wireframes.length > 0
+        ? document.summary.wireframes
+        : extractWireframesFromProperties(document.properties)
+      : [];
+  const designs =
+    state.selectedVersion === null
+      ? document.summary.designs && document.summary.designs.length > 0
+        ? document.summary.designs
+        : extractDesignsFromProperties(document.properties)
+      : [];
+  const totalVisualAssets = wireframes.length + designs.length;
+  const hasVisualAssets = totalVisualAssets > 0;
+  useEffect(() => {
+    if (!hasVisualAssets && tab === "assets") {
+      setTab("overview");
+    }
+  }, [hasVisualAssets, tab]);
+  const handleOpenAssetsPanel = () => {
+    setTab("assets");
+    if (isNarrow) {
+      navigationTargetRef.current = null;
+      setMobileContextOpen(true);
+    } else if (contextCollapsed) {
+      setContextCollapsed(false);
+    }
+  };
   const readerRef = useRef<HTMLElement>(null);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const navigationTargetRef = useRef<string | null>(null);
@@ -268,6 +296,11 @@ export function DocumentReader({
     <div className="document-reader__context-header">
       <TabsList className="document-reader__tabs" aria-label="문서 문맥 탭">
         <TabsTrigger selected={tab === "overview"} onClick={() => setTab("overview")}>개요</TabsTrigger>
+        {hasVisualAssets ? (
+          <TabsTrigger selected={tab === "assets"} onClick={() => setTab("assets")}>
+            {`시안 (${totalVisualAssets})`}
+          </TabsTrigger>
+        ) : null}
         <TabsTrigger selected={tab === "history"} onClick={() => setTab("history")}>History</TabsTrigger>
       </TabsList>
       <IconButton ref={contextCloseRef} label={isNarrow ? "문서 문맥 닫기" : "문서 문맥 접기"} tooltip={false} aria-controls="document-reader-context" aria-expanded onClick={() => isNarrow ? setMobileContextOpen(false) : setContextCollapsed(true)}><PanelRightClose aria-hidden="true" /></IconButton>
@@ -294,6 +327,26 @@ export function DocumentReader({
           }
         }}
       />
+    ) : tab === "assets" && hasVisualAssets ? (
+      <div className="document-reader__context-assets">
+        {wireframes.length > 0 ? (
+          <DesignLinksBar
+            designs={wireframes.map((wf) => ({ title: wf.title, image: wf.image }))}
+            documentPath={document.summary.path}
+            readAsset={readAsset}
+            heading="화면 와이어프레임"
+            assetKind="wireframe"
+          />
+        ) : null}
+        {designs.length > 0 ? (
+          <DesignLinksBar
+            designs={designs}
+            documentPath={document.summary.path}
+            readAsset={readAsset}
+            onOpenExternal={(url) => void openExternal(url)}
+          />
+        ) : null}
+      </div>
     ) : (
       <DocumentHistory />
     )}
@@ -444,34 +497,32 @@ export function DocumentReader({
           <span>최신 내용은 원문 (.md)에서 확인하고 다음 PR에서 함께 갱신해 주세요.</span>
         </div>
       ) : null}
-          {state.selectedVersion === null &&
-          ((document.summary.wireframes?.length ?? 0) > 0 ||
-            extractWireframesFromProperties(document.properties).length > 0) ? (
-            <DesignLinksBar
-              designs={(document.summary.wireframes &&
-              document.summary.wireframes.length > 0
-                ? document.summary.wireframes
-                : extractWireframesFromProperties(document.properties)
-              ).map((wf) => ({ title: wf.title, image: wf.image }))}
-              documentPath={document.summary.path}
-              readAsset={readAsset}
-              heading="화면 와이어프레임"
-              assetKind="wireframe"
-            />
-          ) : null}
-          {state.selectedVersion === null &&
-          ((document.summary.designs?.length ?? 0) > 0 ||
-            extractDesignsFromProperties(document.properties).length > 0) ? (
-            <DesignLinksBar
-              designs={
-                document.summary.designs && document.summary.designs.length > 0
-                  ? document.summary.designs
-                  : extractDesignsFromProperties(document.properties)
-              }
-              documentPath={document.summary.path}
-              readAsset={readAsset}
-              onOpenExternal={(url) => void openExternal(url)}
-            />
+          {hasVisualAssets ? (
+            <div
+              className="document-reader__assets-bar"
+              role="region"
+              aria-label="와이어프레임 및 디자인 요약"
+            >
+              <div className="document-reader__assets-bar-counts">
+                {wireframes.length > 0 ? (
+                  <span className="document-map-card__badge document-map-card__badge--wireframe">
+                    {`와이어프레임 ${wireframes.length}`}
+                  </span>
+                ) : null}
+                {designs.length > 0 ? (
+                  <span className="document-map-card__badge document-map-card__badge--design">
+                    {`디자인 ${designs.length}`}
+                  </span>
+                ) : null}
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleOpenAssetsPanel}
+              >
+                우측 패널에서 보기
+              </Button>
+            </div>
           ) : null}
           {effectiveView === "html" && document.companionHtml ? (
             <CompanionHtmlFrame

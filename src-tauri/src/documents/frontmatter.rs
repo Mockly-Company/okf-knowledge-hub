@@ -28,6 +28,8 @@ pub(crate) fn parse_document_reader<R: BufRead>(
             doc_type: None,
             domain: None,
             status: None,
+            impl_status: None,
+            impl_note: None,
             description: None,
             frontmatter_links: Vec::new(),
             designs: Vec::new(),
@@ -40,6 +42,8 @@ pub(crate) fn parse_document_reader<R: BufRead>(
             doc_type: None,
             domain: None,
             status: None,
+            impl_status: None,
+            impl_note: None,
             description: None,
             frontmatter_links: Vec::new(),
             designs: Vec::new(),
@@ -56,6 +60,28 @@ fn optional_non_empty_str(value: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
+}
+
+pub(crate) fn normalize_impl_status(raw: &str) -> Option<String> {
+    let normalized = raw.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    match normalized.as_str() {
+        "synced" | "implemented" | "complete" | "completed" | "done" | "반영완료" | "반영_완료"
+        | "완료" => Some("synced".to_owned()),
+        "partial"
+        | "needs_update"
+        | "in_progress"
+        | "outdated"
+        | "drift"
+        | "일부수정"
+        | "일부_수정"
+        | "일부_수정_필요"
+        | "수정필요"
+        | "수정_필요" => Some("partial".to_owned()),
+        "unimplemented" | "not_started" | "missing" | "todo" | "none" | "미반영" | "미구현" => {
+            Some("unimplemented".to_owned())
+        }
+        _ => None,
+    }
 }
 
 fn collect_string_list(value: &Value, keys: &[&str]) -> Vec<String> {
@@ -206,6 +232,8 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
                 doc_type: None,
                 domain: None,
                 status: None,
+                impl_status: None,
+                impl_note: None,
                 description: None,
                 frontmatter_links: Vec::new(),
                 designs: Vec::new(),
@@ -226,6 +254,14 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
         .and_then(|id| Uuid::parse_str(id).ok())
         .filter(|id| id.get_version() == Some(uuid::Version::Random));
 
+    let impl_status = optional_non_empty_str(&value, "impl_status")
+        .or_else(|| optional_non_empty_str(&value, "implementation_status"))
+        .or_else(|| optional_non_empty_str(&value, "code_sync"))
+        .and_then(|raw| normalize_impl_status(&raw));
+    let impl_note = optional_non_empty_str(&value, "impl_note")
+        .or_else(|| optional_non_empty_str(&value, "implementation_note"))
+        .or_else(|| optional_non_empty_str(&value, "code_sync_note"));
+
     ParsedDocumentMetadata {
         title,
         document_id,
@@ -233,6 +269,8 @@ fn parse_frontmatter(source: &str, fallback_title: String) -> ParsedDocumentMeta
         doc_type: optional_non_empty_str(&value, "type"),
         domain: optional_non_empty_str(&value, "domain"),
         status: optional_non_empty_str(&value, "status"),
+        impl_status,
+        impl_note,
         description: optional_non_empty_str(&value, "description"),
         frontmatter_links: collect_string_list(&value, &["related_docs", "links"]),
         designs: extract_design_links(&value),
@@ -477,5 +515,29 @@ designs:
 
         let designs = super::extract_design_links(&value);
         assert_eq!(designs[0].wireframe.as_deref(), Some("목록 화면"));
+    }
+
+    #[test]
+    fn parses_and_normalizes_impl_status_and_impl_note() {
+        let synced = super::parse_document(
+            "---\ntitle: 기획서\nimpl_status: \"반영 완료\"\nimpl_note: \"PR #42에서 구현됨\"\n---\n# 기획서\n",
+            "prd.md",
+        );
+        assert_eq!(synced.impl_status.as_deref(), Some("synced"));
+        assert_eq!(synced.impl_note.as_deref(), Some("PR #42에서 구현됨"));
+
+        let partial = super::parse_document(
+            "---\ntitle: 화면명세\nimplementation_status: needs-update\nimplementation_note: \"모바일 레이아웃 보완 필요\"\n---\n",
+            "screen-spec.md",
+        );
+        assert_eq!(partial.impl_status.as_deref(), Some("partial"));
+        assert_eq!(
+            partial.impl_note.as_deref(),
+            Some("모바일 레이아웃 보완 필요")
+        );
+
+        let unimpl =
+            super::parse_document("---\ntitle: 미착수\ncode_sync: \"미반영\"\n---\n", "prd.md");
+        assert_eq!(unimpl.impl_status.as_deref(), Some("unimplemented"));
     }
 }

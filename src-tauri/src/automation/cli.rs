@@ -240,6 +240,43 @@ async fn run_command(
                 ExitCode::from(2)
             })
         }
+        ("doc", "set-impl-status") => {
+            let path = args
+                .get(2)
+                .filter(|arg| !arg.starts_with("--"))
+                .cloned()
+                .or_else(|| find_flag_value(&args[2..], "--path"))
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::WorkspaceInvalid,
+                        "상태를 갱신할 문서 경로(`--path <경로>` 또는 첫 번째 인자)를 지정해 주세요.",
+                    )
+                })?;
+            let status = find_flag_value(&args[2..], "--status").ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "`--status <synced|partial|unimplemented|clear>` 옵션을 지정해 주세요.",
+                )
+            })?;
+            let note = find_flag_value(&args[2..], "--note");
+            let checked_at = find_flag_value(&args[2..], "--checked-at");
+            let updated = runtime.update_doc_impl_status(
+                &path,
+                &status,
+                note.as_deref(),
+                checked_at.as_deref(),
+            )?;
+            if json_output {
+                emit_json(&updated);
+            } else {
+                println!(
+                    "갱신 완료: {} -> {}",
+                    updated.path,
+                    updated.impl_status.as_deref().unwrap_or("(해제됨)")
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         ("pr", "list") => {
             let repo = find_flag_value(&args[2..], "--repo");
             let prs = runtime.list_pull_requests(repo.as_deref()).await?;
@@ -616,6 +653,7 @@ okhub-cli — OkHub 동적 프로젝트·저장소 자동화 CLI 및 STDIO MCP �
   doc list                                       문서 저장소의 .md 목록 및 .html 동기화 상태 출력
   doc read <경로>                                지정한 .md 문서 읽기
   doc validate                                   frontmatter, .md+.html 2벌 동기화, SVG 와이어프레임/변경 마커 검증
+  doc set-impl-status <경로> --status <...>       문서 frontmatter의 코드 반영 상태(synced|partial|unimplemented|clear) 갱신
   pr list [--repo <owner/name>]                  열린 PR 목록 조회
   pr create --head <브랜치> --title <제목> [...]   기획/코드 PR 생성
   pr approve-merge <번호> [--comment <메모>]      PR 승인 및 Squash Merge

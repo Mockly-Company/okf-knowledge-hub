@@ -214,6 +214,15 @@ async fn dispatch_tool_call(
             let report = runtime.validate_docs()?;
             Ok(serde_json::to_value(report).unwrap_or(Value::Null))
         }
+        "okhub_update_doc_impl_status" => {
+            let path = required_str(args, "path")?;
+            let impl_status = required_str(args, "implStatus")?;
+            let impl_note = args.get("implNote").and_then(Value::as_str);
+            let checked_at = args.get("checkedAt").and_then(Value::as_str);
+            let updated =
+                runtime.update_doc_impl_status(path, impl_status, impl_note, checked_at)?;
+            Ok(serde_json::to_value(updated).unwrap_or(Value::Null))
+        }
         "okhub_pr_list" => {
             let repo = args.get("repository").and_then(Value::as_str);
             let prs = runtime.list_pull_requests(repo).await?;
@@ -608,6 +617,25 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "okhub_update_doc_impl_status",
+            "description": "연결된 코드 저장소와 대조해 확인한 문서별 코드 반영 상태(`impl_status`: synced|partial|unimplemented|clear)와 사유(`impl_note`)를 대상 .md frontmatter에 기록합니다.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["path", "implStatus"],
+                "properties": {
+                    "path": { "type": "string", "description": "대상 .md 문서 상대 경로 (예: docs/domains/documents/prd.md)" },
+                    "implStatus": {
+                        "type": "string",
+                        "enum": ["synced", "partial", "unimplemented", "clear"],
+                        "description": "synced(코드 반영 완료/파랑), partial(일부 수정 필요/주황), unimplemented(미반영/빨강), clear(상태 제거)"
+                    },
+                    "implNote": { "type": "string", "description": "대조 점검 사유 또는 누락 사항 1줄 요약" },
+                    "checkedAt": { "type": "string", "description": "점검 일자 (예: 2026-11-20)" },
+                    "workspaceId": { "type": "string", "description": "특정 연결 워크스페이스 ID로 실행할 때 선택 지정" }
+                }
+            }
+        }),
+        json!({
             "name": "okhub_pr_list",
             "description": "현재 선택된 문서 저장소(또는 지정한 저장소)의 열린 Pull Request 목록을 조회합니다.",
             "inputSchema": {
@@ -861,8 +889,9 @@ mod tests {
             .iter()
             .filter_map(|t| t["name"].as_str())
             .collect();
-        assert_eq!(tool_names.len(), 16);
+        assert_eq!(tool_names.len(), 17);
         assert!(tool_names.contains(&"okhub_doc_validate"));
+        assert!(tool_names.contains(&"okhub_update_doc_impl_status"));
         assert!(tool_names.contains(&"okhub_board_ready"));
         assert!(tool_names.contains(&"okhub_board_get_schema"));
         assert!(tool_names.contains(&"okhub_board_create_backlog_tree"));
@@ -959,5 +988,29 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(validate_text.contains("\"valid\": true"));
+
+        let impl_call = handle_mcp_request(
+            &overrides,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "okhub_update_doc_impl_status",
+                    "arguments": {
+                        "path": "docs/overview.md",
+                        "implStatus": "synced",
+                        "implNote": "코드 반영 확인됨",
+                        "checkedAt": "2026-11-20"
+                    }
+                }
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(impl_call["result"]["isError"], false);
+        let impl_text = impl_call["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(impl_text.contains("\"implStatus\": \"synced\""));
+        assert!(impl_text.contains("코드 반영 확인됨"));
     }
 }

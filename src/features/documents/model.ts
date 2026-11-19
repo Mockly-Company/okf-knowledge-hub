@@ -56,6 +56,8 @@ export interface DocumentWireframe {
   image: string;
 }
 
+export type DocumentImplStatus = "synced" | "partial" | "unimplemented";
+
 export interface DocumentSummary {
   path: string;
   fileName: string;
@@ -65,6 +67,8 @@ export interface DocumentSummary {
   docType?: string | null;
   domain?: string | null;
   status?: string | null;
+  implStatus?: DocumentImplStatus | null;
+  implNote?: string | null;
   description?: string | null;
   previewHeadings?: string[];
   linkedPaths?: string[];

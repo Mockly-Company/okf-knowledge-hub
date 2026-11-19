@@ -47,6 +47,9 @@ export interface AiTaskLaunchRequest {
   issueNumber?: number;
   repositoryFullName?: string | null;
   documentPath?: string | null;
+  taskMode?: "default" | "audit_code_sync";
+  domainLabel?: string | null;
+  documentPaths?: string[];
 }
 
 export interface AiGateway {

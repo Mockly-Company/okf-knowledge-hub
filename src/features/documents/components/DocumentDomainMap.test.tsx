@@ -1,8 +1,9 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BoardIssue } from "@/features/project-board/model";
 import type { DocumentAsset, DocumentSummary } from "../model";
-import { DocumentDomainMap } from "./DocumentDomainMap";
+import { buildDomainEdges, DocumentDomainMap } from "./DocumentDomainMap";
 
 afterEach(cleanup);
 
@@ -240,5 +241,131 @@ describe("DocumentDomainMap", () => {
       screen.getByRole("button", { name: "화면명세 모아보기" }),
     );
     expect(onSelectScreenSpecs).toHaveBeenCalledWith("documents");
+  });
+
+  it("prevents stage-skipping overview→screen_spec edges when PRDs exist and drops reverse arrows", () => {
+    const overviewSkipping: DocumentSummary = {
+      ...indexDoc,
+      linkedPaths: [
+        "docs/domains/documents/prd.md",
+        "docs/domains/documents/screen-spec.md",
+      ],
+    };
+    const prdOnlyReverseTarget: DocumentSummary = {
+      ...prdDoc,
+      linkedPaths: ["docs/domains/documents/index.md"],
+    };
+    const specLinkingReverse: DocumentSummary = {
+      ...specDoc,
+      designs: [],
+      linkedPaths: ["docs/domains/documents/prd.md"],
+    };
+    const adrLinkingReverse: DocumentSummary = {
+      ...adrDoc,
+      linkedPaths: ["docs/domains/documents/screen-spec.md"],
+    };
+
+    const edges = buildDomainEdges([
+      overviewSkipping,
+      prdOnlyReverseTarget,
+      specLinkingReverse,
+      adrLinkingReverse,
+    ]);
+    const ids = edges.map((e) => e.id);
+
+    expect(ids).toContain(
+      "docs/domains/documents/index.md->docs/domains/documents/prd.md",
+    );
+    expect(ids).not.toContain(
+      "docs/domains/documents/index.md->docs/domains/documents/screen-spec.md",
+    );
+    // Reverse link screen_spec → prd is normalized forward as prd → screen_spec instead of backwards.
+    expect(ids).toContain(
+      "docs/domains/documents/prd.md->docs/domains/documents/screen-spec.md",
+    );
+    expect(ids).not.toContain(
+      "docs/domains/documents/screen-spec.md->docs/domains/documents/prd.md",
+    );
+    expect(ids).not.toContain(
+      "docs/domains/documents/prd.md->docs/domains/documents/index.md",
+    );
+    expect(ids).not.toContain(
+      "docs/domains/documents/adr-001.md->docs/domains/documents/screen-spec.md",
+    );
+
+    // Without any PRD in the domain, overview → screen_spec flow is allowed.
+    const noPrdEdges = buildDomainEdges([indexDoc, specLinkingReverse]);
+    expect(noPrdEdges.map((e) => e.id)).toContain(
+      "docs/domains/documents/index.md->docs/domains/documents/screen-spec.md",
+    );
+  });
+
+  it("renders color-coded impl status cards from frontmatter/board and triggers domain code-sync audit", async () => {
+    const user = userEvent.setup();
+    const onAuditCodeSync = vi.fn();
+
+    const syncedPrd: DocumentSummary = {
+      ...prdDoc,
+      implStatus: "synced",
+      implNote: "전체 엔드포인트 반영됨",
+    };
+    const partialSpec: DocumentSummary = {
+      ...specDoc,
+      designs: [],
+      implStatus: "partial",
+      implNote: "모바일 필터 바 미구현",
+    };
+    const unimplementedPrd: DocumentSummary = {
+      ...prdDoc,
+      path: "docs/domains/documents/billing-prd.md",
+      fileName: "billing-prd.md",
+      title: "결제 PRD",
+      linkedPaths: [],
+    };
+    const boardIssues: BoardIssue[] = [
+      {
+        number: 201,
+        title: "[프론트] 결제 UI",
+        url: "https://github.com/org/repo/issues/201",
+        layer: "frontend",
+        status: "backlog",
+        kind: "작업",
+        linkedDocPaths: ["docs/domains/documents/billing-prd.md"],
+        children: [],
+      },
+    ];
+
+    render(
+      <DocumentDomainMap
+        documents={[syncedPrd, partialSpec, unimplementedPrd]}
+        boardIssues={boardIssues}
+        onSelectDocument={vi.fn()}
+        onAuditCodeSync={onAuditCodeSync}
+      />,
+    );
+
+    const legend = screen.getByLabelText("코드 반영 상태 범례");
+    expect(within(legend).getByText("코드 반영 완료")).toBeVisible();
+    expect(within(legend).getByText("일부 수정 필요")).toBeVisible();
+    expect(within(legend).getByText("미반영")).toBeVisible();
+
+    const syncedCard = screen.getByRole("article", { name: syncedPrd.title });
+    expect(syncedCard).toHaveAttribute("data-impl-status", "synced");
+    expect(syncedCard).toHaveClass("document-map-card--impl-synced");
+    expect(within(syncedCard).getByText("전체 엔드포인트 반영됨")).toBeVisible();
+
+    const partialCard = screen.getByRole("article", { name: partialSpec.title });
+    expect(partialCard).toHaveAttribute("data-impl-status", "partial");
+    expect(partialCard).toHaveClass("document-map-card--impl-partial");
+    expect(within(partialCard).getByText("모바일 필터 바 미구현")).toBeVisible();
+
+    const boardCard = screen.getByRole("article", { name: "결제 PRD" });
+    expect(boardCard).toHaveAttribute("data-impl-status", "unimplemented");
+    expect(boardCard).toHaveClass("document-map-card--impl-unimplemented");
+    expect(within(boardCard).getByText("미착수 (미점검)")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "AI 코드 반영 점검" }));
+    expect(onAuditCodeSync).toHaveBeenCalledTimes(1);
+    expect(onAuditCodeSync.mock.calls[0]?.[0]?.key).toBe("documents");
   });
 });

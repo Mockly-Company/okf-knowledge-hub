@@ -1714,6 +1714,11 @@ impl GithubHttpClient {
                     }
                 }
                 let depends_on = parse_depends_on(content.body.as_deref());
+                let linked_doc_paths = content
+                    .body
+                    .as_deref()
+                    .map(crate::automation::context_pack::extract_referenced_doc_paths)
+                    .unwrap_or_default();
                 let repository_full_name = content
                     .repository
                     .and_then(|repo| repo.name_with_owner)
@@ -1766,6 +1771,7 @@ impl GithubHttpClient {
                     kind,
                     priority,
                     depends_on,
+                    linked_doc_paths,
                     sub_issues,
                     assignees,
                     created_at,

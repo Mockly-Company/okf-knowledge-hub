@@ -22,6 +22,7 @@ import {
   type IndexStatus,
   type SearchResult,
 } from "../model";
+import type { BoardIssue } from "@/features/project-board/model";
 import type { AsyncStatus } from "../documents-reducer";
 import { DocumentDomainMap } from "./DocumentDomainMap";
 import { ScreenSpecDeck } from "./ScreenSpecDeck";
@@ -34,6 +35,7 @@ interface DocumentSearchProps {
   searchError: AppError | null;
   indexStatus: IndexStatus;
   defaultGroupMode?: DocumentGroupMode;
+  boardIssues?: readonly BoardIssue[];
   onQueryChange(query: string): void;
   onSelectDocument(
     path: string,
@@ -41,6 +43,7 @@ interface DocumentSearchProps {
   ): void;
   onSelectResult(result: SearchResult): void;
   onRetry(): void;
+  onAuditCodeSync?: (group: DocumentGroup) => void;
   onNewDocumentInFolder?: (folderPath: string) => void;
   onOpenInNewWindow?: (
     path: string,
@@ -93,11 +96,14 @@ export function DocumentSearch({
   results,
   searchStatus,
   searchError,
+  indexStatus: _indexStatus,
   defaultGroupMode = "domain",
+  boardIssues,
   onQueryChange,
   onSelectDocument,
   onSelectResult,
   onRetry,
+  onAuditCodeSync,
   onNewDocumentInFolder,
   onOpenInNewWindow,
   toolbarAction,
@@ -395,11 +401,13 @@ export function DocumentSearch({
           <DocumentDomainMap
             documents={filteredDocuments}
             allDocuments={documents}
+            boardIssues={boardIssues}
             onSelectDocument={onSelectDocument}
             onSelectScreenSpecs={(domainKey) => {
               setScreenSpecDomain(domainKey);
               setGroupMode("screen_specs");
             }}
+            onAuditCodeSync={onAuditCodeSync}
             onOpenInNewWindow={onOpenInNewWindow}
             onNewDocumentInFolder={onNewDocumentInFolder}
           />

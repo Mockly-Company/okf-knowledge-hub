@@ -270,6 +270,8 @@ function sameDocumentSummary(
     left.modifiedAtUnixMs === right.modifiedAtUnixMs &&
     left.size === right.size &&
     left.hasCompanionHtml === right.hasCompanionHtml &&
+    left.implStatus === right.implStatus &&
+    left.implNote === right.implNote &&
     sameWireframes(left.wireframes, right.wireframes) &&
     sameDesigns(left.designs, right.designs) &&
     sameFrontmatterStatus(left.frontmatterStatus, right.frontmatterStatus)

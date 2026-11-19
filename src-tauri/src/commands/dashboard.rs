@@ -1185,6 +1185,7 @@ mod tests {
             children,
             kind: Some("작업".into()),
             depends_on,
+            linked_doc_paths: Vec::new(),
             children_truncated: false,
             assignees: assignees
                 .into_iter()
@@ -1282,6 +1283,7 @@ mod tests {
                 status: BoardStatus::InProgress,
                 kind: Some("기능".into()),
                 depends_on: None,
+                linked_doc_paths: Vec::new(),
                 children_truncated: false,
                 assignees: Vec::new(),
                 created_at: None,

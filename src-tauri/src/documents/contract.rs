@@ -39,6 +39,10 @@ pub struct DocumentSummary {
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
+    pub impl_status: Option<String>,
+    #[serde(default)]
+    pub impl_note: Option<String>,
+    #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
     pub preview_headings: Vec<String>,
@@ -185,6 +189,8 @@ pub struct ParsedDocumentMetadata {
     pub doc_type: Option<String>,
     pub domain: Option<String>,
     pub status: Option<String>,
+    pub impl_status: Option<String>,
+    pub impl_note: Option<String>,
     pub description: Option<String>,
     pub frontmatter_links: Vec<String>,
     pub designs: Vec<DocumentDesignLink>,

@@ -4,9 +4,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { ExternalLink, FilePlus2, LayoutGrid } from "lucide-react";
+import { ExternalLink, FilePlus2, GitCompareArrows, LayoutGrid } from "lucide-react";
 import { Button, IconButton } from "@/components/ui/button";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
+import type { BoardIssue } from "@/features/project-board/model";
+import { cn } from "@/lib/utils";
 import { useOptionalDocuments } from "../DocumentsProvider";
 import {
   classifyDocumentCategory,
@@ -16,6 +18,7 @@ import {
   isOverviewDocument,
   type DocumentGroup,
 } from "../document-taxonomy";
+import { resolveDocumentImplStatus } from "../impl-status";
 import {
   normalizeDocumentPath,
   type DocumentAsset,
@@ -53,6 +56,15 @@ const STAGE_ORDER: readonly StageKey[] = [
   "guide_ref",
 ];
 
+const STAGE_RANK: Record<StageKey, number> = {
+  overview: 0,
+  prd: 1,
+  screen_spec: 2,
+  design: 3,
+  adr: 4,
+  guide_ref: 5,
+};
+
 function documentStage(doc: DocumentSummary): Exclude<StageKey, "design"> {
   if (isOverviewDocument(doc)) return "overview";
   switch (classifyDocumentCategory(doc)) {
@@ -85,6 +97,8 @@ interface DomainEdge {
 
 interface MeasuredEdge {
   id: string;
+  fromKey: string;
+  toKey: string;
   path: string;
   kind: "explicit" | "flow";
 }
@@ -105,27 +119,10 @@ function preferredViewOf(doc: DocumentSummary): "html" | "markdown" {
   return doc.hasCompanionHtml ? "html" : "markdown";
 }
 
-function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
-  const domainKeys = new Set(documents.map((doc) => canonicalKey(doc.path)));
-  const edges: DomainEdge[] = [];
-  const seen = new Set<string>();
-  const explicitPairs = new Set<string>();
-  const pushEdge = (fromKey: string, toKey: string, kind: DomainEdge["kind"]) => {
-    const edgeId = `${fromKey}->${toKey}`;
-    if (seen.has(edgeId)) return;
-    seen.add(edgeId);
-    edges.push({ id: edgeId, fromKey, toKey, kind });
-  };
-
+export function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
+  const stageByKey = new Map<string, StageKey>();
   for (const doc of documents) {
-    const fromKey = canonicalKey(doc.path);
-    for (const linked of doc.linkedPaths ?? []) {
-      const toKey = canonicalKey(linked);
-      if (toKey === fromKey || !domainKeys.has(toKey)) continue;
-      explicitPairs.add(`${fromKey}->${toKey}`);
-      explicitPairs.add(`${toKey}->${fromKey}`);
-      pushEdge(fromKey, toKey, "explicit");
-    }
+    stageByKey.set(canonicalKey(doc.path), documentStage(doc));
   }
 
   const byStage = (stage: StageKey) =>
@@ -136,18 +133,78 @@ function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
   const prds = byStage("prd");
   const specs = byStage("screen_spec");
   const adrs = byStage("adr");
+  const hasPrds = prds.length > 0;
 
-  // Implied reading-flow edges from the first document of one stage to each document of the
-  // next stage, unless an explicit related_docs link already connects them.
+  const edges: DomainEdge[] = [];
+  const seen = new Set<string>();
+  const explicitPairs = new Set<string>();
+  const incomingExplicitByStage = new Map<string, Set<string>>();
+
+  const pushEdge = (fromKey: string, toKey: string, kind: DomainEdge["kind"]) => {
+    const edgeId = `${fromKey}->${toKey}`;
+    if (seen.has(edgeId)) return;
+    seen.add(edgeId);
+    edges.push({ id: edgeId, fromKey, toKey, kind });
+  };
+
+  for (const doc of documents) {
+    const rawFromKey = canonicalKey(doc.path);
+    const rawFromStage = stageByKey.get(rawFromKey);
+    if (!rawFromStage) continue;
+
+    for (const linked of doc.linkedPaths ?? []) {
+      const rawToKey = canonicalKey(linked);
+      const rawToStage = stageByKey.get(rawToKey);
+      if (!rawToStage || rawToKey === rawFromKey) continue;
+
+      let fromKey = rawFromKey;
+      let toKey = rawToKey;
+      let fromStage = rawFromStage;
+      let toStage = rawToStage;
+
+      // 화면명세 → 기획 역방향 참조는 화면상 기획 → 화면명세 정방향으로 정규화하고, 그 외 역방향/동일 컬럼 간선은 그리지 않는다.
+      if (STAGE_RANK[fromStage] > STAGE_RANK[toStage]) {
+        if (fromStage === "screen_spec" && toStage === "prd") {
+          fromKey = rawToKey;
+          fromStage = rawToStage;
+          toKey = rawFromKey;
+          toStage = rawFromStage;
+        } else {
+          continue;
+        }
+      }
+
+      if (fromStage === toStage) continue;
+
+      // 기획(PRD)이 있는 도메인에서는 개요 → 화면명세 직통 화살표를 생략해 개요 → 기획 → 화면명세 흐름만 유지한다.
+      if (hasPrds && fromStage === "overview" && toStage !== "prd") {
+        continue;
+      }
+
+      explicitPairs.add(`${fromKey}->${toKey}`);
+      let targetsFromStage = incomingExplicitByStage.get(fromStage);
+      if (!targetsFromStage) {
+        targetsFromStage = new Set<string>();
+        incomingExplicitByStage.set(fromStage, targetsFromStage);
+      }
+      targetsFromStage.add(toKey);
+      pushEdge(fromKey, toKey, "explicit");
+    }
+  }
+
+  // 명시적 related_docs 연결이 없는 다음 단계 카드만 대표 선행 문서의 암묵적 흐름선으로 잇는다.
   const linkFlow = (
+    fromStageKey: StageKey,
     anchors: readonly DocumentSummary[],
     targets: readonly DocumentSummary[],
   ) => {
     const [anchor] = anchors;
     if (!anchor) return;
     const anchorKey = canonicalKey(anchor.path);
+    const explicitlyLinkedTargets = incomingExplicitByStage.get(fromStageKey);
     for (const target of targets) {
       const targetKey = canonicalKey(target.path);
+      if (explicitlyLinkedTargets?.has(targetKey)) continue;
       const linked = anchors.some((candidate) =>
         explicitPairs.has(`${canonicalKey(candidate.path)}->${targetKey}`),
       );
@@ -155,9 +212,9 @@ function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
     }
   };
 
-  linkFlow(overviews, prds.length > 0 ? prds.slice(0, 1) : specs.slice(0, 1));
-  linkFlow(prds, specs);
-  linkFlow(specs, adrs);
+  linkFlow("overview", overviews, hasPrds ? prds.slice(0, 1) : specs.slice(0, 1));
+  linkFlow("prd", prds, specs);
+  linkFlow("screen_spec", specs, adrs);
 
   for (const spec of specs) {
     const specKey = canonicalKey(spec.path);
@@ -169,34 +226,181 @@ function buildDomainEdges(documents: readonly DocumentSummary[]): DomainEdge[] {
   return edges;
 }
 
-function computeEdgePath(
-  boardRect: DOMRect,
-  fromRect: DOMRect,
-  toRect: DOMRect,
-  scrollLeft: number,
-  scrollTop: number,
+interface RawEdgeGeometry {
+  edge: DomainEdge;
+  fromRect: DOMRect;
+  toRect: DOMRect;
+  fromCenterY: number;
+  toCenterY: number;
+}
+
+function buildRoundedOrthogonalPath(
+  x1: number,
+  y1: number,
+  laneX: number,
+  x2: number,
+  y2: number,
 ): string {
-  const fromY = fromRect.top - boardRect.top + scrollTop + fromRect.height / 2;
-  const toY = toRect.top - boardRect.top + scrollTop + toRect.height / 2;
+  const dy = y2 - y1;
+  if (Math.abs(dy) < 2) {
+    return `M ${x1} ${y1} L ${x2} ${y2}`;
+  }
+  const dir = dy > 0 ? 1 : -1;
+  const r = Math.min(
+    8,
+    Math.abs(laneX - x1) - 1,
+    Math.abs(x2 - laneX) - 1,
+    Math.abs(dy) / 2,
+  );
+  if (r < 2) {
+    return `M ${x1} ${y1} L ${laneX} ${y1} L ${laneX} ${y2} L ${x2} ${y2}`;
+  }
+  return `M ${x1} ${y1} L ${laneX - r} ${y1} Q ${laneX} ${y1} ${laneX} ${y1 + dir * r} L ${laneX} ${y2 - dir * r} Q ${laneX} ${y2} ${laneX + r} ${y2} L ${x2} ${y2}`;
+}
 
-  if (fromRect.right <= toRect.left + 8) {
-    const x1 = fromRect.right - boardRect.left + scrollLeft;
-    const x2 = toRect.left - boardRect.left + scrollLeft;
-    const dx = Math.max(24, (x2 - x1) * 0.48);
-    return `M ${x1} ${fromY} C ${x1 + dx} ${fromY}, ${x2 - dx} ${toY}, ${x2} ${toY}`;
+function spreadPortY(
+  rectTop: number,
+  rectHeight: number,
+  boardTop: number,
+  scrollTop: number,
+  index: number,
+  total: number,
+): number {
+  const relTop = rectTop - boardTop + scrollTop;
+  if (total <= 1) {
+    return relTop + rectHeight * 0.5;
+  }
+  const ratio = 0.24 + (0.52 * index) / (total - 1);
+  return relTop + rectHeight * ratio;
+}
+
+interface PositionedEdge {
+  edge: DomainEdge;
+  x1: number;
+  x2: number;
+  y1: number;
+  y2: number;
+}
+
+export function layoutDomainEdgePaths(
+  edges: readonly DomainEdge[],
+  cardRefs: ReadonlyMap<string, HTMLElement>,
+  board: HTMLElement,
+  boardRect: DOMRect,
+): MeasuredEdge[] {
+  const geometries: RawEdgeGeometry[] = [];
+  for (const edge of edges) {
+    const fromEl = cardRefs.get(edge.fromKey);
+    const toEl = cardRefs.get(edge.toKey);
+    if (!fromEl || !toEl) continue;
+    const fromRect = fromEl.getBoundingClientRect();
+    const toRect = toEl.getBoundingClientRect();
+    if (toRect.left < fromRect.left || Math.abs(fromRect.left - toRect.left) < 40) {
+      continue;
+    }
+    geometries.push({
+      edge,
+      fromRect,
+      toRect,
+      fromCenterY: fromRect.top + fromRect.height / 2,
+      toCenterY: toRect.top + toRect.height / 2,
+    });
   }
 
-  if (toRect.right <= fromRect.left + 8) {
-    const x1 = fromRect.left - boardRect.left + scrollLeft;
-    const x2 = toRect.right - boardRect.left + scrollLeft;
-    const dx = Math.max(24, (x1 - x2) * 0.48);
-    return `M ${x1} ${fromY} C ${x1 - dx} ${fromY}, ${x2 + dx} ${toY}, ${x2} ${toY}`;
+  if (geometries.length === 0) {
+    return [];
   }
 
-  const x1 = fromRect.right - boardRect.left + scrollLeft;
-  const x2 = toRect.right - boardRect.left + scrollLeft;
-  const archX = Math.max(x1, x2) + 28;
-  return `M ${x1} ${fromY} C ${archX} ${fromY}, ${archX} ${toY}, ${x2} ${toY}`;
+  const outPortY = new Map<string, number>();
+  const outgoingByFrom = new Map<string, RawEdgeGeometry[]>();
+  for (const geom of geometries) {
+    const list = outgoingByFrom.get(geom.edge.fromKey) ?? [];
+    list.push(geom);
+    outgoingByFrom.set(geom.edge.fromKey, list);
+  }
+  for (const group of outgoingByFrom.values()) {
+    group.sort(
+      (a, b) => a.toCenterY - b.toCenterY || a.edge.id.localeCompare(b.edge.id),
+    );
+    group.forEach((geom, idx) => {
+      outPortY.set(
+        geom.edge.id,
+        spreadPortY(
+          geom.fromRect.top,
+          geom.fromRect.height,
+          boardRect.top,
+          board.scrollTop,
+          idx,
+          group.length,
+        ),
+      );
+    });
+  }
+
+  const inPortY = new Map<string, number>();
+  const incomingByTo = new Map<string, RawEdgeGeometry[]>();
+  for (const geom of geometries) {
+    const list = incomingByTo.get(geom.edge.toKey) ?? [];
+    list.push(geom);
+    incomingByTo.set(geom.edge.toKey, list);
+  }
+  for (const group of incomingByTo.values()) {
+    group.sort(
+      (a, b) => a.fromCenterY - b.fromCenterY || a.edge.id.localeCompare(b.edge.id),
+    );
+    group.forEach((geom, idx) => {
+      inPortY.set(
+        geom.edge.id,
+        spreadPortY(
+          geom.toRect.top,
+          geom.toRect.height,
+          boardRect.top,
+          board.scrollTop,
+          idx,
+          group.length,
+        ),
+      );
+    });
+  }
+
+  const gutterGroups = new Map<string, PositionedEdge[]>();
+  for (const geom of geometries) {
+    const x1 = geom.fromRect.right - boardRect.left + board.scrollLeft;
+    const x2 = geom.toRect.left - boardRect.left + board.scrollLeft;
+    const y1 = outPortY.get(geom.edge.id) ?? 0;
+    const y2 = inPortY.get(geom.edge.id) ?? 0;
+    const gutterKey = `${Math.round(x1 / 24)}->${Math.round(x2 / 24)}`;
+    const group = gutterGroups.get(gutterKey) ?? [];
+    group.push({ edge: geom.edge, x1, x2, y1, y2 });
+    gutterGroups.set(gutterKey, group);
+  }
+
+  const measured: MeasuredEdge[] = [];
+  for (const group of gutterGroups.values()) {
+    group.sort(
+      (a, b) =>
+        a.y1 - b.y1 || a.y2 - b.y2 || a.edge.id.localeCompare(b.edge.id),
+    );
+    group.forEach((item, idx) => {
+      const laneMin = item.x1 + 10;
+      const laneMax = item.x2 - 10;
+      const laneX =
+        laneMax <= laneMin
+          ? (item.x1 + item.x2) / 2
+          : group.length === 1
+            ? (laneMin + laneMax) / 2
+            : laneMin + ((laneMax - laneMin) * idx) / (group.length - 1);
+      measured.push({
+        id: item.edge.id,
+        fromKey: item.edge.fromKey,
+        toKey: item.edge.toKey,
+        kind: item.edge.kind,
+        path: buildRoundedOrthogonalPath(item.x1, item.y1, laneX, item.x2, item.y2),
+      });
+    });
+  }
+
+  return measured;
 }
 
 function ThumbChrome() {
@@ -240,6 +444,7 @@ function DesignMapCard({
   onSelectDocument,
   onOpenExternal,
   onExpand,
+  onHoverChange,
 }: {
   spec: DocumentSummary;
   design: DocumentDesignLink;
@@ -248,6 +453,7 @@ function DesignMapCard({
   onSelectDocument: (path: string, preferredViewMode?: "html" | "markdown") => void;
   onOpenExternal?: (url: string) => void;
   onExpand: (preview: ExpandedDesignPreview) => void;
+  onHoverChange?: (active: boolean) => void;
 }) {
   const { asset, failed } = useDocumentAsset(spec.path, design.image, readAsset);
   const externalUrl = safeHttpUrl(design.url);
@@ -258,6 +464,14 @@ function DesignMapCard({
       className="document-map-card document-map-card--design"
       aria-label={`${design.title} 디자인 시안`}
       data-category="design"
+      onMouseEnter={() => onHoverChange?.(true)}
+      onMouseLeave={() => onHoverChange?.(false)}
+      onFocus={() => onHoverChange?.(true)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          onHoverChange?.(false);
+        }
+      }}
     >
       <div className="document-map-card__top">
         <div className="document-map-card__badges">
@@ -329,9 +543,11 @@ function hashMarkerKey(value: string): string {
 function DomainSectionBoard({
   group,
   lookupByPath,
+  boardIssues,
   readAsset,
   onSelectDocument,
   onSelectScreenSpecs,
+  onAuditCodeSync,
   onOpenInNewWindow,
   onNewDocumentInFolder,
   onOpenExternal,
@@ -339,12 +555,14 @@ function DomainSectionBoard({
 }: {
   group: DocumentGroup;
   lookupByPath: ReadonlyMap<string, DocumentSummary>;
+  boardIssues?: readonly BoardIssue[];
   readAsset: DocumentAssetReader;
   onSelectDocument: (
     path: string,
     preferredViewMode?: "html" | "markdown",
   ) => void;
   onSelectScreenSpecs?: (domainKey: string) => void;
+  onAuditCodeSync?: (group: DocumentGroup) => void;
   onOpenInNewWindow?: (
     path: string,
     viewMode?: "html" | "markdown",
@@ -361,6 +579,7 @@ function DomainSectionBoard({
     height: 0,
   });
   const [measuredEdges, setMeasuredEdges] = useState<MeasuredEdge[]>([]);
+  const [hoveredCardKey, setHoveredCardKey] = useState<string | null>(null);
 
   const columns = useMemo(() => {
     const cardsByStage = new Map<StageKey, MapCard[]>(
@@ -399,6 +618,15 @@ function DomainSectionBoard({
       ),
     [group.documents],
   );
+  const hasAuditableSpecs = useMemo(
+    () =>
+      group.documents.some((doc) => {
+        if (isAuxiliaryDocument(doc)) return false;
+        const cat = classifyDocumentCategory(doc);
+        return cat === "prd" || cat === "screen_spec";
+      }),
+    [group.documents],
+  );
 
   const registerCard = (key: string) => (node: HTMLElement | null) => {
     if (node) {
@@ -420,23 +648,12 @@ function DomainSectionBoard({
         return;
       }
 
-      const nextEdges: MeasuredEdge[] = [];
-      for (const edge of edges) {
-        const fromEl = cardRefs.current.get(edge.fromKey);
-        const toEl = cardRefs.current.get(edge.toKey);
-        if (!fromEl || !toEl) continue;
-        nextEdges.push({
-          id: edge.id,
-          kind: edge.kind,
-          path: computeEdgePath(
-            boardRect,
-            fromEl.getBoundingClientRect(),
-            toEl.getBoundingClientRect(),
-            board.scrollLeft,
-            board.scrollTop,
-          ),
-        });
-      }
+      const nextEdges = layoutDomainEdgePaths(
+        edges,
+        cardRefs.current,
+        board,
+        boardRect,
+      );
       setSvgSize({
         width: Math.max(board.scrollWidth, boardRect.width),
         height: Math.max(board.scrollHeight, boardRect.height),
@@ -491,6 +708,16 @@ function DomainSectionBoard({
           </span>
         </div>
         <div className="document-domain-map__section-actions">
+          {hasAuditableSpecs && onAuditCodeSync ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => onAuditCodeSync(group)}
+            >
+              <GitCompareArrows aria-hidden="true" size={14} />
+              AI 코드 반영 점검
+            </Button>
+          ) : null}
           {hasScreenSpec && onSelectScreenSpecs ? (
             <Button
               type="button"
@@ -552,25 +779,54 @@ function DomainSectionBoard({
                 />
               </marker>
             </defs>
-            {measuredEdges.map((edge) => (
-              <path
-                key={edge.id}
-                d={edge.path}
-                fill="none"
-                stroke={
-                  edge.kind === "explicit"
-                    ? "var(--color-primary)"
-                    : "var(--color-border-strong)"
-                }
-                strokeWidth={edge.kind === "explicit" ? 1.75 : 1.25}
-                strokeDasharray={edge.kind === "flow" ? "4 4" : undefined}
-                markerEnd={
-                  edge.kind === "explicit"
-                    ? `url(#edge-arrow-explicit-${safeGroupKey})`
-                    : `url(#edge-arrow-flow-${safeGroupKey})`
-                }
-              />
-            ))}
+            {[...measuredEdges]
+              .sort((a, b) => {
+                if (!hoveredCardKey) return 0;
+                const aConn =
+                  a.fromKey === hoveredCardKey || a.toKey === hoveredCardKey ? 1 : 0;
+                const bConn =
+                  b.fromKey === hoveredCardKey || b.toKey === hoveredCardKey ? 1 : 0;
+                return aConn - bConn;
+              })
+              .map((edge) => {
+                const isConnected =
+                  hoveredCardKey !== null &&
+                  (edge.fromKey === hoveredCardKey || edge.toKey === hoveredCardKey);
+                const isDimmed = hoveredCardKey !== null && !isConnected;
+                return (
+                  <path
+                    key={edge.id}
+                    d={edge.path}
+                    data-edge-from={edge.fromKey}
+                    data-edge-to={edge.toKey}
+                    data-edge-kind={edge.kind}
+                    fill="none"
+                    stroke={
+                      edge.kind === "explicit"
+                        ? "var(--color-primary)"
+                        : "var(--color-border-strong)"
+                    }
+                    strokeWidth={
+                      isConnected ? 2.25 : edge.kind === "explicit" ? 1.5 : 1.25
+                    }
+                    opacity={
+                      isConnected
+                        ? 1
+                        : isDimmed
+                          ? 0.14
+                          : edge.kind === "explicit"
+                            ? 0.65
+                            : 0.45
+                    }
+                    strokeDasharray={edge.kind === "flow" ? "4 4" : undefined}
+                    markerEnd={
+                      edge.kind === "explicit"
+                        ? `url(#edge-arrow-explicit-${safeGroupKey})`
+                        : `url(#edge-arrow-flow-${safeGroupKey})`
+                    }
+                  />
+                );
+              })}
           </svg>
         ) : null}
 
@@ -599,6 +855,11 @@ function DomainSectionBoard({
                         onSelectDocument={onSelectDocument}
                         onOpenExternal={onOpenExternal}
                         onExpand={onExpandDesign}
+                        onHoverChange={(active) =>
+                          setHoveredCardKey((cur) =>
+                            active ? card.key : cur === card.key ? null : cur,
+                          )
+                        }
                       />
                     );
                   }
@@ -606,6 +867,7 @@ function DomainSectionBoard({
                   const { doc, key } = card;
                   const category = classifyDocumentCategory(doc);
                   const isScreenSpec = column.key === "screen_spec";
+                  const impl = resolveDocumentImplStatus(doc, boardIssues);
                   const relatedDocs: DocumentSummary[] = [];
                   const seenRelated = new Set<string>([key]);
                   for (const linkedPath of doc.linkedPaths ?? []) {
@@ -629,9 +891,27 @@ function DomainSectionBoard({
                     <article
                       key={doc.path}
                       ref={registerCard(key)}
-                      className="document-map-card"
+                      className={cn(
+                        "document-map-card",
+                        impl && `document-map-card--impl-${impl.status}`,
+                      )}
                       aria-label={doc.title}
                       data-category={column.key === "overview" ? "overview" : category}
+                      data-impl-status={impl?.status}
+                      onMouseEnter={() => setHoveredCardKey(key)}
+                      onMouseLeave={() =>
+                        setHoveredCardKey((cur) => (cur === key ? null : cur))
+                      }
+                      onFocus={() => setHoveredCardKey(key)}
+                      onBlur={(event) => {
+                        if (
+                          !event.currentTarget.contains(
+                            event.relatedTarget as Node | null,
+                          )
+                        ) {
+                          setHoveredCardKey((cur) => (cur === key ? null : cur));
+                        }
+                      }}
                     >
                       <div className="document-map-card__top">
                         <div className="document-map-card__badges">
@@ -640,6 +920,13 @@ function DomainSectionBoard({
                               ? STAGE_LABELS.overview
                               : DOCUMENT_CATEGORY_LABELS[category]}
                           </span>
+                          {impl ? (
+                            <span
+                              className={`document-map-card__badge document-map-card__badge--impl-${impl.status}`}
+                            >
+                              {impl.label}
+                            </span>
+                          ) : null}
                           {doc.hasCompanionHtml ? (
                             <span className="document-map-card__badge document-map-card__badge--html">
                               HTML
@@ -718,6 +1005,15 @@ function DomainSectionBoard({
                         )}
                       </UnstyledButton>
 
+                      {impl?.note ? (
+                        <p
+                          className={`document-map-card__impl-note document-map-card__impl-note--${impl.status}`}
+                          title={impl.note}
+                        >
+                          {impl.note}
+                        </p>
+                      ) : null}
+
                       {relatedDocs.length > 0 ? (
                         <div
                           className="document-map-card__links"
@@ -752,21 +1048,25 @@ function DomainSectionBoard({
 export function DocumentDomainMap({
   documents,
   allDocuments,
+  boardIssues,
   readAsset,
   onSelectDocument,
   onSelectScreenSpecs,
+  onAuditCodeSync,
   onOpenInNewWindow,
   onNewDocumentInFolder,
   onOpenExternal,
 }: {
   documents: readonly DocumentSummary[];
   allDocuments?: readonly DocumentSummary[];
+  boardIssues?: readonly BoardIssue[];
   readAsset?: DocumentAssetReader;
   onSelectDocument: (
     path: string,
     preferredViewMode?: "html" | "markdown",
   ) => void;
   onSelectScreenSpecs?: (domainKey: string) => void;
+  onAuditCodeSync?: (group: DocumentGroup) => void;
   onOpenInNewWindow?: (
     path: string,
     viewMode?: "html" | "markdown",
@@ -802,14 +1102,43 @@ export function DocumentDomainMap({
 
   return (
     <div className="document-domain-map">
+      <div
+        className="document-domain-map__legend"
+        aria-label="코드 반영 상태 범례"
+      >
+        <span className="document-domain-map__legend-title">코드 반영 상태</span>
+        <span className="document-domain-map__legend-item">
+          <span
+            className="document-domain-map__legend-dot document-domain-map__legend-dot--synced"
+            aria-hidden="true"
+          />
+          코드 반영 완료
+        </span>
+        <span className="document-domain-map__legend-item">
+          <span
+            className="document-domain-map__legend-dot document-domain-map__legend-dot--partial"
+            aria-hidden="true"
+          />
+          일부 수정 필요
+        </span>
+        <span className="document-domain-map__legend-item">
+          <span
+            className="document-domain-map__legend-dot document-domain-map__legend-dot--unimplemented"
+            aria-hidden="true"
+          />
+          미반영
+        </span>
+      </div>
       {groups.map((group) => (
         <DomainSectionBoard
           key={group.key}
           group={group}
           lookupByPath={lookupByPath}
+          boardIssues={boardIssues}
           readAsset={assetReader}
           onSelectDocument={onSelectDocument}
           onSelectScreenSpecs={onSelectScreenSpecs}
+          onAuditCodeSync={onAuditCodeSync}
           onOpenInNewWindow={onOpenInNewWindow}
           onNewDocumentInFolder={onNewDocumentInFolder}
           onOpenExternal={externalOpener}

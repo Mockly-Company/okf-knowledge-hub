@@ -133,6 +133,8 @@ pub struct GithubProjectItem {
     pub priority: Option<String>,
     /// 본문 `이전 단계: #N`에서 읽은 선행 이슈 번호. 없으면 `None`.
     pub depends_on: Option<u64>,
+    #[serde(default)]
+    pub linked_doc_paths: Vec<String>,
     pub sub_issues: Vec<GithubSubIssue>,
     pub assignees: Vec<BoardAssignee>,
     pub created_at: Option<String>,
