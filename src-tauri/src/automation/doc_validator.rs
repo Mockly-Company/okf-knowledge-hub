@@ -197,12 +197,7 @@ pub fn validate_workspace_docs(
         let canonical_root = workspace_root.canonicalize().ok();
         let doc_parent = full_md.parent().unwrap_or(workspace_root);
         for wf in &parsed_doc.wireframes {
-            if !local_asset_exists(
-                workspace_root,
-                canonical_root.as_deref(),
-                doc_parent,
-                &wf.image,
-            ) {
+            if !local_asset_exists(canonical_root.as_deref(), doc_parent, &wf.image) {
                 issues.push(DocValidationIssue {
                     severity: "error".to_owned(),
                     path: rel_path.clone(),
@@ -216,8 +211,7 @@ pub fn validate_workspace_docs(
         }
         for design in &parsed_doc.designs {
             if let Some(image) = design.image.as_deref() {
-                if !local_asset_exists(workspace_root, canonical_root.as_deref(), doc_parent, image)
-                {
+                if !local_asset_exists(canonical_root.as_deref(), doc_parent, image) {
                     issues.push(DocValidationIssue {
                         severity: "error".to_owned(),
                         path: rel_path.clone(),
@@ -543,12 +537,7 @@ fn is_screen_spec_document(rel_path: &str, file_name: &str, doc_type: Option<&st
         || lower_path.ends_with("/screen-spec.md")
 }
 
-fn local_asset_exists(
-    workspace_root: &Path,
-    canonical_root: Option<&Path>,
-    doc_parent: &Path,
-    raw_asset: &str,
-) -> bool {
+fn local_asset_exists(canonical_root: Option<&Path>, doc_parent: &Path, raw_asset: &str) -> bool {
     let clean = raw_asset
         .split(['?', '#'])
         .next()
@@ -565,7 +554,7 @@ fn local_asset_exists(
     if let (Some(root), Ok(canon)) = (canonical_root, candidate.canonicalize()) {
         return canon.starts_with(root);
     }
-    candidate.starts_with(workspace_root)
+    false
 }
 
 fn strip_style_blocks(html: &str) -> String {
@@ -752,5 +741,32 @@ mod tests {
             .issues
             .iter()
             .any(|i| i.code == "design_wireframe_unknown"));
+    }
+
+    #[test]
+    fn rejects_path_traversal_assets_outside_workspace_root() {
+        let outer = TempDir::new().unwrap();
+        let workspace = outer.path().join("ws");
+        let domain_dir = workspace.join("docs").join("domains").join("board");
+        std::fs::create_dir_all(&domain_dir).unwrap();
+        std::fs::write(
+            outer.path().join("outside.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.md"),
+            "---\nokf_hub_id: 11111111-1111-4111-8111-111111111111\ntype: \"Screen Spec\"\ntitle: 탈출 테스트\nwireframes:\n  - title: 외부 탈출\n    image: ../../../../outside.svg\n---\n# 탈출 테스트\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.html"),
+            "<html><body><h1>탈출 테스트</h1></body></html>",
+        )
+        .unwrap();
+
+        let report = validate_workspace_docs(&workspace, "docs").unwrap();
+        assert!(!report.valid);
+        assert!(report.issues.iter().any(|i| i.code == "asset_file_missing"));
     }
 }

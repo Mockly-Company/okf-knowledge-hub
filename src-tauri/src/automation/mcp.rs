@@ -547,7 +547,7 @@ fn parse_backlog_tree_items(args: &Value) -> Result<Vec<BacklogTreeItemInput>, A
                 ),
             ));
         }
-        let assignees = optional_string_array(item, "assignees")?.unwrap_or_default();
+        let assignees = optional_string_array(item, "assignees")?;
 
         parsed.push(BacklogTreeItemInput {
             repository_full_name,
@@ -687,7 +687,7 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
                     "assignees": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "GitHub 로그인 목록. 생략 시 .okf/workspace.yml의 역할별 assignees를 자동 지정합니다."
+                        "description": "GitHub 로그인 목록. 생략 시 .okf/workspace.yml의 역할별 assignees를 자동 지정하고, 빈 배열([])을 넘기면 담당자 없이 생성합니다."
                     }
                 }
             }
@@ -726,7 +726,7 @@ pub fn mcp_tool_definitions() -> Vec<Value> {
                                 "parentBatchIndex": { "type": "integer", "description": "배치 내 상위 이슈의 0-based 인덱스 (< 현재 인덱스)" },
                                 "dependsOn": { "type": "integer" },
                                 "dependsOnBatchIndex": { "type": "integer", "description": "배치 내 선행 이슈의 0-based 인덱스 (< 현재 인덱스)" },
-                                "assignees": { "type": "array", "items": { "type": "string" } }
+                                "assignees": { "type": "array", "items": { "type": "string" }, "description": "생략 시 역할별 기본 assignees 자동 지정, [] 지정 시 담당자 없음" }
                             }
                         }
                     }

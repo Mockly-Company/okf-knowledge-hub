@@ -107,7 +107,7 @@ pub struct BacklogTreeItemInput {
     pub parent_batch_index: Option<usize>,
     pub depends_on: Option<u64>,
     pub depends_on_batch_index: Option<usize>,
-    pub assignees: Vec<String>,
+    pub assignees: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -871,7 +871,15 @@ impl AutomationRuntime {
                 }
                 match inferred_repos.into_iter().next() {
                     Some(found) => found,
-                    None => self.resolve_target_repository(None)?,
+                    None => {
+                        return Err(AppError::new(
+                            ErrorCode::WorkspaceInvalid,
+                            format!(
+                                "선택된 GitHub Project에서 이슈 #{issue_number}을(를) 찾을 수 없습니다. 다른 저장소의 이슈라면 `repo`(owner/repo)를 지정해 주세요."
+                            ),
+                        )
+                        .with_recovery(RecoveryAction::Retry));
+                    }
                 }
             }
         };
@@ -1000,7 +1008,7 @@ impl AutomationRuntime {
                 item.depends_on
             };
             let final_body = inject_depends_on_line(&item.body, depends_on);
-            let resolved_assignees = resolve_effective_assignees(Some(&item.assignees), || {
+            let resolved_assignees = resolve_effective_assignees(item.assignees.as_deref(), || {
                 self.default_assignees_for_layer(item.layer)
             });
             let issue = github
@@ -1284,13 +1292,10 @@ fn resolve_effective_assignees<F>(explicit: Option<&[String]>, fallback: F) -> V
 where
     F: FnOnce() -> Vec<String>,
 {
-    if let Some(raw) = explicit {
-        let cleaned = clean_assignee_list(raw);
-        if !cleaned.is_empty() {
-            return cleaned;
-        }
+    match explicit {
+        Some(raw) => clean_assignee_list(raw),
+        None => fallback(),
     }
-    fallback()
 }
 
 #[cfg(test)]
@@ -1476,5 +1481,22 @@ mod tests {
             ..Default::default()
         });
         assert!(missing.is_err());
+    }
+
+    #[test]
+    fn resolve_effective_assignees_distinguishes_omitted_from_explicit_empty() {
+        let omitted = resolve_effective_assignees(None, || vec!["role-lead".to_owned()]);
+        assert_eq!(omitted, vec!["role-lead"]);
+
+        let cleared: Vec<String> = Vec::new();
+        let explicit_empty =
+            resolve_effective_assignees(Some(&cleared), || vec!["role-lead".to_owned()]);
+        assert!(explicit_empty.is_empty());
+
+        let explicit = vec![" @Alice ".to_owned(), "alice".to_owned()];
+        assert_eq!(
+            resolve_effective_assignees(Some(&explicit), || vec!["role-lead".to_owned()]),
+            vec!["Alice"]
+        );
     }
 }

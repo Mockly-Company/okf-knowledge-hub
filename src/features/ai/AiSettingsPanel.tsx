@@ -351,6 +351,8 @@ export function AiSettingsPanel({
               {MCP_CLIENT_CONFIGS.map((entry) => (
                 <TabsTrigger
                   key={entry.id}
+                  id={`mcp-tab-${entry.id}`}
+                  aria-controls="mcp-client-panel"
                   selected={entry.id === activeMcpConfig.id}
                   onClick={() => {
                     setMcpClient(entry.id);
@@ -369,16 +371,23 @@ export function AiSettingsPanel({
               {mcpCopied ? "복사됨" : "설정 복사"}
             </Button>
           </div>
-          <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
-            설정 위치: {activeMcpConfig.fileHint}
-          </p>
-          <pre
-            aria-label="MCP 클라이언트 설정 예시"
-            tabIndex={0}
-            className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] font-mono text-[length:var(--font-meta-size)]"
+          <div
+            role="tabpanel"
+            id="mcp-client-panel"
+            aria-labelledby={`mcp-tab-${activeMcpConfig.id}`}
+            className="grid gap-[var(--space-2)]"
           >
-            {activeMcpConfig.snippet}
-          </pre>
+            <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+              설정 위치: {activeMcpConfig.fileHint}
+            </p>
+            <pre
+              aria-label="MCP 클라이언트 설정 예시"
+              tabIndex={0}
+              className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] font-mono text-[length:var(--font-meta-size)]"
+            >
+              {activeMcpConfig.snippet}
+            </pre>
+          </div>
         </div>
       </section>
     </div>
