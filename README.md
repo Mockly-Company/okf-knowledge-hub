@@ -132,17 +132,17 @@ args = ["mcp"]
   "mcpServers": {
     "okhub": {
       "command": "okhub-cli",
-      "args": ["mcp"],
-      "env": {
-        "OKHUB_PROJECT_URL": "https://github.com/orgs/<ORG>/projects/<NUM>",
-        "OKHUB_DOCS_REPO": "<ORG>/<DOCS_REPO>"
-      }
+      "args": ["mcp"]
     }
   }
 }
 ```
 
-> **Windows / Worktree 경로 팁**
+> **URL이나 저장소를 따로 적지 않아도 실행 중인 OkHub 앱과 자동 연동됩니다**
+> - `env` 없이 위 설정만 넣으면, `okhub-cli mcp`가 호출될 때마다 실행 중인 OkHub 데스크톱 앱의 `settings.json`과 OS 키체인 로그인 토큰을 실시간으로 읽어 옵니다.
+> - AI가 `okhub_get_active_context`를 호출하면 **OkHub 앱에 등록된 모든 워크스페이스/프로젝트 목록(`connectedWorkspaces`)**과 **현재 앱에서 활성화된 GitHub Project·문서 저장소·코드 저장소 경로**를 바로 조회할 수 있습니다(다른 프로젝트를 지정하고 싶을 때는 도구 인자 `workspaceId` 또는 선택적 `env`인 `OKHUB_PROJECT_URL`·`OKHUB_DOCS_REPO`로 오버라이드 가능).
+>
+> **Windows / macOS 경로 팁**
 > - Windows에서 `~/.cargo/bin`이 PATH에 없다면 `C:\\Users\\<USER>\\.cargo\\bin\\okhub-cli.exe` 또는 `target\\debug\\okhub-cli.exe`의 **절대 경로**를 `"command"`에 적으세요(JSON에서는 `\\` 이스케이프 또는 `/` 사용).
 > - macOS GUI 앱에서 실행할 때도 PATH 누락을 피하려면 `/Users/<USER>/.cargo/bin/okhub-cli` 절대 경로를 권장합니다.
 
@@ -163,7 +163,7 @@ args = ["mcp"]
 
 | 구분 | 도구 이름 | 설명 |
 |---|---|---|
-| 컨텍스트 | `okhub_get_active_context` | 선택된 Project, 문서/코드 저장소, 역할별 `assignees` 조회 |
+| 컨텍스트 | `okhub_get_active_context` | OkHub 앱에 연결된 전체 워크스페이스/프로젝트 목록(`connectedWorkspaces`), 현재 활성 Project·문서/코드 저장소·역할별 `assignees` 조회 |
 | 컨텍스트 | `okhub_context_issue` | 이슈 본문·선행 이슈 완료 여부·연결 `.md` 문서 Context Pack 반환 |
 | 문서 | `okhub_doc_list` | `.md` 목록, `.html` 동기화 상태, 변경 하이라이트 여부 조회 |
 | 문서 | `okhub_doc_read` | 지정 경로 `.md` 원문 및 `.html`/마커 상태 조회 |

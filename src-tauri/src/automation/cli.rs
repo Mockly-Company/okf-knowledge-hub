@@ -135,6 +135,28 @@ async fn run_command(
                         repo.local_path.as_deref().unwrap_or("(로컬 미연결)")
                     );
                 }
+                if !summary.connected_workspaces.is_empty() {
+                    println!(
+                        "OkHub 연결 워크스페이스 ({}개):",
+                        summary.connected_workspaces.len()
+                    );
+                    for ws in &summary.connected_workspaces {
+                        println!(
+                            "  {} [{}] {}{}{}",
+                            if ws.active { "*" } else { "-" },
+                            ws.id,
+                            ws.title,
+                            ws.docs_repository_full_name
+                                .as_deref()
+                                .map(|r| format!(" · {r}"))
+                                .unwrap_or_default(),
+                            ws.project_url
+                                .as_deref()
+                                .map(|u| format!(" ({u})"))
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
