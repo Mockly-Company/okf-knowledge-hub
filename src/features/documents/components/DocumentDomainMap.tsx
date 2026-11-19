@@ -439,6 +439,7 @@ function WireframeThumb({
 function DesignMapCard({
   spec,
   design,
+  highlighted,
   readAsset,
   registerRef,
   onSelectDocument,
@@ -448,6 +449,7 @@ function DesignMapCard({
 }: {
   spec: DocumentSummary;
   design: DocumentDesignLink;
+  highlighted?: boolean;
   readAsset: DocumentAssetReader;
   registerRef: (node: HTMLElement | null) => void;
   onSelectDocument: (path: string, preferredViewMode?: "html" | "markdown") => void;
@@ -464,6 +466,7 @@ function DesignMapCard({
       className="document-map-card document-map-card--design"
       aria-label={`${design.title} 디자인 시안`}
       data-category="design"
+      data-focused-or-hovered={highlighted ? "true" : undefined}
       onMouseEnter={() => onHoverChange?.(true)}
       onMouseLeave={() => onHoverChange?.(false)}
       onFocus={() => onHoverChange?.(true)}
@@ -488,6 +491,7 @@ function DesignMapCard({
             label={`${design.title} 원본 디자인 열기`}
             tooltip={false}
             className="document-map-card__popout"
+            onFocus={() => onHoverChange?.(true)}
             onClick={() => onOpenExternal(externalUrl)}
           >
             <ExternalLink aria-hidden="true" />
@@ -502,6 +506,7 @@ function DesignMapCard({
             type="button"
             className="document-map-card__thumb document-map-card__thumb--image"
             aria-label={`${design.title} 크게 보기`}
+            onFocus={() => onHoverChange?.(true)}
             onClick={() => onExpand({ asset, title: design.title, externalUrl })}
           >
             <img src={documentAssetSrc(asset)} alt={design.title} />
@@ -522,6 +527,7 @@ function DesignMapCard({
         <UnstyledButton
           type="button"
           className="document-map-card__link-chip"
+          onFocus={() => onHoverChange?.(true)}
           onClick={() => onSelectDocument(spec.path, preferredViewOf(spec))}
         >
           {`← ${spec.title}`}
@@ -850,6 +856,7 @@ function DomainSectionBoard({
                         key={card.key}
                         spec={card.spec}
                         design={card.design}
+                        highlighted={hoveredCardKey === card.key}
                         readAsset={readAsset}
                         registerRef={registerCard(card.key)}
                         onSelectDocument={onSelectDocument}
@@ -898,6 +905,7 @@ function DomainSectionBoard({
                       aria-label={doc.title}
                       data-category={column.key === "overview" ? "overview" : category}
                       data-impl-status={impl?.status}
+                      data-focused-or-hovered={hoveredCardKey === key ? "true" : undefined}
                       onMouseEnter={() => setHoveredCardKey(key)}
                       onMouseLeave={() =>
                         setHoveredCardKey((cur) => (cur === key ? null : cur))
@@ -967,6 +975,7 @@ function DomainSectionBoard({
                       <UnstyledButton
                         type="button"
                         className="document-map-card__main"
+                        onFocus={() => setHoveredCardKey(key)}
                         onClick={() => onSelectDocument(doc.path, preferredView)}
                       >
                         <strong className="document-map-card__title">

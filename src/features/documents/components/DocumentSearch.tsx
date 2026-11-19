@@ -96,7 +96,6 @@ export function DocumentSearch({
   results,
   searchStatus,
   searchError,
-  indexStatus: _indexStatus,
   defaultGroupMode = "domain",
   boardIssues,
   onQueryChange,

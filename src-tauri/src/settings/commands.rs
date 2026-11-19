@@ -320,7 +320,18 @@ fn build_document_task_pack(
                 .trim_start_matches("./")
                 .trim_start_matches('/')
                 .to_owned();
-            if norm.is_empty() || norm.contains("..") {
+            if norm.is_empty()
+                || norm.contains("..")
+                || norm.contains('`')
+                || norm.chars().any(char::is_control)
+                || !norm.to_ascii_lowercase().ends_with(".md")
+            {
+                continue;
+            }
+            let Ok(canon) = workspace_dir.join(&norm).canonicalize() else {
+                continue;
+            };
+            if !canon.starts_with(&canon_root) || !canon.is_file() {
                 continue;
             }
             if !target_paths.iter().any(|existing| existing == &norm) {
@@ -336,12 +347,28 @@ fn build_document_task_pack(
             return None;
         }
 
-        let domain_label = req
+        let sanitized_domain = req
             .domain_label
             .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or("선택된 도메인");
+            .map(|raw| {
+                raw.chars()
+                    .map(|ch| {
+                        if ch.is_control() || ch == '`' {
+                            ' '
+                        } else {
+                            ch
+                        }
+                    })
+                    .collect::<String>()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
+            })
+            .filter(|s| !s.is_empty());
+        let domain_label = sanitized_domain.as_deref().unwrap_or("선택된 도메인");
         let slug_seed = primary_doc
             .as_ref()
             .map(|(p, _)| p.as_str())
@@ -1570,7 +1597,7 @@ mod tests {
         assert_eq!(legacy.document_paths, None);
 
         let audit_req: super::AiTaskLaunchRequest = serde_json::from_str(
-            r#"{"documentPath":"docs/domains/board/prd.md","taskMode":"audit_code_sync","domainLabel":"Board (보드)","documentPaths":["docs/domains/board/prd.md","docs/domains/board/screen-spec.md","../secret.md"]}"#,
+            r#"{"documentPath":"docs/domains/board/prd.md","taskMode":"audit_code_sync","domainLabel":"Board `보드`\n# INJECT","documentPaths":["docs/domains/board/prd.md","docs/domains/board/screen-spec.md","../secret.md","docs/domains/board/evil.md\n## INJECT","docs/domains/board/image.png","docs/domains/board/nonexistent.md"]}"#,
         )
         .unwrap();
         assert_eq!(audit_req.task_mode.as_deref(), Some("audit_code_sync"));
@@ -1579,14 +1606,20 @@ mod tests {
         let docs_dir = temp.path().join("docs").join("domains").join("board");
         std::fs::create_dir_all(&docs_dir).unwrap();
         std::fs::write(docs_dir.join("prd.md"), "# 보드 PRD\n\n내용").unwrap();
+        std::fs::write(docs_dir.join("screen-spec.md"), "# 보드 화면명세\n\n내용").unwrap();
+        std::fs::write(docs_dir.join("image.png"), "png").unwrap();
 
         let pack = super::build_document_task_pack(temp.path(), &audit_req)
             .expect("audit pack should build");
         assert!(pack.slug.starts_with("audit-"));
         assert!(pack.branch_name.starts_with("docs/audit-"));
-        assert!(pack.markdown.contains("Board (보드)"));
+        assert!(pack.markdown.contains("Board 보드 # INJECT"));
+        assert!(!pack.markdown.contains("## INJECT"));
         assert!(pack.markdown.contains("okhub_update_doc_impl_status"));
         assert!(pack.markdown.contains("docs/domains/board/screen-spec.md"));
         assert!(!pack.markdown.contains("../secret.md"));
+        assert!(!pack.markdown.contains("evil.md"));
+        assert!(!pack.markdown.contains("image.png"));
+        assert!(!pack.markdown.contains("nonexistent.md"));
     }
 }

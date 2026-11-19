@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardIssue } from "@/features/project-board/model";
@@ -367,5 +367,66 @@ describe("DocumentDomainMap", () => {
     await user.click(screen.getByRole("button", { name: "AI 코드 반영 점검" }));
     expect(onAuditCodeSync).toHaveBeenCalledTimes(1);
     expect(onAuditCodeSync.mock.calls[0]?.[0]?.key).toBe("documents");
+  });
+
+  it("highlights connected edges and dims unrelated edges on keyboard focus of a card control (S2)", () => {
+    const colLeft: Record<string, number> = {
+      overview: 0,
+      prd: 300,
+      screen_spec: 600,
+      adr: 900,
+    };
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement): DOMRect {
+        if (this.classList.contains("document-domain-map__board")) {
+          return new DOMRect(0, 0, 1200, 400);
+        }
+        const cat = this.getAttribute("data-category");
+        if (cat && cat in colLeft) {
+          return new DOMRect(colLeft[cat], 20, 220, 120);
+        }
+        return new DOMRect(0, 0, 0, 0);
+      });
+
+    try {
+      const bareSpec: DocumentSummary = {
+        ...specDoc,
+        designs: [],
+        linkedPaths: ["docs/domains/documents/adr-001.md"],
+      };
+      const { container } = render(
+        <DocumentDomainMap
+          documents={[indexDoc, prdDoc, bareSpec, adrDoc]}
+          onSelectDocument={vi.fn()}
+        />,
+      );
+
+      const overviewCard = screen.getByRole("article", { name: indexDoc.title });
+      const overviewBtn = within(overviewCard).getAllByRole("button")[0]!;
+      const connectedPath = () =>
+        container.querySelector(
+          'path[data-edge-from="docs/domains/documents/index.md"][data-edge-to="docs/domains/documents/prd.md"]',
+        );
+      const unrelatedPath = () =>
+        container.querySelector(
+          'path[data-edge-from="docs/domains/documents/screen-spec.md"][data-edge-to="docs/domains/documents/adr-001.md"]',
+        );
+
+      expect(connectedPath()).not.toBeNull();
+      expect(unrelatedPath()).not.toBeNull();
+
+      fireEvent.focus(overviewBtn);
+      expect(overviewCard).toHaveAttribute("data-focused-or-hovered", "true");
+      expect(connectedPath()).toHaveAttribute("opacity", "1");
+      expect(connectedPath()).toHaveAttribute("stroke-width", "2.25");
+      expect(unrelatedPath()).toHaveAttribute("opacity", "0.14");
+
+      fireEvent.blur(overviewBtn, { relatedTarget: null });
+      expect(overviewCard).not.toHaveAttribute("data-focused-or-hovered");
+      expect(unrelatedPath()).not.toHaveAttribute("opacity", "0.14");
+    } finally {
+      rectSpy.mockRestore();
+    }
   });
 });

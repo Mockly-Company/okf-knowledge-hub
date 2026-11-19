@@ -2587,8 +2587,14 @@
   transition: background var(--motion-control-duration) var(--motion-control-easing);
 }
 
-.document-map-card:hover {
+.document-map-card:hover,
+.document-map-card:focus-within {
   background: var(--color-surface);
+}
+
+.document-map-card:focus-within {
+  outline: var(--focus-ring-width) solid var(--color-primary);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .document-map-card--impl-synced {

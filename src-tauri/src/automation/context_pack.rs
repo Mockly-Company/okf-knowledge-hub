@@ -169,12 +169,13 @@ pub fn extract_referenced_doc_paths(text: &str) -> Vec<String> {
             continue;
         }
         let stripped = normalized
+            .trim_start_matches(':')
             .trim_start_matches("./")
             .trim_start_matches('/')
-            .trim_matches(|ch: char| ch == '.' || ch == ':')
             .split('#')
             .next()
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .trim_end_matches(['.', ':']);
         let canonical = if stripped.len() >= 5
             && stripped.as_bytes()[stripped.len() - 5..].eq_ignore_ascii_case(b".html")
         {
@@ -494,6 +495,7 @@ mod tests {
 - 현재경로: ./docs/domains/board/screen-spec.html#sec-2
 - 윈도우: docs\domains\board\prd.md
 - 루트슬래시: /docs/domains/auth/prd.md
+- 워크스페이스 규칙: .okf/AGENTS.md, ./.okf/guide.md.
 - 차단: docs/../secrets.md https://example.com/docs/a.md
 "#;
         let extracted = super::extract_referenced_doc_paths(body);
@@ -503,6 +505,8 @@ mod tests {
                 "docs/domains/board/prd.md",
                 "docs/domains/board/screen-spec.md",
                 "docs/domains/auth/prd.md",
+                ".okf/AGENTS.md",
+                ".okf/guide.md",
             ]
         );
     }
