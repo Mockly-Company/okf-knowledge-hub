@@ -179,7 +179,7 @@ export function AppSidebar({
       </div>
 
       <div className="app-sidebar__section app-sidebar__section--primary">
-        <div className="px-[var(--space-1)] pb-[var(--space-2)]">
+        <div className="px-[var(--space-2)] pb-[var(--space-2)]">
           <NavLink
             to="/home"
             end
@@ -197,7 +197,7 @@ export function AppSidebar({
               <>
                 <span
                   aria-hidden="true"
-                  className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-primary-soft)] px-[var(--space-2)] py-0.5 text-[11px] font-[number:var(--font-weight-control)] text-[var(--color-primary-text)] tabular-nums"
+                  className="inline-flex min-w-5 items-center justify-center rounded-full bg-[var(--color-primary-action)] px-[var(--space-2)] py-0.5 text-[11px] font-[number:var(--font-weight-control)] text-[var(--color-on-primary)] tabular-nums"
                 >
                   {unreadDashboardCount > 99 ? "99+" : unreadDashboardCount}
                 </span>
@@ -399,7 +399,13 @@ export function AppSidebar({
             </NavLink>
           ))}
         </nav>
-        <hr className="app-sidebar__primary-divider" />
+        <hr
+          className={cn(
+            "app-sidebar__primary-divider",
+            !location.pathname.startsWith("/documents") &&
+              "app-sidebar__primary-divider--hidden",
+          )}
+        />
         {location.pathname.startsWith("/documents") ? (
           <div className="app-sidebar__documents">
             <DocumentTree
@@ -424,48 +430,46 @@ export function AppSidebar({
         </NavLink>
       </div>
 
-      <div className="app-sidebar__user">
-        {account.status === "loading" ? (
-          <>
-            <span
-              className="app-sidebar__avatar app-sidebar__skeleton"
-              aria-hidden="true"
-            />
-            <span
-              className="app-sidebar__user-copy app-sidebar__user-copy--loading"
-              aria-label="GitHub 계정 불러오는 중"
-            >
-              <span className="app-sidebar__skeleton" />
-              <span className="app-sidebar__skeleton" />
-            </span>
-          </>
-        ) : (
-          <>
-            <span className="app-sidebar__avatar" aria-hidden="true">
-              {accountUser && !avatarFailed ? (
-                <img
-                  src={accountUser.avatarUrl}
-                  alt=""
-                  onError={() => setFailedAvatarUrl(accountUser.avatarUrl)}
-                />
-              ) : (
-                accountInitial
-              )}
-            </span>
-            <span className="app-sidebar__user-copy">
-              <strong>
-                {accountUser
-                  ? `@${accountUser.login}`
-                  : account.status === "login_beginning" ||
-                      account.status === "waiting_for_user"
-                    ? "GitHub 연결 중"
-                    : "GitHub 재로그인 필요"}
-              </strong>
-              <small>{accountUser ? "GitHub 계정" : "Settings에서 연결"}</small>
-            </span>
-          </>
-        )}
-      </div>
+      {account.status === "loading" ? (
+        <div className="app-sidebar__user">
+          <span
+            className="app-sidebar__avatar app-sidebar__skeleton"
+            aria-hidden="true"
+          />
+          <span
+            className="app-sidebar__user-copy app-sidebar__user-copy--loading"
+            aria-label="GitHub 계정 불러오는 중"
+          >
+            <span className="app-sidebar__skeleton" />
+            <span className="app-sidebar__skeleton" />
+          </span>
+        </div>
+      ) : (
+        <Link to="/settings?category=external" className="app-sidebar__user">
+          <span className="app-sidebar__avatar" aria-hidden="true">
+            {accountUser && !avatarFailed ? (
+              <img
+                src={accountUser.avatarUrl}
+                alt=""
+                onError={() => setFailedAvatarUrl(accountUser.avatarUrl)}
+              />
+            ) : (
+              accountInitial
+            )}
+          </span>
+          <span className="app-sidebar__user-copy">
+            <strong>
+              {accountUser
+                ? `@${accountUser.login}`
+                : account.status === "login_beginning" ||
+                    account.status === "waiting_for_user"
+                  ? "GitHub 연결 중"
+                  : "GitHub 재로그인 필요"}
+            </strong>
+            <small>{accountUser ? "GitHub 계정" : "Settings에서 연결"}</small>
+          </span>
+        </Link>
+      )}
     </aside>
   );
 }

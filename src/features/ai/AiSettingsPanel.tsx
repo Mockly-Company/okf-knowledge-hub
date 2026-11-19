@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SectionHeader } from "@/components/patterns/SectionHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   StatusFeedback,
   StatusFeedbackDescription,
@@ -28,6 +30,52 @@ function describeAiSettingsError(error: unknown): string | null {
   return error instanceof Error ? error.message : "아직 지원되지 않습니다";
 }
 
+type McpClientId = "claude" | "codex" | "agy";
+
+const MCP_INSTALL_COMMAND = "cargo install --path src-tauri --bin okhub-cli";
+
+const MCP_CLIENT_CONFIGS: Array<{
+  id: McpClientId;
+  label: string;
+  fileHint: string;
+  snippet: string;
+}> = [
+  {
+    id: "claude",
+    label: "Claude Code",
+    fileHint: ".mcp.json 또는 claude mcp add",
+    snippet: `{
+  "mcpServers": {
+    "okhub": {
+      "command": "okhub-cli",
+      "args": ["mcp"]
+    }
+  }
+}`,
+  },
+  {
+    id: "codex",
+    label: "Codex",
+    fileHint: "~/.codex/config.toml (또는 앱 내 실행 시 자동 주입)",
+    snippet: `[mcp_servers.okhub]
+command = "okhub-cli"
+args = ["mcp"]`,
+  },
+  {
+    id: "agy",
+    label: "Antigravity / Cursor",
+    fileHint: "MCP 서버 설정 JSON",
+    snippet: `{
+  "mcpServers": {
+    "okhub": {
+      "command": "okhub-cli",
+      "args": ["mcp"]
+    }
+  }
+}`,
+  },
+];
+
 export function AiSettingsPanel({
   gateway = sharedGateway,
 }: {
@@ -40,6 +88,8 @@ export function AiSettingsPanel({
     activeProject?.activeWorkspace?.id ??
     DEFAULT_WORKSPACE_SCOPE;
   const [cliCommand, setCliCommand] = useState("");
+  const [mcpClient, setMcpClient] = useState<McpClientId>("claude");
+  const [mcpCopied, setMcpCopied] = useState(false);
   const seededRef = useRef(false);
 
   // AI 화면과 같은 스코프 키를 쓴다. 상위 prefix(aiKeys.agentsMd)로 invalidate하면 양쪽이 함께 갱신된다.
@@ -106,6 +156,18 @@ export function AiSettingsPanel({
 
   const save = () => saveMutation.mutate();
   const createFromTemplate = () => createMutation.mutate();
+  const activeMcpConfig =
+    MCP_CLIENT_CONFIGS.find((entry) => entry.id === mcpClient) ??
+    MCP_CLIENT_CONFIGS[0];
+
+  const handleCopyMcpSnippet = async () => {
+    try {
+      await navigator.clipboard?.writeText(activeMcpConfig.snippet);
+      setMcpCopied(true);
+    } catch {
+      setMcpCopied(false);
+    }
+  };
 
   return (
     <div>
@@ -128,7 +190,7 @@ export function AiSettingsPanel({
         >
           터미널용 CLI 명령
         </label>
-        <input
+        <Input
           id="ai-cli-command"
           value={cliCommand}
           onChange={(event) => {
@@ -137,9 +199,9 @@ export function AiSettingsPanel({
           }}
           placeholder="my-ai-cli"
           disabled={isLoading}
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)] font-mono text-[var(--font-meta-size)]"
+          className="w-full font-mono text-[length:var(--font-meta-size)]"
         />
-        <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+        <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
           AI 화면의 &apos;사용자 지정&apos; 버튼이 이 명령을 앱 안 터미널에서 실행합니다
         </p>
         <div>
@@ -186,7 +248,7 @@ export function AiSettingsPanel({
           <pre
             aria-label="저장소 공통 규칙 미리보기"
             tabIndex={0}
-            className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
+            className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[length:var(--font-meta-size)]"
           >
             {previewLines(agentsContent)}
           </pre>
@@ -240,7 +302,7 @@ export function AiSettingsPanel({
           <pre
             aria-label="허브 공통 규칙 미리보기"
             tabIndex={0}
-            className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[var(--font-meta-size)]"
+            className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] text-[length:var(--font-meta-size)]"
           >
             {previewLines(appAgentsContent, 10)}
           </pre>
@@ -253,6 +315,67 @@ export function AiSettingsPanel({
             허브 공통 규칙이 아직 설정되지 않았습니다.
           </p>
         )}
+      </section>
+      <section
+        aria-label="MCP 서버 연결 (외부 AI 에이전트)"
+        className="mt-[var(--space-6)] grid gap-[var(--space-3)]"
+      >
+        <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+          <h3 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+            MCP 서버 연결 (외부 AI 에이전트)
+          </h3>
+          <StatusBadge tone="neutral">STDIO</StatusBadge>
+        </div>
+        <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+          OkHub 내장 터미널에서 Claude Code·Codex를 실행하면 현재 Project·워크스페이스 MCP 설정이 자동 주입됩니다. 외부 IDE나 독립 터미널에서도 <code>okhub-cli mcp</code>를 연결하면 기획·디자인 문서 검증, 백로그 트리 생성, PR 생성을 한 번에 실행할 수 있습니다.
+        </p>
+        <div className="grid gap-[var(--space-2)]">
+          <p className="m-0 font-[number:var(--font-weight-control)] text-[length:var(--font-meta-size)] text-[var(--color-text-strong)]">
+            1. CLI 바이너리 준비
+          </p>
+          <pre
+            aria-label="okhub-cli 설치 명령"
+            tabIndex={0}
+            className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] font-mono text-[length:var(--font-meta-size)]"
+          >
+            {MCP_INSTALL_COMMAND}
+          </pre>
+        </div>
+        <div className="grid gap-[var(--space-2)]">
+          <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
+            <TabsList aria-label="MCP 클라이언트 선택" className="min-w-0 flex-1 border-b border-[var(--color-border)]">
+              {MCP_CLIENT_CONFIGS.map((entry) => (
+                <TabsTrigger
+                  key={entry.id}
+                  selected={entry.id === activeMcpConfig.id}
+                  onClick={() => {
+                    setMcpClient(entry.id);
+                    setMcpCopied(false);
+                  }}
+                >
+                  {entry.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void handleCopyMcpSnippet()}
+            >
+              {mcpCopied ? "복사됨" : "설정 복사"}
+            </Button>
+          </div>
+          <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+            설정 위치: {activeMcpConfig.fileHint}
+          </p>
+          <pre
+            aria-label="MCP 클라이언트 설정 예시"
+            tabIndex={0}
+            className="overflow-x-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-3)] font-mono text-[length:var(--font-meta-size)]"
+          >
+            {activeMcpConfig.snippet}
+          </pre>
+        </div>
       </section>
     </div>
   );

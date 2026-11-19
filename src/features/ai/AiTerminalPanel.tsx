@@ -104,7 +104,7 @@ export function AiTerminalPanel({
         <TerminalSurface key={active.key} session={active} store={store} />
       </div>
       {active.status === "exited" ? (
-        <p role="status" className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+        <p role="status" className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
           터미널이 종료되었습니다 (코드 {active.exitCode}).
         </p>
       ) : null}

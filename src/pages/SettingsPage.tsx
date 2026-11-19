@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { Check } from "lucide-react";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { SectionHeader } from "@/components/patterns/SectionHeader";
@@ -18,7 +19,6 @@ import type { CodeRepositoriesGateway } from "@/features/code-repositories/CodeR
 
 const settingsCategories = [
   "외부 연결",
-  "문서",
   "작업 방식",
   "화면",
   "AI 연동",
@@ -38,9 +38,6 @@ function resolveSettingsCategory(value: string | null): string {
     key === "외부연결"
   ) {
     return "외부 연결";
-  }
-  if (key === "document" || key === "documents" || key === "문서") {
-    return "문서";
   }
   if (
     key === "workflow" ||
@@ -64,6 +61,21 @@ function resolveSettingsCategory(value: string | null): string {
     return "앱 정보";
   }
   return "화면";
+}
+
+function RouterCategorySync({
+  onCategoryChange,
+}: {
+  onCategoryChange: (category: string) => void;
+}) {
+  const [searchParams] = useSearchParams();
+  const rawCategory = searchParams.get("category");
+  useEffect(() => {
+    if (rawCategory !== null) {
+      onCategoryChange(resolveSettingsCategory(rawCategory));
+    }
+  }, [onCategoryChange, rawCategory]);
+  return null;
 }
 
 /**
@@ -113,6 +125,7 @@ export function SettingsPage({
   codeRepositoriesGateway?: CodeRepositoriesGateway;
 }) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
+  const inRouterContext = useInRouterContext();
   const [activeCategory, setActiveCategory] = useState(readInitialSettingsCategory);
 
   return (
@@ -120,6 +133,9 @@ export function SettingsPage({
       className="min-h-full bg-[var(--color-surface)] px-[var(--page-padding-inline)] pt-[var(--page-block-start)] pb-[var(--space-10)]"
       aria-labelledby="settings-title"
     >
+      {inRouterContext ? (
+        <RouterCategorySync onCategoryChange={setActiveCategory} />
+      ) : null}
       <PageHeader
         titleId="settings-title"
         title="Settings"

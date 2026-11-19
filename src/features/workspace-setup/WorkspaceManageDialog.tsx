@@ -178,7 +178,7 @@ export function WorkspaceManageDialog({
 
         <TabsList
           aria-label="연결된 워크스페이스 목록"
-          className="gap-[var(--space-5)] overflow-x-auto pb-0.5"
+          className="mt-[var(--space-4)] gap-[var(--space-5)] overflow-x-auto pb-0.5"
         >
           {workspaces.map((workspace) => {
             const isSelected = workspace.id === selectedWorkspace.id;

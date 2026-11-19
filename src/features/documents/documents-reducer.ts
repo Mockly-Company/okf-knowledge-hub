@@ -239,6 +239,10 @@ function sameDocumentSummary(
     left.documentId === right.documentId &&
     left.modifiedAtUnixMs === right.modifiedAtUnixMs &&
     left.size === right.size &&
+    left.hasCompanionHtml === right.hasCompanionHtml &&
+    JSON.stringify(left.wireframes ?? []) ===
+      JSON.stringify(right.wireframes ?? []) &&
+    JSON.stringify(left.designs ?? []) === JSON.stringify(right.designs ?? []) &&
     sameFrontmatterStatus(left.frontmatterStatus, right.frontmatterStatus)
   );
 }

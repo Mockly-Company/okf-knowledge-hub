@@ -13,13 +13,16 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "url": "https://github.com/login/device"
+          "url": "https://*"
         },
         {
-          "url": "https://github.com/settings/installations"
+          "url": "http://*"
         },
         {
-          "url": "https://github.com/Mockly-Company/okf-knowledge-hub/releases"
+          "url": "mailto:*"
+        },
+        {
+          "url": "tel:*"
         }
       ]
     },

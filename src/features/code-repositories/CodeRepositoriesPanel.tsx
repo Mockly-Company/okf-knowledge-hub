@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SectionHeader } from "@/components/patterns/SectionHeader";
+import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { StatusFeedback } from "@/components/ui/status-feedback";
 import {
   createCodeRepositoriesGateway,
   type CodeRepositoriesGateway,
@@ -23,11 +25,17 @@ function statusBadgeLabel(source: CodeRepositoryMappingSource, exists: boolean):
   return "미연결";
 }
 
-function statusBadgeClassName(source: CodeRepositoryMappingSource, exists: boolean): string {
+function statusBadgeTone(
+  source: CodeRepositoryMappingSource,
+  exists: boolean,
+): "success" | "warning" | "neutral" {
   if ((source === "manual" && exists) || source === "auto_detected") {
-    return "bg-[var(--color-primary-soft)] text-[var(--color-primary-text)] border-[var(--color-primary)]";
+    return "success";
   }
-  return "bg-[var(--color-surface-muted)] text-[var(--color-text-default)] border-[var(--color-border)]";
+  if (source === "manual" && !exists) {
+    return "warning";
+  }
+  return "neutral";
 }
 
 export function CodeRepositoriesPanel({
@@ -131,43 +139,39 @@ export function CodeRepositoriesPanel({
         description="현재 문서 워크스페이스(.okf/workspace.yml)에 선언된 코드 저장소의 로컬 클론 경로를 연결합니다. AI 터미널과 문서 내 코드 참조 미리보기가 이 경로를 자동으로 따릅니다."
       />
 
-      {feedback && (
-        <p
-          role="status"
-          className="m-0 rounded-[var(--radius-md)] border border-[var(--color-primary)] bg-[var(--color-primary-soft)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-sm)] text-[var(--color-text-default)]"
-        >
+      {feedback ? (
+        <StatusFeedback variant="banner" tone="success">
           {feedback}
-        </p>
-      )}
-      {errorMessage && (
-        <p
-          role="alert"
-          className="m-0 rounded-[var(--radius-md)] border border-[var(--color-error-border)] bg-[var(--color-error-surface)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--text-sm)] text-[var(--color-error-text)]"
-        >
+        </StatusFeedback>
+      ) : null}
+      {errorMessage ? (
+        <StatusFeedback variant="banner" tone="error">
           {errorMessage}
-        </p>
-      )}
+        </StatusFeedback>
+      ) : null}
 
       {reposQuery.isLoading ? (
         <p className="m-0 text-[var(--color-text-muted)]">
           연결된 코드 저장소 목록을 확인하는 중…
         </p>
       ) : reposQuery.isError ? (
-        <div
-          role="alert"
-          className="flex flex-wrap items-center justify-between gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-error-border)] bg-[var(--color-error-surface)] p-[var(--space-4)] text-[var(--color-error-text)]"
+        <StatusFeedback
+          variant="content"
+          tone="error"
+          action={
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void reposQuery.refetch()}
+            >
+              다시 시도
+            </Button>
+          }
         >
-          <span>코드 저장소 목록을 불러오지 못했습니다.</span>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void reposQuery.refetch()}
-          >
-            다시 시도
-          </Button>
-        </div>
+          코드 저장소 목록을 불러오지 못했습니다.
+        </StatusFeedback>
       ) : repos.length === 0 ? (
-        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-[var(--space-4)] text-[var(--color-text-default)]">
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-4)] text-[var(--color-text-default)]">
           현재 문서 워크스페이스의 <code>.okf/workspace.yml</code>에 선언된 코드 저장소가 없습니다.
         </div>
       ) : (
@@ -175,6 +179,8 @@ export function CodeRepositoriesPanel({
           {repos.map((repo) => {
             const currentInput =
               draftPaths[repo.fullName] ?? repo.localPath ?? "";
+            const trimmedInput = currentInput.trim();
+            const hasChanges = trimmedInput !== (repo.localPath ?? "").trim();
             const inputId = `code-repo-path-${repo.key}`;
             return (
               <li
@@ -186,18 +192,13 @@ export function CodeRepositoriesPanel({
                     <strong className="font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
                       {repo.label}
                     </strong>
-                    <span className="ml-[var(--space-2)] font-mono text-[length:var(--text-sm)] text-[var(--color-text-muted)]">
+                    <span className="ml-[var(--space-2)] font-mono text-[length:var(--font-ui-size)] text-[var(--color-text-muted)]">
                       {repo.fullName}
                     </span>
                   </div>
-                  <span
-                    className={`inline-flex items-center rounded-[var(--radius-sm)] border px-[var(--space-2)] py-0.5 text-[length:var(--text-xs)] font-[number:var(--font-weight-control)] ${statusBadgeClassName(
-                      repo.mappingSource,
-                      repo.exists,
-                    )}`}
-                  >
+                  <StatusBadge tone={statusBadgeTone(repo.mappingSource, repo.exists)}>
                     {statusBadgeLabel(repo.mappingSource, repo.exists)}
-                  </span>
+                  </StatusBadge>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-[var(--space-2)]">
@@ -229,14 +230,17 @@ export function CodeRepositoriesPanel({
                   <Button
                     type="button"
                     variant="primary"
+                    loading={saveMutation.isPending}
                     disabled={
-                      saveMutation.isPending || currentInput.trim().length === 0
+                      saveMutation.isPending ||
+                      trimmedInput.length === 0 ||
+                      !hasChanges
                     }
                     aria-label={`${repo.fullName} 경로 저장`}
                     onClick={() =>
                       saveMutation.mutate({
                         fullName: repo.fullName,
-                        localPath: currentInput.trim(),
+                        localPath: trimmedInput,
                       })
                     }
                   >
@@ -246,6 +250,7 @@ export function CodeRepositoriesPanel({
                     <Button
                       type="button"
                       variant="ghost"
+                      loading={clearMutation.isPending}
                       disabled={clearMutation.isPending}
                       aria-label={`${repo.fullName} 수동 연결 해제`}
                       onClick={() => clearMutation.mutate(repo.fullName)}

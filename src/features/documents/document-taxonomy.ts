@@ -93,6 +93,7 @@ function classifyByDocType(docType: string | null | undefined): DocumentCategory
   if (
     normalized === "product spec" ||
     normalized === "prd" ||
+    normalized === "feature_design" ||
     normalized === "feature_spec" ||
     normalized === "product-spec" ||
     normalized === "기획서"

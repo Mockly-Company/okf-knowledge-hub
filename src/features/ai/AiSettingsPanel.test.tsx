@@ -248,4 +248,30 @@ describe("AiSettingsPanel", () => {
     );
     expect(document.body.textContent).not.toContain("/work/docs-b");
   });
+
+  it("renders the external MCP connection guide and switches client snippets", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeAiGateway();
+    render(
+      <TestQueryProvider>
+        <AiSettingsPanel gateway={gateway} />
+      </TestQueryProvider>,
+    );
+
+    const mcpSection = await screen.findByRole("region", {
+      name: "MCP 서버 연결 (외부 AI 에이전트)",
+    });
+    expect(within(mcpSection).getByLabelText("okhub-cli 설치 명령")).toHaveTextContent(
+      "cargo install --path src-tauri --bin okhub-cli",
+    );
+    const snippetBox = within(mcpSection).getByLabelText("MCP 클라이언트 설정 예시");
+    expect(snippetBox).toHaveTextContent('"command": "okhub-cli"');
+
+    await user.click(within(mcpSection).getByRole("tab", { name: "Codex" }));
+    expect(snippetBox).toHaveTextContent("[mcp_servers.okhub]");
+    expect(snippetBox).toHaveTextContent('args = ["mcp"]');
+
+    await user.click(within(mcpSection).getByRole("tab", { name: "Antigravity / Cursor" }));
+    expect(snippetBox).toHaveTextContent('"mcpServers"');
+  });
 });

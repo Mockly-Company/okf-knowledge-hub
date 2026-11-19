@@ -490,7 +490,7 @@ export function ScreenSpecDeck({
                   )}
                 </div>
 
-                <div className="screen-spec-card__designs">
+                <div className="screen-spec-card__aside screen-spec-card__designs">
                   <DesignLinksBar
                     designs={wireframes.map((wireframe) => ({
                       title: wireframe.title,
@@ -499,6 +499,7 @@ export function ScreenSpecDeck({
                     documentPath={spec.path}
                     readAsset={assetReader}
                     heading="화면 와이어프레임"
+                    assetKind="wireframe"
                     emptyNotice="와이어프레임이 아직 없습니다. 화면마다 frontmatter의 wireframes 항목에 와이어프레임 이미지를 등록해 주세요."
                   />
                   <DesignLinksBar

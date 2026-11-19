@@ -34,18 +34,66 @@ pub enum AiTool {
 impl AiTool {
     /// 터미널에서 대화형으로 띄울 명령. Codex와 Antigravity는 첫 대화형 프롬프트로 규칙 파일을 전달한다.
     pub fn terminal_command(self, custom_command: &str, rules_file: &Path) -> String {
+        self.terminal_command_with_mcp(custom_command, rules_file, None, None)
+    }
+
+    /// MCP 서버 설정(`--mcp-config` 또는 `-c mcp_servers.okhub.*`)까지 함께 실어 터미널 명령을 만든다.
+    pub fn terminal_command_with_mcp(
+        self,
+        custom_command: &str,
+        rules_file: &Path,
+        mcp_config_path: Option<&Path>,
+        okhub_cli_path: Option<&Path>,
+    ) -> String {
         let rules = rules_file.display();
         match self {
-            AiTool::Claude => format!(
-                "claude --append-system-prompt-file {}",
-                shell_quote(&rules.to_string())
-            ),
-            AiTool::Codex => format!(
-                "codex {}",
-                shell_quote(&format!(
+            AiTool::Claude => {
+                let mut cmd = format!(
+                    "claude --append-system-prompt-file {}",
+                    shell_quote(&rules.to_string())
+                );
+                if let Some(cfg) = mcp_config_path {
+                    cmd.push_str(&format!(
+                        " --mcp-config {}",
+                        shell_quote(&cfg.display().to_string())
+                    ));
+                }
+                cmd
+            }
+            AiTool::Codex => {
+                let mut cmd = String::from("codex");
+                if let Some(cli) = okhub_cli_path {
+                    let cli_text = cli.display().to_string();
+                    let (cmd_override, args_override) = if cfg!(windows) {
+                        let toml_cmd = if cli_text.contains('\'') {
+                            format!("'{}'", cli_text.replace('\'', ""))
+                        } else {
+                            format!("'{cli_text}'")
+                        };
+                        (
+                            format!("mcp_servers.okhub.command={toml_cmd}"),
+                            "mcp_servers.okhub.args=['mcp']".to_owned(),
+                        )
+                    } else {
+                        let json_cmd = serde_json::to_string(&cli_text)
+                            .unwrap_or_else(|_| format!("\"{cli_text}\""));
+                        (
+                            format!("mcp_servers.okhub.command={json_cmd}"),
+                            "mcp_servers.okhub.args=[\"mcp\"]".to_owned(),
+                        )
+                    };
+                    cmd.push_str(&format!(
+                        " -c {} -c {}",
+                        shell_quote(&cmd_override),
+                        shell_quote(&args_override),
+                    ));
+                }
+                cmd.push(' ');
+                cmd.push_str(&shell_quote(&format!(
                     "Read the workspace rules in {rules} and follow them during this session. Then wait for my request."
-                ))
-            ),
+                )));
+                cmd
+            }
             AiTool::Antigravity => format!(
                 "agy --prompt-interactive {}",
                 shell_quote(&format!(
@@ -92,6 +140,7 @@ pub struct ActiveWorkspaceAiContext {
     pub docs_repository_full_name: Option<String>,
     pub project: Option<ActiveProjectRuleInfo>,
     pub code_repositories: Vec<LinkedCodeRepoRuleInfo>,
+    pub assignees: Option<crate::workspace::model::WorkspaceAssignees>,
     pub current_user_login: Option<String>,
 }
 
@@ -165,8 +214,33 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
             }
         }
     }
+    if let Some(assignees) = context.assignees.as_ref().filter(|a| !a.is_empty()) {
+        let mut role_parts = Vec::new();
+        for (label, list) in [
+            ("기획", &assignees.planning),
+            ("디자인", &assignees.design),
+            ("프론트엔드", &assignees.frontend),
+            ("백엔드", &assignees.backend),
+        ] {
+            let formatted: Vec<String> = list
+                .iter()
+                .map(|login| login.trim().trim_start_matches('@'))
+                .filter(|login| !login.is_empty())
+                .map(|login| format!("`@{login}`"))
+                .collect();
+            if !formatted.is_empty() {
+                role_parts.push(format!("{label} {}", formatted.join(", ")));
+            }
+        }
+        if !role_parts.is_empty() {
+            lines.push(format!(
+                "- 역할별 기본 담당자 (`.okf/workspace.yml`): {}",
+                role_parts.join(" · ")
+            ));
+        }
+    }
     lines.push(
-        "- 로컬 자동화 도구: `okhub-cli` (`doc validate`, `pr list|create|approve-merge`, `board list|ready|create-issue|derive-backlog|update-status`, `context issue <번호>`, STDIO MCP `okhub-cli mcp`)"
+        "- 로컬 자동화 도구: `okhub-cli` (CLI: `doc validate`, `pr list|create|approve-merge`, `board schema|list|ready|create-issue|derive-backlog|update-status`, `context issue <번호>`, STDIO MCP `okhub-cli mcp` — 주요 MCP 도구: `okhub_get_active_context`, `okhub_board_get_schema`, `okhub_board_create_backlog_tree`, `okhub_board_update_issue`, `okhub_doc_validate`, `okhub_pr_create` 등 16개)"
             .to_owned(),
     );
     lines.push(String::new());
@@ -196,10 +270,199 @@ pub fn worktree_rules(repository_root: &Path, worktrees_root: &Path) -> String {
 브랜치 이름은 영문 소문자·숫자·`-`·`/`만 쓰고, 만들기 전에 `git check-ref-format --branch <branch>`로 확인한다.\n\
 3. 원본 저장소에 있는 git이 추적하지 않는 큰 폴더(`node_modules` 등)는 worktree에 복사하거나 새로 설치하지 말고 링크한다. \
 Windows: `cmd /c mklink /J \"<worktree>\\<dir>\" \"{root}\\<dir>\"`, macOS: `ln -s \"{root}/<dir>\" \"<worktree>/<dir>\"`.\n\
-4. 사용자가 요청하면 worktree에서 커밋하고 푸시한 뒤 `gh pr create`로 PR을 연다.\n\
+4. 사용자가 요청하면 worktree에서 커밋하고 푸시한 뒤 `okhub_pr_create` (또는 `okhub-cli pr create`, 폴백: `gh pr create`)로 PR을 연다.\n\
 5. 세션을 시작하면 `git -C \"{root}\" worktree list`를 확인하고, PR이 머지된 브랜치의 worktree는 `git worktree remove`로 지운 뒤 `git -C \"{root}\" worktree prune`을 실행한다. 머지 전 worktree는 남긴다.\n\
 6. GitHub 권한은 앱 로그인 토큰을 쓴다. 터미널을 8시간 넘게 열어 두면 푸시가 실패할 수 있으니, 그때는 사용자에게 새 터미널을 열어 달라고 말한다.\n"
     )
+}
+
+/// 앱이 작업용 격리 worktree를 이미 생성해 그 안에서 터미널을 띄웠을 때 적용하는 규칙.
+pub fn active_worktree_rules(
+    worktree_dir: &Path,
+    base_repo_dir: &Path,
+    branch_name: &str,
+) -> String {
+    let wt = worktree_dir.display();
+    let base = base_repo_dir.display();
+    format!(
+        "# OkHub 활성 작업 워크트리 규칙 (앱이 이미 격리 환경 준비 완료)\n\n\
+1. 현재 세션은 이미 격리 git worktree `{wt}` (브랜치 `{branch_name}`) 안에서 시작되었다. 원본 저장소 `{base}`에서는 파일을 고치거나 커밋하지 않는다.\n\
+2. 추가 worktree를 중복 생성하지 말고 현재 폴더 `{wt}`에서 바로 문서를 편집·검증·커밋한다.\n\
+3. 작업이 끝나면 현재 worktree에서 커밋·푸시(`git push -u origin {branch_name}`)한 뒤 `okhub_pr_create` (또는 `okhub-cli pr create`, 폴백: `gh pr create`)로 PR을 연다.\n\
+4. 큰 미추적 폴더(`node_modules` 등)가 필요하면 복사하지 말고 `{base}`에서 심볼릭/정션 링크한다.\n\
+5. GitHub 권한은 세션 환경 변수(`GH_TOKEN`)와 `okhub-cli`를 통해 자동 전달된다.\n"
+    )
+}
+
+/// 앱과 함께 배포되거나 Cargo/PATH에 설치된 `okhub-cli` 바이너리를 찾는다.
+pub fn resolve_okhub_cli_binary() -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) {
+        "okhub-cli.exe"
+    } else {
+        "okhub-cli"
+    };
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            let sibling = dir.join(exe_name);
+            if sibling.is_file() {
+                return Some(shell_path(&sibling));
+            }
+        }
+    }
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(|home| PathBuf::from(home).join(".cargo"))
+        });
+    if let Some(cargo_dir) = cargo_home {
+        let candidate = cargo_dir.join("bin").join(exe_name);
+        if candidate.is_file() {
+            return Some(shell_path(&candidate));
+        }
+    }
+    if let Some(path_var) = std::env::var_os("PATH") {
+        for folder in std::env::split_paths(&path_var) {
+            let candidate = folder.join(exe_name);
+            if candidate.is_file() {
+                return Some(shell_path(&candidate));
+            }
+        }
+    }
+    None
+}
+
+/// 비비밀 OkHub 컨텍스트 환경 변수 목록(`OKHUB_*`). MCP 설정 파일과 터미널 환경 양쪽에 사용한다.
+pub fn context_env_vars(
+    app_data_dir: &Path,
+    workspace_dir: &Path,
+    active_context: &ActiveWorkspaceAiContext,
+) -> Vec<(String, String)> {
+    let mut vars = vec![
+        (
+            "OKHUB_APP_DATA_DIR".to_owned(),
+            shell_path(app_data_dir).display().to_string(),
+        ),
+        (
+            "OKHUB_WORKSPACE_DIR".to_owned(),
+            shell_path(workspace_dir).display().to_string(),
+        ),
+    ];
+    if let Some(repo) = active_context
+        .docs_repository_full_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        vars.push(("OKHUB_DOCS_REPO".to_owned(), repo.to_owned()));
+    }
+    if let Some(project) = active_context.project.as_ref() {
+        let owner = project.owner.trim();
+        if !owner.is_empty() && project.number > 0 {
+            let scope_segment = if project.scope.eq_ignore_ascii_case("user") {
+                "users"
+            } else {
+                "orgs"
+            };
+            vars.push((
+                "OKHUB_PROJECT_URL".to_owned(),
+                format!(
+                    "https://github.com/{scope_segment}/{owner}/projects/{}",
+                    project.number
+                ),
+            ));
+        }
+    }
+    vars
+}
+
+/// 앱 로그인 토큰 + 현재 선택된 OkHub 컨텍스트 + `okhub-cli` 경로를 터미널 환경 변수로 구성한다.
+pub fn terminal_env_with_context(
+    access_token: Option<&str>,
+    app_data_dir: &Path,
+    workspace_dir: &Path,
+    active_context: &ActiveWorkspaceAiContext,
+    okhub_cli: Option<&Path>,
+) -> Vec<(String, String)> {
+    let mut env = terminal_env(access_token);
+    env.extend(context_env_vars(
+        app_data_dir,
+        workspace_dir,
+        active_context,
+    ));
+    if let Some(cli_dir) = okhub_cli.and_then(Path::parent) {
+        #[cfg(windows)]
+        let base_path = Some(cli_search_path());
+        #[cfg(not(windows))]
+        let base_path = std::env::var_os("PATH");
+        let mut folders = vec![shell_path(cli_dir)];
+        if let Some(existing) = base_path.as_deref() {
+            for entry in std::env::split_paths(existing) {
+                if !folders.contains(&entry) {
+                    folders.push(entry);
+                }
+            }
+        }
+        if let Ok(joined) = std::env::join_paths(&folders) {
+            if let Some(path_str) = joined.to_str() {
+                env.push(("PATH".to_owned(), path_str.to_owned()));
+            }
+        }
+    }
+    env
+}
+
+/// 외부/내장 AI CLI가 `okhub-cli mcp`를 자동 실행할 수 있도록 비비밀 MCP JSON 설정 파일을 기록한다.
+pub fn write_mcp_config_file(
+    app_data_dir: &Path,
+    launch_dir: &Path,
+    okhub_cli: &Path,
+    env_vars: &[(String, String)],
+) -> Result<PathBuf, crate::error::AppError> {
+    use std::hash::{Hash, Hasher};
+
+    let okhub_dir = app_data_dir.join("okhub");
+    std::fs::create_dir_all(&okhub_dir).map_err(|error| {
+        crate::error::AppError::new(
+            crate::error::ErrorCode::LocalSettingsUnavailable,
+            "MCP 설정 디렉터리를 만들 수 없습니다.",
+        )
+        .with_recovery(crate::error::RecoveryAction::Retry)
+        .with_detail("reason", error.to_string())
+    })?;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    launch_dir.hash(&mut hasher);
+    let target = okhub_dir.join(format!("mcp-config-{:016x}.json", hasher.finish()));
+
+    let mut safe_env = serde_json::Map::new();
+    for (key, value) in env_vars {
+        // 토큰·자격 증명 계열은 디스크에 쓰지 않고 프로세스 환경으로만 전달한다.
+        if key.starts_with("OKHUB_") {
+            safe_env.insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
+    }
+    let payload = serde_json::json!({
+        "mcpServers": {
+            "okhub": {
+                "command": shell_path(okhub_cli).display().to_string(),
+                "args": ["mcp"],
+                "env": safe_env,
+            }
+        }
+    });
+    let serialized = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_owned());
+    std::fs::write(&target, serialized).map_err(|error| {
+        crate::error::AppError::new(
+            crate::error::ErrorCode::LocalSettingsUnavailable,
+            "MCP 설정 파일을 쓸 수 없습니다.",
+        )
+        .with_recovery(crate::error::RecoveryAction::Retry)
+        .with_detail("reason", error.to_string())
+    })?;
+
+    Ok(shell_path(&target))
 }
 
 /// 앱 로그인 토큰으로 `git push`와 `gh`가 동작하게 하는 환경 변수. 로그인 전이면 비운다.
@@ -735,5 +998,76 @@ mod tests {
             !active_context_rules(&without_login).contains("현재 로그인한 GitHub 사용자"),
             "unexpected login rule line when login missing"
         );
+    }
+
+    #[test]
+    fn active_worktree_rules_avoid_recreating_worktree_and_name_branch() {
+        let rules = active_worktree_rules(
+            Path::new("/data/worktrees/o/docs/issue-98"),
+            Path::new("/data/repos/o/docs"),
+            "docs/issue-98",
+        );
+        assert!(rules.contains("/data/worktrees/o/docs/issue-98"));
+        assert!(rules.contains("/data/repos/o/docs"));
+        assert!(rules.contains("docs/issue-98"));
+        assert!(rules.contains("okhub_pr_create"));
+    }
+
+    #[test]
+    fn terminal_env_with_context_and_mcp_config_keep_secrets_off_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let ws = temp.path().join("docs-wt");
+        std::fs::create_dir_all(&ws).unwrap();
+        let cli = temp.path().join("bin").join("okhub-cli");
+        let ctx = ActiveWorkspaceAiContext {
+            workspace_title: Some("OKF".to_owned()),
+            docs_repository_full_name: Some("Mockly-Company/hub-knowledge".to_owned()),
+            project: Some(ActiveProjectRuleInfo {
+                id: "PVT_3".to_owned(),
+                owner: "Mockly-Company".to_owned(),
+                number: 3,
+                title: "Project-OKF".to_owned(),
+                scope: "organization".to_owned(),
+            }),
+            ..Default::default()
+        };
+
+        let env =
+            terminal_env_with_context(Some("secret-token"), temp.path(), &ws, &ctx, Some(&cli));
+        assert!(env.contains(&("GH_TOKEN".to_owned(), "secret-token".to_owned())));
+        assert!(env.contains(&(
+            "OKHUB_DOCS_REPO".to_owned(),
+            "Mockly-Company/hub-knowledge".to_owned()
+        )));
+        assert!(env.contains(&(
+            "OKHUB_PROJECT_URL".to_owned(),
+            "https://github.com/orgs/Mockly-Company/projects/3".to_owned()
+        )));
+
+        let cfg_path = write_mcp_config_file(temp.path(), &ws, &cli, &env).unwrap();
+        let raw = std::fs::read_to_string(cfg_path).unwrap();
+        assert!(!raw.contains("secret-token"));
+        assert!(!raw.contains("GH_TOKEN"));
+        assert!(raw.contains("OKHUB_WORKSPACE_DIR"));
+        assert!(raw.contains("okhub-cli"));
+    }
+
+    #[test]
+    fn terminal_command_with_mcp_configures_claude_and_codex() {
+        let rules = Path::new("/tmp/rules.md");
+        let mcp_cfg = Path::new("/tmp/mcp-config.json");
+        let cli = Path::new("/tmp/okhub-cli");
+
+        let claude_cmd =
+            AiTool::Claude.terminal_command_with_mcp("", rules, Some(mcp_cfg), Some(cli));
+        assert!(claude_cmd.starts_with("claude "));
+        assert!(claude_cmd.contains("--mcp-config"));
+        assert!(claude_cmd.contains("mcp-config.json"));
+
+        let codex_cmd =
+            AiTool::Codex.terminal_command_with_mcp("", rules, Some(mcp_cfg), Some(cli));
+        assert!(codex_cmd.starts_with("codex "));
+        assert!(codex_cmd.contains("mcp_servers.okhub.command="));
+        assert!(codex_cmd.contains("mcp_servers.okhub.args="));
     }
 }

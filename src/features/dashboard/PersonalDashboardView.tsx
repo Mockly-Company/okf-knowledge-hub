@@ -378,8 +378,8 @@ function PersonalDashboardInner({
             <strong
               className={
                 (dashboard?.unreadNewCount ?? 0) > 0
-                  ? "text-[length:var(--font-h2-size)] font-[number:var(--font-weight-page-title)] text-[var(--color-primary-text)] tabular-nums"
-                  : "text-[length:var(--font-h2-size)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)] tabular-nums"
+                  ? "text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-page-title)] text-[var(--color-primary-text)] tabular-nums"
+                  : "text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)] tabular-nums"
               }
             >
               {`${dashboard?.unreadNewCount ?? 0}건`}
@@ -390,7 +390,7 @@ function PersonalDashboardInner({
             <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
               시작 가능 작업
             </span>
-            <strong className="text-[length:var(--font-h2-size)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)] tabular-nums">
+            <strong className="text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)] tabular-nums">
               {`${dashboard?.readyTaskCount ?? 0}건`}
             </strong>
           </div>
@@ -402,8 +402,8 @@ function PersonalDashboardInner({
             <strong
               className={
                 (dashboard?.unreadNotificationCount ?? 0) > 0
-                  ? "text-[length:var(--font-h2-size)] font-[number:var(--font-weight-page-title)] text-[var(--color-warning)] tabular-nums"
-                  : "text-[length:var(--font-h2-size)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)] tabular-nums"
+                  ? "text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-page-title)] text-[var(--color-warning)] tabular-nums"
+                  : "text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)] tabular-nums"
               }
             >
               {`${dashboard?.unreadNotificationCount ?? 0}건`}
@@ -419,7 +419,7 @@ function PersonalDashboardInner({
             <div className="flex items-center justify-between gap-[var(--space-2)]">
               <h2
                 id="dashboard-tasks-heading"
-                className="m-0 text-[length:var(--font-h2-size)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]"
+                className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]"
               >
                 내 담당 백로그
               </h2>
@@ -490,7 +490,7 @@ function PersonalDashboardInner({
             <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
               <h2
                 id="dashboard-docs-heading"
-                className="m-0 text-[length:var(--font-h2-size)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]"
+                className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]"
               >
                 기획 · 화면명세 변경 알림
               </h2>

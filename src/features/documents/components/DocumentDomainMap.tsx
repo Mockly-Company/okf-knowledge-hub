@@ -173,26 +173,28 @@ function computeEdgePath(
   boardRect: DOMRect,
   fromRect: DOMRect,
   toRect: DOMRect,
+  scrollLeft: number,
+  scrollTop: number,
 ): string {
-  const fromY = fromRect.top - boardRect.top + fromRect.height / 2;
-  const toY = toRect.top - boardRect.top + toRect.height / 2;
+  const fromY = fromRect.top - boardRect.top + scrollTop + fromRect.height / 2;
+  const toY = toRect.top - boardRect.top + scrollTop + toRect.height / 2;
 
   if (fromRect.right <= toRect.left + 8) {
-    const x1 = fromRect.right - boardRect.left;
-    const x2 = toRect.left - boardRect.left;
+    const x1 = fromRect.right - boardRect.left + scrollLeft;
+    const x2 = toRect.left - boardRect.left + scrollLeft;
     const dx = Math.max(24, (x2 - x1) * 0.48);
     return `M ${x1} ${fromY} C ${x1 + dx} ${fromY}, ${x2 - dx} ${toY}, ${x2} ${toY}`;
   }
 
   if (toRect.right <= fromRect.left + 8) {
-    const x1 = fromRect.left - boardRect.left;
-    const x2 = toRect.right - boardRect.left;
+    const x1 = fromRect.left - boardRect.left + scrollLeft;
+    const x2 = toRect.right - boardRect.left + scrollLeft;
     const dx = Math.max(24, (x1 - x2) * 0.48);
     return `M ${x1} ${fromY} C ${x1 - dx} ${fromY}, ${x2 + dx} ${toY}, ${x2} ${toY}`;
   }
 
-  const x1 = fromRect.right - boardRect.left;
-  const x2 = toRect.right - boardRect.left;
+  const x1 = fromRect.right - boardRect.left + scrollLeft;
+  const x2 = toRect.right - boardRect.left + scrollLeft;
   const archX = Math.max(x1, x2) + 28;
   return `M ${x1} ${fromY} C ${archX} ${fromY}, ${archX} ${toY}, ${x2} ${toY}`;
 }
@@ -421,6 +423,8 @@ function DomainSectionBoard({
             boardRect,
             fromEl.getBoundingClientRect(),
             toEl.getBoundingClientRect(),
+            board.scrollLeft,
+            board.scrollTop,
           ),
         });
       }
@@ -463,6 +467,7 @@ function DomainSectionBoard({
   }, [edges, columns]);
 
   const folderPath = group.folderPath;
+  const safeGroupKey = group.key.replace(/[^a-zA-Z0-9_-]/g, "_");
 
   return (
     <section
@@ -513,7 +518,7 @@ function DomainSectionBoard({
           >
             <defs>
               <marker
-                id={`edge-arrow-explicit-${group.key}`}
+                id={`edge-arrow-explicit-${safeGroupKey}`}
                 viewBox="0 0 10 10"
                 refX="8"
                 refY="5"
@@ -524,7 +529,7 @@ function DomainSectionBoard({
                 <path d="M 0 1.5 L 8.5 5 L 0 8.5 z" fill="var(--color-primary)" />
               </marker>
               <marker
-                id={`edge-arrow-flow-${group.key}`}
+                id={`edge-arrow-flow-${safeGroupKey}`}
                 viewBox="0 0 10 10"
                 refX="8"
                 refY="5"
@@ -552,8 +557,8 @@ function DomainSectionBoard({
                 strokeDasharray={edge.kind === "flow" ? "4 4" : undefined}
                 markerEnd={
                   edge.kind === "explicit"
-                    ? `url(#edge-arrow-explicit-${group.key})`
-                    : `url(#edge-arrow-flow-${group.key})`
+                    ? `url(#edge-arrow-explicit-${safeGroupKey})`
+                    : `url(#edge-arrow-flow-${safeGroupKey})`
                 }
               />
             ))}

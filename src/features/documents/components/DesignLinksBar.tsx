@@ -1,9 +1,9 @@
-import { ExternalLink, Palette, X } from "lucide-react";
+import { ExternalLink, LayoutTemplate, Palette, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button, IconButton } from "@/components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
-import type { DocumentAsset, DocumentDesignLink } from "../model";
+import type { DocumentAsset, DocumentDesignLink, DocumentWireframe } from "../model";
 
 function isHttpUrl(url: string): boolean {
   return /^https?:\/\//i.test(url.trim());
@@ -85,6 +85,47 @@ export function extractDesignsFromProperties(
     }
   }
   return designs;
+}
+
+export function extractWireframesFromProperties(
+  properties: unknown,
+): DocumentWireframe[] {
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return [];
+  }
+  const record = properties as Record<string, unknown>;
+  const rawList = Array.isArray(record.wireframes) ? record.wireframes : [];
+  const wireframes: DocumentWireframe[] = [];
+  rawList.forEach((entry, index) => {
+    if (typeof entry === "string" && entry.trim()) {
+      const trimmed = entry.trim();
+      if (!isHttpUrl(trimmed) && looksLikeImageAsset(trimmed)) {
+        wireframes.push({
+          title: `와이어프레임 ${index + 1}`,
+          image: trimmed,
+        });
+      }
+      return;
+    }
+    if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+      const obj = entry as Record<string, unknown>;
+      const image =
+        typeof obj.image === "string" && obj.image.trim()
+          ? obj.image.trim()
+          : typeof obj.asset === "string" && obj.asset.trim()
+            ? obj.asset.trim()
+            : null;
+      if (!image || isHttpUrl(image) || !looksLikeImageAsset(image)) return;
+      const title =
+        typeof obj.title === "string" && obj.title.trim()
+          ? obj.title.trim()
+          : typeof obj.label === "string" && obj.label.trim()
+            ? obj.label.trim()
+            : `와이어프레임 ${index + 1}`;
+      wireframes.push({ title, image });
+    }
+  });
+  return wireframes;
 }
 
 export type DocumentAssetReader = (
@@ -187,16 +228,26 @@ function DesignThumbnail({
   readAsset,
   onOpenExternal,
   onExpand,
+  assetKind = "design",
 }: {
   design: DocumentDesignLink;
   documentPath: string;
   readAsset: DocumentAssetReader;
   onOpenExternal?: (url: string) => void;
   onExpand: (asset: DocumentAsset, title: string, externalUrl?: string | null) => void;
+  assetKind?: "design" | "wireframe";
 }) {
   const { asset, failed } = useDocumentAsset(documentPath, design.image, readAsset);
 
   const safeExternalUrl = safeHttpUrl(design.url);
+  const failedCopy =
+    assetKind === "wireframe"
+      ? "와이어프레임 이미지를 불러올 수 없습니다."
+      : "시안 이미지를 불러올 수 없습니다.";
+  const loadingCopy =
+    assetKind === "wireframe"
+      ? "와이어프레임 불러오는 중…"
+      : "디자인 시안 불러오는 중…";
 
   return (
     <div className="document-design-card">
@@ -206,6 +257,12 @@ function DesignThumbnail({
           <span className="document-design-card__status">{design.status}</span>
         ) : null}
       </div>
+
+      {design.wireframe ? (
+        <p className="document-design-card__wireframe">
+          {`와이어프레임 · ${design.wireframe}`}
+        </p>
+      ) : null}
 
       {design.image ? (
         asset ? (
@@ -219,7 +276,7 @@ function DesignThumbnail({
           </UnstyledButton>
         ) : (
           <div className="document-design-card__placeholder">
-            {failed ? "시안 이미지를 불러올 수 없습니다." : "디자인 시안 불러오는 중…"}
+            {failed ? failedCopy : loadingCopy}
           </div>
         )
       ) : null}
@@ -249,6 +306,7 @@ export function DesignLinksBar({
   onOpenExternal,
   heading = "연결된 디자인 시안",
   emptyNotice,
+  assetKind = "design",
 }: {
   designs: readonly DocumentDesignLink[];
   documentPath: string;
@@ -256,14 +314,16 @@ export function DesignLinksBar({
   onOpenExternal?: (url: string) => void;
   heading?: string;
   emptyNotice?: string;
+  assetKind?: "design" | "wireframe";
 }) {
   const [expanded, setExpanded] = useState<ExpandedDesignPreview | null>(null);
+  const Icon = assetKind === "wireframe" ? LayoutTemplate : Palette;
 
   if (designs.length === 0) {
     if (!emptyNotice) return null;
     return (
       <div className="document-designs-empty">
-        <Palette aria-hidden="true" size={14} />
+        <Icon aria-hidden="true" size={14} />
         <span>{emptyNotice}</span>
       </div>
     );
@@ -273,7 +333,7 @@ export function DesignLinksBar({
     <section className="document-designs-strip" aria-label={heading}>
       <div className="document-designs-strip__header">
         <span className="document-designs-strip__label">
-          <Palette aria-hidden="true" size={14} />
+          <Icon aria-hidden="true" size={14} />
           {heading}
         </span>
         <span className="document-designs-strip__count">{`${designs.length}건`}</span>
@@ -288,6 +348,7 @@ export function DesignLinksBar({
             documentPath={documentPath}
             readAsset={readAsset}
             onOpenExternal={onOpenExternal}
+            assetKind={assetKind}
             onExpand={(asset, title, externalUrl) =>
               setExpanded({ asset, title, externalUrl })
             }

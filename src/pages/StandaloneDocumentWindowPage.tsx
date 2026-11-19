@@ -9,6 +9,7 @@ import { CompanionHtmlFrame } from "@/features/documents/components/CompanionHtm
 import {
   DesignLinksBar,
   extractDesignsFromProperties,
+  extractWireframesFromProperties,
 } from "@/features/documents/components/DesignLinksBar";
 import { MarkdownDocument } from "@/features/documents/components/MarkdownDocument";
 import type { DocumentsGateway } from "@/features/documents/DocumentsGateway";
@@ -146,6 +147,14 @@ export function StandaloneDocumentWindowPage({
     if (hasCompanionHtml) return "html";
     return "markdown";
   }, [currentEntry, hasCompanionHtml, viewOverrides]);
+
+  const wireframes = useMemo(() => {
+    if (!doc) return [];
+    if (doc.summary.wireframes && doc.summary.wireframes.length > 0) {
+      return doc.summary.wireframes;
+    }
+    return extractWireframesFromProperties(doc.properties);
+  }, [doc]);
 
   const designs = useMemo(() => {
     if (!doc) return [];
@@ -371,6 +380,15 @@ export function StandaloneDocumentWindowPage({
         </StatusFeedback>
       ) : (
         <div className="standalone-doc-window__content">
+          {wireframes.length > 0 ? (
+            <DesignLinksBar
+              designs={wireframes.map((wf) => ({ title: wf.title, image: wf.image }))}
+              documentPath={doc.summary.path}
+              readAsset={readWindowAsset}
+              heading="화면 와이어프레임"
+              assetKind="wireframe"
+            />
+          ) : null}
           {designs.length > 0 ? (
             <DesignLinksBar
               designs={designs}

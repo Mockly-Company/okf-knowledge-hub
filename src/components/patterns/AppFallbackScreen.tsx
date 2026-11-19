@@ -139,11 +139,11 @@ export function AppFallbackScreen({
             </span>
             <h1
               id="app-fallback-title"
-              className="m-0 text-[length:var(--font-h2-size)] leading-[var(--font-h2-line)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)]"
+              className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-page-title)] text-[var(--color-text-strong)]"
             >
               {resolvedTitle}
             </h1>
-            <p className="m-0 mt-[var(--space-1)] text-[length:var(--font-body-size)] leading-[var(--font-body-line)] text-[var(--color-text-default)]">
+            <p className="m-0 mt-[var(--space-1)] text-[length:var(--font-ui-size)] leading-[var(--font-ui-line)] text-[var(--color-text-default)]">
               {resolvedDescription}
             </p>
           </div>

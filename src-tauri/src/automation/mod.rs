@@ -27,8 +27,9 @@ use crate::automation::doc_validator::{
 use crate::commands::code_repositories::resolve_code_repositories_for_workspace;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
-    CreateProjectIssueInput, CreatePullRequestInput, CreatedProjectIssue, DocsPullRequestSummary,
-    GithubProjectItem, UpdateProjectItemInput, UpdatedProjectItem,
+    BoardAssignee, CreateProjectIssueInput, CreatePullRequestInput, CreatedIssueComment,
+    CreatedProjectIssue, DocsPullRequestSummary, GithubProjectItem, GithubProjectSchema,
+    UpdateProjectItemInput, UpdatedIssue, UpdatedProjectItem,
 };
 use crate::github::GithubService;
 use crate::project_board::model::{parse_project_url, BoardLayer, BoardStatus, ProjectOwnerScope};
@@ -38,7 +39,7 @@ use crate::settings::ai_runner::{
 };
 use crate::settings::service::{LocalSettingsService, LocalSettingsStore, DISPLAY_DENSITY_KEY};
 use crate::settings::store_adapter::SETTINGS_FILE_NAME;
-use crate::workspace::model::WorkspaceConfigV1;
+use crate::workspace::model::{WorkspaceAssignees, WorkspaceConfigV1};
 
 const APP_IDENTIFIER: &str = "com.okhub.desktop";
 
@@ -60,6 +61,38 @@ pub struct ActiveAutomationContextSummary {
     pub docs_repository_full_name: Option<String>,
     pub project: Option<AutomationProjectSummary>,
     pub code_repositories: Vec<AutomationCodeRepoSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignees: Option<WorkspaceAssignees>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedBoardIssueResult {
+    pub issue_number: u64,
+    pub repository_full_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_issue: Option<UpdatedIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_comment: Option<CreatedIssueComment>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<BoardAssignee>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BacklogTreeItemInput {
+    pub repository_full_name: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub layer: Option<BoardLayer>,
+    pub status: Option<BoardStatus>,
+    pub kind: Option<String>,
+    pub priority: Option<String>,
+    pub parent_issue_number: Option<u64>,
+    pub parent_issue_repository: Option<String>,
+    pub parent_batch_index: Option<usize>,
+    pub depends_on: Option<u64>,
+    pub depends_on_batch_index: Option<usize>,
+    pub assignees: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -265,25 +298,17 @@ impl AutomationRuntime {
         let active_linked_project = settings.load_active_project().ok().flatten();
         let current_workspace = settings.load_current().ok().flatten();
 
-        let workspace_dir = overrides
-            .workspace_dir
-            .clone()
-            .or(env_workspace_dir)
-            .or_else(|| {
-                active_hub_workspace
-                    .as_ref()
-                    .and_then(|ws| ws.docs_repository.as_ref())
-                    .and_then(|repo| managed_clone_dir(&app_data_dir, &repo.full_name).ok())
-                    .filter(|dir| dir.exists())
-            })
-            .or_else(|| current_workspace.as_ref().map(|ws| ws.path.clone()))
-            .or_else(|| {
-                let cwd = std::env::current_dir().ok()?;
-                cwd.join(".okf")
-                    .join("workspace.yml")
-                    .is_file()
-                    .then_some(cwd)
-            });
+        let managed_clone_dir_candidate = active_hub_workspace
+            .as_ref()
+            .and_then(|ws| ws.docs_repository.as_ref())
+            .and_then(|repo| managed_clone_dir(&app_data_dir, &repo.full_name).ok());
+        let workspace_dir = resolve_workspace_dir_priority(
+            overrides.workspace_dir.clone(),
+            env_workspace_dir,
+            std::env::current_dir().ok(),
+            managed_clone_dir_candidate,
+            current_workspace.as_ref().map(|ws| ws.path.clone()),
+        );
 
         let mut docs_root_rel = "docs".to_owned();
         let mut workspace_title = active_hub_workspace.as_ref().map(|ws| ws.title.clone());
@@ -339,6 +364,7 @@ impl AutomationRuntime {
             });
 
         let mut code_repositories = Vec::new();
+        let mut assignees: Option<WorkspaceAssignees> = None;
 
         if let Some(root) = workspace_dir.as_deref() {
             if let Ok(raw_cfg) = fs::read_to_string(root.join(".okf").join("workspace.yml")) {
@@ -362,6 +388,10 @@ impl AutomationRuntime {
                             });
                         }
                     }
+                    assignees = cfg
+                        .assignees
+                        .map(|raw| raw.normalized())
+                        .filter(|norm| !norm.is_empty());
                 }
             }
             if let Ok(resolved) = resolve_code_repositories_for_workspace(&settings, root) {
@@ -390,6 +420,7 @@ impl AutomationRuntime {
                 },
             }),
             code_repositories,
+            assignees,
             current_user_login: None,
         };
 
@@ -421,7 +452,22 @@ impl AutomationRuntime {
                     local_path: repo.local_path.clone(),
                 })
                 .collect(),
+            assignees: self.ai_context.assignees.clone(),
         }
+    }
+
+    pub fn default_assignees_for_layer(&self, layer: Option<BoardLayer>) -> Vec<String> {
+        let Some(assignees) = self.ai_context.assignees.as_ref() else {
+            return Vec::new();
+        };
+        let list = match layer {
+            Some(BoardLayer::Planning) => &assignees.planning,
+            Some(BoardLayer::Design) => &assignees.design,
+            Some(BoardLayer::Frontend) => &assignees.frontend,
+            Some(BoardLayer::Backend) => &assignees.backend,
+            Some(BoardLayer::Unassigned) | None => return Vec::new(),
+        };
+        clean_assignee_list(list)
     }
 
     pub fn require_workspace_dir(&self) -> Result<&Path, AppError> {
@@ -641,11 +687,16 @@ impl AutomationRuntime {
         kind: Option<String>,
         priority: Option<String>,
         parent_issue_number: Option<u64>,
+        parent_issue_repository: Option<String>,
         depends_on: Option<u64>,
+        assignees: Option<Vec<String>>,
     ) -> Result<CreatedProjectIssue, AppError> {
         let project = self.require_project()?;
         let repo = self.resolve_issue_target_repository(explicit_repo, layer)?;
         let final_body = inject_depends_on_line(body, depends_on);
+        let resolved_assignees = resolve_effective_assignees(assignees.as_deref(), || {
+            self.default_assignees_for_layer(layer)
+        });
         let github = self.build_github_service()?;
         github
             .create_project_issue(&CreateProjectIssueInput {
@@ -660,9 +711,215 @@ impl AutomationRuntime {
                 kind,
                 priority,
                 parent_issue_number,
-                parent_issue_repository: None,
+                parent_issue_repository: parent_issue_repository
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty()),
+                assignees: resolved_assignees,
             })
             .await
+    }
+
+    pub async fn inspect_board_schema(&self) -> Result<GithubProjectSchema, AppError> {
+        let project = self.require_project()?;
+        let github = self.build_github_service()?;
+        github
+            .inspect_project_schema(project.scope, &project.owner, project.number)
+            .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update_board_issue(
+        &self,
+        issue_number: u64,
+        explicit_repo: Option<&str>,
+        title: Option<&str>,
+        body: Option<&str>,
+        state: Option<&str>,
+        comment: Option<&str>,
+        assignees: Option<Vec<String>>,
+    ) -> Result<UpdatedBoardIssueResult, AppError> {
+        let has_issue_patch = title.map(str::trim).is_some_and(|s| !s.is_empty())
+            || body.is_some()
+            || state.map(str::trim).is_some_and(|s| !s.is_empty());
+        let trimmed_comment = comment.map(str::trim).filter(|s| !s.is_empty());
+        let cleaned_assignees = assignees
+            .as_deref()
+            .map(clean_assignee_list)
+            .unwrap_or_default();
+
+        if !has_issue_patch && trimmed_comment.is_none() && cleaned_assignees.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "수정할 제목, 본문, 상태, 코멘트 또는 담당자 중 하나 이상을 입력해 주세요.",
+            ));
+        }
+
+        let project = self.require_project()?;
+        let github = self.build_github_service()?;
+
+        let repo = match explicit_repo.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(explicit) => explicit.to_owned(),
+            None => {
+                let (items, _, _, _) = github
+                    .list_project_items_with_fallback(project.scope, &project.owner, project.number)
+                    .await?;
+                let matches: Vec<_> = items
+                    .into_iter()
+                    .filter(|item| item.number == issue_number)
+                    .collect();
+                let mut inferred_repos = std::collections::HashSet::new();
+                for item in &matches {
+                    if let Some(inferred) = item.infer_repository_full_name() {
+                        inferred_repos.insert(inferred);
+                    }
+                }
+                if inferred_repos.len() > 1 {
+                    return Err(AppError::new(
+                        ErrorCode::WorkspaceInvalid,
+                        format!(
+                            "이슈 #{issue_number}가 여러 저장소에 존재합니다. `repo` 인자로 대상 저장소(owner/repo)를 지정해 주세요."
+                        ),
+                    ));
+                }
+                match inferred_repos.into_iter().next() {
+                    Some(found) => found,
+                    None => self.resolve_target_repository(None)?,
+                }
+            }
+        };
+
+        let updated_issue = if has_issue_patch {
+            Some(
+                github
+                    .update_issue(&repo, issue_number, title, body, state)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        let created_comment = if let Some(comment_text) = trimmed_comment {
+            Some(
+                github
+                    .create_issue_comment(&repo, issue_number, comment_text)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        let updated_assignees = if !cleaned_assignees.is_empty() {
+            github
+                .add_issue_assignees(&repo, issue_number, &cleaned_assignees)
+                .await?
+        } else {
+            Vec::new()
+        };
+
+        Ok(UpdatedBoardIssueResult {
+            issue_number,
+            repository_full_name: repo,
+            updated_issue,
+            created_comment,
+            assignees: updated_assignees,
+        })
+    }
+
+    pub async fn create_backlog_tree(
+        &self,
+        items: Vec<BacklogTreeItemInput>,
+    ) -> Result<Vec<CreatedProjectIssue>, AppError> {
+        if items.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "생성할 백로그 항목 목록(`items`)을 1개 이상 입력해 주세요.",
+            ));
+        }
+
+        let project = self.require_project()?;
+        let mut resolved_repos = Vec::with_capacity(items.len());
+        for (idx, item) in items.iter().enumerate() {
+            if item.title.trim().is_empty() {
+                return Err(AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    format!("items[{idx}]의 제목(`title`)을 입력해 주세요."),
+                ));
+            }
+            if let Some(parent_idx) = item.parent_batch_index {
+                if parent_idx >= idx {
+                    return Err(AppError::new(
+                        ErrorCode::WorkspaceInvalid,
+                        format!(
+                            "items[{idx}]의 `parentBatchIndex`({parent_idx})는 현재 항목보다 앞선 인덱스(< {idx})여야 합니다."
+                        ),
+                    ));
+                }
+            }
+            if let Some(dep_idx) = item.depends_on_batch_index {
+                if dep_idx >= idx {
+                    return Err(AppError::new(
+                        ErrorCode::WorkspaceInvalid,
+                        format!(
+                            "items[{idx}]의 `dependsOnBatchIndex`({dep_idx})는 현재 항목보다 앞선 인덱스(< {idx})여야 합니다."
+                        ),
+                    ));
+                }
+            }
+            let repo = self.resolve_issue_target_repository(
+                item.repository_full_name.as_deref(),
+                item.layer,
+            )?;
+            resolved_repos.push(repo);
+        }
+
+        let github = self.build_github_service()?;
+        let mut created: Vec<CreatedProjectIssue> = Vec::with_capacity(items.len());
+        for (item, target_repo) in items.into_iter().zip(resolved_repos) {
+            let (parent_issue_number, parent_issue_repository) =
+                if let Some(parent_idx) = item.parent_batch_index {
+                    let parent = &created[parent_idx];
+                    (
+                        Some(parent.number),
+                        Some(parent.repository_full_name.clone()),
+                    )
+                } else {
+                    (
+                        item.parent_issue_number,
+                        item.parent_issue_repository
+                            .map(|s| s.trim().to_owned())
+                            .filter(|s| !s.is_empty()),
+                    )
+                };
+            let depends_on = if let Some(dep_idx) = item.depends_on_batch_index {
+                Some(created[dep_idx].number)
+            } else {
+                item.depends_on
+            };
+            let final_body = inject_depends_on_line(&item.body, depends_on);
+            let resolved_assignees = resolve_effective_assignees(Some(&item.assignees), || {
+                self.default_assignees_for_layer(item.layer)
+            });
+            let issue = github
+                .create_project_issue(&CreateProjectIssueInput {
+                    project_scope: project.scope,
+                    project_owner: project.owner.clone(),
+                    project_number: project.number,
+                    repository_full_name: target_repo,
+                    title: item.title,
+                    body: final_body,
+                    layer: item.layer,
+                    status: item.status,
+                    kind: item.kind,
+                    priority: item.priority,
+                    parent_issue_number,
+                    parent_issue_repository,
+                    assignees: resolved_assignees,
+                })
+                .await?;
+            created.push(issue);
+        }
+
+        Ok(created)
     }
 
     pub async fn derive_backlog_from_issue(
@@ -718,6 +975,7 @@ impl AutomationRuntime {
                         priority: source.priority.clone(),
                         parent_issue_number: Some(source_issue_number),
                         parent_issue_repository: source.infer_repository_full_name(),
+                        assignees: self.default_assignees_for_layer(Some(BoardLayer::Frontend)),
                     })
                     .await?;
                 created.push(fe);
@@ -741,6 +999,7 @@ impl AutomationRuntime {
                         priority: source.priority.clone(),
                         parent_issue_number: Some(source_issue_number),
                         parent_issue_repository: source.infer_repository_full_name(),
+                        assignees: self.default_assignees_for_layer(Some(BoardLayer::Backend)),
                     })
                     .await?;
                 let be_num = be.number;
@@ -764,6 +1023,7 @@ impl AutomationRuntime {
                         priority: source.priority.clone(),
                         parent_issue_number: Some(source_issue_number),
                         parent_issue_repository: source.infer_repository_full_name(),
+                        assignees: self.default_assignees_for_layer(Some(BoardLayer::Frontend)),
                     })
                     .await?;
                 created.push(fe);
@@ -869,4 +1129,147 @@ pub fn strip_layer_prefix(title: &str) -> String {
 
 pub fn run_cli_from_env() -> ExitCode {
     cli::run_from_args(std::env::args().skip(1).collect())
+}
+
+fn resolve_workspace_dir_priority(
+    explicit: Option<PathBuf>,
+    env_dir: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+    managed_clone: Option<PathBuf>,
+    current_workspace_path: Option<PathBuf>,
+) -> Option<PathBuf> {
+    explicit
+        .or(env_dir)
+        .or_else(|| {
+            let cwd = cwd?;
+            cwd.ancestors()
+                .find(|dir| dir.join(".okf").join("workspace.yml").is_file())
+                .map(Path::to_path_buf)
+        })
+        .or_else(|| managed_clone.filter(|dir| dir.exists()))
+        .or(current_workspace_path)
+}
+
+fn clean_assignee_list(raw: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for item in raw {
+        let login = item.trim().trim_start_matches('@').to_owned();
+        if !login.is_empty() && seen.insert(login.to_ascii_lowercase()) {
+            out.push(login);
+        }
+    }
+    out
+}
+
+fn resolve_effective_assignees<F>(explicit: Option<&[String]>, fallback: F) -> Vec<String>
+where
+    F: FnOnce() -> Vec<String>,
+{
+    if let Some(raw) = explicit {
+        let cleaned = clean_assignee_list(raw);
+        if !cleaned.is_empty() {
+            return cleaned;
+        }
+    }
+    fallback()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cwd_worktree_overrides_managed_clone() {
+        let temp = tempfile::tempdir().unwrap();
+        let worktree_dir = temp.path().join("worktree-docs");
+        let worktree_nested = worktree_dir.join("docs").join("product");
+        let managed_dir = temp.path().join("managed-clone");
+        let current_dir = temp.path().join("current");
+
+        fs::create_dir_all(worktree_dir.join(".okf")).unwrap();
+        fs::create_dir_all(&worktree_nested).unwrap();
+        fs::write(
+            worktree_dir.join(".okf").join("workspace.yml"),
+            "schema_version: 1\n",
+        )
+        .unwrap();
+        fs::create_dir_all(&managed_dir).unwrap();
+        fs::create_dir_all(&current_dir).unwrap();
+
+        let resolved = resolve_workspace_dir_priority(
+            None,
+            None,
+            Some(worktree_dir.clone()),
+            Some(managed_dir.clone()),
+            Some(current_dir.clone()),
+        );
+        assert_eq!(resolved.as_deref(), Some(worktree_dir.as_path()));
+
+        let resolved_from_subdir = resolve_workspace_dir_priority(
+            None,
+            None,
+            Some(worktree_nested),
+            Some(managed_dir.clone()),
+            Some(current_dir.clone()),
+        );
+        assert_eq!(
+            resolved_from_subdir.as_deref(),
+            Some(worktree_dir.as_path())
+        );
+
+        let plain_dir = temp.path().join("unrelated");
+        fs::create_dir_all(&plain_dir).unwrap();
+        let fallback = resolve_workspace_dir_priority(
+            None,
+            None,
+            Some(plain_dir),
+            Some(managed_dir.clone()),
+            Some(current_dir),
+        );
+        assert_eq!(fallback.as_deref(), Some(managed_dir.as_path()));
+    }
+
+    #[test]
+    fn default_assignees_for_layer_reads_role_mapping() {
+        let assignees = WorkspaceAssignees {
+            planning: vec!["@planner".to_owned()],
+            design: vec!["designer".to_owned()],
+            frontend: vec!["fe-dev".to_owned()],
+            backend: vec!["be-dev".to_owned()],
+            ..Default::default()
+        };
+
+        let runtime = AutomationRuntime {
+            app_data_dir: PathBuf::from("."),
+            workspace_dir: None,
+            docs_root_rel: "docs".to_owned(),
+            active_project: None,
+            ai_context: ActiveWorkspaceAiContext {
+                assignees: Some(assignees),
+                ..Default::default()
+            },
+        };
+
+        assert_eq!(
+            runtime.default_assignees_for_layer(Some(BoardLayer::Planning)),
+            vec!["planner"]
+        );
+        assert_eq!(
+            runtime.default_assignees_for_layer(Some(BoardLayer::Design)),
+            vec!["designer"]
+        );
+        assert_eq!(
+            runtime.default_assignees_for_layer(Some(BoardLayer::Frontend)),
+            vec!["fe-dev"]
+        );
+        assert_eq!(
+            runtime.default_assignees_for_layer(Some(BoardLayer::Backend)),
+            vec!["be-dev"]
+        );
+        assert!(runtime
+            .default_assignees_for_layer(Some(BoardLayer::Unassigned))
+            .is_empty());
+        assert!(runtime.default_assignees_for_layer(None).is_empty());
+    }
 }

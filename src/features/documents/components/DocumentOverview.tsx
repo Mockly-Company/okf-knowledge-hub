@@ -251,7 +251,7 @@ export function DocumentOverview({
           className="mt-[var(--space-4)] grid gap-[var(--space-2)]"
           aria-label="연결된 코드 참조"
         >
-          <h2 className="m-0 text-[length:var(--text-sm)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+          <h2 className="m-0 text-[length:var(--font-ui-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
             연결된 코드 참조
           </h2>
           <div className="grid gap-[var(--space-1)]">
@@ -262,7 +262,7 @@ export function DocumentOverview({
                 variant="secondary"
                 loading={loadingCodeRef === ref.raw}
                 onClick={() => void toggleCodeReference(ref)}
-                className="justify-start font-mono text-[length:var(--text-xs)]"
+                className="justify-start font-mono text-[length:var(--font-meta-size)]"
               >
                 {ref.raw}
               </Button>
@@ -272,7 +272,7 @@ export function DocumentOverview({
             <p
               role="status"
               aria-live="polite"
-              className="m-0 text-[length:var(--text-xs)] text-[var(--color-text-muted)]"
+              className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
             >
               코드 스니펫을 불러오는 중…
             </p>
@@ -280,18 +280,18 @@ export function DocumentOverview({
           {codePreviewError && (
             <p
               role="alert"
-              className="m-0 text-[length:var(--text-xs)] text-[var(--color-error-text)]"
+              className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-error)]"
             >
               {codePreviewError}
             </p>
           )}
           {codePreview && (
-            <div className="grid gap-[var(--space-1)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-[var(--space-2)]">
-              <div className="text-[length:var(--text-xs)] text-[var(--color-text-muted)]">
+            <div className="grid gap-[var(--space-1)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-2)]">
+              <div className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                 {codePreview.repositoryFullName} · {codePreview.filePath} (L
                 {codePreview.startLine}–L{codePreview.endLine})
               </div>
-              <pre className="m-0 overflow-x-auto font-mono text-[length:var(--text-xs)] text-[var(--color-text-strong)]">
+              <pre className="m-0 overflow-x-auto font-mono text-[length:var(--font-meta-size)] text-[var(--color-text-strong)]">
                 <code>{codePreview.content}</code>
               </pre>
             </div>
