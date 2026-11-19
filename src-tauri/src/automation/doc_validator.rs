@@ -140,6 +140,16 @@ pub fn validate_workspace_docs(
     workspace_root: &Path,
     docs_root_rel: &str,
 ) -> Result<DocValidationReport, AppError> {
+    let canonical_root = workspace_root.canonicalize().map_err(|err| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            format!(
+                "문서 워크스페이스 루트 경로를 확인할 수 없습니다: {}",
+                workspace_root.display()
+            ),
+        )
+        .with_detail("reason", err.to_string())
+    })?;
     let md_files = collect_markdown_files(workspace_root, docs_root_rel)?;
     let mut issues = Vec::new();
     let mut highlighted_markdown_files = Vec::new();
@@ -194,10 +204,9 @@ pub fn validate_workspace_docs(
             });
         }
 
-        let canonical_root = workspace_root.canonicalize().ok();
         let doc_parent = full_md.parent().unwrap_or(workspace_root);
         for wf in &parsed_doc.wireframes {
-            if !local_asset_exists(canonical_root.as_deref(), doc_parent, &wf.image) {
+            if !local_asset_exists(&canonical_root, doc_parent, &wf.image) {
                 issues.push(DocValidationIssue {
                     severity: "error".to_owned(),
                     path: rel_path.clone(),
@@ -211,7 +220,7 @@ pub fn validate_workspace_docs(
         }
         for design in &parsed_doc.designs {
             if let Some(image) = design.image.as_deref() {
-                if !local_asset_exists(canonical_root.as_deref(), doc_parent, image) {
+                if !local_asset_exists(&canonical_root, doc_parent, image) {
                     issues.push(DocValidationIssue {
                         severity: "error".to_owned(),
                         path: rel_path.clone(),
@@ -537,7 +546,7 @@ fn is_screen_spec_document(rel_path: &str, file_name: &str, doc_type: Option<&st
         || lower_path.ends_with("/screen-spec.md")
 }
 
-fn local_asset_exists(canonical_root: Option<&Path>, doc_parent: &Path, raw_asset: &str) -> bool {
+fn local_asset_exists(canonical_root: &Path, doc_parent: &Path, raw_asset: &str) -> bool {
     let clean = raw_asset
         .split(['?', '#'])
         .next()
@@ -551,10 +560,9 @@ fn local_asset_exists(canonical_root: Option<&Path>, doc_parent: &Path, raw_asse
     if !candidate.is_file() {
         return false;
     }
-    if let (Some(root), Ok(canon)) = (canonical_root, candidate.canonicalize()) {
-        return canon.starts_with(root);
-    }
-    false
+    candidate
+        .canonicalize()
+        .is_ok_and(|canon| canon.starts_with(canonical_root))
 }
 
 fn strip_style_blocks(html: &str) -> String {
@@ -616,6 +624,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{list_workspace_docs, read_workspace_doc, validate_workspace_docs};
+    use crate::error::ErrorCode;
 
     #[test]
     fn validates_dual_md_html_sync_frontmatter_and_rolling_markers() {
@@ -768,5 +777,12 @@ mod tests {
         let report = validate_workspace_docs(&workspace, "docs").unwrap();
         assert!(!report.valid);
         assert!(report.issues.iter().any(|i| i.code == "asset_file_missing"));
+    }
+
+    #[test]
+    fn fails_fast_when_workspace_root_cannot_be_canonicalized() {
+        let missing = TempDir::new().unwrap().path().join("nonexistent-workspace");
+        let err = validate_workspace_docs(&missing, "docs").unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkspaceInvalid);
     }
 }

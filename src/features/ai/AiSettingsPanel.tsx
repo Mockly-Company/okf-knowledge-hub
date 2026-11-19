@@ -4,7 +4,6 @@ import { SectionHeader } from "@/components/patterns/SectionHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   StatusFeedback,
   StatusFeedbackDescription,
@@ -347,22 +346,29 @@ export function AiSettingsPanel({
         </div>
         <div className="grid gap-[var(--space-2)]">
           <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
-            <TabsList aria-label="MCP 클라이언트 선택" className="min-w-0 flex-1 border-b border-[var(--color-border)]">
-              {MCP_CLIENT_CONFIGS.map((entry) => (
-                <TabsTrigger
-                  key={entry.id}
-                  id={`mcp-tab-${entry.id}`}
-                  aria-controls="mcp-client-panel"
-                  selected={entry.id === activeMcpConfig.id}
-                  onClick={() => {
-                    setMcpClient(entry.id);
-                    setMcpCopied(false);
-                  }}
-                >
-                  {entry.label}
-                </TabsTrigger>
-              ))}
-            </TabsList>
+            <div
+              role="group"
+              aria-label="MCP 클라이언트 선택"
+              className="flex min-w-0 flex-1 flex-wrap items-center gap-[var(--space-2)]"
+            >
+              {MCP_CLIENT_CONFIGS.map((entry) => {
+                const selected = entry.id === activeMcpConfig.id;
+                return (
+                  <Button
+                    key={entry.id}
+                    type="button"
+                    variant={selected ? "secondary" : "ghost"}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      setMcpClient(entry.id);
+                      setMcpCopied(false);
+                    }}
+                  >
+                    {entry.label}
+                  </Button>
+                );
+              })}
+            </div>
             <Button
               type="button"
               variant="secondary"
@@ -371,12 +377,7 @@ export function AiSettingsPanel({
               {mcpCopied ? "복사됨" : "설정 복사"}
             </Button>
           </div>
-          <div
-            role="tabpanel"
-            id="mcp-client-panel"
-            aria-labelledby={`mcp-tab-${activeMcpConfig.id}`}
-            className="grid gap-[var(--space-2)]"
-          >
+          <div className="grid gap-[var(--space-2)]">
             <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
               설정 위치: {activeMcpConfig.fileHint}
             </p>

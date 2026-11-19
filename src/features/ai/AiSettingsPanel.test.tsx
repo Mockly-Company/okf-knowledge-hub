@@ -266,12 +266,19 @@ describe("AiSettingsPanel", () => {
     );
     const snippetBox = within(mcpSection).getByLabelText("MCP 클라이언트 설정 예시");
     expect(snippetBox).toHaveTextContent('"command": "okhub-cli"');
+    const claudeButton = within(mcpSection).getByRole("button", { name: "Claude Code" });
+    expect(claudeButton).toHaveAttribute("aria-pressed", "true");
 
-    await user.click(within(mcpSection).getByRole("tab", { name: "Codex" }));
+    const codexButton = within(mcpSection).getByRole("button", { name: "Codex" });
+    await user.click(codexButton);
+    expect(codexButton).toHaveAttribute("aria-pressed", "true");
+    expect(claudeButton).toHaveAttribute("aria-pressed", "false");
     expect(snippetBox).toHaveTextContent("[mcp_servers.okhub]");
     expect(snippetBox).toHaveTextContent('args = ["mcp"]');
 
-    await user.click(within(mcpSection).getByRole("tab", { name: "Antigravity / Cursor" }));
+    const agyButton = within(mcpSection).getByRole("button", { name: "Antigravity / Cursor" });
+    await user.click(agyButton);
+    expect(agyButton).toHaveAttribute("aria-pressed", "true");
     expect(snippetBox).toHaveTextContent('"mcpServers"');
   });
 

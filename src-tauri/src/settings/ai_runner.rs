@@ -64,24 +64,8 @@ impl AiTool {
                 let mut cmd = String::from("codex");
                 if let Some(cli) = okhub_cli_path {
                     let cli_text = cli.display().to_string();
-                    let (cmd_override, args_override) = if cfg!(windows) {
-                        let toml_cmd = if cli_text.contains('\'') {
-                            format!("'{}'", cli_text.replace('\'', ""))
-                        } else {
-                            format!("'{cli_text}'")
-                        };
-                        (
-                            format!("mcp_servers.okhub.command={toml_cmd}"),
-                            "mcp_servers.okhub.args=['mcp']".to_owned(),
-                        )
-                    } else {
-                        let json_cmd = serde_json::to_string(&cli_text)
-                            .unwrap_or_else(|_| format!("\"{cli_text}\""));
-                        (
-                            format!("mcp_servers.okhub.command={json_cmd}"),
-                            "mcp_servers.okhub.args=[\"mcp\"]".to_owned(),
-                        )
-                    };
+                    let (cmd_override, args_override) =
+                        format_codex_mcp_overrides(&cli_text, cfg!(windows));
                     cmd.push_str(&format!(
                         " -c {} -c {}",
                         shell_quote(&cmd_override),
@@ -103,6 +87,65 @@ impl AiTool {
             AiTool::Custom => custom_command.trim().to_owned(),
         }
     }
+}
+
+/// Windows `CommandLineToArgvW` 규칙에 맞게 외부 큰따옴표(`shell_quote`) 내부 인자를 이스케이프한다.
+fn escape_windows_double_quoted_arg(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 8);
+    let mut pending_backslashes = 0usize;
+    for ch in value.chars() {
+        if ch == '\\' {
+            pending_backslashes += 1;
+        } else if ch == '"' {
+            for _ in 0..(pending_backslashes * 2 + 1) {
+                out.push('\\');
+            }
+            out.push('"');
+            pending_backslashes = 0;
+        } else {
+            for _ in 0..pending_backslashes {
+                out.push('\\');
+            }
+            pending_backslashes = 0;
+            out.push(ch);
+        }
+    }
+    for _ in 0..(pending_backslashes * 2) {
+        out.push('\\');
+    }
+    out
+}
+
+/// Codex `-c` TOML 오버라이드 문자열을 플랫폼 셸 인용 규칙에 안전하게 생성한다.
+/// Windows에서는 외부 `cmd.exe` 큰따옴표를 깨지 않도록 가능한 한 TOML 리터럴(`'...'`/`'''...'''`)을 사용하고,
+/// `'''`·줄바꿈·끝 `'` 등 특수 경우에만 `serde_json` 기본 문자열 + `CommandLineToArgvW` 이스케이프를 사용한다.
+fn format_codex_mcp_overrides(cli_text: &str, windows_mode: bool) -> (String, String) {
+    if !windows_mode {
+        let json_cmd =
+            serde_json::to_string(cli_text).unwrap_or_else(|_| format!("\"{cli_text}\""));
+        return (
+            format!("mcp_servers.okhub.command={json_cmd}"),
+            "mcp_servers.okhub.args=[\"mcp\"]".to_owned(),
+        );
+    }
+
+    let cmd_override = if !cli_text.contains('\'') && !cli_text.contains(['\n', '\r']) {
+        format!("mcp_servers.okhub.command='{cli_text}'")
+    } else if !cli_text.contains("'''")
+        && !cli_text.ends_with('\'')
+        && !cli_text.contains(['\n', '\r'])
+    {
+        format!("mcp_servers.okhub.command='''{cli_text}'''")
+    } else {
+        let json_cmd = serde_json::to_string(cli_text).unwrap_or_else(|_| {
+            format!(
+                "\"{}\"",
+                cli_text.replace('\\', "\\\\").replace('"', "\\\"")
+            )
+        });
+        escape_windows_double_quoted_arg(&format!("mcp_servers.okhub.command={json_cmd}"))
+    };
+    (cmd_override, "mcp_servers.okhub.args=['mcp']".to_owned())
 }
 
 /// `canonicalize`가 만든 `\\?\` 경로는 cmd가 현재 폴더로 쓰지 못하므로 일반 경로로 되돌린다.
@@ -1069,5 +1112,39 @@ mod tests {
         assert!(codex_cmd.starts_with("codex "));
         assert!(codex_cmd.contains("mcp_servers.okhub.command="));
         assert!(codex_cmd.contains("mcp_servers.okhub.args="));
+    }
+
+    #[test]
+    fn format_codex_mcp_overrides_preserves_apostrophes_and_escapes_safely() {
+        let (win_plain, win_args) =
+            format_codex_mcp_overrides(r"C:\Users\Alice\bin\okhub-cli.exe", true);
+        assert_eq!(
+            win_plain,
+            r"mcp_servers.okhub.command='C:\Users\Alice\bin\okhub-cli.exe'"
+        );
+        assert_eq!(win_args, "mcp_servers.okhub.args=['mcp']");
+
+        let (win_quote, _) =
+            format_codex_mcp_overrides(r"C:\Users\O'Brien\bin\okhub-cli.exe", true);
+        assert_eq!(
+            win_quote,
+            r"mcp_servers.okhub.command='''C:\Users\O'Brien\bin\okhub-cli.exe'''"
+        );
+        assert!(!win_quote.contains('"'));
+
+        let (win_triple, _) =
+            format_codex_mcp_overrides(r"C:\Users\O'''Brien\bin\okhub-cli.exe", true);
+        assert!(win_triple.contains("O'''Brien"));
+        assert!(win_triple.contains(r"C:\\Users\\O'''Brien\\bin\\okhub-cli.exe"));
+        assert!(win_triple.starts_with(r#"mcp_servers.okhub.command=\""#));
+        assert!(win_triple.ends_with(r#"\""#));
+
+        let (unix_quote, unix_args) =
+            format_codex_mcp_overrides("/Users/O'Brien/bin/okhub-cli", false);
+        assert_eq!(
+            unix_quote,
+            "mcp_servers.okhub.command=\"/Users/O'Brien/bin/okhub-cli\""
+        );
+        assert_eq!(unix_args, "mcp_servers.okhub.args=[\"mcp\"]");
     }
 }

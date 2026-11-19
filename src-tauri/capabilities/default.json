@@ -13,28 +13,55 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "url": "https://github.com/*"
+          "url": "https://github.com/login/device"
         },
         {
-          "url": "https://www.figma.com/*"
+          "url": "https://github.com/settings/installations"
         },
         {
-          "url": "https://figma.com/*"
+          "url": "https://github.com/Mockly-Company/okf-knowledge-hub/releases"
         },
         {
-          "url": "https://www.notion.so/*"
+          "url": "https://github.com/*/*/pull/*"
         },
         {
-          "url": "https://notion.so/*"
+          "url": "https://github.com/*/*/issues/*"
         },
         {
-          "url": "https://docs.google.com/*"
+          "url": "https://github.com/orgs/*/projects/*"
         },
         {
-          "url": "https://miro.com/*"
+          "url": "https://github.com/users/*/projects/*"
         },
         {
-          "url": "https://linear.app/*"
+          "url": "https://www.figma.com/design/*"
+        },
+        {
+          "url": "https://www.figma.com/file/*"
+        },
+        {
+          "url": "https://www.figma.com/proto/*"
+        },
+        {
+          "url": "https://www.figma.com/board/*"
+        },
+        {
+          "url": "https://figma.com/design/*"
+        },
+        {
+          "url": "https://figma.com/file/*"
+        },
+        {
+          "url": "https://docs.google.com/document/*"
+        },
+        {
+          "url": "https://docs.google.com/spreadsheets/*"
+        },
+        {
+          "url": "https://docs.google.com/presentation/*"
+        },
+        {
+          "url": "https://miro.com/app/board/*"
         }
       ]
     },

@@ -105,6 +105,7 @@ export function boardStatusTone(
     case "ready":
       return "warning";
     case "backlog":
+    default:
       return "neutral";
   }
 }

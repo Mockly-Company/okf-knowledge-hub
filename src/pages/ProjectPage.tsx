@@ -1379,37 +1379,52 @@ export function ProjectPage({
               </section>
             ) : (filter !== "all" ||
                 readyOnly ||
+                hideDone ||
                 assigneeFilter !== ASSIGNEE_FILTER_ALL) &&
               ((view === "tree" && treeIssues.length === 0) ||
                 (view === "layers" && groupedIssueCount === 0)) ? (
-              <section
-                aria-label="필터 결과 없음"
-                className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
-              >
-                <p className="m-0 text-[var(--color-text-muted)]">
-                  {filter === "all" &&
+              (() => {
+                const onlyHideDoneActive =
+                  filter === "all" &&
                   !readyOnly &&
-                  assigneeFilter !== ASSIGNEE_FILTER_ALL &&
-                  assigneeFilter !== ASSIGNEE_FILTER_UNASSIGNED
-                    ? hideDone
-                      ? "선택한 담당자에게 배정된 열린 작업이 없습니다."
-                      : "선택한 담당자에게 배정된 작업이 없습니다."
-                    : hideDone
-                      ? "선택한 필터 조건에 맞는 열린 작업이 없습니다."
-                      : "선택한 필터 조건에 맞는 작업이 없습니다."}
-                </p>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => {
-                    setFilter("all");
-                    setReadyOnly(false);
-                    setAssigneeFilter(ASSIGNEE_FILTER_ALL);
-                  }}
-                >
-                  필터 초기화
-                </Button>
-              </section>
+                  assigneeFilter === ASSIGNEE_FILTER_ALL &&
+                  hideDone;
+                return (
+                  <section
+                    aria-label="필터 결과 없음"
+                    className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
+                  >
+                    <p className="m-0 text-[var(--color-text-muted)]">
+                      {onlyHideDoneActive
+                        ? "열린 작업이 없습니다. 완료된 항목을 보려면 완료 숨기기를 해제하세요."
+                        : filter === "all" &&
+                            !readyOnly &&
+                            assigneeFilter !== ASSIGNEE_FILTER_ALL &&
+                            assigneeFilter !== ASSIGNEE_FILTER_UNASSIGNED
+                          ? hideDone
+                            ? "선택한 담당자에게 배정된 열린 작업이 없습니다."
+                            : "선택한 담당자에게 배정된 작업이 없습니다."
+                          : hideDone
+                            ? "선택한 필터 조건에 맞는 열린 작업이 없습니다."
+                            : "선택한 필터 조건에 맞는 작업이 없습니다."}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setFilter("all");
+                        setReadyOnly(false);
+                        setAssigneeFilter(ASSIGNEE_FILTER_ALL);
+                        if (onlyHideDoneActive) {
+                          setHideDone(false);
+                        }
+                      }}
+                    >
+                      {onlyHideDoneActive ? "완료 항목 포함 보기" : "필터 초기화"}
+                    </Button>
+                  </section>
+                );
+              })()
             ) : view === "tree" ? (
               <ProjectTree
                 issues={treeIssues}
