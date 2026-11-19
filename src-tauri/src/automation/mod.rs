@@ -739,7 +739,7 @@ impl AutomationRuntime {
         assignees: Option<Vec<String>>,
     ) -> Result<UpdatedBoardIssueResult, AppError> {
         let has_issue_patch = title.map(str::trim).is_some_and(|s| !s.is_empty())
-            || body.is_some()
+            || body.map(str::trim).is_some_and(|s| !s.is_empty())
             || state.map(str::trim).is_some_and(|s| !s.is_empty());
         let trimmed_comment = comment.map(str::trim).filter(|s| !s.is_empty());
         let cleaned_assignees = assignees

@@ -317,6 +317,15 @@ function DesignMapCard({
   );
 }
 
+function hashMarkerKey(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 function DomainSectionBoard({
   group,
   lookupByPath,
@@ -467,7 +476,7 @@ function DomainSectionBoard({
   }, [edges, columns]);
 
   const folderPath = group.folderPath;
-  const safeGroupKey = group.key.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const safeGroupKey = `${group.key.replace(/[^a-zA-Z0-9_-]/g, "_")}_${hashMarkerKey(group.key)}`;
 
   return (
     <section

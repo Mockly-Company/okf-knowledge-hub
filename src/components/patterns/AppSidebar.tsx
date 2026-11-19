@@ -445,7 +445,15 @@ export function AppSidebar({
           </span>
         </div>
       ) : (
-        <Link to="/settings?category=external" className="app-sidebar__user">
+        <Link
+          to="/settings?category=external"
+          className="app-sidebar__user"
+          aria-label={
+            accountUser
+              ? `@${accountUser.login} GitHub 계정 — 외부 연결 설정으로 이동`
+              : "GitHub 계정 — 외부 연결 설정으로 이동"
+          }
+        >
           <span className="app-sidebar__avatar" aria-hidden="true">
             {accountUser && !avatarFailed ? (
               <img

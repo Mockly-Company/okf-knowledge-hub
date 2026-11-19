@@ -274,4 +274,35 @@ describe("AiSettingsPanel", () => {
     await user.click(within(mcpSection).getByRole("tab", { name: "Antigravity / Cursor" }));
     expect(snippetBox).toHaveTextContent('"mcpServers"');
   });
+
+  it("does not report copied when clipboard API is unavailable", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeAiGateway();
+    const originalDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      render(
+        <TestQueryProvider>
+          <AiSettingsPanel gateway={gateway} />
+        </TestQueryProvider>,
+      );
+
+      const mcpSection = await screen.findByRole("region", {
+        name: "MCP 서버 연결 (외부 AI 에이전트)",
+      });
+      await user.click(within(mcpSection).getByRole("button", { name: "설정 복사" }));
+
+      expect(within(mcpSection).getByRole("button", { name: "설정 복사" })).toBeInTheDocument();
+      expect(within(mcpSection).queryByRole("button", { name: "복사됨" })).toBeNull();
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(navigator, "clipboard", originalDescriptor);
+      } else {
+        delete (navigator as unknown as Record<string, unknown>).clipboard;
+      }
+    }
+  });
 });

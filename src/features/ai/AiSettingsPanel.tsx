@@ -161,8 +161,12 @@ export function AiSettingsPanel({
     MCP_CLIENT_CONFIGS[0];
 
   const handleCopyMcpSnippet = async () => {
+    if (!navigator.clipboard?.writeText) {
+      setMcpCopied(false);
+      return;
+    }
     try {
-      await navigator.clipboard?.writeText(activeMcpConfig.snippet);
+      await navigator.clipboard.writeText(activeMcpConfig.snippet);
       setMcpCopied(true);
     } catch {
       setMcpCopied(false);

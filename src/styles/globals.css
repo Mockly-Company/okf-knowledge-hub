@@ -356,6 +356,12 @@ a.app-sidebar__user:hover {
   background: var(--color-surface-hover);
 }
 
+a.app-sidebar__user:focus-visible {
+  background: var(--color-surface-hover);
+  outline: var(--focus-ring-width) solid var(--color-primary);
+  outline-offset: -2px;
+}
+
 .app-sidebar__avatar {
   display: grid;
   width: 32px;

@@ -13,16 +13,28 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         {
-          "url": "https://*"
+          "url": "https://github.com/*"
         },
         {
-          "url": "http://*"
+          "url": "https://www.figma.com/*"
         },
         {
-          "url": "mailto:*"
+          "url": "https://figma.com/*"
         },
         {
-          "url": "tel:*"
+          "url": "https://www.notion.so/*"
+        },
+        {
+          "url": "https://notion.so/*"
+        },
+        {
+          "url": "https://docs.google.com/*"
+        },
+        {
+          "url": "https://miro.com/*"
+        },
+        {
+          "url": "https://linear.app/*"
         }
       ]
     },

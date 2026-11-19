@@ -1424,7 +1424,7 @@ impl GithubHttpClient {
         if let Some(next_title) = title.map(str::trim).filter(|s| !s.is_empty()) {
             payload.insert("title".to_owned(), json!(next_title));
         }
-        if let Some(next_body) = body {
+        if let Some(next_body) = body.map(str::trim).filter(|s| !s.is_empty()) {
             payload.insert("body".to_owned(), json!(next_body));
         }
         if let Some(next_state) = state.map(str::trim).filter(|s| !s.is_empty()) {
@@ -1496,7 +1496,7 @@ impl GithubHttpClient {
                 HttpMethod::Post,
                 &["repos", owner, name, "issues", &number_str, "comments"],
                 &[],
-                Some(json!({ "body": body })),
+                Some(json!({ "body": trimmed })),
             )
             .await?;
         if !(200..300).contains(&response.status) {
@@ -4665,11 +4665,17 @@ mod tests {
         assert_eq!(updated.state, "closed");
 
         let commented = service
-            .create_issue_comment("Acme-Org/acme-web", 77, "검토 코멘트")
+            .create_issue_comment("Acme-Org/acme-web", 77, "  검토 코멘트  ")
             .await
             .unwrap();
         assert_eq!(commented.id, 501);
         assert_eq!(commented.body, "검토 코멘트");
+
+        let empty_patch_err = service
+            .update_issue("Acme-Org/acme-web", 77, None, Some("   "), None)
+            .await
+            .unwrap_err();
+        assert_eq!(empty_patch_err.code, ErrorCode::WorkspaceInvalid);
 
         let reqs = transport.requests();
         assert_eq!(reqs.len(), 2);

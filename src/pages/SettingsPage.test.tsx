@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { PreferencesProvider } from "@/features/preferences/PreferencesProvider";
 import { WorkspaceConnectionProvider } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { DisplayDensity } from "@/features/preferences/display-density";
@@ -39,8 +40,9 @@ const buildInfoGateway: BuildInfoGateway = {
   }),
 };
 
+afterEach(cleanup);
+
 describe("SettingsPage", () => {
-  afterEach(cleanup);
 
   it("uses the approved page and section hierarchy", async () => {
     render(
@@ -197,7 +199,7 @@ describe("SettingsPage", () => {
     expect(await screen.findByText("@hyeeun")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "로그아웃" })).toBeInTheDocument();
   });
-});
+
   it("shows the current development build provenance without local paths", async () => {
     render(
       <PreferencesProvider repository={new FakePreferencesRepository()}>
@@ -212,3 +214,31 @@ describe("SettingsPage", () => {
     expect(screen.getByText("file-keychain")).toBeInTheDocument();
     expect(screen.queryByText(/Users\/hyeeun/)).not.toBeInTheDocument();
   });
+});
+
+describe("SettingsPage router synchronization", () => {
+
+  it("maps legacy category=document deep links to workflow and syncs category clicks back to URL", async () => {
+    const user = userEvent.setup();
+    function SearchProbe() {
+      const location = useLocation();
+      return <output data-testid="settings-search">{location.search}</output>;
+    }
+
+    render(
+      <MemoryRouter initialEntries={["/settings?category=document"]}>
+        <PreferencesProvider repository={new FakePreferencesRepository()}>
+          <SettingsPage />
+          <SearchProbe />
+        </PreferencesProvider>
+      </MemoryRouter>,
+    );
+
+    expect(
+      await screen.findByRole("button", { name: "작업 방식" }),
+    ).toHaveAttribute("aria-current", "page");
+
+    await user.click(screen.getByRole("button", { name: "AI 연동" }));
+    expect(screen.getByTestId("settings-search")).toHaveTextContent("?category=ai");
+  });
+});
