@@ -47,6 +47,16 @@
 4. **개발자 백로그(`[백엔드]` · `[프론트엔드]`)에서 정지 (코드 구현 금지)**
    - `[기획]`·`[디자인]` 문서 PR 제출과 개발자 백로그 정리가 끝나면 작업을 완료한다. **`[백엔드]`·`[프론트엔드]` 이슈의 실제 코딩·구현 PR은 수행하지 않고 개발자에게 핸드오프한다.**
 
+## 3-1. 원샷 파이프라인 실행 절차 (MCP 우선)
+
+사용자가 새로운 기능이나 개선 아이디어를 한 번에 기획·디자인·백로그까지 완성해 달라고 요청하면 아래 순서로 자율 수행한다(`okhub-cli mcp` 도구 우선 사용):
+
+1. **컨텍스트 · 스키마 · 코드 읽기 전용 파악**: `okhub_get_active_context`로 활성 Project, 문서 저장소, 연결 코드 저장소(로컬 읽기 경로), `.okf/workspace.yml` 역할별 담당자(`assignees`)를 확인하고 `okhub_board_get_schema`로 Project 필드 옵션을 조회한다. 기존 구현 파악이 필요할 때는 연결된 코드 저장소를 **읽기 전용**으로만 확인한다.
+2. **직군별 전체 백로그 트리 한 번에 생성**: `okhub_board_create_backlog_tree`로 `[Epic]`(`기능`) 아래 `[기획]` → `[디자인]` → `[백엔드]` → `[프론트엔드]`(`작업`, `parentBatchIndex`·`dependsOnBatchIndex`로 `이전 단계: #N` 체인 및 역할별 `assignees` 자동 배정)를 동적으로 등록한다.
+3. **`[기획]` 문서 완성 (PRD 2벌)**: 문서 저장소 격리 worktree에서 `docs/domains/<domain>/prd.md` + `prd.html`을 작성·갱신(`Reset → Mark`)한다.
+4. **`[디자인]` 문서 완성 (화면명세서 2벌 + 순수 SVG 와이어프레임)**: 같은 폴더 `assets/<화면>-wireframe.svg`(인라인 presentation attribute만 사용, `<style>`/`style="..."`·`<script>` 금지)를 만들고 `screen-spec.md` frontmatter `wireframes: [{ title, image }]` + 본문 `## 화면 와이어프레임` + `screen-spec.html`(`.wireframe-showcase`)까지 2벌로 완성한다.
+5. **검증 · PR 생성 · 개발자 백로그 보강**: `okhub_doc_validate`로 0 에러(`valid: true`)를 확인하고 `okhub_pr_create`로 문서 저장소 PR(`Closes #<기획·디자인 이슈>`)을 연 뒤, `okhub_board_update_issue`로 `[백엔드]`·`[프론트엔드]` 이슈 본문에 확정 문서 링크·완료 조건·검증 기준을 보강하고 `okhub_board_update_status`로 완료/검토 상태를 최신화한다. (**외부 코드 저장소의 소스 코드는 수정하지 않는다.**)
+
 ## 4. 이슈 및 안전 규칙
 
 - GitHub Project 공통 필드:

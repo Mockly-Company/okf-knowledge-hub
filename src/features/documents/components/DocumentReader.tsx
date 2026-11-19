@@ -21,7 +21,11 @@ import { useDocuments } from "../DocumentsProvider";
 import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
 import { CompanionHtmlFrame } from "./CompanionHtmlFrame";
-import { DesignLinksBar, extractDesignsFromProperties } from "./DesignLinksBar";
+import {
+  DesignLinksBar,
+  extractDesignsFromProperties,
+  extractWireframesFromProperties,
+} from "./DesignLinksBar";
 import { MarkdownDocument } from "./MarkdownDocument";
 import { DocumentHistory } from "./DocumentHistory";
 import { DocumentOverview } from "./DocumentOverview";
@@ -440,6 +444,21 @@ export function DocumentReader({
           <span>최신 내용은 원문 (.md)에서 확인하고 다음 PR에서 함께 갱신해 주세요.</span>
         </div>
       ) : null}
+          {state.selectedVersion === null &&
+          ((document.summary.wireframes?.length ?? 0) > 0 ||
+            extractWireframesFromProperties(document.properties).length > 0) ? (
+            <DesignLinksBar
+              designs={(document.summary.wireframes &&
+              document.summary.wireframes.length > 0
+                ? document.summary.wireframes
+                : extractWireframesFromProperties(document.properties)
+              ).map((wf) => ({ title: wf.title, image: wf.image }))}
+              documentPath={document.summary.path}
+              readAsset={readAsset}
+              heading="화면 와이어프레임"
+              assetKind="wireframe"
+            />
+          ) : null}
           {state.selectedVersion === null &&
           ((document.summary.designs?.length ?? 0) > 0 ||
             extractDesignsFromProperties(document.properties).length > 0) ? (

@@ -311,6 +311,10 @@ select {
   border-top: 1px solid var(--color-border);
 }
 
+.app-sidebar__primary-divider--hidden {
+  border-top-color: transparent;
+}
+
 .app-sidebar__link {
   display: flex;
   min-height: var(--control-height);
@@ -343,12 +347,27 @@ select {
   margin-top: auto;
   border-top: 1px solid var(--color-border);
   padding: var(--space-3) var(--space-4);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color var(--motion-control-duration) var(--motion-control-easing);
+}
+
+a.app-sidebar__user:hover {
+  background: var(--color-surface-hover);
+}
+
+a.app-sidebar__user:focus-visible {
+  background: var(--color-surface-hover);
+  outline: var(--focus-ring-width) solid var(--color-primary);
+  outline-offset: -2px;
 }
 
 .app-sidebar__avatar {
   display: grid;
   width: 32px;
   height: 32px;
+  flex: 0 0 32px;
+  overflow: hidden;
   place-items: center;
   border-radius: var(--radius-full);
   background: var(--color-primary-soft);
@@ -374,11 +393,6 @@ select {
 
 .app-sidebar__user small {
   color: var(--color-text-muted);
-}
-
-.app-sidebar__avatar {
-  overflow: hidden;
-  flex: 0 0 32px;
 }
 
 .app-sidebar__avatar img {
@@ -514,7 +528,8 @@ select {
   gap: var(--space-3);
 }
 
-.github-account-card__device-flow code {
+.github-account-card__device-flow code,
+.device-code-copy code {
   border-radius: var(--radius-sm);
   background: var(--color-canvas);
   padding: var(--space-2) var(--space-3);

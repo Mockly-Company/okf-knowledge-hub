@@ -114,4 +114,50 @@ describe("design token contract", () => {
       /\[aria-invalid="true"\]:focus-visible\s*\{[\s\S]*?outline-color: var\(--color-error\)/,
     );
   });
+
+  it("references only CSS custom properties defined in tokens.css or locally", () => {
+    const tokens = readFileSync(tokenFile, "utf8");
+    const definedTokens = new Set(
+      [...tokens.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)].map((m) => m[1]),
+    );
+    const allowedRuntimeTokens = new Set(["--tree-indent"]);
+    const productRuntimeFiles = globSync("**/*.{css,tsx,ts}", { cwd: sourceRoot })
+      .map((path) => resolve(sourceRoot, path))
+      .filter(
+        (path) =>
+          path !== tokenFile &&
+          !path.includes(`${resolve(sourceRoot, "stories")}`) &&
+          !/\.test\.(ts|tsx)$/.test(path),
+      );
+
+    const violations = productRuntimeFiles.flatMap((path) => {
+      const contents = readFileSync(path, "utf8");
+      const localDefs = new Set(
+        [...contents.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)].map((m) => m[1]),
+      );
+      return [...contents.matchAll(/var\((--[a-zA-Z0-9_-]+)/g)]
+        .map((m) => m[1])
+        .filter(
+          (tok) =>
+            !tok.startsWith("--radix-") &&
+            !allowedRuntimeTokens.has(tok) &&
+            !definedTokens.has(tok) &&
+            !localDefs.has(tok),
+        )
+        .map((tok) => `${path.slice(sourceRoot.length + 1)}: ${tok}`);
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it("uses Tailwind length: disambiguator for font-size CSS variable utilities", () => {
+    const violations = productStyleFiles().flatMap((path) => {
+      const contents = readFileSync(path, "utf8");
+      return [...contents.matchAll(/text-\[var\(--font-[a-zA-Z0-9_-]+\)\]/g)].map(
+        (m) => `${path.slice(sourceRoot.length + 1)}: ${m[0]}`,
+      );
+    });
+
+    expect(violations).toEqual([]);
+  });
 });

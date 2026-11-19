@@ -394,7 +394,7 @@ function BoardColumn({
       aria-label={`${layerName} ${statusName}`}
     >
       <header className="flex h-[var(--control-height)] items-center gap-[var(--space-2)] px-[var(--space-1)]">
-        <h3 className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)]">
+        <h3 className="m-0 text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)]">
           {statusName}
         </h3>
         <StatusBadge tone="neutral">{String(issues.length)}</StatusBadge>
@@ -415,7 +415,7 @@ function BoardColumn({
               >
                 <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
                   <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-                    <span className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+                    <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                       #{issue.number}
                     </span>
                     {readiness?.state === "ready" ? (
@@ -1058,7 +1058,7 @@ export function ProjectPage({
         actions={
           <div className="flex min-w-0 flex-wrap items-center justify-end gap-[var(--space-3)]">
             <span
-              className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
+              className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
               aria-live="polite"
             >
               {board?.fetchedAt ? (
@@ -1208,41 +1208,6 @@ export function ProjectPage({
 
       {isUnlinked || board === null ? null : (
         <>
-          {board.issues.length > 0 && view === "layers" ? (
-            <div
-              className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
-              role="group"
-              aria-label="레이어 필터"
-            >
-              <Button
-                type="button"
-                variant={filter === "all" ? "primary" : "secondary"}
-                aria-pressed={filter === "all"}
-                onClick={() => setFilter("all")}
-              >
-                전체
-              </Button>
-              {BOARD_LAYERS.map((layer) => (
-                <Button
-                  key={layer.id}
-                  type="button"
-                  variant={filter === layer.id ? "primary" : "secondary"}
-                  aria-pressed={filter === layer.id}
-                  onClick={() => setFilter(layer.id)}
-                >
-                  {layer.name}
-                </Button>
-              ))}
-            </div>
-          ) : null}
-
-          {board && board.skipped > 0 ? (
-            <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
-              {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
-              Project의 영역 값과 상태 값을 확인해 주세요.
-            </p>
-          ) : null}
-
           {board.issues.length > 0 ? (
             <div className="mt-[var(--space-6)] flex flex-wrap items-center justify-between gap-[var(--space-3)]">
               <div className="flex flex-wrap items-center gap-[var(--space-3)]">
@@ -1268,21 +1233,21 @@ export function ProjectPage({
                     계층별
                   </Button>
                 </div>
-                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                   <Checkbox
                     checked={hideDone}
                     onChange={(event) => setHideDone(event.target.checked)}
                   />
                   완료 항목 숨기기
                 </label>
-                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                   <Checkbox
                     checked={readyOnly}
                     onChange={(event) => setReadyOnly(event.target.checked)}
                   />
                   시작 가능만 보기
                 </label>
-                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                <label className="flex cursor-pointer items-center gap-[var(--space-2)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                   <Checkbox
                     disabled={viewerLogin === null}
                     checked={isMineOnly}
@@ -1323,8 +1288,44 @@ export function ProjectPage({
               </div>
             </div>
           ) : null}
+
+          {board.issues.length > 0 && view === "layers" ? (
+            <div
+              className="mt-[var(--space-4)] flex flex-wrap gap-[var(--space-2)]"
+              role="group"
+              aria-label="레이어 필터"
+            >
+              <Button
+                type="button"
+                variant={filter === "all" ? "primary" : "secondary"}
+                aria-pressed={filter === "all"}
+                onClick={() => setFilter("all")}
+              >
+                전체
+              </Button>
+              {BOARD_LAYERS.map((layer) => (
+                <Button
+                  key={layer.id}
+                  type="button"
+                  variant={filter === layer.id ? "primary" : "secondary"}
+                  aria-pressed={filter === layer.id}
+                  onClick={() => setFilter(layer.id)}
+                >
+                  {layer.name}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+
+          {board && board.skipped > 0 ? (
+            <p className="m-0 mt-[var(--space-3)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
+              {board.skipped}개 항목은 레이어·상태를 판별할 수 없어 제외됐습니다.
+              Project의 영역 값과 상태 값을 확인해 주세요.
+            </p>
+          ) : null}
+
           {board && (board.truncated || walkCapped || treeCapped) ? (
-            <p className="m-0 mt-[var(--space-3)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+            <p className="m-0 mt-[var(--space-3)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
               보드 항목이 많아 일부만 표시됩니다. (보드 최대 500개·에픽별 하위 이슈
               최대 520개
               {walkCapped || treeCapped
@@ -1337,19 +1338,26 @@ export function ProjectPage({
       )}
 
       {boardLoading ? (
-        <p role="status">
-          {switchingTitle ? `"${switchingTitle}" 보드 가져오는 중` : "Project 불러오는 중"}
-        </p>
+        <div className="mt-[var(--space-4)]">
+          <StatusFeedback variant="content" tone="info">
+            {switchingTitle ? `"${switchingTitle}" 보드 가져오는 중` : "Project 불러오는 중"}
+          </StatusFeedback>
+        </div>
       ) : (
         <>
           {loadError ? (
-            <div role="alert" className="grid gap-[var(--space-3)]">
-              <p className="m-0">{loadError}</p>
-              <div>
-                <Button type="button" variant="secondary" onClick={retryLoad}>
-                  다시 시도
-                </Button>
-              </div>
+            <div className="mt-[var(--space-4)]">
+              <StatusFeedback
+                variant="content"
+                tone="error"
+                action={
+                  <Button type="button" variant="secondary" onClick={retryLoad}>
+                    다시 시도
+                  </Button>
+                }
+              >
+                {loadError}
+              </StatusFeedback>
             </div>
           ) : null}
           {!isUnlinked && board ? (
@@ -1369,36 +1377,54 @@ export function ProjectPage({
                   )}
                 </Button>
               </section>
-            ) : assigneeFilter !== ASSIGNEE_FILTER_ALL &&
+            ) : (filter !== "all" ||
+                readyOnly ||
+                hideDone ||
+                assigneeFilter !== ASSIGNEE_FILTER_ALL) &&
               ((view === "tree" && treeIssues.length === 0) ||
                 (view === "layers" && groupedIssueCount === 0)) ? (
-              <section
-                aria-label="필터 결과 없음"
-                className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
-              >
-                <p className="m-0 text-[var(--color-text-muted)]">
-                  {filter === "all" &&
+              (() => {
+                const onlyHideDoneActive =
+                  filter === "all" &&
                   !readyOnly &&
-                  assigneeFilter !== ASSIGNEE_FILTER_UNASSIGNED
-                    ? hideDone
-                      ? "선택한 담당자에게 배정된 열린 작업이 없습니다."
-                      : "선택한 담당자에게 배정된 작업이 없습니다."
-                    : hideDone
-                      ? "선택한 필터 조건에 맞는 열린 작업이 없습니다."
-                      : "선택한 필터 조건에 맞는 작업이 없습니다."}
-                </p>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => {
-                    setFilter("all");
-                    setReadyOnly(false);
-                    setAssigneeFilter(ASSIGNEE_FILTER_ALL);
-                  }}
-                >
-                  필터 초기화
-                </Button>
-              </section>
+                  assigneeFilter === ASSIGNEE_FILTER_ALL &&
+                  hideDone;
+                return (
+                  <section
+                    aria-label="필터 결과 없음"
+                    className="mt-[var(--space-6)] grid max-w-2xl justify-items-start gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-6)]"
+                  >
+                    <p className="m-0 text-[var(--color-text-muted)]">
+                      {onlyHideDoneActive
+                        ? "열린 작업이 없습니다. 완료된 항목을 보려면 완료 숨기기를 해제하세요."
+                        : filter === "all" &&
+                            !readyOnly &&
+                            assigneeFilter !== ASSIGNEE_FILTER_ALL &&
+                            assigneeFilter !== ASSIGNEE_FILTER_UNASSIGNED
+                          ? hideDone
+                            ? "선택한 담당자에게 배정된 열린 작업이 없습니다."
+                            : "선택한 담당자에게 배정된 작업이 없습니다."
+                          : hideDone
+                            ? "선택한 필터 조건에 맞는 열린 작업이 없습니다."
+                            : "선택한 필터 조건에 맞는 작업이 없습니다."}
+                    </p>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        setFilter("all");
+                        setReadyOnly(false);
+                        setAssigneeFilter(ASSIGNEE_FILTER_ALL);
+                        if (onlyHideDoneActive) {
+                          setHideDone(false);
+                        }
+                      }}
+                    >
+                      {onlyHideDoneActive ? "완료 항목 포함 보기" : "필터 초기화"}
+                    </Button>
+                  </section>
+                );
+              })()
             ) : view === "tree" ? (
               <ProjectTree
                 issues={treeIssues}
@@ -1409,11 +1435,14 @@ export function ProjectPage({
                 }}
               />
             ) : (
-        <div className="grid gap-[var(--space-6)]">
+        <div className="mt-[var(--space-4)] grid gap-[var(--space-6)]">
           {visibleLayers.map((layer) => (
             <section key={layer.id} aria-label={`${layer.name} 레이어`} className="min-w-0">
               {/* 미지정 레인은 매핑 라벨이 없어 title을 붙이지 않는다. */}
-              <h2 className="m-0 mb-[var(--space-3)]" title={layer.label ?? undefined}>
+              <h2
+                className="m-0 mb-[var(--space-3)] text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]"
+                title={layer.label ?? undefined}
+              >
                 {layer.name}
               </h2>
               <section

@@ -950,6 +950,8 @@ pub struct CreateBoardIssueRequest {
     pub parent_batch_index: Option<usize>,
     pub depends_on: Option<u64>,
     pub depends_on_batch_index: Option<usize>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1276,6 +1278,7 @@ pub async fn create_project_board_issues(
                 priority: req.priority,
                 parent_issue_number: resolved_parent_num,
                 parent_issue_repository: resolved_parent_repo,
+                assignees: req.assignees,
             })
             .await?;
         created.push(item);

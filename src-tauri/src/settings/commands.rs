@@ -193,10 +193,18 @@ pub async fn start_ai_terminal(
         Some(auth) => auth.valid_access_token().await.ok(),
         None => None,
     };
-    let env = ai_runner::terminal_env(
+    let okhub_cli = ai_runner::resolve_okhub_cli_binary();
+    let workspace_dir =
+        connected_workspace_dir(&state.local_settings).unwrap_or_else(|_| launch_dir.clone());
+    let active_context = resolve_active_ai_context(&state, &workspace_dir);
+    let env = ai_runner::terminal_env_with_context(
         access_token
             .as_ref()
             .map(crate::auth::model::AccessToken::expose_secret),
+        &app_data,
+        &launch_dir,
+        &active_context,
+        okhub_cli.as_deref(),
     );
     let session_id = terminals
         .start(&command_line, &launch_dir, cols, rows, &env, move |event| {
@@ -460,8 +468,18 @@ fn prepare_ai_terminal_with_task_pack(
         Some(active_context),
         task_pack,
     )?;
+    let okhub_cli = ai_runner::resolve_okhub_cli_binary();
+    let mcp_config_path = okhub_cli.as_deref().and_then(|cli_path| {
+        let ctx_env = ai_runner::context_env_vars(app_data_dir, &launch_dir, active_context);
+        ai_runner::write_mcp_config_file(app_data_dir, &launch_dir, cli_path, &ctx_env).ok()
+    });
     Ok((
-        tool.terminal_command(&custom_command, &rules_file),
+        tool.terminal_command_with_mcp(
+            &custom_command,
+            &rules_file,
+            mcp_config_path.as_deref(),
+            okhub_cli.as_deref(),
+        ),
         launch_dir,
     ))
 }
@@ -564,11 +582,26 @@ fn load_ai_rules(
     if let Some(pack) = task_pack {
         sections.push(pack.markdown.trim().to_owned());
     }
-    sections.push(
-        ai_runner::worktree_rules(launch_dir, worktrees_dir)
-            .trim()
-            .to_owned(),
-    );
+    match task_pack {
+        Some(pack) if launch_dir != workspace_dir => {
+            sections.push(
+                ai_runner::active_worktree_rules(
+                    launch_dir,
+                    &pack.target_repo_dir,
+                    &pack.branch_name,
+                )
+                .trim()
+                .to_owned(),
+            );
+        }
+        _ => {
+            sections.push(
+                ai_runner::worktree_rules(launch_dir, worktrees_dir)
+                    .trim()
+                    .to_owned(),
+            );
+        }
+    }
     let fixed = sections.join("\n\n---\n\n");
     Ok(ai_runner::compose_rules(
         &app_rules,
@@ -683,6 +716,12 @@ pub(crate) fn resolve_active_ai_context(
         })
         .unwrap_or_default();
 
+    let assignees = manifest
+        .as_ref()
+        .and_then(|m| m.assignees.as_ref())
+        .map(crate::workspace::model::WorkspaceAssignees::normalized)
+        .filter(|a| !a.is_empty());
+
     let current_user_login = services
         .auth
         .as_ref()
@@ -693,6 +732,7 @@ pub(crate) fn resolve_active_ai_context(
         docs_repository_full_name,
         project,
         code_repositories,
+        assignees,
         current_user_login,
     }
 }
@@ -1407,6 +1447,7 @@ mod tests {
         assert!(rules.contains("# 작업 컨텍스트 팩 — #63 [디자인] 화면명세서 작성"));
         assert!(rules.contains("팀 문서 규칙: 2벌(.md+.html) 유지"));
         assert!(rules.contains("절대 원칙 (코드 구현 금지)"));
+        assert!(rules.contains("OkHub 활성 작업 워크트리 규칙"));
     }
 
     #[test]

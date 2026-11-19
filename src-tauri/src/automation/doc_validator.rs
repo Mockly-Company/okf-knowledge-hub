@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::documents::reader::extract_local_stylesheet_hrefs;
+use crate::documents::frontmatter::parse_document;
+use crate::documents::reader::{extract_local_stylesheet_hrefs, is_reserved_markdown_path};
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -139,6 +140,16 @@ pub fn validate_workspace_docs(
     workspace_root: &Path,
     docs_root_rel: &str,
 ) -> Result<DocValidationReport, AppError> {
+    let canonical_root = workspace_root.canonicalize().map_err(|err| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            format!(
+                "문서 워크스페이스 루트 경로를 확인할 수 없습니다: {}",
+                workspace_root.display()
+            ),
+        )
+        .with_detail("reason", err.to_string())
+    })?;
     let md_files = collect_markdown_files(workspace_root, docs_root_rel)?;
     let mut issues = Vec::new();
     let mut highlighted_markdown_files = Vec::new();
@@ -173,11 +184,79 @@ pub fn validate_workspace_docs(
             highlighted_markdown_files.push(rel_path.clone());
         }
 
+        let file_name = Path::new(rel_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(rel_path);
+        let is_reserved = is_reserved_markdown_path(rel_path, file_name);
+
+        let parsed_doc = parse_document(&markdown, file_name);
+        if is_screen_spec_document(rel_path, file_name, parsed_doc.doc_type.as_deref())
+            && parsed_doc.wireframes.is_empty()
+        {
+            issues.push(DocValidationIssue {
+                severity: "error".to_owned(),
+                path: rel_path.clone(),
+                code: "screen_spec_wireframe_missing".to_owned(),
+                message: format!(
+                    "화면명세서 `{rel_path}`에 `wireframes` frontmatter(화면별 SVG 와이어프레임)가 없습니다."
+                ),
+            });
+        }
+
+        let doc_parent = full_md.parent().unwrap_or(workspace_root);
+        for wf in &parsed_doc.wireframes {
+            if !local_asset_exists(&canonical_root, doc_parent, &wf.image) {
+                issues.push(DocValidationIssue {
+                    severity: "error".to_owned(),
+                    path: rel_path.clone(),
+                    code: "asset_file_missing".to_owned(),
+                    message: format!(
+                        "`{rel_path}`의 와이어프레임 에셋 `{}` 파일을 찾을 수 없습니다.",
+                        wf.image
+                    ),
+                });
+            }
+        }
+        for design in &parsed_doc.designs {
+            if let Some(image) = design.image.as_deref() {
+                if !local_asset_exists(&canonical_root, doc_parent, image) {
+                    issues.push(DocValidationIssue {
+                        severity: "error".to_owned(),
+                        path: rel_path.clone(),
+                        code: "asset_file_missing".to_owned(),
+                        message: format!(
+                            "`{rel_path}`의 디자인 시안 에셋 `{image}` 파일을 찾을 수 없습니다."
+                        ),
+                    });
+                }
+            }
+            if let Some(ref_wf) = design.wireframe.as_deref() {
+                let target = ref_wf.trim();
+                if !target.is_empty()
+                    && !parsed_doc
+                        .wireframes
+                        .iter()
+                        .any(|w| w.title.trim().eq_ignore_ascii_case(target))
+                {
+                    issues.push(DocValidationIssue {
+                        severity: "warning".to_owned(),
+                        path: rel_path.clone(),
+                        code: "design_wireframe_unknown".to_owned(),
+                        message: format!(
+                            "`{rel_path}`의 디자인 시안 `{}`이(가) 참조하는 와이어프레임 `{target}`을 `wireframes`에서 찾을 수 없습니다.",
+                            design.title
+                        ),
+                    });
+                }
+            }
+        }
+
         let html_rel = companion_html_rel_path(rel_path);
         let full_html = workspace_root.join(&html_rel);
         let sync_status = compute_html_sync_status(&full_md, &full_html);
         match sync_status.as_str() {
-            "missing" => {
+            "missing" if !is_reserved => {
                 issues.push(DocValidationIssue {
                     severity: "warning".to_owned(),
                     path: html_rel.clone(),
@@ -450,12 +529,69 @@ fn detect_markdown_change_markers(markdown: &str) -> Vec<String> {
     markers
 }
 
+fn is_screen_spec_document(rel_path: &str, file_name: &str, doc_type: Option<&str>) -> bool {
+    if let Some(raw_type) = doc_type {
+        let norm = raw_type.trim().to_ascii_lowercase();
+        if matches!(
+            norm.as_str(),
+            "screen spec" | "screen-spec" | "screen_spec" | "화면명세" | "화면명세서"
+        ) {
+            return true;
+        }
+    }
+    let lower_name = file_name.to_ascii_lowercase();
+    let lower_path = rel_path.to_ascii_lowercase();
+    lower_name == "screen-spec.md"
+        || lower_name.ends_with("-screen-spec.md")
+        || lower_path.ends_with("/screen-spec.md")
+}
+
+fn local_asset_exists(canonical_root: &Path, doc_parent: &Path, raw_asset: &str) -> bool {
+    let clean = raw_asset
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(raw_asset)
+        .trim()
+        .replace('\\', "/");
+    if clean.is_empty() {
+        return false;
+    }
+    let candidate = doc_parent.join(&clean);
+    if !candidate.is_file() {
+        return false;
+    }
+    candidate
+        .canonicalize()
+        .is_ok_and(|canon| canon.starts_with(canonical_root))
+}
+
+fn strip_style_blocks(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0;
+    while let Some(rel_start) = lower[cursor..].find("<style") {
+        let abs_start = cursor + rel_start;
+        out.push_str(&html[cursor..abs_start]);
+        if let Some(rel_end) = lower[abs_start..].find("</style>") {
+            cursor = abs_start + rel_end + "</style>".len();
+        } else {
+            cursor = html.len();
+            break;
+        }
+    }
+    if cursor < html.len() {
+        out.push_str(&html[cursor..]);
+    }
+    out
+}
+
 fn detect_html_change_markers(html: &str) -> Vec<String> {
+    let stripped = strip_style_blocks(html);
     let mut markers = Vec::new();
-    if html.contains("is-new") {
+    if stripped.contains("is-new") {
         markers.push("is-new".to_owned());
     }
-    if html.contains("is-changed") {
+    if stripped.contains("is-changed") {
         markers.push("is-changed".to_owned());
     }
     markers
@@ -488,6 +624,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{list_workspace_docs, read_workspace_doc, validate_workspace_docs};
+    use crate::error::ErrorCode;
 
     #[test]
     fn validates_dual_md_html_sync_frontmatter_and_rolling_markers() {
@@ -548,5 +685,104 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "html_forbidden_script"));
+    }
+
+    #[test]
+    fn skips_reserved_markdown_and_validates_screen_spec_wireframes_and_style_blocks() {
+        let temp = TempDir::new().unwrap();
+        let domain_dir = temp.path().join("docs").join("domains").join("board");
+        let assets_dir = domain_dir.join("assets");
+        std::fs::create_dir_all(&assets_dir).unwrap();
+        std::fs::write(temp.path().join("docs").join("index.md"), "# Index\n").unwrap();
+        std::fs::write(temp.path().join("docs").join("log.md"), "# Log\n").unwrap();
+        std::fs::write(
+            assets_dir.join("board-wireframe.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        )
+        .unwrap();
+
+        // Missing wireframes on screen spec -> error
+        std::fs::write(
+            domain_dir.join("screen-spec.md"),
+            "---\nokf_hub_id: 11111111-1111-4111-8111-111111111111\ntype: \"Screen Spec\"\ntitle: 보드 화면명세\n---\n# 보드 화면명세\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.html"),
+            "<html><head><style>.is-new { color: green; }</style></head><body><h1>보드 화면명세</h1></body></html>",
+        )
+        .unwrap();
+
+        let missing_report = validate_workspace_docs(temp.path(), "docs").unwrap();
+        assert!(!missing_report.valid);
+        assert!(missing_report
+            .issues
+            .iter()
+            .any(|i| i.code == "screen_spec_wireframe_missing"));
+        assert!(!missing_report
+            .issues
+            .iter()
+            .any(|i| i.code == "companion_html_missing"));
+        // CSS selector `.is-new` inside <style> must not trigger a false-positive marker mismatch.
+        assert!(!missing_report
+            .issues
+            .iter()
+            .any(|i| i.code == "change_marker_mismatch"));
+
+        // Valid wireframe + linked design -> valid
+        std::fs::write(
+            domain_dir.join("screen-spec.md"),
+            "---\nokf_hub_id: 11111111-1111-4111-8111-111111111111\ntype: \"Screen Spec\"\ntitle: 보드 화면명세\nwireframes:\n  - title: 보드 와이어프레임\n    image: assets/board-wireframe.svg\ndesigns:\n  - title: 보드 시안\n    image: assets/missing-mock.svg\n    wireframe: 없는 와이어프레임\n---\n# 보드 화면명세\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.html"),
+            "<html><body><h1>보드 화면명세</h1></body></html>",
+        )
+        .unwrap();
+        let asset_report = validate_workspace_docs(temp.path(), "docs").unwrap();
+        assert!(!asset_report.valid);
+        assert!(asset_report
+            .issues
+            .iter()
+            .any(|i| i.code == "asset_file_missing"));
+        assert!(asset_report
+            .issues
+            .iter()
+            .any(|i| i.code == "design_wireframe_unknown"));
+    }
+
+    #[test]
+    fn rejects_path_traversal_assets_outside_workspace_root() {
+        let outer = TempDir::new().unwrap();
+        let workspace = outer.path().join("ws");
+        let domain_dir = workspace.join("docs").join("domains").join("board");
+        std::fs::create_dir_all(&domain_dir).unwrap();
+        std::fs::write(
+            outer.path().join("outside.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.md"),
+            "---\nokf_hub_id: 11111111-1111-4111-8111-111111111111\ntype: \"Screen Spec\"\ntitle: 탈출 테스트\nwireframes:\n  - title: 외부 탈출\n    image: ../../../../outside.svg\n---\n# 탈출 테스트\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.html"),
+            "<html><body><h1>탈출 테스트</h1></body></html>",
+        )
+        .unwrap();
+
+        let report = validate_workspace_docs(&workspace, "docs").unwrap();
+        assert!(!report.valid);
+        assert!(report.issues.iter().any(|i| i.code == "asset_file_missing"));
+    }
+
+    #[test]
+    fn fails_fast_when_workspace_root_cannot_be_canonicalized() {
+        let missing = TempDir::new().unwrap().path().join("nonexistent-workspace");
+        let err = validate_workspace_docs(&missing, "docs").unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkspaceInvalid);
     }
 }

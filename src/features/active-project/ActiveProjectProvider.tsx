@@ -170,7 +170,6 @@ export function ActiveProjectProvider({
     readLastActiveProjectId(),
   );
   const activeWorkspaceIdRef = useRef(activeWorkspaceId);
-  activeWorkspaceIdRef.current = activeWorkspaceId;
   const [docsMissing, setDocsMissing] = useState(false);
   const [guardSelectError, setGuardSelectError] = useState<string | null>(null);
 
@@ -993,10 +992,25 @@ export function ActiveProjectProvider({
     workspaces,
   ]);
 
+  const snapshotActiveWorkspaceId =
+    workspacesQuery.data?.activeWorkspaceId &&
+    workspaces.some(
+      (candidate) => candidate.id === workspacesQuery.data?.activeWorkspaceId,
+    )
+      ? workspacesQuery.data.activeWorkspaceId
+      : null;
+  const effectiveActiveWorkspaceId =
+    activeWorkspaceId !== null || userClearedRef.current || !hasWorkspaceGateway
+      ? activeWorkspaceId
+      : snapshotActiveWorkspaceId;
+  activeWorkspaceIdRef.current = effectiveActiveWorkspaceId;
+
   const activeWorkspace = useMemo(
     () =>
-      workspaces.find((candidate) => candidate.id === activeWorkspaceId) ?? null,
-    [activeWorkspaceId, workspaces],
+      workspaces.find(
+        (candidate) => candidate.id === effectiveActiveWorkspaceId,
+      ) ?? null,
+    [effectiveActiveWorkspaceId, workspaces],
   );
 
   const querySucceeded = hasWorkspaceGateway
@@ -1006,9 +1020,9 @@ export function ActiveProjectProvider({
   const activeProjectId = activeWorkspace
     ? (activeWorkspace.project?.id ?? null)
     : !querySucceeded &&
-        activeWorkspaceId !== null &&
-        !activeWorkspaceId.startsWith("repo:")
-      ? activeWorkspaceId
+        effectiveActiveWorkspaceId !== null &&
+        !effectiveActiveWorkspaceId.startsWith("repo:")
+      ? effectiveActiveWorkspaceId
       : null;
 
   const activeWorkspaceTitle =
@@ -1032,7 +1046,7 @@ export function ActiveProjectProvider({
     () => ({
       workspaces,
       activeWorkspace,
-      activeWorkspaceId,
+      activeWorkspaceId: effectiveActiveWorkspaceId,
       activeWorkspaceTitle,
       activeProjectId,
       projects,
@@ -1059,7 +1073,7 @@ export function ActiveProjectProvider({
     [
       workspaces,
       activeWorkspace,
-      activeWorkspaceId,
+      effectiveActiveWorkspaceId,
       activeWorkspaceTitle,
       activeProjectId,
       projects,

@@ -285,6 +285,7 @@ pub struct CreateProjectIssueInput {
     pub priority: Option<String>,
     pub parent_issue_number: Option<u64>,
     pub parent_issue_repository: Option<String>,
+    pub assignees: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -322,6 +323,23 @@ pub struct UpdatedProjectItem {
     pub area: Option<String>,
     pub kind: Option<String>,
     pub priority: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedIssue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedIssueComment {
+    pub id: u64,
+    pub url: String,
+    pub body: String,
 }
 
 /// 이슈 본문에서 순서 약속을 읽는다.

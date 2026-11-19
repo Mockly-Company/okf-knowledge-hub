@@ -172,20 +172,26 @@ export function WorkspaceDocsRepositoryPicker({
  */
 export function DocumentsFollowActiveProject() {
   const activeProject = useOptionalActiveProject();
+  const isListing = Boolean(activeProject?.isListing);
   const workspaceKey =
     activeProject?.activeWorkspaceId ?? activeProject?.activeProjectId ?? null;
   const repoKey = activeProject?.activeWorkspace?.docsRepository?.fullName ?? "";
   const signature = `${workspaceKey ?? "none"}::${repoKey}`;
   const { resetForWorkspaceSwitch } = useDocuments();
   const queryClient = useQueryClient();
-  const previous = useRef(signature);
+  const previous = useRef<string | null>(isListing ? null : signature);
   useEffect(() => {
+    if (isListing) return;
+    if (previous.current === null) {
+      previous.current = signature;
+      return;
+    }
     if (previous.current === signature) return;
     previous.current = signature;
     void queryClient.invalidateQueries({ queryKey: currentDocsRepositoryKey });
     void queryClient.invalidateQueries({ queryKey: aiKeys.agentsMd });
     resetForWorkspaceSwitch();
-  }, [signature, queryClient, resetForWorkspaceSwitch]);
+  }, [isListing, signature, queryClient, resetForWorkspaceSwitch]);
   return null;
 }
 

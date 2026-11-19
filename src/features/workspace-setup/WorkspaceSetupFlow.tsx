@@ -109,7 +109,7 @@ export function WorkspaceSetupFlow({
             <CircleUserRound strokeWidth={1.75} />
           </span>
           <div className="grid gap-[var(--space-1)]">
-            <h2 className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-heading)] text-[var(--color-text-strong)]">
+            <h2 className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]">
               GitHub에 로그인하고 문서 워크스페이스를 시작하세요
             </h2>
             <p className="m-0 text-[var(--color-text-muted)]">
@@ -196,7 +196,7 @@ export function WorkspaceSetupFlow({
       className="grid gap-[var(--space-4)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-5)]"
     >
       <div className="grid gap-[var(--space-1)]">
-        <h2 className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-heading)] text-[var(--color-text-strong)]">
+        <h2 className="m-0 text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]">
           문서 워크스페이스 연결
         </h2>
         <p className="m-0 text-[var(--color-text-muted)]">

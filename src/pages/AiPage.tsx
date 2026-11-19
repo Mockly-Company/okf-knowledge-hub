@@ -201,7 +201,7 @@ export function AiPage({
           />
           <section
             aria-label="컨텍스트 요약"
-            className="mt-[var(--space-3)] grid gap-[var(--space-1)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
+            className="mt-[var(--space-3)] grid gap-[var(--space-1)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
           >
             {agentsQuery.isError ? (
               <p className="m-0">
@@ -224,7 +224,7 @@ export function AiPage({
       ) : (
         <section
           aria-label="컨텍스트 요약"
-          className="mt-[var(--space-4)] grid gap-[var(--space-1)] text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
+          className="mt-[var(--space-4)] grid gap-[var(--space-1)] text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
         >
           <p className="m-0">
             프로젝트:{" "}
@@ -272,7 +272,7 @@ export function AiPage({
             <div className="flex flex-wrap items-center gap-[var(--space-2)]">
               <StatusBadge tone="info">격리 worktree 실행 대기</StatusBadge>
               {pendingLaunch.targetDescription ? (
-                <span className="text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+                <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                   {pendingLaunch.targetDescription}
                 </span>
               ) : null}
@@ -280,7 +280,7 @@ export function AiPage({
             <p className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
               {pendingLaunch.label}
             </p>
-            <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+            <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
               아래 AI 도구를 선택하면 문서 저장소의 격리된 git worktree를 열고 `.okf/AGENTS.md`·연결 문서·완료 조건을 자동 주입합니다. (OkHub는 PRD·화면명세서 `.md`+`.html` 작성 및 백로그 정리만 수행하며 코드 구현은 하지 않습니다.)
             </p>
           </div>
@@ -298,7 +298,7 @@ export function AiPage({
           <h2 className="m-0 font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
             터미널에서 열기
           </h2>
-          <p className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]">
+          <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
             앱 안 터미널에서 워크스페이스 폴더로 바로 실행합니다. Claude Code, Codex, Antigravity에는 프로젝트 규칙을 함께 전달합니다.
           </p>
           <div className="flex flex-wrap gap-[var(--space-2)]">
@@ -322,7 +322,7 @@ export function AiPage({
           {missingTools.map((tool) => (
             <p
               key={tool}
-              className="m-0 text-[var(--font-meta-size)] text-[var(--color-text-muted)]"
+              className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
             >
               {NOT_INSTALLED_MESSAGES[tool]}
             </p>

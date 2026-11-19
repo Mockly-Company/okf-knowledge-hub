@@ -93,6 +93,23 @@ export function statusName(status: BoardStatus): string {
   return BOARD_STATUSES.find((entry) => entry.id === status)?.name ?? status;
 }
 
+export function boardStatusTone(
+  status: BoardStatus,
+): "neutral" | "info" | "warning" | "success" {
+  switch (status) {
+    case "done":
+      return "success";
+    case "in_progress":
+    case "in_review":
+      return "info";
+    case "ready":
+      return "warning";
+    case "backlog":
+    default:
+      return "neutral";
+  }
+}
+
 /** GitHub 계정(조직 또는 개인). 프로젝트 목록의 owner 필터 단위. */
 export interface Organization {
   login: string;

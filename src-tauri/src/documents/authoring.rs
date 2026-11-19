@@ -60,6 +60,12 @@ pub struct DocumentTargetValidation {
     pub suggested_file_name: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct TeamTemplateDefaults {
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct TeamTemplateFrontmatter {
@@ -68,7 +74,7 @@ struct TeamTemplateFrontmatter {
     #[serde(rename = "type")]
     type_key: Option<String>,
     #[serde(default)]
-    defaults: DocumentTemplateDefaults,
+    defaults: TeamTemplateDefaults,
 }
 
 #[derive(Serialize)]
@@ -247,6 +253,18 @@ pub fn built_in_templates() -> Vec<NewDocumentTemplate> {
             Some("incident_review"),
             "# {{title}}\n\n## 요약\n\n## 영향\n\n## 탐지\n\n## 타임라인\n\n## 대응과 복구\n\n## 원인과 기여 요인\n\n## 배운 점\n\n### 잘된 점\n\n### 개선할 점\n\n## 재발 방지와 영향 완화 조치\n",
         ),
+        built_in(
+            "prd",
+            "제품 요구사항 정의서 (PRD)",
+            Some("prd"),
+            "# {{title}}\n\n## 이번 변경 요약\n\n- [NEW] 최초 PRD 작성\n\n## 1. 배경 및 목표 (Problem & Goal)\n\n- **해결하려는 문제**: \n- **핵심 목표 및 성공 기준**: \n\n## 2. 범위 (Scope)\n\n- **포함 범위 (In-Scope)**: \n- **제외 범위 (Out-of-Scope)**: \n\n## 3. 사용자 스토리 및 핵심 흐름\n\n1. 시작 조건과 진입 경로\n2. 주요 사용자 행동과 시스템 처리 규칙\n3. 최종 결과 및 상태 반영\n\n## 4. 상세 기능 요구사항 및 예외 정책\n\n| 요구사항 ID | 구분 | 상세 규칙 | 예외 / 경계 조건 |\n| --- | --- | --- | --- |\n| REQ-01 | 핵심 동작 | | |\n\n## 5. 직군별 연결 백로그 요약\n\n- `[기획]`: 본 PRD 확정 및 승인\n- `[디자인]`: 연결 화면명세서 및 와이어프레임 작성\n- `[백엔드]`: 도메인 모델 · API 계약 구현\n- `[프론트엔드]`: 화면명세서 기준 UI · 상태 연동 구현\n\n## 6. 완료 조건 (Acceptance Criteria)\n\n- [ ] 검증 가능한 핵심 인수 조건 1\n",
+        ),
+        built_in(
+            "screen_spec",
+            "화면명세서 (Screen Spec)",
+            Some("screen_spec"),
+            "# {{title}}\n\n## 이번 변경 요약\n\n- [NEW] 최초 화면명세서 작성\n\n## 1. 화면 개요 및 연결 문서\n\n- **기준 PRD**: `docs/domains/<domain>/prd.md`\n- **화면 목적**: \n- **진입 경로 및 권한**: \n\n## 2. 화면 와이어프레임 (필수)\n\n> frontmatter에 `wireframes: [{ title: \"핵심 화면 와이어프레임\", image: \"assets/screen-wireframe.svg\" }]`를 등록하고 아래 이미지를 실제 SVG 경로로 연결하세요.\n\n![핵심 화면 와이어프레임](assets/screen-wireframe.svg)\n\n## 3. 레이아웃 및 주요 구성 요소\n\n| 영역 / 컴포넌트 | 표시 데이터 · 역할 | 기본값 / 제약 조건 |\n| --- | --- | --- |\n| 상단 헤더 | | |\n| 본문 영역 | | |\n\n## 4. 상태별 화면 규칙 (State Matrix)\n\n| 상태 | 화면 표시 및 피드백 | 활성/비활성 제어 |\n| --- | --- | --- |\n| 기본 (Loaded) | | |\n| 로딩 (Loading) | | |\n| 빈 화면 (Empty) | | |\n| 오류 (Error) | | |\n\n## 5. 사용자 인터랙션 및 화면 전환\n\n1. **주요 액션**: 트리거 → 반응 → 후속 전환\n\n## 6. 예외 및 안내 문구 (Microcopy)\n\n| 상황 | 노출 위치 | 확정 문구 |\n| --- | --- | --- |\n| 요청 실패 | 상단 배너 | 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요. |\n\n## 7. 프론트엔드 핸드오프 완료 조건\n\n- [ ] 모든 주요 화면에 저충실도 SVG 와이어프레임이 첨부됨\n- [ ] 모든 상태(기본·로딩·빈 화면·오류)의 UI 규칙과 문구가 정의됨\n",
+        ),
     ]
 }
 
@@ -343,7 +361,9 @@ fn parse_team_template(template_id: &str, path: &Path) -> Result<NewDocumentTemp
         label,
         description: parsed.description.filter(|value| !value.trim().is_empty()),
         type_key: parsed.type_key.filter(|value| !value.trim().is_empty()),
-        defaults: parsed.defaults,
+        defaults: DocumentTemplateDefaults {
+            tags: parsed.defaults.tags,
+        },
         rich_editor_compatible: rich_editor_compatible(body),
         body: body.to_owned(),
     })
@@ -553,9 +573,9 @@ mod tests {
     }
 
     #[test]
-    fn built_in_catalog_contains_the_nine_approved_templates() {
+    fn built_in_catalog_contains_the_eleven_approved_templates() {
         let templates = built_in_templates();
-        assert_eq!(templates.len(), 9);
+        assert_eq!(templates.len(), 11);
         assert_eq!(templates[0].id, "builtin:blank");
         assert!(templates
             .iter()
@@ -563,6 +583,10 @@ mod tests {
         assert!(templates
             .iter()
             .any(|item| item.id == "builtin:incident_review"));
+        assert!(templates.iter().any(|item| item.id == "builtin:prd"));
+        assert!(templates
+            .iter()
+            .any(|item| item.id == "builtin:screen_spec"));
         assert!(!templates.iter().any(|item| item.label == "Runbook"));
     }
 

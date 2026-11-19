@@ -429,6 +429,7 @@ mod tests {
                 full_name: "Acme-Org/acme-web".to_owned(),
                 local_path: Some("/work/acme-web".to_owned()),
             }],
+            assignees: None,
             current_user_login: Some("YoonCarrot".to_owned()),
         };
 
