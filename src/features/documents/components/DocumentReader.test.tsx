@@ -874,4 +874,27 @@ describe("DocumentReader", () => {
       await within(contextPanel).findByAltText("도메인 맵 시안"),
     ).toBeVisible();
   });
+
+  it("keeps the workbench panel scrollable within documents-page--reader and allows header action wrapping", () => {
+    const readerPage = declarationBlock(".documents-page--reader");
+    expect(readerPage).toContain("display: flex");
+    expect(readerPage).toContain("flex-direction: column");
+
+    const workbenchPanel = declarationBlock(
+      ".documents-page--reader > .documents-page__workbench-panel",
+    );
+    expect(workbenchPanel).toContain("flex: 1 1 0");
+    expect(workbenchPanel).toContain("min-height: 0");
+    expect(workbenchPanel).toContain("overflow: hidden");
+
+    expect(declarationBlock(".document-reader__header")).toContain(
+      "flex-wrap: wrap",
+    );
+    expect(declarationBlock(".document-reader__heading")).toContain(
+      "min-width: 0",
+    );
+    expect(declarationBlock(".document-reader__actions")).toContain(
+      "flex-wrap: wrap",
+    );
+  });
 });

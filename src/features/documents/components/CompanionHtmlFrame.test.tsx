@@ -239,5 +239,18 @@ describe("CompanionHtmlFrame", () => {
     expect(frame).not.toHaveClass("document-reader__html-frame--auto-height");
     expect(frame.style.height).toBe("");
   });
+
+  it("injects autoResize viewport-height override styles only when autoResize is enabled and omits documentElement ResizeObserver", () => {
+    const html = "<!doctype html><html><head><style>.layout{min-height:100vh;}</style></head><body><h1>본문</h1></body></html>";
+    const enabled = prepareInteractiveCompanionHtml(html, "chan-a", "nonce-a", true);
+    expect(enabled).toContain('data-okhub-autoresize="true"');
+    expect(enabled).toContain("body>.layout:not([data-keep-viewport-height])");
+    expect(enabled).toContain("body>.layout>.sidebar:not([data-keep-viewport-height])");
+    expect(enabled).not.toContain("}.layout{");
+    expect(enabled).not.toContain("ro.observe(document.documentElement)");
+
+    const disabled = prepareInteractiveCompanionHtml(html, "chan-b", "nonce-b", false);
+    expect(disabled).not.toContain('data-okhub-autoresize="true"');
+  });
 });
 

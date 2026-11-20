@@ -291,6 +291,7 @@ export function prepareInteractiveCompanionHtml(
   rawHtml: string,
   channelId: string,
   nonce: string = createScriptNonce(),
+  autoResize: boolean = true,
 ): string {
   const sanitized = sanitizeCompanionHtmlDocument(rawHtml);
 
@@ -298,7 +299,12 @@ export function prepareInteractiveCompanionHtml(
   // 상속하므로 여기서 https:를 열어도 실제로는 차단되며, 외부 추적 픽셀도 막는다. 로컬 이미지는
   // reader.rs가 data: URI로 인라인하므로 문서 저장소 안의 시안/스크린샷은 정상 표시된다.
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:; script-src 'nonce-${nonce}';" />`;
-  const bridgeScript = `<script nonce="${nonce}">(function(){var ch=${JSON.stringify(channelId)};function scrollToFrag(frag){if(!frag){window.scrollTo(0,0);return;}var decoded=frag;try{decoded=decodeURIComponent(frag);}catch(_){}var el=document.getElementById(decoded)||document.getElementsByName(decoded)[0];if(el&&typeof el.scrollIntoView==="function"){el.scrollIntoView({behavior:"smooth",block:"start"});}}var lastH=0;function postH(){if(!window.parent||window.parent===window)return;var b=document.body;var de=document.documentElement;var h=0;if(b){var cs=window.getComputedStyle?window.getComputedStyle(b):null;var mt=cs?parseFloat(cs.marginTop)||0:0;var mb=cs?parseFloat(cs.marginBottom)||0:0;h=Math.max(b.scrollHeight,Math.ceil(b.offsetHeight+mt+mb));}if(!h&&de){h=de.scrollHeight;}if(h>0&&Math.abs(h-lastH)>=2){lastH=h;window.parent.postMessage({type:"okhub:companion-height",channel:ch,height:h},"*");}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",postH);}else{postH();}window.addEventListener("load",postH);if(typeof ResizeObserver==="function"){var ro=new ResizeObserver(postH);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body);}document.addEventListener("load",postH,true);document.addEventListener("click",function(ev){var t=ev.target;if(!t||typeof t.closest!=="function")return;var a=t.closest("a[href]");if(!a)return;var href=a.getAttribute("href");if(!href)return;ev.preventDefault();var compact=href.replace(/[\\u0000-\\u0020]+/g,"");if(/^(javascript|vbscript|data):/i.test(compact))return;if(href.charAt(0)==="#"){scrollToFrag(href.slice(1));return;}var kind=/^(https?:|mailto:|tel:)/i.test(href)?"external":"document";if(window.parent&&window.parent!==window){window.parent.postMessage({type:"okhub:companion-link",channel:ch,kind:kind,href:href},"*");}},true);window.addEventListener("message",function(ev){if(!ev.data||ev.data.channel!==ch)return;if(ev.data.type==="okhub:scroll-to"){scrollToFrag(ev.data.fragment||"");}});})();</script>`;
+  // Scope 100vh neutralization to the top-level companion HTML shell (`body > .layout`, `body > .layout > .sidebar`)
+  // with explicit `data-keep-viewport-height` opt-out so nested `.layout`/`.sidebar` elements keep author styles.
+  const autoResizeStyle = autoResize
+    ? `<style data-okhub-autoresize="true">html,body{height:auto!important;min-height:0!important;overflow-y:visible!important;}body>.layout:not([data-keep-viewport-height]){min-height:0!important;height:auto!important;}body>.layout>.sidebar:not([data-keep-viewport-height]){height:auto!important;min-height:0!important;position:static!important;overflow-y:visible!important;}</style>`
+    : "";
+  const bridgeScript = `<script nonce="${nonce}">(function(){var ch=${JSON.stringify(channelId)};function scrollToFrag(frag){if(!frag){window.scrollTo(0,0);return;}var decoded=frag;try{decoded=decodeURIComponent(frag);}catch(_){}var el=document.getElementById(decoded)||document.getElementsByName(decoded)[0];if(el&&typeof el.scrollIntoView==="function"){el.scrollIntoView({behavior:"smooth",block:"start"});}}var lastH=0;function postH(){if(!window.parent||window.parent===window)return;var b=document.body;var de=document.documentElement;var h=0;if(b){var cs=window.getComputedStyle?window.getComputedStyle(b):null;var mt=cs?parseFloat(cs.marginTop)||0:0;var mb=cs?parseFloat(cs.marginBottom)||0:0;var rectH=b.getBoundingClientRect?Math.ceil(b.getBoundingClientRect().height+mt+mb):Math.ceil(b.offsetHeight+mt+mb);var scrollH=b.scrollHeight;h=scrollH>window.innerHeight?scrollH:Math.max(rectH,0);}if(!h&&de){h=de.scrollHeight;}if(lastH>0&&Math.abs(h-window.innerHeight)<=1&&h>lastH&&h-lastH<=32)return;if(h>0&&Math.abs(h-lastH)>=2){lastH=h;window.parent.postMessage({type:"okhub:companion-height",channel:ch,height:h},"*");}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",postH);}else{postH();}window.addEventListener("load",postH);if(typeof ResizeObserver==="function"){var ro=new ResizeObserver(postH);if(document.body)ro.observe(document.body);}document.addEventListener("load",postH,true);document.addEventListener("click",function(ev){var t=ev.target;if(!t||typeof t.closest!=="function")return;var a=t.closest("a[href]");if(!a)return;var href=a.getAttribute("href");if(!href)return;ev.preventDefault();var compact=href.replace(/[\\u0000-\\u0020]+/g,"");if(/^(javascript|vbscript|data):/i.test(compact))return;if(href.charAt(0)==="#"){scrollToFrag(href.slice(1));return;}var kind=/^(https?:|mailto:|tel:)/i.test(href)?"external":"document";if(window.parent&&window.parent!==window){window.parent.postMessage({type:"okhub:companion-link",channel:ch,kind:kind,href:href},"*");}},true);window.addEventListener("message",function(ev){if(!ev.data||ev.data.channel!==ch)return;if(ev.data.type==="okhub:scroll-to"){scrollToFrag(ev.data.fragment||"");}});})();</script>`;
 
   let withCsp: string;
   const headMatch = /<head\b[^>]*>/i.exec(sanitized);
@@ -307,6 +313,15 @@ export function prepareInteractiveCompanionHtml(
     withCsp = `${sanitized.slice(0, insertAt)}${cspMeta}${sanitized.slice(insertAt)}`;
   } else {
     withCsp = `${cspMeta}${sanitized}`;
+  }
+
+  if (autoResizeStyle) {
+    const headCloseMatch = /<\/head>/i.exec(withCsp);
+    if (headCloseMatch) {
+      withCsp = `${withCsp.slice(0, headCloseMatch.index)}${autoResizeStyle}${withCsp.slice(headCloseMatch.index)}`;
+    } else {
+      withCsp = withCsp.replace(cspMeta, `${cspMeta}${autoResizeStyle}`);
+    }
   }
 
   const bodyCloseIndex = withCsp.toLowerCase().lastIndexOf("</body>");
@@ -334,8 +349,8 @@ export function CompanionHtmlFrame({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [contentHeight, setContentHeight] = useState<number | null>(null);
   const preparedHtml = useMemo(
-    () => prepareInteractiveCompanionHtml(html, channelId),
-    [html, channelId],
+    () => prepareInteractiveCompanionHtml(html, channelId, undefined, autoResize),
+    [html, channelId, autoResize],
   );
 
   // Callers usually pass inline callbacks; read the latest ones through a ref so the window

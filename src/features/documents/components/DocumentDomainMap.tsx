@@ -226,117 +226,211 @@ export function buildDomainEdges(documents: readonly DocumentSummary[]): DomainE
   return edges;
 }
 
+interface CardBox {
+  key: string;
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+  centerY: number;
+  colIndex: number;
+}
+
 interface RawEdgeGeometry {
   edge: DomainEdge;
-  fromRect: DOMRect;
-  toRect: DOMRect;
-  fromCenterY: number;
-  toCenterY: number;
+  fromBox: CardBox;
+  toBox: CardBox;
+  isSkip: boolean;
 }
 
-function buildRoundedOrthogonalPath(
-  x1: number,
-  y1: number,
-  laneX: number,
-  x2: number,
-  y2: number,
+interface GutterTrack {
+  id: string;
+  kind: "adjacent" | "skip-exit" | "skip-entry";
+  minY: number;
+  maxY: number;
+  anchorY: number;
+  meanDeltaY: number;
+  fallbackX: number;
+}
+
+export interface DomainEdgeLayoutResult {
+  edges: MeasuredEdge[];
+  maxY: number;
+  maxCardBottom: number;
+}
+
+function buildRoundedPolylinePath(
+  rawPoints: ReadonlyArray<{ x: number; y: number }>,
+  maxRadius = 8,
 ): string {
-  const dy = y2 - y1;
-  if (Math.abs(dy) < 2) {
-    return `M ${x1} ${y1} L ${x2} ${y2}`;
+  const deduped: Array<{ x: number; y: number }> = [];
+  for (const pt of rawPoints) {
+    const prev = deduped[deduped.length - 1];
+    if (!prev || Math.hypot(pt.x - prev.x, pt.y - prev.y) >= 0.5) {
+      deduped.push(pt);
+    }
   }
-  const dir = dy > 0 ? 1 : -1;
-  const r = Math.min(
-    8,
-    Math.abs(laneX - x1) - 1,
-    Math.abs(x2 - laneX) - 1,
-    Math.abs(dy) / 2,
-  );
-  if (r < 2) {
-    return `M ${x1} ${y1} L ${laneX} ${y1} L ${laneX} ${y2} L ${x2} ${y2}`;
+
+  const points: Array<{ x: number; y: number }> = [];
+  for (const pt of deduped) {
+    if (points.length >= 2) {
+      const a = points[points.length - 2];
+      const b = points[points.length - 1];
+      if (a && b) {
+        const dot = (b.x - a.x) * (pt.x - b.x) + (b.y - a.y) * (pt.y - b.y);
+        const sameX = Math.abs(a.x - b.x) < 0.5 && Math.abs(b.x - pt.x) < 0.5;
+        const sameY = Math.abs(a.y - b.y) < 0.5 && Math.abs(b.y - pt.y) < 0.5;
+        if ((sameX || sameY) && dot >= 0) {
+          points[points.length - 1] = pt;
+          continue;
+        }
+      }
+    }
+    points.push(pt);
   }
-  return `M ${x1} ${y1} L ${laneX - r} ${y1} Q ${laneX} ${y1} ${laneX} ${y1 + dir * r} L ${laneX} ${y2 - dir * r} Q ${laneX} ${y2} ${laneX + r} ${y2} L ${x2} ${y2}`;
+
+  const first = points[0];
+  const second = points[1];
+  const last = points[points.length - 1];
+  if (points.length < 2 || !first || !second || !last) return "";
+  if (points.length === 2) {
+    return `M ${first.x} ${first.y} L ${second.x} ${second.y}`;
+  }
+
+  const parts: string[] = [`M ${first.x} ${first.y}`];
+  for (let i = 1; i < points.length - 1; i += 1) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const next = points[i + 1];
+    if (!prev || !curr || !next) continue;
+    const dx1 = curr.x - prev.x;
+    const dy1 = curr.y - prev.y;
+    const d1 = Math.hypot(dx1, dy1);
+    const dx2 = next.x - curr.x;
+    const dy2 = next.y - curr.y;
+    const d2 = Math.hypot(dx2, dy2);
+    if (d1 < 0.5 || d2 < 0.5) {
+      parts.push(`L ${curr.x} ${curr.y}`);
+      continue;
+    }
+    const limit1 = i === 1 ? d1 - 1 : d1 / 2 - 0.5;
+    const limit2 = i === points.length - 2 ? d2 - 1 : d2 / 2 - 0.5;
+    const r = Math.min(maxRadius, limit1, limit2);
+    if (r < 2) {
+      parts.push(`L ${curr.x} ${curr.y}`);
+      continue;
+    }
+    const ux1 = dx1 / d1;
+    const uy1 = dy1 / d1;
+    const ux2 = dx2 / d2;
+    const uy2 = dy2 / d2;
+    const inX = curr.x - ux1 * r;
+    const inY = curr.y - uy1 * r;
+    const outX = curr.x + ux2 * r;
+    const outY = curr.y + uy2 * r;
+    parts.push(`L ${inX} ${inY} Q ${curr.x} ${curr.y} ${outX} ${outY}`);
+  }
+  parts.push(`L ${last.x} ${last.y}`);
+  return parts.join(" ");
 }
 
-function spreadPortY(
-  rectTop: number,
-  rectHeight: number,
-  boardTop: number,
-  scrollTop: number,
+function spreadBoxPortY(
+  boxTop: number,
+  boxHeight: number,
   index: number,
   total: number,
 ): number {
-  const relTop = rectTop - boardTop + scrollTop;
   if (total <= 1) {
-    return relTop + rectHeight * 0.5;
+    return boxTop + boxHeight * 0.5;
   }
   const ratio = 0.24 + (0.52 * index) / (total - 1);
-  return relTop + rectHeight * ratio;
+  return boxTop + boxHeight * ratio;
 }
 
-interface PositionedEdge {
-  edge: DomainEdge;
-  x1: number;
-  x2: number;
-  y1: number;
-  y2: number;
-}
-
-export function layoutDomainEdgePaths(
+export function layoutDomainEdgePathsWithBounds(
   edges: readonly DomainEdge[],
   cardRefs: ReadonlyMap<string, HTMLElement>,
   board: HTMLElement,
   boardRect: DOMRect,
-): MeasuredEdge[] {
+  columnIndexByKey?: ReadonlyMap<string, number>,
+): DomainEdgeLayoutResult {
+  const rawBoxes: Array<Omit<CardBox, "colIndex">> = [];
+  for (const [key, el] of cardRefs.entries()) {
+    const rect = el.getBoundingClientRect();
+    const left = rect.left - boardRect.left + board.scrollLeft;
+    const right = rect.right - boardRect.left + board.scrollLeft;
+    const top = rect.top - boardRect.top + board.scrollTop;
+    const bottom = rect.bottom - boardRect.top + board.scrollTop;
+    rawBoxes.push({
+      key,
+      left,
+      right,
+      top,
+      bottom,
+      width: rect.width,
+      height: rect.height,
+      centerY: top + rect.height / 2,
+    });
+  }
+
+  const cardBoxes = new Map<string, CardBox>();
+  if (columnIndexByKey) {
+    for (const raw of rawBoxes) {
+      const colIndex = columnIndexByKey.get(raw.key);
+      if (colIndex === undefined) continue;
+      cardBoxes.set(raw.key, { ...raw, colIndex });
+    }
+  } else {
+    const byLeft = [...rawBoxes].sort((a, b) => a.left - b.left);
+    let colIndex = 0;
+    let anchorLeft = byLeft[0]?.left ?? 0;
+    for (const raw of byLeft) {
+      if (raw.left - anchorLeft >= 40) {
+        colIndex += 1;
+        anchorLeft = raw.left;
+      }
+      cardBoxes.set(raw.key, { ...raw, colIndex });
+    }
+  }
+
+  const colLeft = new Map<number, number>();
+  const colRight = new Map<number, number>();
+  const colBottom = new Map<number, number>();
+  let maxCardBottom = 0;
+  for (const box of cardBoxes.values()) {
+    maxCardBottom = Math.max(maxCardBottom, box.bottom);
+    const prevL = colLeft.get(box.colIndex);
+    colLeft.set(box.colIndex, prevL === undefined ? box.left : Math.min(prevL, box.left));
+    const prevR = colRight.get(box.colIndex);
+    colRight.set(box.colIndex, prevR === undefined ? box.right : Math.max(prevR, box.right));
+    const prevB = colBottom.get(box.colIndex);
+    colBottom.set(box.colIndex, prevB === undefined ? box.bottom : Math.max(prevB, box.bottom));
+  }
+
   const geometries: RawEdgeGeometry[] = [];
   for (const edge of edges) {
-    const fromEl = cardRefs.get(edge.fromKey);
-    const toEl = cardRefs.get(edge.toKey);
-    if (!fromEl || !toEl) continue;
-    const fromRect = fromEl.getBoundingClientRect();
-    const toRect = toEl.getBoundingClientRect();
-    if (toRect.left < fromRect.left || Math.abs(fromRect.left - toRect.left) < 40) {
+    const fromBox = cardBoxes.get(edge.fromKey);
+    const toBox = cardBoxes.get(edge.toKey);
+    if (!fromBox || !toBox) continue;
+    if (fromBox.colIndex >= toBox.colIndex || toBox.left - fromBox.left < 40) {
       continue;
     }
     geometries.push({
       edge,
-      fromRect,
-      toRect,
-      fromCenterY: fromRect.top + fromRect.height / 2,
-      toCenterY: toRect.top + toRect.height / 2,
+      fromBox,
+      toBox,
+      isSkip: toBox.colIndex - fromBox.colIndex > 1,
     });
   }
 
   if (geometries.length === 0) {
-    return [];
+    return { edges: [], maxY: maxCardBottom, maxCardBottom };
   }
 
-  const outPortY = new Map<string, number>();
-  const outgoingByFrom = new Map<string, RawEdgeGeometry[]>();
-  for (const geom of geometries) {
-    const list = outgoingByFrom.get(geom.edge.fromKey) ?? [];
-    list.push(geom);
-    outgoingByFrom.set(geom.edge.fromKey, list);
-  }
-  for (const group of outgoingByFrom.values()) {
-    group.sort(
-      (a, b) => a.toCenterY - b.toCenterY || a.edge.id.localeCompare(b.edge.id),
-    );
-    group.forEach((geom, idx) => {
-      outPortY.set(
-        geom.edge.id,
-        spreadPortY(
-          geom.fromRect.top,
-          geom.fromRect.height,
-          boardRect.top,
-          board.scrollTop,
-          idx,
-          group.length,
-        ),
-      );
-    });
-  }
-
+  // Spread incoming ports per target card; adjacent edges enter upper/middle ports,
+  // skip bypass edges enter the bottom port so risers never cross adjacent arrivals.
   const inPortY = new Map<string, number>();
   const incomingByTo = new Map<string, RawEdgeGeometry[]>();
   for (const geom of geometries) {
@@ -346,61 +440,324 @@ export function layoutDomainEdgePaths(
   }
   for (const group of incomingByTo.values()) {
     group.sort(
-      (a, b) => a.fromCenterY - b.fromCenterY || a.edge.id.localeCompare(b.edge.id),
+      (a, b) =>
+        (a.isSkip ? 1 : 0) - (b.isSkip ? 1 : 0) ||
+        a.fromBox.centerY - b.fromBox.centerY ||
+        a.edge.id.localeCompare(b.edge.id),
     );
     group.forEach((geom, idx) => {
       inPortY.set(
         geom.edge.id,
-        spreadPortY(
-          geom.toRect.top,
-          geom.toRect.height,
-          boardRect.top,
-          board.scrollTop,
-          idx,
-          group.length,
-        ),
+        spreadBoxPortY(geom.toBox.top, geom.toBox.height, idx, group.length),
       );
     });
   }
 
-  const gutterGroups = new Map<string, PositionedEdge[]>();
+  // Group outgoing edges by source card so fan-out edges share one crisp bus anchor.
+  const hasAdjacentOut = new Set<string>();
+  const hasSkipOut = new Set<string>();
   for (const geom of geometries) {
-    const x1 = geom.fromRect.right - boardRect.left + board.scrollLeft;
-    const x2 = geom.toRect.left - boardRect.left + board.scrollLeft;
-    const y1 = outPortY.get(geom.edge.id) ?? 0;
-    const y2 = inPortY.get(geom.edge.id) ?? 0;
-    const gutterKey = `${Math.round(x1 / 24)}->${Math.round(x2 / 24)}`;
-    const group = gutterGroups.get(gutterKey) ?? [];
-    group.push({ edge: geom.edge, x1, x2, y1, y2 });
-    gutterGroups.set(gutterKey, group);
+    if (geom.isSkip) {
+      hasSkipOut.add(geom.edge.fromKey);
+    } else {
+      hasAdjacentOut.add(geom.edge.fromKey);
+    }
+  }
+  const outPortY = new Map<string, number>();
+  for (const geom of geometries) {
+    const { fromBox } = geom;
+    const both = hasAdjacentOut.has(geom.edge.fromKey) && hasSkipOut.has(geom.edge.fromKey);
+    const ratio = !both ? 0.5 : geom.isSkip ? 0.62 : 0.42;
+    outPortY.set(geom.edge.id, fromBox.top + fromBox.height * ratio);
   }
 
-  const measured: MeasuredEdge[] = [];
-  for (const group of gutterGroups.values()) {
-    group.sort(
-      (a, b) =>
-        a.y1 - b.y1 || a.y2 - b.y2 || a.edge.id.localeCompare(b.edge.id),
-    );
-    group.forEach((item, idx) => {
-      const laneMin = item.x1 + 10;
-      const laneMax = item.x2 - 10;
-      const laneX =
-        laneMax <= laneMin
-          ? (item.x1 + item.x2) / 2
-          : group.length === 1
-            ? (laneMin + laneMax) / 2
-            : laneMin + ((laneMax - laneMin) * idx) / (group.length - 1);
-      measured.push({
-        id: item.edge.id,
-        fromKey: item.edge.fromKey,
-        toKey: item.edge.toKey,
-        kind: item.edge.kind,
-        path: buildRoundedOrthogonalPath(item.x1, item.y1, laneX, item.x2, item.y2),
+  // Assign non-overlapping bottom-bypass Y corridors for non-adjacent edges.
+  interface SkipGroupInfo {
+    groupKey: string;
+    fromKey: string;
+    fromCol: number;
+    toCol: number;
+    anchorCenterY: number;
+    geoms: RawEdgeGeometry[];
+    bypassY: number;
+  }
+  const skipGroupMap = new Map<string, SkipGroupInfo>();
+  for (const geom of geometries) {
+    if (!geom.isSkip) continue;
+    const groupKey = `${geom.edge.fromKey}->col:${geom.toBox.colIndex}`;
+    const existing = skipGroupMap.get(groupKey);
+    if (existing) {
+      existing.geoms.push(geom);
+    } else {
+      skipGroupMap.set(groupKey, {
+        groupKey,
+        fromKey: geom.edge.fromKey,
+        fromCol: geom.fromBox.colIndex,
+        toCol: geom.toBox.colIndex,
+        anchorCenterY: geom.fromBox.centerY,
+        geoms: [geom],
+        bypassY: 0,
       });
+    }
+  }
+
+  const skipGroups = [...skipGroupMap.values()].sort(
+    (a, b) =>
+      a.fromCol - b.fromCol ||
+      a.toCol - b.toCol ||
+      a.anchorCenterY - b.anchorCenterY ||
+      a.groupKey.localeCompare(b.groupKey),
+  );
+  const placedBypasses: SkipGroupInfo[] = [];
+  for (const sg of skipGroups) {
+    let obstacleBottom = 0;
+    let foundIntermediate = false;
+    for (let c = sg.fromCol + 1; c < sg.toCol; c += 1) {
+      const b = colBottom.get(c);
+      if (b !== undefined) {
+        obstacleBottom = Math.max(obstacleBottom, b);
+        foundIntermediate = true;
+      }
+    }
+    if (!foundIntermediate) {
+      const firstGeom = sg.geoms[0];
+      if (!firstGeom) continue;
+      obstacleBottom = Math.max(
+        firstGeom.fromBox.bottom,
+        ...sg.geoms.map((g) => g.toBox.bottom),
+      );
+    }
+    let bypassY = obstacleBottom + 18;
+    // Keep any horizontally overlapping bypass corridors vertically separated by >= 12px.
+    const conflicts = placedBypasses.filter(
+      (prev) => Math.max(prev.fromCol, sg.fromCol) < Math.min(prev.toCol, sg.toCol),
+    );
+    while (conflicts.some((prev) => Math.abs(prev.bypassY - bypassY) < 12)) {
+      bypassY += 12;
+    }
+    sg.bypassY = bypassY;
+    placedBypasses.push(sg);
+  }
+
+  // Collect vertical tracks inside each gutter [c -> c + 1] and allocate non-overlapping X lanes.
+  const tracksByGutter = new Map<number, GutterTrack[]>();
+  const addTrack = (gutterCol: number, track: GutterTrack) => {
+    const list = tracksByGutter.get(gutterCol) ?? [];
+    list.push(track);
+    tracksByGutter.set(gutterCol, list);
+  };
+
+  // 1) Adjacent bus tracks grouped by source card
+  const adjBySource = new Map<string, RawEdgeGeometry[]>();
+  for (const geom of geometries) {
+    if (geom.isSkip) continue;
+    const list = adjBySource.get(geom.edge.fromKey) ?? [];
+    list.push(geom);
+    adjBySource.set(geom.edge.fromKey, list);
+  }
+  for (const [fromKey, list] of adjBySource.entries()) {
+    const firstAdj = list[0];
+    if (!firstAdj) continue;
+    const fromCol = firstAdj.fromBox.colIndex;
+    const y1 = outPortY.get(firstAdj.edge.id) ?? 0;
+    const y2s = list.map((g) => inPortY.get(g.edge.id) ?? 0);
+    const meanDelta = y2s.reduce((acc, y2) => acc + (y2 - y1), 0) / y2s.length;
+    addTrack(fromCol, {
+      id: `adj:${fromKey}`,
+      kind: "adjacent",
+      minY: Math.min(y1, ...y2s),
+      maxY: Math.max(y1, ...y2s),
+      anchorY: y1,
+      meanDeltaY: meanDelta,
+      fallbackX: (firstAdj.fromBox.right + firstAdj.toBox.left) / 2,
     });
   }
 
-  return measured;
+  // 2) Skip exit tracks grouped by source card (all skip edges leaving fromKey share one exit riser)
+  const skipBySource = new Map<string, SkipGroupInfo[]>();
+  for (const sg of skipGroups) {
+    const list = skipBySource.get(sg.fromKey) ?? [];
+    list.push(sg);
+    skipBySource.set(sg.fromKey, list);
+  }
+  for (const [fromKey, list] of skipBySource.entries()) {
+    const firstSkip = list[0];
+    const firstSkipGeom = firstSkip?.geoms[0];
+    if (!firstSkip || !firstSkipGeom) continue;
+    const fromCol = firstSkip.fromCol;
+    const y1 = outPortY.get(firstSkipGeom.edge.id) ?? 0;
+    const bypassYs = list.map((sg) => sg.bypassY);
+    const meanDelta = bypassYs.reduce((acc, by) => acc + (by - y1), 0) / bypassYs.length;
+    addTrack(fromCol, {
+      id: `skip-exit:${fromKey}`,
+      kind: "skip-exit",
+      minY: Math.min(y1, ...bypassYs),
+      maxY: Math.max(y1, ...bypassYs),
+      anchorY: y1,
+      meanDeltaY: meanDelta,
+      fallbackX: firstSkipGeom.fromBox.right + 14,
+    });
+  }
+
+  // 3) Skip entry tracks grouped by (fromKey, toCol) in gutter (toCol - 1)
+  for (const sg of skipGroups) {
+    const firstEntryGeom = sg.geoms[0];
+    if (!firstEntryGeom) continue;
+    const y2s = sg.geoms.map((g) => inPortY.get(g.edge.id) ?? 0);
+    const meanDelta = y2s.reduce((acc, y2) => acc + (y2 - sg.bypassY), 0) / y2s.length;
+    addTrack(sg.toCol - 1, {
+      id: `skip-entry:${sg.groupKey}`,
+      kind: "skip-entry",
+      minY: Math.min(sg.bypassY, ...y2s),
+      maxY: Math.max(sg.bypassY, ...y2s),
+      anchorY: sg.bypassY,
+      meanDeltaY: meanDelta,
+      fallbackX: firstEntryGeom.toBox.left - 14,
+    });
+  }
+
+  const laneXByTrackId = new Map<string, number>();
+  for (const [gutterCol, tracks] of tracksByGutter.entries()) {
+    const leftEdge = colRight.get(gutterCol);
+    const rightEdge = colLeft.get(gutterCol + 1);
+    const hasGutterBounds = leftEdge !== undefined && rightEdge !== undefined;
+    const gutterMid = hasGutterBounds ? (leftEdge + rightEdge) / 2 : 0;
+    const laneMin = hasGutterBounds ? leftEdge + 10 : 0;
+    const laneMax = hasGutterBounds ? rightEdge - 12 : 0;
+
+    // Connected components of vertically overlapping tracks inside this gutter.
+    const visited = new Array<boolean>(tracks.length).fill(false);
+    for (let i = 0; i < tracks.length; i += 1) {
+      if (visited[i]) continue;
+      visited[i] = true;
+      const queue = [i];
+      const component: GutterTrack[] = [];
+      while (queue.length > 0) {
+        const idx = queue.shift();
+        if (idx === undefined) break;
+        const curr = tracks[idx];
+        if (!curr) continue;
+        component.push(curr);
+        for (let j = 0; j < tracks.length; j += 1) {
+          if (visited[j]) continue;
+          const other = tracks[j];
+          if (!other) continue;
+          if (Math.min(curr.maxY, other.maxY) - Math.max(curr.minY, other.minY) > -4) {
+            visited[j] = true;
+            queue.push(j);
+          }
+        }
+      }
+
+      if (!hasGutterBounds) {
+        for (const t of component) {
+          laneXByTrackId.set(t.id, t.fallbackX);
+        }
+        continue;
+      }
+
+      if (component.length === 1 || laneMax <= laneMin) {
+        const xMid = laneMax <= laneMin ? gutterMid : (laneMin + laneMax) / 2;
+        for (const t of component) {
+          laneXByTrackId.set(t.id, xMid);
+        }
+        continue;
+      }
+
+      const netDelta = component.reduce((sum, t) => sum + t.meanDeltaY, 0);
+      component.sort((a, b) => {
+        if (netDelta >= 0) {
+          return (
+            b.anchorY - a.anchorY ||
+            (a.kind === "skip-exit" ? 1 : 0) - (b.kind === "skip-exit" ? 1 : 0) ||
+            a.id.localeCompare(b.id)
+          );
+        }
+        return (
+          a.anchorY - b.anchorY ||
+          (a.kind === "skip-exit" ? 1 : 0) - (b.kind === "skip-exit" ? 1 : 0) ||
+          a.id.localeCompare(b.id)
+        );
+      });
+
+      component.forEach((t, idx) => {
+        const x = laneMin + ((laneMax - laneMin) * idx) / (component.length - 1);
+        laneXByTrackId.set(t.id, x);
+      });
+    }
+  }
+
+  const bypassYByEdgeId = new Map<string, number>();
+  for (const sg of skipGroups) {
+    for (const geom of sg.geoms) {
+      bypassYByEdgeId.set(geom.edge.id, sg.bypassY);
+    }
+  }
+
+  const measured: MeasuredEdge[] = [];
+  for (const geom of geometries) {
+    const x1 = geom.fromBox.right;
+    const x2 = geom.toBox.left;
+    const y1 = outPortY.get(geom.edge.id) ?? 0;
+    const y2 = inPortY.get(geom.edge.id) ?? 0;
+
+    let path: string;
+    if (!geom.isSkip) {
+      const busX = laneXByTrackId.get(`adj:${geom.edge.fromKey}`) ?? (x1 + x2) / 2;
+      path = buildRoundedPolylinePath([
+        { x: x1, y: y1 },
+        { x: busX, y: y1 },
+        { x: busX, y: y2 },
+        { x: x2, y: y2 },
+      ]);
+    } else {
+      const bypassY = bypassYByEdgeId.get(geom.edge.id) ?? maxCardBottom + 18;
+      const exitLaneX =
+        laneXByTrackId.get(`skip-exit:${geom.edge.fromKey}`) ?? x1 + 14;
+      const entryLaneX =
+        laneXByTrackId.get(`skip-entry:${geom.edge.fromKey}->col:${geom.toBox.colIndex}`) ??
+        x2 - 14;
+      path = buildRoundedPolylinePath([
+        { x: x1, y: y1 },
+        { x: exitLaneX, y: y1 },
+        { x: exitLaneX, y: bypassY },
+        { x: entryLaneX, y: bypassY },
+        { x: entryLaneX, y: y2 },
+        { x: x2, y: y2 },
+      ]);
+    }
+
+    measured.push({
+      id: geom.edge.id,
+      fromKey: geom.edge.fromKey,
+      toKey: geom.edge.toKey,
+      kind: geom.edge.kind,
+      path,
+    });
+  }
+
+  const maxBypassY = skipGroups.reduce((max, sg) => Math.max(max, sg.bypassY + 12), 0);
+  return {
+    edges: measured,
+    maxY: Math.max(maxCardBottom, maxBypassY),
+    maxCardBottom,
+  };
+}
+
+export function layoutDomainEdgePaths(
+  edges: readonly DomainEdge[],
+  cardRefs: ReadonlyMap<string, HTMLElement>,
+  board: HTMLElement,
+  boardRect: DOMRect,
+  columnIndexByKey?: ReadonlyMap<string, number>,
+): MeasuredEdge[] {
+  return layoutDomainEdgePathsWithBounds(
+    edges,
+    cardRefs,
+    board,
+    boardRect,
+    columnIndexByKey,
+  ).edges;
 }
 
 function ThumbChrome() {
@@ -585,6 +942,7 @@ function DomainSectionBoard({
     height: 0,
   });
   const [measuredEdges, setMeasuredEdges] = useState<MeasuredEdge[]>([]);
+  const [extraBottomPadding, setExtraBottomPadding] = useState(0);
   const [hoveredCardKey, setHoveredCardKey] = useState<string | null>(null);
 
   const columns = useMemo(() => {
@@ -613,6 +971,16 @@ function DomainSectionBoard({
       cards: cardsByStage.get(stage) ?? [],
     })).filter((column) => column.cards.length > 0);
   }, [group.documents]);
+
+  const columnIndexByKey = useMemo(() => {
+    const map = new Map<string, number>();
+    columns.forEach((col, colIdx) => {
+      for (const card of col.cards) {
+        map.set(card.key, colIdx);
+      }
+    });
+    return map;
+  }, [columns]);
 
   const edges = useMemo(() => buildDomainEdges(group.documents), [group.documents]);
   const hasScreenSpec = useMemo(
@@ -651,18 +1019,28 @@ function DomainSectionBoard({
       if (boardRect.width <= 0 && boardRect.height <= 0) {
         setSvgSize({ width: 0, height: 0 });
         setMeasuredEdges([]);
+        setExtraBottomPadding((prev) => (prev === 0 ? prev : 0));
         return;
       }
 
-      const nextEdges = layoutDomainEdgePaths(
-        edges,
-        cardRefs.current,
-        board,
-        boardRect,
-      );
+      const { edges: nextEdges, maxY, maxCardBottom } =
+        layoutDomainEdgePathsWithBounds(
+          edges,
+          cardRefs.current,
+          board,
+          boardRect,
+          columnIndexByKey,
+        );
+      const nextExtra =
+        maxY > maxCardBottom + 2 ? Math.ceil(maxY - maxCardBottom) + 8 : 0;
+      setExtraBottomPadding((prev) => (prev === nextExtra ? prev : nextExtra));
       setSvgSize({
         width: Math.max(board.scrollWidth, boardRect.width),
-        height: Math.max(board.scrollHeight, boardRect.height),
+        height: Math.max(
+          board.scrollHeight,
+          boardRect.height,
+          Math.ceil(maxY + 8),
+        ),
       });
       setMeasuredEdges(nextEdges);
     };
@@ -696,10 +1074,38 @@ function DomainSectionBoard({
       board.removeEventListener("scroll", scheduleMeasure);
       window.removeEventListener("resize", scheduleMeasure);
     };
-  }, [edges, columns]);
+  }, [edges, columns, columnIndexByKey]);
 
   const folderPath = group.folderPath;
   const safeGroupKey = `${group.key.replace(/[^a-zA-Z0-9_-]/g, "_")}_${hashMarkerKey(group.key)}`;
+
+  const renderEdgePath = (
+    edge: MeasuredEdge,
+    strokeWidth: number,
+    opacity: number,
+  ) => (
+    <path
+      key={edge.id}
+      d={edge.path}
+      data-edge-from={edge.fromKey}
+      data-edge-to={edge.toKey}
+      data-edge-kind={edge.kind}
+      fill="none"
+      stroke={
+        edge.kind === "explicit"
+          ? "var(--color-primary)"
+          : "var(--color-border-strong)"
+      }
+      strokeWidth={strokeWidth}
+      opacity={opacity}
+      strokeDasharray={edge.kind === "flow" ? "4 4" : undefined}
+      markerEnd={
+        edge.kind === "explicit"
+          ? `url(#edge-arrow-explicit-${safeGroupKey})`
+          : `url(#edge-arrow-flow-${safeGroupKey})`
+      }
+    />
+  );
 
   return (
     <section
@@ -785,58 +1191,58 @@ function DomainSectionBoard({
                 />
               </marker>
             </defs>
-            {[...measuredEdges]
-              .sort((a, b) => {
-                if (!hoveredCardKey) return 0;
-                const aConn =
-                  a.fromKey === hoveredCardKey || a.toKey === hoveredCardKey ? 1 : 0;
-                const bConn =
-                  b.fromKey === hoveredCardKey || b.toKey === hoveredCardKey ? 1 : 0;
-                return aConn - bConn;
-              })
-              .map((edge) => {
-                const isConnected =
-                  hoveredCardKey !== null &&
-                  (edge.fromKey === hoveredCardKey || edge.toKey === hoveredCardKey);
-                const isDimmed = hoveredCardKey !== null && !isConnected;
-                return (
-                  <path
-                    key={edge.id}
-                    d={edge.path}
-                    data-edge-from={edge.fromKey}
-                    data-edge-to={edge.toKey}
-                    data-edge-kind={edge.kind}
-                    fill="none"
-                    stroke={
-                      edge.kind === "explicit"
-                        ? "var(--color-primary)"
-                        : "var(--color-border-strong)"
-                    }
-                    strokeWidth={
-                      isConnected ? 2.25 : edge.kind === "explicit" ? 1.5 : 1.25
-                    }
-                    opacity={
-                      isConnected
-                        ? 1
-                        : isDimmed
-                          ? 0.14
-                          : edge.kind === "explicit"
-                            ? 0.65
-                            : 0.45
-                    }
-                    strokeDasharray={edge.kind === "flow" ? "4 4" : undefined}
-                    markerEnd={
-                      edge.kind === "explicit"
-                        ? `url(#edge-arrow-explicit-${safeGroupKey})`
-                        : `url(#edge-arrow-flow-${safeGroupKey})`
-                    }
-                  />
-                );
-              })}
+            {hoveredCardKey === null ? (
+              <>
+                <g opacity={0.52}>
+                  {measuredEdges
+                    .filter((edge) => edge.kind === "flow")
+                    .map((edge) => renderEdgePath(edge, 1.25, 1))}
+                </g>
+                <g opacity={0.75}>
+                  {measuredEdges
+                    .filter((edge) => edge.kind === "explicit")
+                    .map((edge) => renderEdgePath(edge, 1.5, 1))}
+                </g>
+              </>
+            ) : (
+              [...measuredEdges]
+                .sort((a, b) => {
+                  const aConn =
+                    a.fromKey === hoveredCardKey || a.toKey === hoveredCardKey
+                      ? 1
+                      : 0;
+                  const bConn =
+                    b.fromKey === hoveredCardKey || b.toKey === hoveredCardKey
+                      ? 1
+                      : 0;
+                  return aConn - bConn;
+                })
+                .map((edge) => {
+                  const isConnected =
+                    edge.fromKey === hoveredCardKey ||
+                    edge.toKey === hoveredCardKey;
+                  return renderEdgePath(
+                    edge,
+                    isConnected
+                      ? 2.25
+                      : edge.kind === "explicit"
+                        ? 1.5
+                        : 1.25,
+                    isConnected ? 1 : 0.14,
+                  );
+                })
+            )}
           </svg>
         ) : null}
 
-        <div className="document-domain-map__columns">
+        <div
+          className="document-domain-map__columns"
+          style={
+            extraBottomPadding > 0
+              ? { paddingBottom: `${extraBottomPadding}px` }
+              : undefined
+          }
+        >
           {columns.map((column) => (
             <div
               key={column.key}
@@ -1113,6 +1519,7 @@ export function DocumentDomainMap({
     <div className="document-domain-map">
       <div
         className="document-domain-map__legend"
+        role="region"
         aria-label="코드 반영 상태 범례"
       >
         <span className="document-domain-map__legend-title">코드 반영 상태</span>
