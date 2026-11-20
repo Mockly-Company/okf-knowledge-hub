@@ -373,7 +373,10 @@ export function DocumentReader({
         </div>
         <div className="document-reader__actions">
           {hasCompanionHtml ? (
-            <TabsList className="document-reader__view-tabs" aria-label="문서 표시 형식">
+            <TabsList
+              className="document-reader__view-tabs w-auto gap-[var(--space-4)]"
+              aria-label="문서 표시 형식"
+            >
               <TabsTrigger
                 selected={effectiveView === "html"}
                 onClick={() => setViewMode("html")}

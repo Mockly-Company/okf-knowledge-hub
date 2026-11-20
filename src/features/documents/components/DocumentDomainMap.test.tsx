@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardIssue } from "@/features/project-board/model";
 import type { DocumentAsset, DocumentSummary } from "../model";
-import { buildDomainEdges, DocumentDomainMap } from "./DocumentDomainMap";
+import {
+  buildDomainEdges,
+  DocumentDomainMap,
+  layoutDomainEdgePathsWithBounds,
+} from "./DocumentDomainMap";
 
 afterEach(cleanup);
 
@@ -344,7 +348,7 @@ describe("DocumentDomainMap", () => {
       />,
     );
 
-    const legend = screen.getByLabelText("코드 반영 상태 범례");
+    const legend = screen.getByRole("region", { name: "코드 반영 상태 범례" });
     expect(within(legend).getByText("코드 반영 완료")).toBeVisible();
     expect(within(legend).getByText("일부 수정 필요")).toBeVisible();
     expect(within(legend).getByText("미반영")).toBeVisible();
@@ -428,5 +432,143 @@ describe("DocumentDomainMap", () => {
     } finally {
       rectSpy.mockRestore();
     }
+  });
+
+  it("routes single-source fan-out through a shared bus X, orders downward trunks outer-to-inner, and routes skip-column edges below intermediate cards", () => {
+    const makeEl = (left: number, top: number, width = 220, height = 100) => {
+      const el = document.createElement("article");
+      el.getBoundingClientRect = () => new DOMRect(left, top, width, height);
+      return el;
+    };
+    const board = document.createElement("div");
+    const boardRect = new DOMRect(0, 0, 1200, 600);
+
+    // Helper to extract vertical segments x coordinates from an SVG path string
+    const verticalXs = (d: string): number[] => {
+      const xs: number[] = [];
+      const tokens = d.match(/[MLQ]\s*[^MLQ]+/g) ?? [];
+      let cx = 0;
+      let cy = 0;
+      for (const tok of tokens) {
+        const cmd = tok[0];
+        const nums = tok.slice(1).trim().split(/\s+/).map(Number);
+        if (cmd === "M") {
+          [cx, cy] = nums;
+        } else if (cmd === "L") {
+          const [nx, ny] = nums;
+          if (Math.abs(nx - cx) < 0.5 && Math.abs(ny - cy) > 4) {
+            xs.push(nx);
+          }
+          cx = nx;
+          cy = ny;
+        } else if (cmd === "Q") {
+          [, , cx, cy] = nums;
+        }
+      }
+      return xs;
+    };
+
+    const horizontalYs = (d: string): number[] => {
+      const ys: number[] = [];
+      const tokens = d.match(/[MLQ]\s*[^MLQ]+/g) ?? [];
+      let cx = 0;
+      let cy = 0;
+      for (const tok of tokens) {
+        const cmd = tok[0];
+        const nums = tok.slice(1).trim().split(/\s+/).map(Number);
+        if (cmd === "M") {
+          [cx, cy] = nums;
+        } else if (cmd === "L") {
+          const [nx, ny] = nums;
+          if (Math.abs(ny - cy) < 0.5 && Math.abs(nx - cx) > 4) {
+            ys.push(ny);
+          }
+          cx = nx;
+          cy = ny;
+        } else if (cmd === "Q") {
+          [, , cx, cy] = nums;
+        }
+      }
+      return ys;
+    };
+
+    // 1) Fan-out from one source card shares ONE vertical trunk X
+    const fanRefs = new Map<string, HTMLElement>([
+      ["overview", makeEl(0, 100)],
+      ["prd1", makeEl(280, 20)],
+      ["prd2", makeEl(280, 140)],
+      ["prd3", makeEl(280, 260)],
+    ]);
+    const fanCols = new Map<string, number>([
+      ["overview", 0],
+      ["prd1", 1],
+      ["prd2", 1],
+      ["prd3", 1],
+    ]);
+    const fanEdges = layoutDomainEdgePathsWithBounds(
+      [
+        { id: "overview->prd1", fromKey: "overview", toKey: "prd1", kind: "explicit" },
+        { id: "overview->prd2", fromKey: "overview", toKey: "prd2", kind: "explicit" },
+        { id: "overview->prd3", fromKey: "overview", toKey: "prd3", kind: "explicit" },
+      ],
+      fanRefs,
+      board,
+      boardRect,
+      fanCols,
+    );
+    const fanVerts = fanEdges.edges.flatMap((e) => verticalXs(e.path));
+    expect(fanVerts.length).toBeGreaterThanOrEqual(2);
+    for (const vx of fanVerts) {
+      expect(Math.abs(vx - fanVerts[0]!)).toBeLessThan(0.5);
+    }
+
+    // 2) Two downward-trending sources place higher anchor outer-right (> lower anchor X)
+    const crossRefs = new Map<string, HTMLElement>([
+      ["p1", makeEl(0, 20)],
+      ["p2", makeEl(0, 150)],
+      ["s1", makeEl(280, 280)],
+      ["s2", makeEl(280, 410)],
+    ]);
+    const crossCols = new Map<string, number>([
+      ["p1", 0],
+      ["p2", 0],
+      ["s1", 1],
+      ["s2", 1],
+    ]);
+    const crossRes = layoutDomainEdgePathsWithBounds(
+      [
+        { id: "p1->s1", fromKey: "p1", toKey: "s1", kind: "explicit" },
+        { id: "p2->s2", fromKey: "p2", toKey: "s2", kind: "explicit" },
+      ],
+      crossRefs,
+      board,
+      boardRect,
+      crossCols,
+    );
+    const p1VertX = verticalXs(crossRes.edges.find((e) => e.id === "p1->s1")!.path)[0]!;
+    const p2VertX = verticalXs(crossRes.edges.find((e) => e.id === "p2->s2")!.path)[0]!;
+    expect(p1VertX).toBeGreaterThan(p2VertX + 5);
+
+    // 3) Multi-column skip edge routes underneath intermediate column obstacle card
+    const skipRefs = new Map<string, HTMLElement>([
+      ["idx", makeEl(0, 40, 220, 120)],
+      ["adr", makeEl(280, 40, 220, 240)], // col 1 obstacle: bottom = 280
+      ["guide", makeEl(560, 40, 220, 120)],
+    ]);
+    const skipCols = new Map<string, number>([
+      ["idx", 0],
+      ["adr", 1],
+      ["guide", 2],
+    ]);
+    const skipRes = layoutDomainEdgePathsWithBounds(
+      [{ id: "idx->guide", fromKey: "idx", toKey: "guide", kind: "explicit" }],
+      skipRefs,
+      board,
+      boardRect,
+      skipCols,
+    );
+    const bypassYs = horizontalYs(skipRes.edges[0]!.path);
+    expect(bypassYs.some((y) => y > 280)).toBe(true);
+    expect(skipRes.maxY).toBeGreaterThan(280);
   });
 });

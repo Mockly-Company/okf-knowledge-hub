@@ -325,7 +325,7 @@ export function StandaloneDocumentWindowPage({
 
         <div className="standalone-doc-window__actions">
           {hasCompanionHtml ? (
-            <TabsList aria-label="문서 표시 형식">
+            <TabsList className="w-auto gap-[var(--space-4)]" aria-label="문서 표시 형식">
               <TabsTrigger
                 selected={effectiveView === "html"}
                 onClick={() =>

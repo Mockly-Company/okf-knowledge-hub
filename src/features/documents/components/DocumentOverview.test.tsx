@@ -90,3 +90,40 @@ it("prevents default hash navigation and calls onRequestHeading when heading is 
   expect(onRequestHeading).toHaveBeenCalledWith("2026-11-14-change");
   window.location.hash = "";
 });
+
+it("formats wireframes, designs, tags, related_docs, and impl_status cleanly instead of dumping raw JSON", () => {
+  render(
+    <DocumentOverview
+      document={
+        {
+          properties: {
+            type: "Screen Spec",
+            impl_status: "partial",
+            tags: ["documents", "ux"],
+            related_docs: ["docs/prd.md", "docs/adr.md"],
+            wireframes: [{ title: "보드 와이어프레임", image: "assets/wf.svg" }],
+            designs: [
+              { title: "시안 1", image: "assets/d1.svg" },
+              { title: "시안 2", image: "assets/d2.svg" },
+            ],
+            custom_key: "kept",
+          },
+          tableOfContents: [],
+        } as unknown as DocumentContent
+      }
+    />,
+  );
+
+  expect(screen.getByText("와이어프레임")).toBeVisible();
+  expect(screen.getByText("1건 (시안 탭에서 보기)")).toBeVisible();
+  expect(screen.getByText("디자인 시안")).toBeVisible();
+  expect(screen.getByText("2건 (시안 탭에서 보기)")).toBeVisible();
+  expect(screen.getByText("태그")).toBeVisible();
+  expect(screen.getByText("documents, ux")).toBeVisible();
+  expect(screen.getByText("관련 문서")).toBeVisible();
+  expect(screen.getByText("docs/prd.md, docs/adr.md")).toBeVisible();
+  expect(screen.getByText("코드 반영 상태")).toBeVisible();
+  expect(screen.getByText("일부 수정 필요")).toBeVisible();
+  expect(screen.getByText("custom_key")).toBeVisible();
+  expect(screen.getByText("kept")).toBeVisible();
+});

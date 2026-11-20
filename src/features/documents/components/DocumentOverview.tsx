@@ -71,10 +71,68 @@ function extractCodeReferences(properties: unknown): ParsedCodeReference[] {
     .filter((item): item is ParsedCodeReference => item !== null);
 }
 
-function displayProperty(value: unknown): string {
+const PROPERTY_LABELS: Record<string, string> = {
+  type: "유형",
+  owner: "담당",
+  status: "상태",
+  domain: "도메인",
+  tags: "태그",
+  related_docs: "관련 문서",
+  wireframes: "와이어프레임",
+  designs: "디자인 시안",
+  impl_status: "코드 반영 상태",
+  impl_note: "코드 반영 메모",
+  updated: "업데이트",
+  updated_at: "업데이트",
+  code_refs: "코드 참조",
+};
+
+const IMPL_STATUS_LABELS: Record<string, string> = {
+  synced: "코드 반영 완료",
+  partial: "일부 수정 필요",
+  unimplemented: "미반영",
+};
+
+function displayProperty(value: unknown, key?: string): string {
   if (value === null) return "null";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (typeof value === "string") {
+    if (key === "impl_status" && value in IMPL_STATUS_LABELS) {
+      return IMPL_STATUS_LABELS[value];
+    }
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return "없음";
+    if (key === "wireframes" || key === "designs") {
+      return `${value.length}건 (시안 탭에서 보기)`;
+    }
+    if (
+      value.every(
+        (item) =>
+          typeof item === "string" ||
+          typeof item === "number" ||
+          typeof item === "boolean",
+      )
+    ) {
+      return value.map(String).join(", ");
+    }
+    const namedTitles = value
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const record = item as Record<string, unknown>;
+        if (typeof record.title === "string") return record.title;
+        if (typeof record.name === "string") return record.name;
+        return null;
+      })
+      .filter((item): item is string => item !== null);
+    if (namedTitles.length === value.length) {
+      return namedTitles.join(", ");
+    }
+    return `${value.length}건`;
+  }
   return JSON.stringify(value);
 }
 
@@ -239,8 +297,8 @@ export function DocumentOverview({
           <dl>
             {entries.map(([name, value]) => (
               <div key={name}>
-                <dt>{name === "type" ? "유형" : name === "owner" ? "담당" : name}</dt>
-                <dd>{displayProperty(value)}</dd>
+                <dt>{PROPERTY_LABELS[name] ?? name}</dt>
+                <dd>{displayProperty(value, name)}</dd>
               </div>
             ))}
           </dl>
