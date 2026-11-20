@@ -82,6 +82,7 @@ export function StandaloneDocumentWindowPage({
   const [viewOverrides, setViewOverrides] = useState<
     Record<string, "html" | "markdown">
   >({});
+  const [assetsExpanded, setAssetsExpanded] = useState(false);
   const [externalError, setExternalError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -101,6 +102,9 @@ export function StandaloneDocumentWindowPage({
   }, [initialPath, initialView, rawFragment, workspaceId]);
 
   const currentEntry = history.entries[history.index] ?? null;
+  useEffect(() => {
+    setAssetsExpanded(false);
+  }, [currentEntry?.path]);
   const canGoBack = history.index > 0;
   const canGoForward = history.index < history.entries.length - 1;
 
@@ -380,22 +384,59 @@ export function StandaloneDocumentWindowPage({
         </StatusFeedback>
       ) : (
         <div className="standalone-doc-window__content">
-          {wireframes.length > 0 ? (
-            <DesignLinksBar
-              designs={wireframes.map((wf) => ({ title: wf.title, image: wf.image }))}
-              documentPath={doc.summary.path}
-              readAsset={readWindowAsset}
-              heading="화면 와이어프레임"
-              assetKind="wireframe"
-            />
-          ) : null}
-          {designs.length > 0 ? (
-            <DesignLinksBar
-              designs={designs}
-              documentPath={doc.summary.path}
-              readAsset={readWindowAsset}
-              onOpenExternal={handleOpenExternalVoid}
-            />
+          {wireframes.length > 0 || designs.length > 0 ? (
+            <>
+              <div
+                className="document-reader__assets-bar"
+                role="region"
+                aria-label="와이어프레임 및 디자인 요약"
+              >
+                <div className="document-reader__assets-bar-counts">
+                  {wireframes.length > 0 ? (
+                    <span className="document-map-card__badge document-map-card__badge--wireframe">
+                      {`와이어프레임 ${wireframes.length}`}
+                    </span>
+                  ) : null}
+                  {designs.length > 0 ? (
+                    <span className="document-map-card__badge document-map-card__badge--design">
+                      {`디자인 ${designs.length}`}
+                    </span>
+                  ) : null}
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  aria-expanded={assetsExpanded}
+                  onClick={() => setAssetsExpanded((open) => !open)}
+                >
+                  {assetsExpanded ? "시안 접기" : "시안 펼치기"}
+                </Button>
+              </div>
+              {assetsExpanded ? (
+                <>
+                  {wireframes.length > 0 ? (
+                    <DesignLinksBar
+                      designs={wireframes.map((wf) => ({
+                        title: wf.title,
+                        image: wf.image,
+                      }))}
+                      documentPath={doc.summary.path}
+                      readAsset={readWindowAsset}
+                      heading="화면 와이어프레임"
+                      assetKind="wireframe"
+                    />
+                  ) : null}
+                  {designs.length > 0 ? (
+                    <DesignLinksBar
+                      designs={designs}
+                      documentPath={doc.summary.path}
+                      readAsset={readWindowAsset}
+                      onOpenExternal={handleOpenExternalVoid}
+                    />
+                  ) : null}
+                </>
+              ) : null}
+            </>
           ) : null}
           {effectiveView === "html" && doc.companionHtml ? (
             <CompanionHtmlFrame

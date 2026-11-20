@@ -283,7 +283,7 @@ pub fn active_context_rules(context: &ActiveWorkspaceAiContext) -> String {
         }
     }
     lines.push(
-        "- 로컬 자동화 도구: `okhub-cli` (CLI: `doc validate`, `pr list|create|approve-merge`, `board schema|list|ready|create-issue|derive-backlog|update-status`, `context issue <번호>`, STDIO MCP `okhub-cli mcp` — 주요 MCP 도구: `okhub_get_active_context`, `okhub_board_get_schema`, `okhub_board_create_backlog_tree`, `okhub_board_update_issue`, `okhub_doc_validate`, `okhub_pr_create` 등 16개)"
+        "- 로컬 자동화 도구: `okhub-cli` (CLI: `doc validate|set-impl-status`, `pr list|create|approve-merge`, `board schema|list|ready|create-issue|derive-backlog|update-status`, `context issue <번호>`, STDIO MCP `okhub-cli mcp` — 주요 MCP 도구: `okhub_get_active_context`, `okhub_board_get_schema`, `okhub_board_create_backlog_tree`, `okhub_board_update_issue`, `okhub_doc_validate`, `okhub_update_doc_impl_status`, `okhub_pr_create` 등 17개)"
             .to_owned(),
     );
     lines.push(String::new());

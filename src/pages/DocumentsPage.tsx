@@ -1,11 +1,17 @@
 import { FilePlus2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { useInRouterContext, useSearchParams } from "react-router-dom";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useInRouterContext, useNavigate, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { StatusFeedback } from "@/components/ui/status-feedback";
+import { setPendingAiLaunch } from "@/features/ai/pendingAiLaunch";
+import {
+  classifyDocumentCategory,
+  isAuxiliaryDocument,
+  type DocumentGroup,
+} from "@/features/documents/document-taxonomy";
 import { DocumentDraftSwitcher } from "@/features/documents/components/DocumentDraftSwitcher";
 import { NewDocumentDialog } from "@/features/documents/components/NewDocumentDialog";
 import { DocumentSearch } from "@/features/documents/components/DocumentSearch";
@@ -29,8 +35,30 @@ import {
 import { DocsPullNotice } from "@/features/docs-repository/DocsPullNotice";
 import { WorkspaceContextBar } from "@/features/workspace-setup/WorkspaceContextBar";
 import { WorkspaceSetupFlow } from "@/features/workspace-setup/WorkspaceSetupFlow";
+import type { ProjectBoardGateway } from "@/features/project-board/ProjectBoardGateway";
+import { projectBoardKeys } from "@/features/project-board/queryKeys";
+import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
 import "@/features/documents/documents.css";
 import { normalizeDocumentPath, type DocumentSummary } from "@/features/documents/model";
+
+const sharedProjectBoardGateway = new TauriProjectBoardGateway();
+
+function DocumentsRouterRedirect({
+  to,
+  onNavigated,
+}: {
+  to: string;
+  onNavigated: () => void;
+}) {
+  const navigate = useNavigate();
+  const onNavigatedRef = useRef(onNavigated);
+  onNavigatedRef.current = onNavigated;
+  useEffect(() => {
+    navigate(to);
+    onNavigatedRef.current();
+  }, [navigate, to]);
+  return null;
+}
 
 const DocumentDraftEditor = lazy(() =>
   import("@/features/documents/components/DocumentDraftEditor").then(
@@ -181,11 +209,13 @@ export function DocumentsPage({
   additionalDocuments = [],
   docsRepositoryGateway = sharedDocsRepositoryGateway,
   repositoryGateway = sharedRepositoryGateway,
+  projectBoardGateway,
 }: {
   headerActions?: ReactNode;
   additionalDocuments?: DocumentSummary[];
   docsRepositoryGateway?: DocsRepositoryGateway;
   repositoryGateway?: ProjectRepositoryGateway;
+  projectBoardGateway?: ProjectBoardGateway;
 }) {
   const {
     state,
@@ -228,6 +258,12 @@ export function DocumentsPage({
     pullRequestUrl: string;
   } | null>(null);
   const inRouter = useInRouterContext();
+  const [auditNavigateTarget, setAuditNavigateTarget] = useState<string | null>(
+    null,
+  );
+  const handleAuditNavigated = useCallback(() => {
+    setAuditNavigateTarget(null);
+  }, []);
   const [pendingTabFocus, setPendingTabFocus] = useState<"home" | string | null>(
     null,
   );
@@ -245,6 +281,47 @@ export function DocumentsPage({
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
   const docsMissing = activeProject?.docsMissing ?? false;
   const activeProjectId = activeProject?.activeProjectId ?? null;
+  const effectiveBoardGateway =
+    projectBoardGateway ?? sharedProjectBoardGateway;
+  const boardQuery = useQuery({
+    queryKey: projectBoardKeys.board(activeProjectId),
+    queryFn: () => effectiveBoardGateway.getProjectBoard(),
+    enabled:
+      activeProjectId !== null &&
+      (Boolean(projectBoardGateway) ||
+        (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window)),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const handleAuditCodeSync = (group: DocumentGroup) => {
+    const specDocs = group.documents.filter((doc) => {
+      if (isAuxiliaryDocument(doc)) return false;
+      const category = classifyDocumentCategory(doc);
+      return category === "prd" || category === "screen_spec";
+    });
+    const targetDocs = specDocs.length > 0 ? specDocs : group.documents;
+    const primaryDoc =
+      targetDocs.find((doc) => classifyDocumentCategory(doc) === "prd") ??
+      targetDocs[0];
+    if (!primaryDoc) return;
+
+    setPendingAiLaunch({
+      request: {
+        documentPath: primaryDoc.path,
+        repositoryFullName: state.repositoryFullName || null,
+        taskMode: "audit_code_sync",
+        domainLabel: group.label,
+        documentPaths: targetDocs.map((doc) => doc.path),
+      },
+      label: `코드 반영 점검 · ${group.label}`,
+      layer: "planning",
+      targetDescription: "코드 저장소 대조 후 문서 frontmatter(impl_status) 갱신",
+    });
+    if (inRouter) {
+      setAuditNavigateTarget("/ai");
+    }
+  };
   const picker =
     activeWorkspace !== null ? (
       <WorkspaceDocsRepositoryPicker
@@ -612,6 +689,7 @@ export function DocumentsPage({
           searchError={state.searchError}
           indexStatus={state.indexStatus}
           defaultGroupMode="map"
+          boardIssues={boardQuery.data?.issues}
           onQueryChange={setSearchQuery}
           onSelectDocument={(path, preferredView) =>
             selectDocument(path, undefined, preferredView)
@@ -623,6 +701,7 @@ export function DocumentsPage({
             })
           }
           onRetry={retrySearch}
+          onAuditCodeSync={handleAuditCodeSync}
           onNewDocumentInFolder={openNewDocument}
           onOpenInNewWindow={(path, viewMode, title) =>
             void openDocumentInNewWindow(path, viewMode, title)
@@ -637,6 +716,12 @@ export function DocumentsPage({
         </div>
       </div>
       {creationDialog}
+      {inRouter && auditNavigateTarget ? (
+        <DocumentsRouterRedirect
+          to={auditNavigateTarget}
+          onNavigated={handleAuditNavigated}
+        />
+      ) : null}
     </section>
   );
 }

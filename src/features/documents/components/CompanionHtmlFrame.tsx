@@ -1,4 +1,5 @@
-import { useEffect, useId, useMemo, useRef } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { cn } from "@/lib/utils";
 import { normalizeDocumentPath } from "../model";
 
 export interface CompanionHtmlFrameProps {
@@ -6,6 +7,7 @@ export interface CompanionHtmlFrameProps {
   title: string;
   documentPath: string;
   className?: string;
+  autoResize?: boolean;
   initialFragment?: string | null;
   onNavigateDocument?: (target: {
     path: string;
@@ -296,7 +298,7 @@ export function prepareInteractiveCompanionHtml(
   // 상속하므로 여기서 https:를 열어도 실제로는 차단되며, 외부 추적 픽셀도 막는다. 로컬 이미지는
   // reader.rs가 data: URI로 인라인하므로 문서 저장소 안의 시안/스크린샷은 정상 표시된다.
   const cspMeta = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; font-src data:; script-src 'nonce-${nonce}';" />`;
-  const bridgeScript = `<script nonce="${nonce}">(function(){var ch=${JSON.stringify(channelId)};function scrollToFrag(frag){if(!frag){window.scrollTo(0,0);return;}var decoded=frag;try{decoded=decodeURIComponent(frag);}catch(_){}var el=document.getElementById(decoded)||document.getElementsByName(decoded)[0];if(el&&typeof el.scrollIntoView==="function"){el.scrollIntoView({behavior:"smooth",block:"start"});}}document.addEventListener("click",function(ev){var t=ev.target;if(!t||typeof t.closest!=="function")return;var a=t.closest("a[href]");if(!a)return;var href=a.getAttribute("href");if(!href)return;ev.preventDefault();var compact=href.replace(/[\\u0000-\\u0020]+/g,"");if(/^(javascript|vbscript|data):/i.test(compact))return;if(href.charAt(0)==="#"){scrollToFrag(href.slice(1));return;}var kind=/^(https?:|mailto:|tel:)/i.test(href)?"external":"document";if(window.parent&&window.parent!==window){window.parent.postMessage({type:"okhub:companion-link",channel:ch,kind:kind,href:href},"*");}},true);window.addEventListener("message",function(ev){if(!ev.data||ev.data.channel!==ch)return;if(ev.data.type==="okhub:scroll-to"){scrollToFrag(ev.data.fragment||"");}});})();</script>`;
+  const bridgeScript = `<script nonce="${nonce}">(function(){var ch=${JSON.stringify(channelId)};function scrollToFrag(frag){if(!frag){window.scrollTo(0,0);return;}var decoded=frag;try{decoded=decodeURIComponent(frag);}catch(_){}var el=document.getElementById(decoded)||document.getElementsByName(decoded)[0];if(el&&typeof el.scrollIntoView==="function"){el.scrollIntoView({behavior:"smooth",block:"start"});}}var lastH=0;function postH(){if(!window.parent||window.parent===window)return;var b=document.body;var de=document.documentElement;var h=0;if(b){var cs=window.getComputedStyle?window.getComputedStyle(b):null;var mt=cs?parseFloat(cs.marginTop)||0:0;var mb=cs?parseFloat(cs.marginBottom)||0:0;h=Math.max(b.scrollHeight,Math.ceil(b.offsetHeight+mt+mb));}if(!h&&de){h=de.scrollHeight;}if(h>0&&Math.abs(h-lastH)>=2){lastH=h;window.parent.postMessage({type:"okhub:companion-height",channel:ch,height:h},"*");}}if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",postH);}else{postH();}window.addEventListener("load",postH);if(typeof ResizeObserver==="function"){var ro=new ResizeObserver(postH);if(document.documentElement)ro.observe(document.documentElement);if(document.body)ro.observe(document.body);}document.addEventListener("load",postH,true);document.addEventListener("click",function(ev){var t=ev.target;if(!t||typeof t.closest!=="function")return;var a=t.closest("a[href]");if(!a)return;var href=a.getAttribute("href");if(!href)return;ev.preventDefault();var compact=href.replace(/[\\u0000-\\u0020]+/g,"");if(/^(javascript|vbscript|data):/i.test(compact))return;if(href.charAt(0)==="#"){scrollToFrag(href.slice(1));return;}var kind=/^(https?:|mailto:|tel:)/i.test(href)?"external":"document";if(window.parent&&window.parent!==window){window.parent.postMessage({type:"okhub:companion-link",channel:ch,kind:kind,href:href},"*");}},true);window.addEventListener("message",function(ev){if(!ev.data||ev.data.channel!==ch)return;if(ev.data.type==="okhub:scroll-to"){scrollToFrag(ev.data.fragment||"");}});})();</script>`;
 
   let withCsp: string;
   const headMatch = /<head\b[^>]*>/i.exec(sanitized);
@@ -319,6 +321,7 @@ export function CompanionHtmlFrame({
   title,
   documentPath,
   className = "document-reader__html-frame",
+  autoResize = true,
   initialFragment,
   onNavigateDocument,
   onOpenExternal,
@@ -329,6 +332,7 @@ export function CompanionHtmlFrame({
     [reactId],
   );
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [contentHeight, setContentHeight] = useState<number | null>(null);
   const preparedHtml = useMemo(
     () => prepareInteractiveCompanionHtml(html, channelId),
     [html, channelId],
@@ -340,6 +344,10 @@ export function CompanionHtmlFrame({
   callbacksRef.current = { onNavigateDocument, onOpenExternal };
 
   useEffect(() => {
+    setContentHeight(null);
+  }, [html, documentPath, autoResize]);
+
+  useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       const iframeWindow = iframeRef.current?.contentWindow;
       if (!iframeWindow || event.source !== iframeWindow) return;
@@ -349,13 +357,27 @@ export function CompanionHtmlFrame({
             channel?: unknown;
             kind?: unknown;
             href?: unknown;
+            height?: unknown;
           }
         | null
         | undefined;
+      if (!data || data.channel !== channelId) {
+        return;
+      }
+      if (data.type === "okhub:companion-height") {
+        if (
+          autoResize &&
+          typeof data.height === "number" &&
+          Number.isFinite(data.height) &&
+          data.height > 0
+        ) {
+          const clamped = Math.min(Math.max(Math.ceil(data.height) + 24, 360), 40_000);
+          setContentHeight(clamped);
+        }
+        return;
+      }
       if (
-        !data ||
         data.type !== "okhub:companion-link" ||
-        data.channel !== channelId ||
         typeof data.href !== "string"
       ) {
         return;
@@ -375,7 +397,7 @@ export function CompanionHtmlFrame({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [channelId, documentPath]);
+  }, [autoResize, channelId, documentPath]);
 
   useEffect(() => {
     if (!initialFragment) return;
@@ -404,7 +426,15 @@ export function CompanionHtmlFrame({
   return (
     <iframe
       ref={iframeRef}
-      className={className}
+      className={cn(
+        className,
+        autoResize && "document-reader__html-frame--auto-height",
+      )}
+      style={
+        autoResize && contentHeight !== null
+          ? { height: `${contentHeight}px` }
+          : undefined
+      }
       sandbox="allow-scripts"
       referrerPolicy="no-referrer"
       srcDoc={preparedHtml}

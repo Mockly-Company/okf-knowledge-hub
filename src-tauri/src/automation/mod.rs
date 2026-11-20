@@ -21,8 +21,8 @@ use crate::automation::context_pack::{
     IssueContextPack, ReadyBoardItem,
 };
 use crate::automation::doc_validator::{
-    list_workspace_docs, read_workspace_doc, validate_workspace_docs, AutomationDocDetail,
-    AutomationDocEntry, DocValidationReport,
+    list_workspace_docs, read_workspace_doc, update_doc_impl_status, validate_workspace_docs,
+    AutomationDocDetail, AutomationDocEntry, DocImplStatusUpdateResult, DocValidationReport,
 };
 use crate::commands::code_repositories::resolve_code_repositories_for_workspace;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
@@ -659,6 +659,17 @@ impl AutomationRuntime {
     pub fn validate_docs(&self) -> Result<DocValidationReport, AppError> {
         let root = self.require_workspace_dir()?;
         validate_workspace_docs(root, &self.docs_root_rel)
+    }
+
+    pub fn update_doc_impl_status(
+        &self,
+        doc_path: &str,
+        impl_status: &str,
+        impl_note: Option<&str>,
+        checked_at: Option<&str>,
+    ) -> Result<DocImplStatusUpdateResult, AppError> {
+        let root = self.require_workspace_dir()?;
+        update_doc_impl_status(root, doc_path, impl_status, impl_note, checked_at)
     }
 
     pub async fn list_pull_requests(

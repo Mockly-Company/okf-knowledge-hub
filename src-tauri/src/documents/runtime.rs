@@ -3521,6 +3521,8 @@ mod tests {
             doc_type: None,
             domain: None,
             status: None,
+            impl_status: None,
+            impl_note: None,
             description: None,
             preview_headings: Vec::new(),
             linked_paths: Vec::new(),

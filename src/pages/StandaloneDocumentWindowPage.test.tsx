@@ -171,6 +171,9 @@ describe("StandaloneDocumentWindowPage", () => {
 
     expect(await screen.findByText("본문")).toBeVisible();
     expect(readDocSpy).toHaveBeenCalledWith(null, "docs/domains/dashboard/prd.md");
+    // Starts collapsed as a 1-line summary bar until expanded (M11 still reads against resolved workspaceId).
+    expect(screen.queryByAltText("알림 시안")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "시안 펼치기" }));
     expect(await screen.findByAltText("알림 시안")).toBeVisible();
     expect(readAssetSpy).toHaveBeenCalledWith(
       gateway.sessionSnapshot.workspaceId,
@@ -230,6 +233,7 @@ describe("StandaloneDocumentWindowPage", () => {
       "/doc-window?workspaceId=ws-1&doc=docs%2Fdomains%2Fdashboard%2Fprd.md&view=markdown",
     );
 
+    await user.click(await screen.findByRole("button", { name: "시안 펼치기" }));
     expect(await screen.findByAltText("알림 시안")).toBeVisible();
     const callsAfterLoad = readAssetSpy.mock.calls.length;
 

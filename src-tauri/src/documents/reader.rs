@@ -939,6 +939,8 @@ pub(crate) fn document_content_from_bytes(
         doc_type: parsed.doc_type,
         domain: parsed.domain,
         status: parsed.status,
+        impl_status: parsed.impl_status,
+        impl_note: parsed.impl_note,
         description: parsed.description.or(fallback_description),
         preview_headings,
         linked_paths,
