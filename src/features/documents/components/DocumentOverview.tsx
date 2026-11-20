@@ -98,7 +98,7 @@ function displayProperty(value: unknown, key?: string): string {
   if (value === undefined) return "-";
   if (typeof value === "string") {
     if (key === "impl_status" && Object.hasOwn(IMPL_STATUS_LABELS, value)) {
-      return IMPL_STATUS_LABELS[value];
+      return IMPL_STATUS_LABELS[value] ?? value;
     }
     return value;
   }
@@ -304,7 +304,7 @@ export function DocumentOverview({
               <div key={name}>
                 <dt>
                   {Object.hasOwn(PROPERTY_LABELS, name)
-                    ? PROPERTY_LABELS[name]
+                    ? (PROPERTY_LABELS[name] ?? name)
                     : name}
                 </dt>
                 <dd>{displayProperty(value, name)}</dd>

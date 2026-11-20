@@ -252,6 +252,7 @@ interface GutterTrack {
   maxY: number;
   anchorY: number;
   meanDeltaY: number;
+  fallbackX: number;
 }
 
 export interface DomainEdgeLayoutResult {
@@ -568,6 +569,7 @@ export function layoutDomainEdgePathsWithBounds(
       maxY: Math.max(y1, ...y2s),
       anchorY: y1,
       meanDeltaY: meanDelta,
+      fallbackX: (firstAdj.fromBox.right + firstAdj.toBox.left) / 2,
     });
   }
 
@@ -593,11 +595,14 @@ export function layoutDomainEdgePathsWithBounds(
       maxY: Math.max(y1, ...bypassYs),
       anchorY: y1,
       meanDeltaY: meanDelta,
+      fallbackX: firstSkipGeom.fromBox.right + 14,
     });
   }
 
   // 3) Skip entry tracks grouped by (fromKey, toCol) in gutter (toCol - 1)
   for (const sg of skipGroups) {
+    const firstEntryGeom = sg.geoms[0];
+    if (!firstEntryGeom) continue;
     const y2s = sg.geoms.map((g) => inPortY.get(g.edge.id) ?? 0);
     const meanDelta = y2s.reduce((acc, y2) => acc + (y2 - sg.bypassY), 0) / y2s.length;
     addTrack(sg.toCol - 1, {
@@ -607,6 +612,7 @@ export function layoutDomainEdgePathsWithBounds(
       maxY: Math.max(sg.bypassY, ...y2s),
       anchorY: sg.bypassY,
       meanDeltaY: meanDelta,
+      fallbackX: firstEntryGeom.toBox.left - 14,
     });
   }
 
@@ -614,12 +620,10 @@ export function layoutDomainEdgePathsWithBounds(
   for (const [gutterCol, tracks] of tracksByGutter.entries()) {
     const leftEdge = colRight.get(gutterCol);
     const rightEdge = colLeft.get(gutterCol + 1);
-    const fallbackMid =
-      leftEdge !== undefined && rightEdge !== undefined
-        ? (leftEdge + rightEdge) / 2
-        : 0;
-    const laneMin = leftEdge !== undefined ? leftEdge + 10 : fallbackMid;
-    const laneMax = rightEdge !== undefined ? rightEdge - 12 : fallbackMid;
+    const hasGutterBounds = leftEdge !== undefined && rightEdge !== undefined;
+    const gutterMid = hasGutterBounds ? (leftEdge + rightEdge) / 2 : 0;
+    const laneMin = hasGutterBounds ? leftEdge + 10 : 0;
+    const laneMax = hasGutterBounds ? rightEdge - 12 : 0;
 
     // Connected components of vertically overlapping tracks inside this gutter.
     const visited = new Array<boolean>(tracks.length).fill(false);
@@ -645,8 +649,15 @@ export function layoutDomainEdgePathsWithBounds(
         }
       }
 
+      if (!hasGutterBounds) {
+        for (const t of component) {
+          laneXByTrackId.set(t.id, t.fallbackX);
+        }
+        continue;
+      }
+
       if (component.length === 1 || laneMax <= laneMin) {
-        const xMid = laneMax <= laneMin ? fallbackMid : (laneMin + laneMax) / 2;
+        const xMid = laneMax <= laneMin ? gutterMid : (laneMin + laneMax) / 2;
         for (const t of component) {
           laneXByTrackId.set(t.id, xMid);
         }
