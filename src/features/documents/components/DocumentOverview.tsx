@@ -95,8 +95,9 @@ const IMPL_STATUS_LABELS: Record<string, string> = {
 
 function displayProperty(value: unknown, key?: string): string {
   if (value === null) return "null";
+  if (value === undefined) return "-";
   if (typeof value === "string") {
-    if (key === "impl_status" && value in IMPL_STATUS_LABELS) {
+    if (key === "impl_status" && Object.hasOwn(IMPL_STATUS_LABELS, value)) {
       return IMPL_STATUS_LABELS[value];
     }
     return value;
@@ -133,7 +134,7 @@ function displayProperty(value: unknown, key?: string): string {
     }
     return `${value.length}건`;
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? "-";
 }
 
 function propertyEntries(properties: unknown): Array<[string, unknown]> {
@@ -297,7 +298,11 @@ export function DocumentOverview({
           <dl>
             {entries.map(([name, value]) => (
               <div key={name}>
-                <dt>{PROPERTY_LABELS[name] ?? name}</dt>
+                <dt>
+                  {Object.hasOwn(PROPERTY_LABELS, name)
+                    ? PROPERTY_LABELS[name]
+                    : name}
+                </dt>
                 <dd>{displayProperty(value, name)}</dd>
               </div>
             ))}

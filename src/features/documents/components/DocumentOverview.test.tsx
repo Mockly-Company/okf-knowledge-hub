@@ -127,3 +127,27 @@ it("formats wireframes, designs, tags, related_docs, and impl_status cleanly ins
   expect(screen.getByText("custom_key")).toBeVisible();
   expect(screen.getByText("kept")).toBeVisible();
 });
+
+it("guards against prototype-chain lookups on impl_status/property keys and normalizes undefined values", () => {
+  render(
+    <DocumentOverview
+      document={
+        {
+          properties: {
+            impl_status: "toString",
+            constructor: "literal-value",
+            empty_prop: undefined,
+          },
+          tableOfContents: [],
+        } as unknown as DocumentContent
+      }
+    />,
+  );
+
+  expect(screen.getByText("코드 반영 상태")).toBeVisible();
+  expect(screen.getByText("toString")).toBeVisible();
+  expect(screen.getByText("constructor")).toBeVisible();
+  expect(screen.getByText("literal-value")).toBeVisible();
+  expect(screen.getByText("empty_prop")).toBeVisible();
+  expect(screen.getByText("-")).toBeVisible();
+});
