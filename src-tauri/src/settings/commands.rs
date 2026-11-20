@@ -290,50 +290,53 @@ fn sanitize_doc_slug(raw: &str, prefix: &str, fallback: &str) -> String {
     }
 }
 
+fn normalize_workspace_markdown_rel_path(
+    workspace_dir: &Path,
+    canon_root: &Path,
+    raw: &str,
+) -> Option<(String, PathBuf)> {
+    let mut norm = raw.trim().replace('\\', "/");
+    while let Some(stripped) = norm.strip_prefix("./").or_else(|| norm.strip_prefix('/')) {
+        norm = stripped.to_owned();
+    }
+    if norm.is_empty()
+        || norm.contains("..")
+        || norm.contains('`')
+        || norm.chars().any(char::is_control)
+        || !norm.to_ascii_lowercase().ends_with(".md")
+    {
+        return None;
+    }
+    let canon = workspace_dir.join(&norm).canonicalize().ok()?;
+    if !canon.starts_with(canon_root) || !canon.is_file() {
+        return None;
+    }
+    Some((norm, canon))
+}
+
 fn build_document_task_pack(
     workspace_dir: &Path,
     req: &AiTaskLaunchRequest,
 ) -> Option<PreparedTaskPack> {
     let is_audit_mode = req.task_mode.as_deref() == Some("audit_code_sync");
-    let raw_doc_rel = req
+    let canon_root = workspace_dir.canonicalize().ok()?;
+    let primary_doc = req
         .document_path
         .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.contains(".."));
-
-    let canon_root = workspace_dir.canonicalize().ok()?;
-    let primary_doc = raw_doc_rel.and_then(|doc_rel| {
-        let canon_doc = workspace_dir.join(doc_rel).canonicalize().ok()?;
-        if !canon_doc.starts_with(&canon_root) || !canon_doc.is_file() {
-            return None;
-        }
-        let doc_content = std::fs::read_to_string(&canon_doc).ok()?;
-        Some((doc_rel.to_owned(), doc_content))
-    });
+        .and_then(|raw| normalize_workspace_markdown_rel_path(workspace_dir, &canon_root, raw))
+        .and_then(|(doc_rel, canon_doc)| {
+            let doc_content = std::fs::read_to_string(&canon_doc).ok()?;
+            Some((doc_rel, doc_content))
+        });
 
     if is_audit_mode {
         let mut target_paths: Vec<String> = Vec::new();
         for raw_path in req.document_paths.as_deref().unwrap_or(&[]) {
-            let norm = raw_path
-                .trim()
-                .replace('\\', "/")
-                .trim_start_matches("./")
-                .trim_start_matches('/')
-                .to_owned();
-            if norm.is_empty()
-                || norm.contains("..")
-                || norm.contains('`')
-                || norm.chars().any(char::is_control)
-                || !norm.to_ascii_lowercase().ends_with(".md")
-            {
-                continue;
-            }
-            let Ok(canon) = workspace_dir.join(&norm).canonicalize() else {
+            let Some((norm, _canon)) =
+                normalize_workspace_markdown_rel_path(workspace_dir, &canon_root, raw_path)
+            else {
                 continue;
             };
-            if !canon.starts_with(&canon_root) || !canon.is_file() {
-                continue;
-            }
             if !target_paths.iter().any(|existing| existing == &norm) {
                 target_paths.push(norm);
             }
@@ -1597,7 +1600,7 @@ mod tests {
         assert_eq!(legacy.document_paths, None);
 
         let audit_req: super::AiTaskLaunchRequest = serde_json::from_str(
-            r#"{"documentPath":"docs/domains/board/prd.md","taskMode":"audit_code_sync","domainLabel":"Board `보드`\n# INJECT","documentPaths":["docs/domains/board/prd.md","docs/domains/board/screen-spec.md","../secret.md","docs/domains/board/evil.md\n## INJECT","docs/domains/board/image.png","docs/domains/board/nonexistent.md"]}"#,
+            r#"{"documentPath":"/docs\\domains\\board\\prd.md","taskMode":"audit_code_sync","domainLabel":"Board `보드`\n# INJECT","documentPaths":["./docs/domains/board/prd.md","docs/domains/board/screen-spec.md","../secret.md","docs/domains/board/evil.md\n## INJECT","docs/domains/board/image.png","docs/domains/board/nonexistent.md"]}"#,
         )
         .unwrap();
         assert_eq!(audit_req.task_mode.as_deref(), Some("audit_code_sync"));
@@ -1616,6 +1619,15 @@ mod tests {
         assert!(pack.markdown.contains("Board 보드 # INJECT"));
         assert!(!pack.markdown.contains("## INJECT"));
         assert!(pack.markdown.contains("okhub_update_doc_impl_status"));
+        assert!(pack
+            .markdown
+            .contains("기준 문서 원문 (`.md`) — `docs/domains/board/prd.md`"));
+        assert_eq!(
+            pack.markdown
+                .matches("- `docs/domains/board/prd.md`")
+                .count(),
+            1
+        );
         assert!(pack.markdown.contains("docs/domains/board/screen-spec.md"));
         assert!(!pack.markdown.contains("../secret.md"));
         assert!(!pack.markdown.contains("evil.md"));

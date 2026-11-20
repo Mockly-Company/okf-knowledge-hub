@@ -1,6 +1,6 @@
 import { FilePlus2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useInRouterContext, useNavigate, useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { StatusBadge } from "@/components/patterns/StatusBadge";
@@ -51,10 +51,12 @@ function DocumentsRouterRedirect({
   onNavigated: () => void;
 }) {
   const navigate = useNavigate();
+  const onNavigatedRef = useRef(onNavigated);
+  onNavigatedRef.current = onNavigated;
   useEffect(() => {
     navigate(to);
-    onNavigated();
-  }, [navigate, to, onNavigated]);
+    onNavigatedRef.current();
+  }, [navigate, to]);
   return null;
 }
 
@@ -259,6 +261,9 @@ export function DocumentsPage({
   const [auditNavigateTarget, setAuditNavigateTarget] = useState<string | null>(
     null,
   );
+  const handleAuditNavigated = useCallback(() => {
+    setAuditNavigateTarget(null);
+  }, []);
   const [pendingTabFocus, setPendingTabFocus] = useState<"home" | string | null>(
     null,
   );
@@ -714,7 +719,7 @@ export function DocumentsPage({
       {inRouter && auditNavigateTarget ? (
         <DocumentsRouterRedirect
           to={auditNavigateTarget}
-          onNavigated={() => setAuditNavigateTarget(null)}
+          onNavigated={handleAuditNavigated}
         />
       ) : null}
     </section>

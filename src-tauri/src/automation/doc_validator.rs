@@ -202,6 +202,65 @@ fn set_yaml_string(map: &mut serde_yaml_ng::Mapping, key: &str, value: Option<St
     }
 }
 
+const MAX_IMPL_NOTE_CHARS: usize = 300;
+const MAX_CHECKED_AT_LEN: usize = 64;
+
+fn sanitize_impl_note(raw: &str) -> Option<String> {
+    let cleaned = raw
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let truncated: String = cleaned.chars().take(MAX_IMPL_NOTE_CHARS).collect();
+    if truncated.is_empty() {
+        None
+    } else {
+        Some(truncated)
+    }
+}
+
+fn validate_checked_at(raw: &str) -> Result<Option<String>, AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.len() <= MAX_CHECKED_AT_LEN {
+        if trimmed.len() == 10
+            && trimmed.as_bytes()[4] == b'-'
+            && trimmed.as_bytes()[7] == b'-'
+            && trimmed
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
+        {
+            if let (Ok(year), Ok(month), Ok(day)) = (
+                trimmed[0..4].parse::<i32>(),
+                trimmed[5..7].parse::<u8>(),
+                trimmed[8..10].parse::<u8>(),
+            ) {
+                if let Ok(m) = time::Month::try_from(month) {
+                    if time::Date::from_calendar_date(year, m, day).is_ok() {
+                        return Ok(Some(trimmed.to_owned()));
+                    }
+                }
+            }
+        } else if time::OffsetDateTime::parse(
+            trimmed,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .is_ok()
+        {
+            return Ok(Some(trimmed.to_owned()));
+        }
+    }
+    Err(AppError::new(
+        ErrorCode::WorkspaceInvalid,
+        "checkedAt은 YYYY-MM-DD 또는 RFC 3339 형식이어야 합니다.",
+    ))
+}
+
 pub fn update_doc_impl_status(
     workspace_root: &Path,
     doc_path: &str,
@@ -318,14 +377,15 @@ pub fn update_doc_impl_status(
     let final_note = if is_clear {
         None
     } else {
-        note.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty())
+        note.and_then(sanitize_impl_note)
     };
     let final_checked_at = if is_clear {
         None
     } else {
-        checked_at
-            .map(|c| c.trim().to_owned())
-            .filter(|c| !c.is_empty())
+        match checked_at {
+            Some(raw) => validate_checked_at(raw)?,
+            None => None,
+        }
     };
 
     set_yaml_string(&mut map, "impl_status", target_status.clone());
@@ -1099,5 +1159,57 @@ mod tests {
         let traversal =
             update_doc_impl_status(&workspace, "../outside.md", "synced", None, None).unwrap_err();
         assert_eq!(traversal.code, ErrorCode::DocumentPathInvalid);
+    }
+
+    #[test]
+    fn sanitizes_impl_note_and_validates_checked_at_formats() {
+        let temp = TempDir::new().unwrap();
+        let docs_dir = temp.path().join("docs").join("domains").join("board");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::write(
+            docs_dir.join("prd.md"),
+            "---\ntitle: 보드 PRD\n---\n\n# 본문\n",
+        )
+        .unwrap();
+
+        let long_note = format!("개행\n포함  {}", "가".repeat(350));
+        let updated = update_doc_impl_status(
+            temp.path(),
+            "docs/domains/board/prd.md",
+            "synced",
+            Some(&long_note),
+            Some("2026-11-20T01:00:00Z"),
+        )
+        .unwrap();
+        let note_val = updated.impl_note.as_deref().unwrap();
+        assert_eq!(note_val.chars().count(), 300);
+        assert!(!note_val.contains('\n'));
+        assert!(note_val.starts_with("개행 포함 "));
+        assert_eq!(updated.checked_at.as_deref(), Some("2026-11-20T01:00:00Z"));
+
+        let bad_date = update_doc_impl_status(
+            temp.path(),
+            "docs/domains/board/prd.md",
+            "partial",
+            Some("정상 노트"),
+            Some("2026-02-30"),
+        )
+        .unwrap_err();
+        assert_eq!(bad_date.code, ErrorCode::WorkspaceInvalid);
+
+        let not_date = update_doc_impl_status(
+            temp.path(),
+            "docs/domains/board/prd.md",
+            "partial",
+            Some("정상 노트"),
+            Some("invalid-timestamp\ninjected: true"),
+        )
+        .unwrap_err();
+        assert_eq!(not_date.code, ErrorCode::WorkspaceInvalid);
+
+        // File must still contain the previous valid state untouched.
+        let disk = std::fs::read_to_string(docs_dir.join("prd.md")).unwrap();
+        let parsed = parse_document(&disk, "prd.md");
+        assert_eq!(parsed.impl_status.as_deref(), Some("synced"));
     }
 }
