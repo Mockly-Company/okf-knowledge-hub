@@ -134,7 +134,11 @@ function displayProperty(value: unknown, key?: string): string {
     }
     return `${value.length}건`;
   }
-  return JSON.stringify(value) ?? "-";
+  try {
+    return JSON.stringify(value) ?? "-";
+  } catch {
+    return "-";
+  }
 }
 
 function propertyEntries(properties: unknown): Array<[string, unknown]> {

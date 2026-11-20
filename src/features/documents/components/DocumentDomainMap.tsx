@@ -277,27 +277,33 @@ function buildRoundedPolylinePath(
     if (points.length >= 2) {
       const a = points[points.length - 2];
       const b = points[points.length - 1];
-      const dot = (b.x - a.x) * (pt.x - b.x) + (b.y - a.y) * (pt.y - b.y);
-      const sameX = Math.abs(a.x - b.x) < 0.5 && Math.abs(b.x - pt.x) < 0.5;
-      const sameY = Math.abs(a.y - b.y) < 0.5 && Math.abs(b.y - pt.y) < 0.5;
-      if ((sameX || sameY) && dot >= 0) {
-        points[points.length - 1] = pt;
-        continue;
+      if (a && b) {
+        const dot = (b.x - a.x) * (pt.x - b.x) + (b.y - a.y) * (pt.y - b.y);
+        const sameX = Math.abs(a.x - b.x) < 0.5 && Math.abs(b.x - pt.x) < 0.5;
+        const sameY = Math.abs(a.y - b.y) < 0.5 && Math.abs(b.y - pt.y) < 0.5;
+        if ((sameX || sameY) && dot >= 0) {
+          points[points.length - 1] = pt;
+          continue;
+        }
       }
     }
     points.push(pt);
   }
 
-  if (points.length < 2) return "";
+  const first = points[0];
+  const second = points[1];
+  const last = points[points.length - 1];
+  if (points.length < 2 || !first || !second || !last) return "";
   if (points.length === 2) {
-    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
+    return `M ${first.x} ${first.y} L ${second.x} ${second.y}`;
   }
 
-  const parts: string[] = [`M ${points[0].x} ${points[0].y}`];
+  const parts: string[] = [`M ${first.x} ${first.y}`];
   for (let i = 1; i < points.length - 1; i += 1) {
     const prev = points[i - 1];
     const curr = points[i];
     const next = points[i + 1];
+    if (!prev || !curr || !next) continue;
     const dx1 = curr.x - prev.x;
     const dy1 = curr.y - prev.y;
     const d1 = Math.hypot(dx1, dy1);
@@ -325,7 +331,6 @@ function buildRoundedPolylinePath(
     const outY = curr.y + uy2 * r;
     parts.push(`L ${inX} ${inY} Q ${curr.x} ${curr.y} ${outX} ${outY}`);
   }
-  const last = points[points.length - 1];
   parts.push(`L ${last.x} ${last.y}`);
   return parts.join(" ");
 }
@@ -514,8 +519,10 @@ export function layoutDomainEdgePathsWithBounds(
       }
     }
     if (!foundIntermediate) {
+      const firstGeom = sg.geoms[0];
+      if (!firstGeom) continue;
       obstacleBottom = Math.max(
-        sg.geoms[0].fromBox.bottom,
+        firstGeom.fromBox.bottom,
         ...sg.geoms.map((g) => g.toBox.bottom),
       );
     }
@@ -548,8 +555,10 @@ export function layoutDomainEdgePathsWithBounds(
     adjBySource.set(geom.edge.fromKey, list);
   }
   for (const [fromKey, list] of adjBySource.entries()) {
-    const fromCol = list[0].fromBox.colIndex;
-    const y1 = outPortY.get(list[0].edge.id) ?? 0;
+    const firstAdj = list[0];
+    if (!firstAdj) continue;
+    const fromCol = firstAdj.fromBox.colIndex;
+    const y1 = outPortY.get(firstAdj.edge.id) ?? 0;
     const y2s = list.map((g) => inPortY.get(g.edge.id) ?? 0);
     const meanDelta = y2s.reduce((acc, y2) => acc + (y2 - y1), 0) / y2s.length;
     addTrack(fromCol, {
@@ -570,8 +579,11 @@ export function layoutDomainEdgePathsWithBounds(
     skipBySource.set(sg.fromKey, list);
   }
   for (const [fromKey, list] of skipBySource.entries()) {
-    const fromCol = list[0].fromCol;
-    const y1 = outPortY.get(list[0].geoms[0].edge.id) ?? 0;
+    const firstSkip = list[0];
+    const firstSkipGeom = firstSkip?.geoms[0];
+    if (!firstSkip || !firstSkipGeom) continue;
+    const fromCol = firstSkip.fromCol;
+    const y1 = outPortY.get(firstSkipGeom.edge.id) ?? 0;
     const bypassYs = list.map((sg) => sg.bypassY);
     const meanDelta = bypassYs.reduce((acc, by) => acc + (by - y1), 0) / bypassYs.length;
     addTrack(fromCol, {
@@ -617,12 +629,15 @@ export function layoutDomainEdgePathsWithBounds(
       const queue = [i];
       const component: GutterTrack[] = [];
       while (queue.length > 0) {
-        const idx = queue.shift()!;
+        const idx = queue.shift();
+        if (idx === undefined) break;
         const curr = tracks[idx];
+        if (!curr) continue;
         component.push(curr);
         for (let j = 0; j < tracks.length; j += 1) {
           if (visited[j]) continue;
           const other = tracks[j];
+          if (!other) continue;
           if (Math.min(curr.maxY, other.maxY) - Math.max(curr.minY, other.minY) > -4) {
             visited[j] = true;
             queue.push(j);

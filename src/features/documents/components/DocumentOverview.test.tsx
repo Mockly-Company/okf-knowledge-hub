@@ -128,7 +128,10 @@ it("formats wireframes, designs, tags, related_docs, and impl_status cleanly ins
   expect(screen.getByText("kept")).toBeVisible();
 });
 
-it("guards against prototype-chain lookups on impl_status/property keys and normalizes undefined values", () => {
+it("guards against prototype-chain lookups on impl_status/property keys and normalizes undefined or unserializable values", () => {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+
   render(
     <DocumentOverview
       document={
@@ -137,6 +140,7 @@ it("guards against prototype-chain lookups on impl_status/property keys and norm
             impl_status: "toString",
             constructor: "literal-value",
             empty_prop: undefined,
+            cyclic_prop: cyclic,
           },
           tableOfContents: [],
         } as unknown as DocumentContent
@@ -149,5 +153,6 @@ it("guards against prototype-chain lookups on impl_status/property keys and norm
   expect(screen.getByText("constructor")).toBeVisible();
   expect(screen.getByText("literal-value")).toBeVisible();
   expect(screen.getByText("empty_prop")).toBeVisible();
-  expect(screen.getByText("-")).toBeVisible();
+  expect(screen.getByText("cyclic_prop")).toBeVisible();
+  expect(screen.getAllByText("-")).toHaveLength(2);
 });
