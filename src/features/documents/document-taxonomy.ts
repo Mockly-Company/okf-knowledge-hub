@@ -7,8 +7,20 @@ export type DocumentCategory =
   | "guide"
   | "reference";
 
-export type DocumentGroupMode = "map" | "screen_specs" | "domain" | "type" | "flat";
+export type DocumentGroupMode =
+  | "map"
+  | "overview"
+  | "screen_specs"
+  | "domain"
+  | "type"
+  | "flat";
 export type DocumentCategoryFilter = "all" | DocumentCategory;
+export type DocumentImplStatusFilter =
+  | "all"
+  | "unimplemented"
+  | "partial"
+  | "synced"
+  | "unaudited";
 
 export const DOCUMENT_CATEGORY_ORDER: readonly DocumentCategory[] = [
   "prd",
