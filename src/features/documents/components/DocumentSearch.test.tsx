@@ -682,7 +682,7 @@ describe("DocumentSearch", () => {
 
     // Switch to 2.5D Isometric Overview
     await user.click(screen.getByRole("button", { name: "전체 조망 (2.5D)" }));
-    expect(screen.getByRole("img", { name: "문서 전체 조망 2.5D 맵" })).toBeVisible();
+    expect(screen.getByRole("group", { name: "문서 전체 조망 2.5D 맵" })).toBeVisible();
 
     // Drill down to domain map for Documents from HUD
     await user.click(screen.getByRole("button", { name: /Documents PRD/ }));

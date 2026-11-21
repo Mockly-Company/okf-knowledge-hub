@@ -228,4 +228,38 @@ describe("DocumentIsometricOverview", () => {
     await user.click(within(hud).getByRole("button", { name: "AI 코드 반영 점검" }));
     expect(onAuditCodeSync).toHaveBeenCalledTimes(1);
   });
+
+  it("exposes accessible group role on SVG and clears dimmed state when hover/focus leaves while keeping HUD target", () => {
+    render(
+      <DocumentIsometricOverview
+        documents={sampleDocs}
+        allDocuments={sampleDocs}
+        boardIssues={sampleIssues}
+        onSelectDocument={vi.fn()}
+      />,
+    );
+
+    const mapGroup = screen.getByRole("group", { name: "문서 전체 조망 2.5D 맵" });
+    expect(mapGroup).toBeVisible();
+    expect(
+      screen.queryByRole("img", { name: "문서 전체 조망 2.5D 맵" }),
+    ).not.toBeInTheDocument();
+
+    const indexBlock = screen.getByRole("button", { name: /Documents 개요/ });
+    const specBlock = screen.getByRole("button", { name: /Documents 화면명세/ });
+    const hud = screen.getByRole("complementary", { name: "선택 문서 상세 정보" });
+
+    // At rest: no blocks are dimmed
+    expect(specBlock).not.toHaveClass("document-iso-block--dimmed");
+
+    // Focusing indexBlock highlights its edge neighbor (PRD) and dims unrelated specBlock
+    fireEvent.focus(indexBlock);
+    expect(specBlock).toHaveClass("document-iso-block--dimmed");
+    expect(within(hud).getByRole("heading", { name: "Documents 개요" })).toBeVisible();
+
+    // Moving focus/mouse away clears dimming immediately while keeping HUD on the inspected doc
+    fireEvent.blur(indexBlock);
+    expect(specBlock).not.toHaveClass("document-iso-block--dimmed");
+    expect(within(hud).getByRole("heading", { name: "Documents 개요" })).toBeVisible();
+  });
 });

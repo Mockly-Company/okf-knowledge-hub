@@ -22,13 +22,15 @@ export interface LinkedIssueMetrics {
   assignees: string[];
 }
 
-const EMPTY_ISSUE_METRICS: LinkedIssueMetrics = {
-  total: 0,
-  done: 0,
-  active: 0,
-  open: 0,
-  assignees: [],
-};
+export function createEmptyIssueMetrics(): LinkedIssueMetrics {
+  return {
+    total: 0,
+    done: 0,
+    active: 0,
+    open: 0,
+    assignees: [],
+  };
+}
 
 const VALID_IMPL_STATUSES = new Set<DocumentImplStatus>([
   "synced",
@@ -178,9 +180,9 @@ export function countLinkedBoardIssues(
 ): LinkedIssueMetrics {
   const canonical = canonicalDocPath(docPath);
   if (!canonical) {
-    return EMPTY_ISSUE_METRICS;
+    return createEmptyIssueMetrics();
   }
-  return indexLinkedBoardIssues(boardIssues).get(canonical) ?? EMPTY_ISSUE_METRICS;
+  return indexLinkedBoardIssues(boardIssues).get(canonical) ?? createEmptyIssueMetrics();
 }
 
 /**

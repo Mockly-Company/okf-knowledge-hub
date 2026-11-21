@@ -164,5 +164,11 @@ describe("resolveDocumentImplStatus", () => {
       open: 0,
       assignees: [],
     });
+
+    const emptyCopy = countLinkedBoardIssues("docs/domains/documents/missing.md", [epic]);
+    emptyCopy.assignees.push("mutated-user");
+    expect(
+      countLinkedBoardIssues("docs/domains/documents/still-missing.md", [epic]).assignees,
+    ).toEqual([]);
   });
 });

@@ -9,6 +9,7 @@ import {
 } from "./document-taxonomy";
 import {
   canonicalDocPath,
+  createEmptyIssueMetrics,
   flattenBoardIssues,
   indexLinkedBoardIssues,
   isBoardIssueActive,
@@ -84,14 +85,6 @@ export interface ProjectProgressSummary {
   domains: DomainProgressSummary[];
   itemsByKey: ReadonlyMap<string, DocumentProgressItem>;
 }
-
-const EMPTY_METRICS: LinkedIssueMetrics = {
-  total: 0,
-  done: 0,
-  active: 0,
-  open: 0,
-  assignees: [],
-};
 
 export function canonicalDocumentKey(path: string): string {
   return canonicalDocPath(path);
@@ -242,7 +235,7 @@ export function buildProjectProgressSummary(
       const key = canonicalDocPath(doc.path);
       const stage = resolveDocumentStage(doc);
       const category = classifyDocumentCategory(doc);
-      const issues = issueIndex.get(key) ?? EMPTY_METRICS;
+      const issues = issueIndex.get(key) ?? createEmptyIssueMetrics();
       const impl = resolveDocumentImplStatusFromMetrics(doc, issues);
       const bucket: DocumentProgressBucket = impl?.status ?? "unaudited";
       const sizeBytes = Number.isFinite(doc.size) ? Math.max(0, doc.size) : 0;

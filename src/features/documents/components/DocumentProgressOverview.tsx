@@ -211,6 +211,7 @@ export function DocumentProgressOverview({
 
       <div
         className="document-progress-overview__filters"
+        role="group"
         aria-label="코드 반영 상태 필터"
       >
         {filterOptions.map((option) => {
@@ -249,6 +250,7 @@ export function DocumentProgressOverview({
       {domainsExpanded && domains.length > 1 ? (
         <div
           className="document-progress-overview__domains"
+          role="group"
           aria-label="도메인별 진행 현황"
         >
           {domains.map((domain) => {

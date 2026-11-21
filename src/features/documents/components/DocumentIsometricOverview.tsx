@@ -13,7 +13,6 @@ import { UnstyledButton } from "@/components/ui/unstyled-button";
 import type { BoardIssue } from "@/features/project-board/model";
 import { cn } from "@/lib/utils";
 import {
-  classifyDocumentCategory,
   DOCUMENT_CATEGORY_LABELS,
   type DocumentGroup,
 } from "../document-taxonomy";
@@ -505,6 +504,7 @@ export function DocumentIsometricOverview({
   const [heightMetric, setHeightMetric] =
     useState<IsometricHeightMetric>("volume");
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
 
   const summary = useMemo(
@@ -526,8 +526,16 @@ export function DocumentIsometricOverview({
   }, [allDocuments, documents]);
 
   const fallbackKey = useMemo(() => pickInitialActiveKey(summary), [summary]);
+  const highlightedKey =
+    hoveredKey && summary.itemsByKey.has(hoveredKey) ? hoveredKey : null;
+  const highlightedItem = highlightedKey
+    ? summary.itemsByKey.get(highlightedKey) ?? null
+    : null;
   const activeKey =
-    hoveredKey && summary.itemsByKey.has(hoveredKey) ? hoveredKey : fallbackKey;
+    highlightedKey ??
+    (selectedKey && summary.itemsByKey.has(selectedKey)
+      ? selectedKey
+      : fallbackKey);
   const activeItem = activeKey
     ? summary.itemsByKey.get(activeKey) ?? null
     : null;
@@ -544,13 +552,17 @@ export function DocumentIsometricOverview({
     ? summary.domains.find((d) => d.group.key === activeItem.domainKey) ?? null
     : null;
   const activeConnectedKeys = new Set<string>();
-  if (activeItem && activeDomain) {
-    const activeIsland = scene.islands.find(
-      (isl) => isl.domain.group.key === activeDomain.group.key,
+  if (highlightedItem) {
+    const highlightedIsland = scene.islands.find(
+      (isl) => isl.domain.group.key === highlightedItem.domainKey,
     );
-    for (const edge of activeIsland?.edges ?? []) {
-      if (edge.fromKey === activeItem.key) activeConnectedKeys.add(edge.toKey);
-      if (edge.toKey === activeItem.key) activeConnectedKeys.add(edge.fromKey);
+    for (const edge of highlightedIsland?.edges ?? []) {
+      if (edge.fromKey === highlightedItem.key) {
+        activeConnectedKeys.add(edge.toKey);
+      }
+      if (edge.toKey === highlightedItem.key) {
+        activeConnectedKeys.add(edge.fromKey);
+      }
     }
   }
 
@@ -584,7 +596,7 @@ export function DocumentIsometricOverview({
   };
 
   return (
-    <div
+    <section
       className="document-iso-overview"
       aria-label="문서 전체 조망 (2.5D)"
     >
@@ -595,6 +607,7 @@ export function DocumentIsometricOverview({
           </span>
           <div
             className="document-iso-overview__metric-switch"
+            role="group"
             aria-label="블록 높이 기준"
           >
             <UnstyledButton
@@ -669,7 +682,7 @@ export function DocumentIsometricOverview({
         <div className="document-iso-overview__stage">
           <svg
             className="document-iso-overview__svg"
-            role="img"
+            role="group"
             aria-label="문서 전체 조망 2.5D 맵"
             viewBox={`0 0 ${scene.width} ${scene.height}`}
             style={
@@ -688,9 +701,10 @@ export function DocumentIsometricOverview({
             {scene.islands.map((island) => {
               const isSelectedIsland =
                 selectedDomainKey === island.domain.group.key;
-              const isActiveIsland =
-                activeItem?.domainKey === island.domain.group.key;
-              const dimThresholdActive = activeItem !== null && isActiveIsland;
+              const isHighlightedIsland =
+                highlightedItem?.domainKey === island.domain.group.key;
+              const dimThresholdActive =
+                highlightedItem !== null && isHighlightedIsland;
 
               return (
                 <g
@@ -741,7 +755,9 @@ export function DocumentIsometricOverview({
                     const isActive = activeItem?.key === block.key;
                     const isNeighbor = activeConnectedKeys.has(block.key);
                     const isDimmed =
-                      dimThresholdActive && !isActive && !isNeighbor;
+                      dimThresholdActive &&
+                      highlightedItem?.key !== block.key &&
+                      !isNeighbor;
                     const bucketLabel = Object.hasOwn(
                       BUCKET_LABELS,
                       block.item.bucket,
@@ -765,8 +781,24 @@ export function DocumentIsometricOverview({
                         data-block-height={block.height}
                         data-active={isActive ? "true" : undefined}
                         aria-label={`${block.item.doc.title} — ${block.item.domainLabel}, ${bucketLabel}, ${formatDocumentSize(block.item.sizeBytes)}`}
-                        onMouseEnter={() => setHoveredKey(block.key)}
-                        onFocus={() => setHoveredKey(block.key)}
+                        onMouseEnter={() => {
+                          setHoveredKey(block.key);
+                          setSelectedKey(block.key);
+                        }}
+                        onMouseLeave={() =>
+                          setHoveredKey((cur) =>
+                            cur === block.key ? null : cur,
+                          )
+                        }
+                        onFocus={() => {
+                          setHoveredKey(block.key);
+                          setSelectedKey(block.key);
+                        }}
+                        onBlur={() =>
+                          setHoveredKey((cur) =>
+                            cur === block.key ? null : cur,
+                          )
+                        }
                         onClick={() =>
                           onSelectDocument(
                             block.item.doc.path,
@@ -804,12 +836,12 @@ export function DocumentIsometricOverview({
                     );
                   })}
 
-                  {isActiveIsland
+                  {isHighlightedIsland && highlightedItem
                     ? island.edges
                         .filter(
                           (edge) =>
-                            edge.fromKey === activeItem?.key ||
-                            edge.toKey === activeItem?.key,
+                            edge.fromKey === highlightedItem.key ||
+                            edge.toKey === highlightedItem.key,
                         )
                         .map((edge) => (
                           <g key={`arc-${edge.id}`}>
@@ -1049,6 +1081,6 @@ export function DocumentIsometricOverview({
           ) : null}
         </aside>
       </div>
-    </div>
+    </section>
   );
 }
