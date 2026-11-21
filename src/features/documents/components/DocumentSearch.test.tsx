@@ -620,4 +620,77 @@ describe("DocumentSearch", () => {
       consoleError.mockRestore();
     }
   });
+
+  it("renders progress summary filters in map mode and supports switching to 2.5D isometric overview with drill-down", async () => {
+    const user = userEvent.setup();
+    const onSelectDocument = vi.fn();
+    const docs: DocumentSummary[] = [
+      {
+        path: "docs/domains/documents/prd.md",
+        fileName: "prd.md",
+        title: "Documents PRD",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Product Spec",
+        domain: "documents",
+        implStatus: "synced",
+        hasCompanionHtml: true,
+        modifiedAtUnixMs: 1,
+        size: 6000,
+      },
+      {
+        path: "docs/domains/dashboard/prd.md",
+        fileName: "prd.md",
+        title: "Dashboard PRD",
+        documentId: null,
+        frontmatterStatus: { status: "valid" },
+        docType: "Product Spec",
+        domain: "dashboard",
+        implStatus: "unimplemented",
+        modifiedAtUnixMs: 1,
+        size: 2000,
+      },
+    ];
+
+    render(
+      <DocumentSearch
+        query=""
+        documents={docs}
+        results={[]}
+        searchStatus="idle"
+        searchError={null}
+        indexStatus={{ status: "ready" }}
+        defaultGroupMode="map"
+        onQueryChange={() => {}}
+        onSelectDocument={onSelectDocument}
+        onSelectResult={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+
+    const summaryRegion = screen.getByRole("region", { name: "문서 진행도 요약" });
+    expect(within(summaryRegion).getByText("총 2건")).toBeVisible();
+
+    // Status filter hides non-matching domain sections cleanly
+    await user.click(within(summaryRegion).getByRole("button", { name: /미반영/ }));
+    expect(screen.getByRole("heading", { level: 2, name: "Dashboard (대시보드)" })).toBeVisible();
+    expect(screen.queryByRole("heading", { level: 2, name: "Documents (문서)" })).not.toBeInTheDocument();
+
+    // Reset back to all statuses
+    await user.click(within(summaryRegion).getByRole("button", { name: /전체 상태/ }));
+    expect(screen.getByRole("heading", { level: 2, name: "Documents (문서)" })).toBeVisible();
+
+    // Switch to 2.5D Isometric Overview
+    await user.click(screen.getByRole("button", { name: "전체 조망 (2.5D)" }));
+    expect(screen.getByRole("img", { name: "문서 전체 조망 2.5D 맵" })).toBeVisible();
+
+    // Drill down to domain map for Documents from HUD
+    await user.click(screen.getByRole("button", { name: /Documents PRD/ }));
+    expect(onSelectDocument).toHaveBeenCalledWith("docs/domains/documents/prd.md", "html");
+
+    const hud = screen.getByRole("complementary", { name: "선택 문서 상세 정보" });
+    await user.click(within(hud).getByRole("button", { name: "도메인 맵 보기" }));
+    expect(screen.getByRole("heading", { level: 2, name: "Documents (문서)" })).toBeVisible();
+    expect(screen.queryByRole("heading", { level: 2, name: "Dashboard (대시보드)" })).not.toBeInTheDocument();
+  });
 });

@@ -1464,6 +1464,7 @@ export function DocumentDomainMap({
   documents,
   allDocuments,
   boardIssues,
+  hideLegend = false,
   readAsset,
   onSelectDocument,
   onSelectScreenSpecs,
@@ -1475,6 +1476,7 @@ export function DocumentDomainMap({
   documents: readonly DocumentSummary[];
   allDocuments?: readonly DocumentSummary[];
   boardIssues?: readonly BoardIssue[];
+  hideLegend?: boolean;
   readAsset?: DocumentAssetReader;
   onSelectDocument: (
     path: string,
@@ -1517,34 +1519,36 @@ export function DocumentDomainMap({
 
   return (
     <div className="document-domain-map">
-      <div
-        className="document-domain-map__legend"
-        role="region"
-        aria-label="코드 반영 상태 범례"
-      >
-        <span className="document-domain-map__legend-title">코드 반영 상태</span>
-        <span className="document-domain-map__legend-item">
-          <span
-            className="document-domain-map__legend-dot document-domain-map__legend-dot--synced"
-            aria-hidden="true"
-          />
-          코드 반영 완료
-        </span>
-        <span className="document-domain-map__legend-item">
-          <span
-            className="document-domain-map__legend-dot document-domain-map__legend-dot--partial"
-            aria-hidden="true"
-          />
-          일부 수정 필요
-        </span>
-        <span className="document-domain-map__legend-item">
-          <span
-            className="document-domain-map__legend-dot document-domain-map__legend-dot--unimplemented"
-            aria-hidden="true"
-          />
-          미반영
-        </span>
-      </div>
+      {!hideLegend ? (
+        <div
+          className="document-domain-map__legend"
+          role="region"
+          aria-label="코드 반영 상태 범례"
+        >
+          <span className="document-domain-map__legend-title">코드 반영 상태</span>
+          <span className="document-domain-map__legend-item">
+            <span
+              className="document-domain-map__legend-dot document-domain-map__legend-dot--synced"
+              aria-hidden="true"
+            />
+            코드 반영 완료
+          </span>
+          <span className="document-domain-map__legend-item">
+            <span
+              className="document-domain-map__legend-dot document-domain-map__legend-dot--partial"
+              aria-hidden="true"
+            />
+            일부 수정 필요
+          </span>
+          <span className="document-domain-map__legend-item">
+            <span
+              className="document-domain-map__legend-dot document-domain-map__legend-dot--unimplemented"
+              aria-hidden="true"
+            />
+            미반영
+          </span>
+        </div>
+      ) : null}
       {groups.map((group) => (
         <DomainSectionBoard
           key={group.key}
