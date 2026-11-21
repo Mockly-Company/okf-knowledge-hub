@@ -7,7 +7,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { Button, IconButton } from "@/components/ui/button";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
 import type { BoardIssue } from "@/features/project-board/model";
@@ -102,6 +102,7 @@ interface DocumentIsometricOverviewProps {
   documents: readonly DocumentSummary[];
   allDocuments?: readonly DocumentSummary[];
   boardIssues?: readonly BoardIssue[];
+  precomputedSummary?: ProjectProgressSummary;
   selectedDomainKey?: string | null;
   onSelectDocument(path: string, preferredViewMode?: "html" | "markdown"): void;
   onOpenDomainMap?(domainKey: string): void;
@@ -495,6 +496,7 @@ export function DocumentIsometricOverview({
   documents,
   allDocuments,
   boardIssues,
+  precomputedSummary,
   selectedDomainKey,
   onSelectDocument,
   onOpenDomainMap,
@@ -508,9 +510,19 @@ export function DocumentIsometricOverview({
   const [zoom, setZoom] = useState(1);
 
   const summary = useMemo(
-    () => buildProjectProgressSummary(documents, boardIssues),
-    [documents, boardIssues],
+    () =>
+      precomputedSummary ?? buildProjectProgressSummary(documents, boardIssues),
+    [precomputedSummary, documents, boardIssues],
   );
+
+  useEffect(() => {
+    if (selectedKey && !summary.itemsByKey.has(selectedKey)) {
+      setSelectedKey(null);
+    }
+    if (hoveredKey && !summary.itemsByKey.has(hoveredKey)) {
+      setHoveredKey(null);
+    }
+  }, [summary, selectedKey, hoveredKey]);
 
   const scene = useMemo(
     () => computeIsometricScene(summary, heightMetric),

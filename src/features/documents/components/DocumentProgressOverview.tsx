@@ -29,7 +29,7 @@ function buildDomainStageSummary(domain: DomainProgressSummary): string[] {
   const parts: string[] = [];
   if (domain.stages.prd > 0) parts.push(`기획 ${domain.stages.prd}`);
   if (domain.stages.screen_spec > 0) parts.push(`명세 ${domain.stages.screen_spec}`);
-  if (domain.stages.design > 0) parts.push(`디자인 ${domain.stages.design}`);
+  if (domain.stages.designAssets > 0) parts.push(`시안 ${domain.stages.designAssets}`);
   if (domain.stages.adr > 0) parts.push(`ADR ${domain.stages.adr}`);
   if (domain.stages.guide_ref > 0) parts.push(`가이드 ${domain.stages.guide_ref}`);
   if (parts.length === 0 && domain.stages.overview > 0) {

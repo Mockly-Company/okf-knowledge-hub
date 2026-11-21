@@ -169,20 +169,25 @@ export function DocumentSearch({
           ),
     [documents, categoryFilter],
   );
+  const isOverviewOrMap =
+    !isSearching && (groupMode === "map" || groupMode === "overview");
   const progressSummary = useMemo(
-    () => buildProjectProgressSummary(filteredDocuments, boardIssues),
-    [filteredDocuments, boardIssues],
+    () =>
+      isOverviewOrMap
+        ? buildProjectProgressSummary(filteredDocuments, boardIssues)
+        : null,
+    [isOverviewOrMap, filteredDocuments, boardIssues],
   );
   const effectiveDomainKey = useMemo(() => {
-    if (selectedDomainKey === null) return null;
+    if (selectedDomainKey === null || !progressSummary) return null;
     return progressSummary.domains.some(
       (domain) => domain.group.key === selectedDomainKey,
     )
       ? selectedDomainKey
       : null;
-  }, [progressSummary.domains, selectedDomainKey]);
+  }, [progressSummary, selectedDomainKey]);
   const scopedMapDocuments = useMemo(() => {
-    if (statusFilter === "all" && effectiveDomainKey === null) {
+    if (!progressSummary || (statusFilter === "all" && effectiveDomainKey === null)) {
       return filteredDocuments;
     }
     return filteredDocuments.filter((doc) => {
@@ -196,7 +201,7 @@ export function DocumentSearch({
   }, [
     effectiveDomainKey,
     filteredDocuments,
-    progressSummary.itemsByKey,
+    progressSummary,
     statusFilter,
   ]);
   const unfilteredTitleAndPathMatches = useMemo(
@@ -419,7 +424,7 @@ export function DocumentSearch({
             onSelectDocument={onSelectDocument}
             onOpenInNewWindow={onOpenInNewWindow}
           />
-        ) : !isSearching && (groupMode === "map" || groupMode === "overview") ? (
+        ) : isOverviewOrMap && progressSummary !== null ? (
           items.length === 0 ? (
             categoryFilter !== "all" && unfilteredSearchCount > 0 ? (
               <div className="document-search__filtered-empty">
@@ -490,6 +495,11 @@ export function DocumentSearch({
                   documents={scopedMapDocuments}
                   allDocuments={documents}
                   boardIssues={boardIssues}
+                  precomputedSummary={
+                    statusFilter === "all" && effectiveDomainKey === null
+                      ? progressSummary
+                      : undefined
+                  }
                   selectedDomainKey={effectiveDomainKey}
                   onSelectDocument={onSelectDocument}
                   onOpenDomainMap={(domainKey) => {

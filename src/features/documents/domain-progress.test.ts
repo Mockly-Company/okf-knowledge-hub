@@ -150,7 +150,7 @@ describe("domain-progress", () => {
       overview: 1,
       prd: 1,
       screen_spec: 1,
-      design: 2,
+      designAssets: 2,
       adr: 0,
       guide_ref: 0,
     });

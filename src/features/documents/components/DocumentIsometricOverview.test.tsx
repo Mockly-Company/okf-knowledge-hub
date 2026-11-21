@@ -262,4 +262,45 @@ describe("DocumentIsometricOverview", () => {
     expect(specBlock).not.toHaveClass("document-iso-block--dimmed");
     expect(within(hud).getByRole("heading", { name: "Documents 개요" })).toBeVisible();
   });
+
+  it("clears stale selectedKey when the selected document is filtered out so clearing the filter does not jump back to it", () => {
+    const view = render(
+      <DocumentIsometricOverview
+        documents={sampleDocs}
+        allDocuments={sampleDocs}
+        boardIssues={sampleIssues}
+        onSelectDocument={vi.fn()}
+      />,
+    );
+
+    const hud = screen.getByRole("complementary", { name: "선택 문서 상세 정보" });
+    // Initially fallback prioritizes Dashboard PRD (unimplemented)
+    expect(within(hud).getByRole("heading", { name: "Dashboard PRD" })).toBeVisible();
+
+    // Select Workspace 가이드
+    fireEvent.focus(screen.getByRole("button", { name: /Workspace 가이드/ }));
+    expect(within(hud).getByRole("heading", { name: "Workspace 가이드" })).toBeVisible();
+
+    // Filter out Workspace 가이드
+    view.rerender(
+      <DocumentIsometricOverview
+        documents={sampleDocs.filter((d) => d.domain !== "workspace")}
+        allDocuments={sampleDocs}
+        boardIssues={sampleIssues}
+        onSelectDocument={vi.fn()}
+      />,
+    );
+    expect(within(hud).getByRole("heading", { name: "Dashboard PRD" })).toBeVisible();
+
+    // Restore full document set: HUD should stay on fallback (Dashboard PRD), NOT jump back to stale Workspace 가이드
+    view.rerender(
+      <DocumentIsometricOverview
+        documents={sampleDocs}
+        allDocuments={sampleDocs}
+        boardIssues={sampleIssues}
+        onSelectDocument={vi.fn()}
+      />,
+    );
+    expect(within(hud).getByRole("heading", { name: "Dashboard PRD" })).toBeVisible();
+  });
 });

@@ -68,7 +68,8 @@ export interface DomainStageCounts {
   overview: number;
   prd: number;
   screen_spec: number;
-  design: number;
+  /** 화면명세에 연결된 디자인 시안 에셋 총수(문서 건수가 아님). */
+  designAssets: number;
   adr: number;
   guide_ref: number;
 }
@@ -226,7 +227,7 @@ export function buildProjectProgressSummary(
       overview: 0,
       prd: 0,
       screen_spec: 0,
-      design: 0,
+      designAssets: 0,
       adr: 0,
       guide_ref: 0,
     };
@@ -245,7 +246,7 @@ export function buildProjectProgressSummary(
 
       stages[stage] += 1;
       if (stage === "screen_spec") {
-        stages.design += designCount;
+        stages.designAssets += designCount;
       }
 
       const item: DocumentProgressItem = {
