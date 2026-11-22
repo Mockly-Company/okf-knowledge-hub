@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { BoardIssue } from "@/features/project-board/model";
 import type { DocumentSummary } from "./model";
-import { resolveDocumentImplStatus } from "./impl-status";
+import {
+  countLinkedBoardIssues,
+  indexLinkedBoardIssues,
+  resolveDocumentImplStatus,
+} from "./impl-status";
 
 function makeDoc(overrides: Partial<DocumentSummary> = {}): DocumentSummary {
   return {
@@ -112,5 +116,59 @@ describe("resolveDocumentImplStatus", () => {
     expect(resolveDocumentImplStatus(adrDoc, issues)).toBeNull();
     expect(resolveDocumentImplStatus(makeDoc(), [issues[1]!])).toBeNull();
     expect(resolveDocumentImplStatus(makeDoc(), [])).toBeNull();
+  });
+
+  it("indexes and counts linked issues per canonical path with deduplication and assignees", () => {
+    const epic: BoardIssue = {
+      ...makeIssue(100, "in_progress", [
+        "./docs/domains/documents/prd.md",
+        "docs\\domains\\documents\\prd.html",
+      ]),
+      assignees: [{ login: "alice", name: "김앨리스" }],
+      children: [
+        {
+          ...makeIssue(101, "done", ["docs/domains/documents/prd.md"]),
+          assignees: [
+            { login: "alice", name: "김앨리스" },
+            { login: "bob", name: null },
+          ],
+        },
+        {
+          ...makeIssue(102, "ready", ["docs/domains/documents/prd.md", "docs/domains/documents/screen-spec.md"]),
+          assignees: [{ login: "carol" }],
+        },
+      ],
+    };
+
+    const indexed = indexLinkedBoardIssues([epic]);
+    expect(indexed.get("docs/domains/documents/prd.md")).toEqual({
+      total: 3,
+      done: 1,
+      active: 1,
+      open: 1,
+      assignees: ["김앨리스", "bob", "carol"],
+    });
+    expect(
+      countLinkedBoardIssues("./docs/domains/documents/screen-spec.html", [epic]),
+    ).toEqual({
+      total: 1,
+      done: 0,
+      active: 0,
+      open: 1,
+      assignees: ["carol"],
+    });
+    expect(countLinkedBoardIssues("docs/domains/documents/missing.md", [epic])).toEqual({
+      total: 0,
+      done: 0,
+      active: 0,
+      open: 0,
+      assignees: [],
+    });
+
+    const emptyCopy = countLinkedBoardIssues("docs/domains/documents/missing.md", [epic]);
+    emptyCopy.assignees.push("mutated-user");
+    expect(
+      countLinkedBoardIssues("docs/domains/documents/still-missing.md", [epic]).assignees,
+    ).toEqual([]);
   });
 });
