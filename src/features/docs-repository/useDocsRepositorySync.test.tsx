@@ -146,4 +146,25 @@ describe("useDocsRepositorySync", () => {
 
     await waitFor(() => expect(gateway.pulls).toBe(2));
   });
+
+  it("pulls on window focus only after the 60s cooldown has elapsed", async () => {
+    const gateway = new FakeDocsRepositoryGateway();
+    renderSync(gateway);
+    await waitFor(() => expect(gateway.pulls).toBe(1));
+
+    // Within 60s cooldown -> skipped
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(gateway.pulls).toBe(1);
+
+    // Past 60s cooldown -> pulls again
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(gateway.pulls).toBe(2));
+  });
 });
+

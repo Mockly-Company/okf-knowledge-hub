@@ -192,8 +192,9 @@ describe("ProjectPage", () => {
     expect(screen.queryByRole("region", { name: "백엔드 레이어" })).not.toBeInTheDocument();
   });
 
-  it("loads with a cheap read on mount and syncs with GitHub only on refresh", async () => {
+  it("loads with a cheap read on mount when cache is fresh and syncs with GitHub on manual refresh", async () => {
     const user = userEvent.setup();
+    const freshFetchedAt = new Date(Date.now() - 10_000).toISOString();
     const gateway = FakeProjectBoardGateway.withIssues(
       [
         {
@@ -206,7 +207,7 @@ describe("ProjectPage", () => {
           kind: null,
         },
       ],
-      "2026-10-25T12:00:00+09:00",
+      freshFetchedAt,
     );
     render(<ProjectPage gateway={gateway} />);
     await showLayersView(user);
@@ -2103,3 +2104,290 @@ describe("ProjectPage project switching", () => {
     expect(await screen.findByText(/#81 완료된 기획 작업/)).toBeVisible();
   });
 });
+
+describe("ProjectPage automatic sync (SWR, login, focus, interval)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("renders stale cached board immediately and refreshes in background via syncProjectBoard (SWR)", async () => {
+    const staleFetchedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    const freshFetchedAt = new Date().toISOString();
+    const gateway = FakeProjectBoardGateway.withIssues(
+      [
+        {
+          number: 10,
+          title: "예전 캐시 작업",
+          url: "https://example.test/issues/10",
+          layer: "planning",
+          status: "in_progress",
+          children: [],
+          kind: "작업",
+        },
+      ],
+      staleFetchedAt,
+    );
+
+    let resolveSync!: (board: ProjectBoard) => void;
+    vi.spyOn(gateway, "syncProjectBoard").mockImplementationOnce(async () => {
+      gateway.calls.push({ method: "syncProjectBoard" });
+      return new Promise<ProjectBoard>((resolve) => {
+        resolveSync = resolve;
+      });
+    });
+
+    render(<ProjectPage gateway={gateway} />);
+
+    // Stale cache is visible immediately without waiting for network sync
+    expect(
+      await screen.findByRole("article", { name: "단일 항목 #10 예전 캐시 작업" }),
+    ).toBeInTheDocument();
+
+    // Background sync starts automatically
+    await waitFor(() =>
+      expect(
+        gateway.calls.filter((call) => call.method === "syncProjectBoard"),
+      ).toHaveLength(1),
+    );
+    expect(screen.getByText(/동기화 중…/)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveSync({
+        issues: [
+          {
+            number: 11,
+            title: "GitHub 최신 작업",
+            url: "https://example.test/issues/11",
+            layer: "frontend",
+            status: "ready",
+            children: [],
+            kind: "작업",
+          },
+        ],
+        fetchedAt: freshFetchedAt,
+        skipped: 0,
+        truncated: false,
+      });
+    });
+
+    expect(
+      await screen.findByRole("article", { name: "단일 항목 #11 GitHub 최신 작업" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("article", { name: "단일 항목 #10 예전 캐시 작업" }),
+    ).toBeNull();
+  });
+
+  it("keeps cached board visible when background auto-sync fails and retries sync on 다시 시도", async () => {
+    const user = userEvent.setup();
+    const staleFetchedAt = new Date(Date.now() - 5 * 60_000).toISOString();
+    const freshFetchedAt = new Date().toISOString();
+    const gateway = FakeProjectBoardGateway.withIssues(
+      [
+        {
+          number: 20,
+          title: "캐시된 작업 유지",
+          url: "https://example.test/issues/20",
+          layer: "backend",
+          status: "in_progress",
+          children: [],
+          kind: "작업",
+        },
+      ],
+      staleFetchedAt,
+    );
+
+    const syncSpy = vi
+      .spyOn(gateway, "syncProjectBoard")
+      .mockImplementationOnce(async () => {
+        gateway.calls.push({ method: "syncProjectBoard" });
+        throw new Error("network down");
+      })
+      .mockImplementationOnce(async () => {
+        gateway.calls.push({ method: "syncProjectBoard" });
+        return {
+          issues: [
+            {
+              number: 21,
+              title: "재시도로 받은 최신 작업",
+              url: "https://example.test/issues/21",
+              layer: "backend",
+              status: "ready",
+              children: [],
+              kind: "작업",
+            },
+          ],
+          fetchedAt: freshFetchedAt,
+          skipped: 0,
+          truncated: false,
+        };
+      });
+
+    render(<ProjectPage gateway={gateway} />);
+
+    expect(
+      await screen.findByRole("article", { name: "단일 항목 #20 캐시된 작업 유지" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Project 보드를 불러오지 못했습니다. (원인: network down)",
+      ),
+    ).toBeInTheDocument();
+    // Cached board remains rendered alongside the error banner
+    expect(
+      screen.getByRole("article", { name: "단일 항목 #20 캐시된 작업 유지" }),
+    ).toBeInTheDocument();
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "다시 시도" }));
+
+    expect(
+      await screen.findByRole("article", {
+        name: "단일 항목 #21 재시도로 받은 최신 작업",
+      }),
+    ).toBeInTheDocument();
+    expect(syncSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("syncs on window focus after 60s cooldown and every 5 minutes in standalone board mode", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-11-26T12:00:00Z"));
+
+    const gateway = FakeProjectBoardGateway.withIssues(
+      [
+        {
+          number: 30,
+          title: "실시간 보드 작업",
+          url: "https://example.test/issues/30",
+          layer: "frontend",
+          status: "in_progress",
+          children: [],
+          kind: "작업",
+        },
+      ],
+      "2026-11-26T11:59:50Z",
+    );
+    const syncSpy = vi
+      .spyOn(gateway, "syncProjectBoard")
+      .mockImplementation(async () => {
+        gateway.calls.push({ method: "syncProjectBoard" });
+        return {
+          ...gateway.board,
+          fetchedAt: new Date().toISOString(),
+        };
+      });
+
+    render(<ProjectPage gateway={gateway} />);
+    await screen.findByRole("article", { name: "단일 항목 #30 실시간 보드 작업" });
+    expect(syncSpy).toHaveBeenCalledTimes(0);
+
+    // Within 60s of fetchedAt (10s + 30s = 40s < 60s) -> ignored
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(syncSpy).toHaveBeenCalledTimes(0);
+
+    // Past 60s cooldown -> focus triggers sync
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(syncSpy).toHaveBeenCalledTimes(1));
+
+    // Advance 5 minutes -> periodic interval triggers sync
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+    await waitFor(() => expect(syncSpy).toHaveBeenCalledTimes(2));
+  });
+
+  it("syncs automatically after a fresh interactive login even when cached board timestamp is recent", async () => {
+    const user = userEvent.setup();
+    const workspaceGateway = FakeWorkspaceConnectionGateway.disconnected();
+    const freshFetchedAt = new Date().toISOString();
+    const gateway = FakeProjectBoardGateway.withIssues(
+      [
+        {
+          number: 40,
+          title: "로그인 직전 캐시",
+          url: "https://example.test/issues/40",
+          layer: "planning",
+          status: "ready",
+          children: [],
+          kind: "작업",
+        },
+      ],
+      freshFetchedAt,
+    );
+    const syncSpy = vi
+      .spyOn(gateway, "syncProjectBoard")
+      .mockImplementation(async () => {
+        gateway.calls.push({ method: "syncProjectBoard" });
+        return {
+          issues: [
+            {
+              number: 41,
+              title: "신규 로그인 후 최신 작업",
+              url: "https://example.test/issues/41",
+              layer: "planning",
+              status: "ready",
+              children: [],
+              kind: "작업",
+            },
+          ],
+          fetchedAt: new Date().toISOString(),
+          skipped: 0,
+          truncated: false,
+        };
+      });
+
+    const { useWorkspaceConnection } = await import(
+      "@/features/workspace-connection/WorkspaceConnectionProvider"
+    );
+    function LoginTrigger() {
+      const { account, startLogin } = useWorkspaceConnection();
+      return (
+        <div>
+          <span data-testid="auth-status">{account.status}</span>
+          <button type="button" onClick={() => void startLogin()}>
+            start-login
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <WorkspaceConnectionProvider gateway={workspaceGateway}>
+        <LoginTrigger />
+        <ProjectPage gateway={gateway} />
+      </WorkspaceConnectionProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("auth-status")).toHaveTextContent("signed_out"),
+    );
+    await screen.findByRole("article", { name: "단일 항목 #40 로그인 직전 캐시" });
+    expect(syncSpy).toHaveBeenCalledTimes(0);
+
+    await user.click(screen.getByRole("button", { name: "start-login" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("auth-status")).toHaveTextContent(
+        "waiting_for_user",
+      ),
+    );
+    await act(async () => {
+      workspaceGateway.approveAuthentication();
+    });
+
+    expect(
+      await screen.findByRole("article", {
+        name: "단일 항목 #41 신규 로그인 후 최신 작업",
+      }),
+    ).toBeInTheDocument();
+    expect(syncSpy).toHaveBeenCalledTimes(1);
+  });
+});
+

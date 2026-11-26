@@ -74,6 +74,8 @@ import {
   matchesAssigneeFilter,
 } from "@/features/project-board/assigneeFilter";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
+import { useOptionalPersonalDashboard } from "@/features/dashboard/PersonalDashboardProvider";
+import { personalDashboardKeys } from "@/features/dashboard/queryKeys";
 import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
 import type { DocsRepositoryGateway } from "@/features/docs-repository/DocsRepositoryGateway";
 import {
@@ -84,6 +86,15 @@ import {
 import { WorkspaceContextBar } from "@/features/workspace-setup/WorkspaceContextBar";
 import { ProjectPickerList } from "@/features/workspace-setup/ProjectPickerList";
 import { TauriProjectBoardGateway } from "@/infrastructure/project-board/TauriProjectBoardGateway";
+import {
+  BACKGROUND_SYNC_INTERVAL_MS,
+  BOARD_AUTO_SYNC_STALE_MS,
+  WINDOW_FOCUS_SYNC_COOLDOWN_MS,
+  hasCooldownElapsed,
+  isTimestampStale,
+  parseIsoTimestampMs,
+  useWindowFocusAndIntervalSync,
+} from "@/infrastructure/sync/autoSyncPolicy";
 
 type LayerFilter = "all" | BoardLayer;
 
@@ -503,11 +514,14 @@ export function ProjectPage({
 }) {
   const inRouterContext = useInRouterContext();
   const activeProject = useOptionalActiveProject();
+  const personalDashboard = useOptionalPersonalDashboard();
   const workspaceConnection = useOptionalWorkspaceConnection();
   const viewerLogin =
     workspaceConnection?.account.status === "authenticated"
       ? workspaceConnection.account.user.login
       : null;
+  const authSessionVersion = workspaceConnection?.authSessionVersion ?? 0;
+  const authSessionOrigin = workspaceConnection?.authSessionOrigin ?? null;
   const activeWorkspace = activeProject?.activeWorkspace ?? null;
   const isStandaloneDocsWorkspace =
     activeWorkspace !== null && activeWorkspace.project === null;
@@ -515,17 +529,24 @@ export function ProjectPage({
   // provider 없으면 기존 단일 프로젝트 경로로 조회한다(테스트·스토리 폴백).
   const queryProjectId = activeProject ? activeProjectId : LEGACY_BOARD_ID;
 
-  // 보드는 프로젝트 id를 키로 쓴다. 전환하면 이전 키 데이터가 아닌 새 키로
-  // 조회되므로, 예전처럼 수동으로 비우거나 revision을 맞출 필요가 없다.
-  // 마운트·전환·재시도는 저렴한 읽기(get)부터 쓰고, 캐시가 비어 있을 때만
-  // 네트워크 동기화(sync)로 채운다. 명시적 새로고침은 항상 sync다.
+  const currentQueryProjectIdRef = useRef<string | null>(queryProjectId);
+  currentQueryProjectIdRef.current = queryProjectId;
+  const lastAutoSyncAttemptByProjectRef = useRef<Map<string, number>>(
+    new Map(),
+  );
+  const lastSyncedLoginVersionByProjectRef = useRef<Map<string, number>>(
+    new Map(),
+  );
+
+  // 보드는 프로젝트 id를 키로 쓴다. 마운트·전환 시 로컬 캐시(get)를 즉시 렌더링하고(SWR),
+  // 캐시가 비어 있거나 오래되었으면(60초 초과) 백그라운드에서 GitHub 동기화(sync)로 최신화한다.
   const queryClient = useQueryClient();
   const boardQuery = useQuery({
     queryKey: projectBoardKeys.board(queryProjectId),
     queryFn: async () => {
       const cached = await gateway.getProjectBoard();
       // 백엔드 get은 프로젝트별 캐시 읽기라, 한 번도 동기화하지 않은
-      // 프로젝트는 빈 보드를 돌려준다. 그때만 sync로 채운다.
+      // 프로젝트는 빈 보드를 돌려준다. 그때는 즉시 sync로 채운다.
       if (cached.issues.length === 0 && cached.fetchedAt === null) {
         return gateway.syncProjectBoard();
       }
@@ -534,16 +555,27 @@ export function ProjectPage({
     enabled: queryProjectId !== null,
   });
   const syncMutation = useMutation({
-    mutationFn: () => gateway.syncProjectBoard(),
-    onSuccess: (fresh) => {
-      if (queryProjectId !== null) {
-        queryClient.setQueryData(
-          projectBoardKeys.board(queryProjectId),
-          fresh,
-        );
+    mutationFn: async (_vars: { projectId: string; mode: "manual" | "auto" }) =>
+      gateway.syncProjectBoard(),
+    onSuccess: (fresh, vars) => {
+      lastAutoSyncAttemptByProjectRef.current.set(vars.projectId, Date.now());
+      if (currentQueryProjectIdRef.current === vars.projectId) {
+        queryClient.setQueryData(projectBoardKeys.board(vars.projectId), fresh);
       }
+      // 보드가 GitHub와 동기화되면 홈 대시보드도 최신 디스크 캐시를 반영하도록 무효화한다.
+      void queryClient.invalidateQueries({
+        queryKey: personalDashboardKeys.all,
+      });
     },
   });
+  const {
+    mutate: mutateBoardSync,
+    reset: resetBoardSync,
+    isPending: isSyncMutationPending,
+    isError: isSyncMutationError,
+    error: syncMutationError,
+  } = syncMutation;
+
   const board: ProjectBoard | null = boardQuery.data ?? null;
   const queryFailed = boardQuery.isError;
   const isUnlinked =
@@ -552,8 +584,8 @@ export function ProjectPage({
   const loadError =
     queryFailed && !isUnlinked
       ? describeBoardError(boardQuery.error)
-      : syncMutation.isError
-        ? describeBoardError(syncMutation.error)
+      : isSyncMutationError
+        ? describeBoardError(syncMutationError)
         : null;
   // disabled 쿼리(None 상태)는 isPending이므로 id 가드로 제외한다.
   const boardLoading =
@@ -561,11 +593,119 @@ export function ProjectPage({
     board === null &&
     (boardQuery.isPending || boardQuery.isFetching);
   const isFetchingBoard = boardQuery.isFetching;
-  const isSyncingBoard = syncMutation.isPending;
+  const isDashboardCoordinatingSync =
+    Boolean(personalDashboard?.isBackgroundSyncing) ||
+    (Boolean(personalDashboard?.isAutoSyncActive) &&
+      Boolean(personalDashboard?.isFetching));
+  const isSyncingBoard =
+    isSyncMutationPending || Boolean(personalDashboard?.isBackgroundSyncing);
   const retryLoad = () => {
-    syncMutation.reset();
+    if (isSyncMutationError && board !== null && queryProjectId !== null) {
+      lastAutoSyncAttemptByProjectRef.current.set(queryProjectId, Date.now());
+      mutateBoardSync({ projectId: queryProjectId, mode: "manual" });
+      return;
+    }
+    resetBoardSync();
     void boardQuery.refetch();
   };
+
+  const triggerAutoSync = useCallback(
+    (projectId: string) => {
+      if (isSyncMutationPending) {
+        return;
+      }
+      lastAutoSyncAttemptByProjectRef.current.set(projectId, Date.now());
+      mutateBoardSync({ projectId, mode: "auto" });
+    },
+    [isSyncMutationPending, mutateBoardSync],
+  );
+
+  // 캐시 즉시 표시 후 신규 로그인 또는 오래된 캐시(60초 초과)이면 백그라운드 최신화(SWR).
+  useEffect(() => {
+    if (
+      queryProjectId === null ||
+      isUnlinked ||
+      isStandaloneDocsWorkspace ||
+      board === null ||
+      boardQuery.isFetching ||
+      isSyncMutationPending ||
+      isDashboardCoordinatingSync
+    ) {
+      return;
+    }
+    const now = Date.now();
+    const needsLoginSync =
+      authSessionOrigin === "login" &&
+      authSessionVersion > 0 &&
+      lastSyncedLoginVersionByProjectRef.current.get(queryProjectId) !==
+        authSessionVersion;
+    if (needsLoginSync) {
+      lastSyncedLoginVersionByProjectRef.current.set(
+        queryProjectId,
+        authSessionVersion,
+      );
+      triggerAutoSync(queryProjectId);
+      return;
+    }
+
+    if (
+      board.fetchedAt !== null &&
+      isTimestampStale(board.fetchedAt, BOARD_AUTO_SYNC_STALE_MS, now)
+    ) {
+      const lastAttempt =
+        lastAutoSyncAttemptByProjectRef.current.get(queryProjectId) ?? null;
+      if (hasCooldownElapsed(lastAttempt, WINDOW_FOCUS_SYNC_COOLDOWN_MS, now)) {
+        triggerAutoSync(queryProjectId);
+      }
+    }
+  }, [
+    authSessionOrigin,
+    authSessionVersion,
+    board,
+    boardQuery.isFetching,
+    isDashboardCoordinatingSync,
+    isStandaloneDocsWorkspace,
+    isSyncMutationPending,
+    isUnlinked,
+    queryProjectId,
+    triggerAutoSync,
+  ]);
+
+  // PersonalDashboardProvider가 활성화되어 있으면 앱 전역 포커스·주기 동기화를 대시보드가
+  // 한 번에 처리하고 Board 쿼리를 무효화하므로 중복 GitHub 호출을 막는다.
+  const standaloneBoardAutoSyncEnabled =
+    queryProjectId !== null &&
+    !isUnlinked &&
+    !isStandaloneDocsWorkspace &&
+    !personalDashboard?.isAutoSyncActive;
+
+  useWindowFocusAndIntervalSync({
+    enabled: standaloneBoardAutoSyncEnabled,
+    intervalMs: BACKGROUND_SYNC_INTERVAL_MS,
+    focusCooldownMs: WINDOW_FOCUS_SYNC_COOLDOWN_MS,
+    getLastSyncAtMs: () => {
+      if (queryProjectId === null) {
+        return null;
+      }
+      const fetchedMs = parseIsoTimestampMs(board?.fetchedAt);
+      const attemptedMs =
+        lastAutoSyncAttemptByProjectRef.current.get(queryProjectId) ?? null;
+      if (fetchedMs !== null && attemptedMs !== null) {
+        return Math.max(fetchedMs, attemptedMs);
+      }
+      return fetchedMs ?? attemptedMs;
+    },
+    onSync: () => {
+      if (
+        queryProjectId === null ||
+        boardQuery.isFetching ||
+        isSyncMutationPending
+      ) {
+        return;
+      }
+      triggerAutoSync(queryProjectId);
+    },
+  });
 
   const [filter, setFilter] = useState<LayerFilter>("all");
   const [view, setView] = useState<BoardView>("tree");
@@ -591,6 +731,7 @@ export function ProjectPage({
       return;
     }
     prevWorkspaceResetKeyRef.current = workspaceResetKey;
+    resetBoardSync();
     setFilter("all");
     setView("tree");
     setHideDone(true);
@@ -605,7 +746,7 @@ export function ProjectPage({
     setTeamSaveToast(null);
     setAiStartConfirm(null);
     setAssignAndStartError(null);
-  }, [workspaceResetKey]);
+  }, [resetBoardSync, workspaceResetKey]);
 
   const [teamSettingsOpen, setTeamSettingsOpen] = useState(false);
   const [teamSaveToast, setTeamSaveToast] = useState<string | null>(null);
@@ -1067,7 +1208,10 @@ export function ProjectPage({
                   <time dateTime={board.fetchedAt}>
                     {formatFetchedAt(board.fetchedAt)}
                   </time>
+                  {isSyncingBoard ? " · 동기화 중…" : null}
                 </>
+              ) : isSyncingBoard ? (
+                "동기화 중…"
               ) : (
                 "아직 불러오지 않음"
               )}
@@ -1098,7 +1242,15 @@ export function ProjectPage({
             <Button
               type="button"
               variant="secondary"
-              onClick={() => syncMutation.mutate()}
+              onClick={() => {
+                if (queryProjectId !== null) {
+                  lastAutoSyncAttemptByProjectRef.current.set(
+                    queryProjectId,
+                    Date.now(),
+                  );
+                  mutateBoardSync({ projectId: queryProjectId, mode: "manual" });
+                }
+              }}
               disabled={isFetchingBoard || isSyncingBoard || isUnlinked}
               loading={isFetchingBoard || isSyncingBoard}
             >
