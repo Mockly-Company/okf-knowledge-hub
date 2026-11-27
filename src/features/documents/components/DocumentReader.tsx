@@ -1,4 +1,4 @@
-import { EllipsisVertical, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { EllipsisVertical, ExternalLink, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useInRouterContext, useNavigate } from "react-router-dom";
 import { Dialog, DialogBody, DialogContent, DialogTitle } from "@/components/ui/dialog";
@@ -20,6 +20,12 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDocuments } from "../DocumentsProvider";
 import { normalizeDocumentPath, type DocumentContent } from "../model";
 import type { DisplayDensity } from "@/features/preferences/display-density";
+import { CompanionHtmlFrame } from "./CompanionHtmlFrame";
+import {
+  DesignLinksBar,
+  extractDesignsFromProperties,
+  extractWireframesFromProperties,
+} from "./DesignLinksBar";
 import { MarkdownDocument } from "./MarkdownDocument";
 import { DocumentHistory } from "./DocumentHistory";
 import { DocumentOverview } from "./DocumentOverview";
@@ -40,7 +46,7 @@ function ReaderRouterRedirect({
   return null;
 }
 
-type ContextTab = "overview" | "history";
+type ContextTab = "overview" | "assets" | "history";
 
 const narrowQuery = "(max-width: 760px)";
 function subscribeNarrow(onChange: () => void) {
@@ -82,11 +88,19 @@ export function DocumentReader({
     clearPreferredViewMode,
     copyText,
     openExternal,
+    readAsset,
+    selectDocument,
     selectCurrentVersion,
     editSelectedDocument,
+    openDocumentInNewWindow,
   } = useDocuments();
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
   const [tab, setTab] = useState<ContextTab>("overview");
+  const [pendingHtmlFragment, setPendingHtmlFragment] = useState<{
+    targetPath: string;
+    fragment: string;
+    seq: number;
+  } | null>(null);
   const normalizedDocPath = normalizeDocumentPath(document.summary.path);
   const location = documentLocation(document.summary.path);
   const readOnly = location.repository !== null;
@@ -108,6 +122,34 @@ export function DocumentReader({
   const [contextCollapsed, setContextCollapsed] = useState(false);
   const isNarrow = useSyncExternalStore(subscribeNarrow, isNarrowScreen, () => false);
   const [mobileContextOpen, setMobileContextOpen] = useState(false);
+  const wireframes =
+    state.selectedVersion === null
+      ? document.summary.wireframes && document.summary.wireframes.length > 0
+        ? document.summary.wireframes
+        : extractWireframesFromProperties(document.properties)
+      : [];
+  const designs =
+    state.selectedVersion === null
+      ? document.summary.designs && document.summary.designs.length > 0
+        ? document.summary.designs
+        : extractDesignsFromProperties(document.properties)
+      : [];
+  const totalVisualAssets = wireframes.length + designs.length;
+  const hasVisualAssets = totalVisualAssets > 0;
+  useEffect(() => {
+    if (!hasVisualAssets && tab === "assets") {
+      setTab("overview");
+    }
+  }, [hasVisualAssets, tab]);
+  const handleOpenAssetsPanel = () => {
+    setTab("assets");
+    if (isNarrow) {
+      navigationTargetRef.current = null;
+      setMobileContextOpen(true);
+    } else if (contextCollapsed) {
+      setContextCollapsed(false);
+    }
+  };
   const readerRef = useRef<HTMLElement>(null);
   const mobileTriggerRef = useRef<HTMLButtonElement>(null);
   const navigationTargetRef = useRef<string | null>(null);
@@ -258,6 +300,11 @@ export function DocumentReader({
     <div className="document-reader__context-header">
       <TabsList className="document-reader__tabs" aria-label="문서 문맥 탭">
         <TabsTrigger selected={tab === "overview"} onClick={() => setTab("overview")}>개요</TabsTrigger>
+        {hasVisualAssets ? (
+          <TabsTrigger selected={tab === "assets"} onClick={() => setTab("assets")}>
+            {`시안 (${totalVisualAssets})`}
+          </TabsTrigger>
+        ) : null}
         <TabsTrigger selected={tab === "history"} onClick={() => setTab("history")}>History</TabsTrigger>
       </TabsList>
       <IconButton ref={contextCloseRef} label={isNarrow ? "문서 문맥 닫기" : "문서 문맥 접기"} tooltip={false} aria-controls="document-reader-context" aria-expanded onClick={() => isNarrow ? setMobileContextOpen(false) : setContextCollapsed(true)}><PanelRightClose aria-hidden="true" /></IconButton>
@@ -284,6 +331,26 @@ export function DocumentReader({
           }
         }}
       />
+    ) : tab === "assets" && hasVisualAssets ? (
+      <div className="document-reader__context-assets">
+        {wireframes.length > 0 ? (
+          <DesignLinksBar
+            designs={wireframes.map((wf) => ({ title: wf.title, image: wf.image }))}
+            documentPath={document.summary.path}
+            readAsset={readAsset}
+            heading="화면 와이어프레임"
+            assetKind="wireframe"
+          />
+        ) : null}
+        {designs.length > 0 ? (
+          <DesignLinksBar
+            designs={designs}
+            documentPath={document.summary.path}
+            readAsset={readAsset}
+            onOpenExternal={(url) => void openExternal(url)}
+          />
+        ) : null}
+      </div>
     ) : (
       <DocumentHistory />
     )}
@@ -311,7 +378,10 @@ export function DocumentReader({
         </div>
         <div className="document-reader__actions">
           {hasCompanionHtml ? (
-            <TabsList className="document-reader__view-tabs" aria-label="문서 표시 형식">
+            <TabsList
+              className="document-reader__view-tabs w-auto gap-[var(--space-4)]"
+              aria-label="문서 표시 형식"
+            >
               <TabsTrigger
                 selected={effectiveView === "html"}
                 onClick={() => setViewMode("html")}
@@ -328,6 +398,20 @@ export function DocumentReader({
           ) : null}
           {state.selectedVersion === null && !readOnly ? (
             <>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() =>
+                  void openDocumentInNewWindow(
+                    document.summary.path,
+                    effectiveView,
+                    document.summary.title,
+                  )
+                }
+              >
+                <ExternalLink aria-hidden="true" size={14} />
+                새 창으로 열기
+              </Button>
               <Button
                 type="button"
                 variant="secondary"
@@ -421,13 +505,70 @@ export function DocumentReader({
           <span>최신 내용은 원문 (.md)에서 확인하고 다음 PR에서 함께 갱신해 주세요.</span>
         </div>
       ) : null}
+          {hasVisualAssets ? (
+            <div
+              className="document-reader__assets-bar"
+              role="region"
+              aria-label="와이어프레임 및 디자인 요약"
+            >
+              <div className="document-reader__assets-bar-counts">
+                {wireframes.length > 0 ? (
+                  <span className="document-map-card__badge document-map-card__badge--wireframe">
+                    {`와이어프레임 ${wireframes.length}`}
+                  </span>
+                ) : null}
+                {designs.length > 0 ? (
+                  <span className="document-map-card__badge document-map-card__badge--design">
+                    {`디자인 ${designs.length}`}
+                  </span>
+                ) : null}
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={handleOpenAssetsPanel}
+              >
+                우측 패널에서 보기
+              </Button>
+            </div>
+          ) : null}
           {effectiveView === "html" && document.companionHtml ? (
-            <iframe
-              className="document-reader__html-frame"
-              sandbox=""
-              referrerPolicy="no-referrer"
-              srcDoc={document.companionHtml.html}
+            <CompanionHtmlFrame
+              html={document.companionHtml.html}
               title={`${document.summary.title} 사람용 보기`}
+              documentPath={document.summary.path}
+              initialFragment={
+                pendingHtmlFragment &&
+                pendingHtmlFragment.targetPath.toLowerCase() ===
+                  normalizedDocPath.toLowerCase()
+                  ? pendingHtmlFragment.fragment
+                  : null
+              }
+              onNavigateDocument={(target) => {
+                const normalizedTarget = normalizeDocumentPath(target.path);
+                setPendingHtmlFragment(
+                  target.fragment
+                    ? {
+                        targetPath: normalizedTarget,
+                        fragment: target.fragment,
+                        seq: Date.now(),
+                      }
+                    : null,
+                );
+                if (
+                  normalizedTarget.toLowerCase() ===
+                  normalizedDocPath.toLowerCase()
+                ) {
+                  setViewMode(
+                    target.view === "html" && hasCompanionNow
+                      ? "html"
+                      : "markdown",
+                  );
+                  return;
+                }
+                selectDocument(normalizedTarget, undefined, target.view);
+              }}
+              onOpenExternal={(url) => void openExternal(url)}
             />
           ) : (
             <MarkdownDocument document={document} hideHeader suppressSourceTitle />

@@ -112,7 +112,11 @@ export const Default: Story = {
     await expect(Math.abs(toggle.getBoundingClientRect().top + toggle.getBoundingClientRect().height / 2 - overview.getBoundingClientRect().top - overview.getBoundingClientRect().height / 2)).toBeLessThanOrEqual(1);
     const propertyLabel = canvas.getByText("유형", {exact: true});
     const propertyValue = canvas.getByText("API 계약", {exact: true});
-    await expect(Math.abs(propertyLabel.getBoundingClientRect().top - propertyValue.getBoundingClientRect().top)).toBeLessThanOrEqual(2);
+    // Structured metadata uses a stacked label/value row so nested values stay readable.
+    await expect(propertyLabel.tagName).toBe("DT");
+    await expect(propertyValue.tagName).toBe("DD");
+    await expect(propertyLabel.parentElement).toBe(propertyValue.parentElement);
+    await expect(propertyValue.getBoundingClientRect().top).toBeGreaterThanOrEqual(propertyLabel.getBoundingClientRect().bottom);
     const toc = canvas.getByRole("navigation", {name: "목차"});
     await expect(toc.querySelectorAll('[aria-current="location"]')).toHaveLength(1);
     scrollBoundary.scrollTop = scrollBoundary.scrollHeight;

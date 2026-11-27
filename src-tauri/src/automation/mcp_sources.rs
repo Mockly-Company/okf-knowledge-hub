@@ -196,9 +196,7 @@ async fn raw_tree(
     Ok(value["tree"]
         .as_array()
         .ok_or_else(|| super::mcp_sdk::error("저장소 트리 형식 오류"))?
-        .iter()
-        .cloned()
-        .collect())
+        .to_vec())
 }
 
 async fn text(

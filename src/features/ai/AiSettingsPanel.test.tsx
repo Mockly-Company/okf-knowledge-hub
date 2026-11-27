@@ -248,4 +248,68 @@ describe("AiSettingsPanel", () => {
     );
     expect(document.body.textContent).not.toContain("/work/docs-b");
   });
+
+  it("renders the external MCP connection guide and switches client snippets", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeAiGateway();
+    render(
+      <TestQueryProvider>
+        <AiSettingsPanel gateway={gateway} />
+      </TestQueryProvider>,
+    );
+
+    const mcpSection = await screen.findByRole("region", {
+      name: "MCP 서버 연결 (외부 AI 에이전트)",
+    });
+    expect(within(mcpSection).getByLabelText("okhub-cli 설치 명령")).toHaveTextContent(
+      "cargo install --path src-tauri --bin okhub-cli",
+    );
+    const snippetBox = within(mcpSection).getByLabelText("MCP 클라이언트 설정 예시");
+    expect(snippetBox).toHaveTextContent('"command": "okhub-cli"');
+    const claudeButton = within(mcpSection).getByRole("button", { name: "Claude Code" });
+    expect(claudeButton).toHaveAttribute("aria-pressed", "true");
+
+    const codexButton = within(mcpSection).getByRole("button", { name: "Codex" });
+    await user.click(codexButton);
+    expect(codexButton).toHaveAttribute("aria-pressed", "true");
+    expect(claudeButton).toHaveAttribute("aria-pressed", "false");
+    expect(snippetBox).toHaveTextContent("[mcp_servers.okhub]");
+    expect(snippetBox).toHaveTextContent('args = ["mcp"]');
+
+    const agyButton = within(mcpSection).getByRole("button", { name: "Antigravity / Cursor" });
+    await user.click(agyButton);
+    expect(agyButton).toHaveAttribute("aria-pressed", "true");
+    expect(snippetBox).toHaveTextContent('"mcpServers"');
+  });
+
+  it("does not report copied when clipboard API is unavailable", async () => {
+    const user = userEvent.setup();
+    const gateway = new FakeAiGateway();
+    const originalDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+    try {
+      render(
+        <TestQueryProvider>
+          <AiSettingsPanel gateway={gateway} />
+        </TestQueryProvider>,
+      );
+
+      const mcpSection = await screen.findByRole("region", {
+        name: "MCP 서버 연결 (외부 AI 에이전트)",
+      });
+      await user.click(within(mcpSection).getByRole("button", { name: "설정 복사" }));
+
+      expect(within(mcpSection).getByRole("button", { name: "설정 복사" })).toBeInTheDocument();
+      expect(within(mcpSection).queryByRole("button", { name: "복사됨" })).toBeNull();
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(navigator, "clipboard", originalDescriptor);
+      } else {
+        delete (navigator as unknown as Record<string, unknown>).clipboard;
+      }
+    }
+  });
 });

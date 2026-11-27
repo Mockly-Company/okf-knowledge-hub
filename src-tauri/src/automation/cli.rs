@@ -135,6 +135,28 @@ async fn run_command(
                         repo.local_path.as_deref().unwrap_or("(로컬 미연결)")
                     );
                 }
+                if !summary.connected_workspaces.is_empty() {
+                    println!(
+                        "OkHub 연결 워크스페이스 ({}개):",
+                        summary.connected_workspaces.len()
+                    );
+                    for ws in &summary.connected_workspaces {
+                        println!(
+                            "  {} [{}] {}{}{}",
+                            if ws.active { "*" } else { "-" },
+                            ws.id,
+                            ws.title,
+                            ws.docs_repository_full_name
+                                .as_deref()
+                                .map(|r| format!(" · {r}"))
+                                .unwrap_or_default(),
+                            ws.project_url
+                                .as_deref()
+                                .map(|u| format!(" ({u})"))
+                                .unwrap_or_default(),
+                        );
+                    }
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -217,6 +239,43 @@ async fn run_command(
             } else {
                 ExitCode::from(2)
             })
+        }
+        ("doc", "set-impl-status") => {
+            let path = args
+                .get(2)
+                .filter(|arg| !arg.starts_with("--"))
+                .cloned()
+                .or_else(|| find_flag_value(&args[2..], "--path"))
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::WorkspaceInvalid,
+                        "상태를 갱신할 문서 경로(`--path <경로>` 또는 첫 번째 인자)를 지정해 주세요.",
+                    )
+                })?;
+            let status = find_flag_value(&args[2..], "--status").ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "`--status <synced|partial|unimplemented|clear>` 옵션을 지정해 주세요.",
+                )
+            })?;
+            let note = find_flag_value(&args[2..], "--note");
+            let checked_at = find_flag_value(&args[2..], "--checked-at");
+            let updated = runtime.update_doc_impl_status(
+                &path,
+                &status,
+                note.as_deref(),
+                checked_at.as_deref(),
+            )?;
+            if json_output {
+                emit_json(&updated);
+            } else {
+                println!(
+                    "갱신 완료: {} -> {}",
+                    updated.path,
+                    updated.impl_status.as_deref().unwrap_or("(해제됨)")
+                );
+            }
+            Ok(ExitCode::SUCCESS)
         }
         ("pr", "list") => {
             let repo = find_flag_value(&args[2..], "--repo");
@@ -327,6 +386,19 @@ async fn run_command(
             }
             Ok(ExitCode::SUCCESS)
         }
+        ("board", "schema") => {
+            let schema = runtime.inspect_board_schema().await?;
+            if json_output {
+                emit_json(&schema);
+            } else {
+                println!("Project {} [{}]", schema.title, schema.project_id);
+                for field in &schema.single_select_fields {
+                    let opts: Vec<_> = field.options.iter().map(|o| o.name.as_str()).collect();
+                    println!("  {} ({}): {}", field.name, field.id, opts.join(", "));
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         ("board", "create-issue") => {
             let rest = &args[2..];
             let repo = find_flag_value(rest, "--repo");
@@ -342,7 +414,23 @@ async fn run_command(
             let kind = find_flag_value(rest, "--kind");
             let priority = find_flag_value(rest, "--priority");
             let parent = parse_optional_u64_flag(rest, "--parent")?;
+            let parent_repo = find_flag_value(rest, "--parent-repo");
             let depends_on = parse_optional_u64_flag(rest, "--depends-on")?;
+            let assignees = find_flag_values(rest, "--assignee");
+            let no_assignee = rest.iter().any(|arg| arg == "--no-assignee");
+            if no_assignee && !assignees.is_empty() {
+                return Err(AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "`--assignee`와 `--no-assignee`는 함께 지정할 수 없습니다.",
+                ));
+            }
+            let assignees = if no_assignee {
+                Some(Vec::new())
+            } else if !assignees.is_empty() {
+                Some(assignees)
+            } else {
+                None
+            };
             let created = runtime
                 .create_board_issue(
                     repo.as_deref(),
@@ -353,7 +441,9 @@ async fn run_command(
                     kind,
                     priority,
                     parent,
+                    parent_repo,
                     depends_on,
+                    assignees,
                 )
                 .await?;
             if json_output {
@@ -444,6 +534,22 @@ fn find_flag_value(args: &[String], flag: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn find_flag_values(args: &[String], flag: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut iter = args.iter();
+    while let Some(item) = iter.next() {
+        if item == flag {
+            if let Some(value) = iter.next() {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    out.push(trimmed.to_owned());
+                }
+            }
+        }
+    }
+    out
 }
 
 fn parse_u64_arg(raw: Option<&String>, label: &str) -> Result<u64, AppError> {
@@ -539,22 +645,31 @@ fn print_help() {
 okhub-cli — OkHub 동적 프로젝트·저장소 자동화 CLI 및 STDIO MCP 서버
 
 사용법:
-  okhub-cli [--json] [--workspace-dir <경로>] [--project <GitHub Project URL>] <명령>
+  okhub-cli [--json] [--app-data-dir <경로>] [--workspace-dir <경로>] [--docs-repo <owner/name>] [--project <GitHub Project URL>] <명령>
 
 명령:
   context active                                 현재 선택된 Project·문서/코드 저장소 컨텍스트 출력
   context issue <번호>                            이슈 본문·선행 단계·연결 .md 문서 Context Pack 출력
   doc list                                       문서 저장소의 .md 목록 및 .html 동기화 상태 출력
   doc read <경로>                                지정한 .md 문서 읽기
-  doc validate                                   frontmatter, .md+.html 2벌 동기화, 변경 마커 검증
+  doc validate                                   frontmatter, .md+.html 2벌 동기화, SVG 와이어프레임/변경 마커 검증
+  doc set-impl-status <경로> --status <...>       문서 frontmatter의 코드 반영 상태(synced|partial|unimplemented|clear) 갱신
   pr list [--repo <owner/name>]                  열린 PR 목록 조회
   pr create --head <브랜치> --title <제목> [...]   기획/코드 PR 생성
   pr approve-merge <번호> [--comment <메모>]      PR 승인 및 Squash Merge
+  board schema                                   선택된 GitHub Project의 Status·영역·타입·Priority 옵션 조회
   board list [--layer <...>] [--status <...>]    선택된 GitHub Project 보드 항목 조회
   board ready [--layer <...>]                    선행 단계가 완료된 시작 가능(Ready) 백로그 조회
-  board create-issue --title <제목> [...]         선택된 GitHub Project에 이슈/하위 이슈 동적 생성
+  board create-issue --title <제목> [...]         이슈 생성 (`--parent`, `--parent-repo`, `--depends-on`, `--assignee`, `--no-assignee`: 무담당)
   board derive-backlog <상위번호> [--repo <...>]   완료된 기획/디자인 이슈에서 백엔드·프론트 백로그 일괄 파생
   board update-status <번호> <상태> [...]          선택된 GitHub Project 이슈 상태/영역/타입 변경
-  mcp                                            STDIO 기반 MCP(Model Context Protocol) 서버 실행"
+  mcp                                            STDIO 기반 MCP(Model Context Protocol) 서버 실행
+
+환경 변수:
+  OKHUB_APP_DATA_DIR    OkHub 앱 데이터 디렉터리 오버라이드 (settings.json 위치)
+  OKHUB_WORKSPACE_DIR   문서 워크스페이스 루트 (또는 worktree 경로) 오버라이드
+  OKHUB_DOCS_REPO       대상 문서 GitHub 저장소 (owner/name)
+  OKHUB_PROJECT_URL     활성 GitHub Project v2 URL
+  GH_TOKEN / GITHUB_TOKEN  GitHub API 토큰 (미설정 시 OkHub OS 키체인 토큰 사용)"
     );
 }

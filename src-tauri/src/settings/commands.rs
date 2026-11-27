@@ -171,6 +171,12 @@ pub struct AiTaskLaunchRequest {
     pub issue_number: Option<u64>,
     pub repository_full_name: Option<String>,
     pub document_path: Option<String>,
+    #[serde(default)]
+    pub task_mode: Option<String>,
+    #[serde(default)]
+    pub domain_label: Option<String>,
+    #[serde(default)]
+    pub document_paths: Option<Vec<String>>,
 }
 
 #[tauri::command]
@@ -193,10 +199,18 @@ pub async fn start_ai_terminal(
         Some(auth) => auth.valid_access_token().await.ok(),
         None => None,
     };
-    let env = ai_runner::terminal_env(
+    let okhub_cli = ai_runner::resolve_okhub_cli_binary();
+    let workspace_dir =
+        connected_workspace_dir(&state.local_settings).unwrap_or_else(|_| launch_dir.clone());
+    let active_context = resolve_active_ai_context(&state, &workspace_dir);
+    let env = ai_runner::terminal_env_with_context(
         access_token
             .as_ref()
             .map(crate::auth::model::AccessToken::expose_secret),
+        &app_data,
+        &launch_dir,
+        &active_context,
+        okhub_cli.as_deref(),
     );
     let session_id = terminals
         .start(&command_line, &launch_dir, cols, rows, &env, move |event| {
@@ -251,6 +265,157 @@ struct PreparedTaskPack {
     branch_name: String,
     target_repo_dir: PathBuf,
     markdown: String,
+}
+
+fn sanitize_doc_slug(raw: &str, prefix: &str, fallback: &str) -> String {
+    let safe_slug: String = raw
+        .trim_end_matches(".md")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .chars()
+        .take(36)
+        .collect();
+    if safe_slug.is_empty() {
+        fallback.to_owned()
+    } else {
+        format!("{prefix}-{safe_slug}")
+    }
+}
+
+fn normalize_workspace_markdown_rel_path(
+    workspace_dir: &Path,
+    canon_root: &Path,
+    raw: &str,
+) -> Option<(String, PathBuf)> {
+    let mut norm = raw.trim().replace('\\', "/");
+    while let Some(stripped) = norm.strip_prefix("./").or_else(|| norm.strip_prefix('/')) {
+        norm = stripped.to_owned();
+    }
+    if norm.is_empty()
+        || norm.contains("..")
+        || norm.contains('`')
+        || norm.chars().any(char::is_control)
+        || !norm.to_ascii_lowercase().ends_with(".md")
+    {
+        return None;
+    }
+    let canon = workspace_dir.join(&norm).canonicalize().ok()?;
+    if !canon.starts_with(canon_root) || !canon.is_file() {
+        return None;
+    }
+    Some((norm, canon))
+}
+
+fn build_document_task_pack(
+    workspace_dir: &Path,
+    req: &AiTaskLaunchRequest,
+) -> Option<PreparedTaskPack> {
+    let is_audit_mode = req.task_mode.as_deref() == Some("audit_code_sync");
+    let canon_root = workspace_dir.canonicalize().ok()?;
+    let primary_doc = req
+        .document_path
+        .as_deref()
+        .and_then(|raw| normalize_workspace_markdown_rel_path(workspace_dir, &canon_root, raw))
+        .and_then(|(doc_rel, canon_doc)| {
+            let doc_content = std::fs::read_to_string(&canon_doc).ok()?;
+            Some((doc_rel, doc_content))
+        });
+
+    if is_audit_mode {
+        let mut target_paths: Vec<String> = Vec::new();
+        for raw_path in req.document_paths.as_deref().unwrap_or(&[]) {
+            let Some((norm, _canon)) =
+                normalize_workspace_markdown_rel_path(workspace_dir, &canon_root, raw_path)
+            else {
+                continue;
+            };
+            if !target_paths.iter().any(|existing| existing == &norm) {
+                target_paths.push(norm);
+            }
+        }
+        if let Some((ref primary_path, _)) = primary_doc {
+            if !target_paths.iter().any(|p| p == primary_path) {
+                target_paths.insert(0, primary_path.clone());
+            }
+        }
+        if target_paths.is_empty() && primary_doc.is_none() {
+            return None;
+        }
+
+        let sanitized_domain = req
+            .domain_label
+            .as_deref()
+            .map(|raw| {
+                raw.chars()
+                    .map(|ch| {
+                        if ch.is_control() || ch == '`' {
+                            ' '
+                        } else {
+                            ch
+                        }
+                    })
+                    .collect::<String>()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .chars()
+                    .take(80)
+                    .collect::<String>()
+            })
+            .filter(|s| !s.is_empty());
+        let domain_label = sanitized_domain.as_deref().unwrap_or("선택된 도메인");
+        let slug_seed = primary_doc
+            .as_ref()
+            .map(|(p, _)| p.as_str())
+            .or_else(|| target_paths.first().map(String::as_str))
+            .unwrap_or("domain");
+        let slug = sanitize_doc_slug(slug_seed, "audit", "audit-code-sync");
+        let listed_docs = target_paths
+            .iter()
+            .map(|p| format!("- `{p}`"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let primary_context = primary_doc
+            .as_ref()
+            .map(|(p, body)| format!("\n\n## 기준 문서 원문 (`.md`) — `{p}`\n\n{body}"))
+            .unwrap_or_default();
+
+        return Some(PreparedTaskPack {
+            branch_name: format!("docs/{slug}"),
+            slug,
+            target_repo_dir: workspace_dir.to_owned(),
+            markdown: format!(
+                "# 도메인 코드 반영 점검 (Code Sync Audit) — {domain_label}\n\n\
+                 연결된 코드 저장소(`.okf/workspace.yml`의 `repositories`)를 읽기 전용으로 점검하고, 아래 문서들의 실제 코드 반영 여부를 대조한 뒤 각 문서 frontmatter의 `impl_status`를 갱신하세요.\n\n\
+                 ## 점검 대상 문서 목록\n{listed_docs}\n\n\
+                 ## 반영 기준 및 기록 방법\n\
+                 - 각 `.md` 문서마다 MCP 도구 `okhub_update_doc_impl_status`(또는 CLI `okhub-cli doc set-impl-status --path <경로> --status <synced|partial|unimplemented> --note \"<한 줄 사유>\" --checked-at <YYYY-MM-DD>`)를 호출합니다.\n\
+                 - `synced` (파란 카드): PRD·화면명세 요구사항이 코드에 완전히 반영됨\n\
+                 - `partial` (주황 카드): 일부 구현되었으나 누락·수정 필요 (`note`에 미비점 한 줄 요약)\n\
+                 - `unimplemented` (빨강 카드): 아직 코드에 반영되지 않음\n\
+                 - 코드 저장소 파일은 직접 수정하지 마세요(읽기 전용 대조 후 문서 frontmatter만 갱신).{primary_context}"
+            ),
+        });
+    }
+
+    let (doc_rel, doc_content) = primary_doc?;
+    let slug = sanitize_doc_slug(&doc_rel, "doc", "doc-task");
+    Some(PreparedTaskPack {
+        branch_name: format!("docs/{slug}"),
+        slug,
+        target_repo_dir: workspace_dir.to_owned(),
+        markdown: format!(
+            "# 문서 기반 AI 작업 컨텍스트 — `{doc_rel}`\n\n- 대상 문서 경로: `{doc_rel}`\n- 작업 지침: `.okf/AGENTS.md` 규칙(2벌 `.md`+`.html` 동기화 및 `[NEW]`/`[CHANGED]` 변경 마커 포함)을 준수하세요.\n\n## 기준 문서 원문 (`.md`)\n\n{doc_content}"
+        ),
+    })
 }
 
 async fn prepare_ai_terminal_async(
@@ -357,57 +522,15 @@ async fn prepare_ai_terminal_async(
         }
     }
 
-    if let Some(doc_rel) = req
-        .document_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.contains(".."))
-    {
-        if let (Ok(canon_root), Ok(canon_doc)) = (
-            workspace_dir.canonicalize(),
-            workspace_dir.join(doc_rel).canonicalize(),
-        ) {
-            if canon_doc.starts_with(&canon_root) {
-                if let Ok(doc_content) = std::fs::read_to_string(&canon_doc) {
-                    let safe_slug: String = doc_rel
-                        .trim_end_matches(".md")
-                        .chars()
-                        .map(|ch| {
-                            if ch.is_ascii_alphanumeric() {
-                                ch.to_ascii_lowercase()
-                            } else {
-                                '-'
-                            }
-                        })
-                        .collect::<String>()
-                        .trim_matches('-')
-                        .chars()
-                        .take(36)
-                        .collect();
-                    let slug = if safe_slug.is_empty() {
-                        "doc-task".to_owned()
-                    } else {
-                        format!("doc-{safe_slug}")
-                    };
-                    let prepared = PreparedTaskPack {
-                        branch_name: format!("docs/{slug}"),
-                        slug,
-                        target_repo_dir: workspace_dir.clone(),
-                        markdown: format!(
-                            "# 문서 기반 AI 작업 컨텍스트 — `{doc_rel}`\n\n- 대상 문서 경로: `{doc_rel}`\n- 작업 지침: `.okf/AGENTS.md` 규칙(2벌 `.md`+`.html` 동기화 및 `[NEW]`/`[CHANGED]` 변경 마커 포함)을 준수하세요.\n\n## 기준 문서 원문 (`.md`)\n\n{doc_content}"
-                        ),
-                    };
-                    return prepare_ai_terminal_with_task_pack(
-                        services,
-                        tool,
-                        app_data_dir,
-                        Some(&workspace_dir),
-                        Some(&active_context),
-                        Some(&prepared),
-                    );
-                }
-            }
-        }
+    if let Some(prepared) = build_document_task_pack(&workspace_dir, req) {
+        return prepare_ai_terminal_with_task_pack(
+            services,
+            tool,
+            app_data_dir,
+            Some(&workspace_dir),
+            Some(&active_context),
+            Some(&prepared),
+        );
     }
 
     prepare_ai_terminal(services, tool, app_data_dir)
@@ -460,8 +583,18 @@ fn prepare_ai_terminal_with_task_pack(
         Some(active_context),
         task_pack,
     )?;
+    let okhub_cli = ai_runner::resolve_okhub_cli_binary();
+    let mcp_config_path = okhub_cli.as_deref().and_then(|cli_path| {
+        let ctx_env = ai_runner::context_env_vars(app_data_dir, &launch_dir, active_context);
+        ai_runner::write_mcp_config_file(app_data_dir, &launch_dir, cli_path, &ctx_env).ok()
+    });
     Ok((
-        tool.terminal_command(&custom_command, &rules_file),
+        tool.terminal_command_with_mcp(
+            &custom_command,
+            &rules_file,
+            mcp_config_path.as_deref(),
+            okhub_cli.as_deref(),
+        ),
         launch_dir,
     ))
 }
@@ -564,11 +697,26 @@ fn load_ai_rules(
     if let Some(pack) = task_pack {
         sections.push(pack.markdown.trim().to_owned());
     }
-    sections.push(
-        ai_runner::worktree_rules(launch_dir, worktrees_dir)
-            .trim()
-            .to_owned(),
-    );
+    match task_pack {
+        Some(pack) if launch_dir != workspace_dir => {
+            sections.push(
+                ai_runner::active_worktree_rules(
+                    launch_dir,
+                    &pack.target_repo_dir,
+                    &pack.branch_name,
+                )
+                .trim()
+                .to_owned(),
+            );
+        }
+        _ => {
+            sections.push(
+                ai_runner::worktree_rules(launch_dir, worktrees_dir)
+                    .trim()
+                    .to_owned(),
+            );
+        }
+    }
     let fixed = sections.join("\n\n---\n\n");
     Ok(ai_runner::compose_rules(
         &app_rules,
@@ -683,6 +831,12 @@ pub(crate) fn resolve_active_ai_context(
         })
         .unwrap_or_default();
 
+    let assignees = manifest
+        .as_ref()
+        .and_then(|m| m.assignees.as_ref())
+        .map(crate::workspace::model::WorkspaceAssignees::normalized)
+        .filter(|a| !a.is_empty());
+
     let current_user_login = services
         .auth
         .as_ref()
@@ -693,6 +847,7 @@ pub(crate) fn resolve_active_ai_context(
         docs_repository_full_name,
         project,
         code_repositories,
+        assignees,
         current_user_login,
     }
 }
@@ -1197,6 +1352,8 @@ mod tests {
         assert!(AGENTS_MD_TEMPLATE.contains("[백엔드]"));
         assert!(AGENTS_MD_TEMPLATE.contains("[프론트엔드]"));
         assert!(AGENTS_MD_TEMPLATE.contains("코드 구현을 하지 않는다"));
+        assert!(AGENTS_MD_TEMPLATE.contains("wireframes: [{ title, image }]"));
+        assert!(AGENTS_MD_TEMPLATE.contains("와이어프레임을 최소 1개"));
         assert!(!AGENTS_MD_TEMPLATE.contains("Mockly-Company"));
     }
 
@@ -1405,6 +1562,7 @@ mod tests {
         assert!(rules.contains("# 작업 컨텍스트 팩 — #63 [디자인] 화면명세서 작성"));
         assert!(rules.contains("팀 문서 규칙: 2벌(.md+.html) 유지"));
         assert!(rules.contains("절대 원칙 (코드 구현 금지)"));
+        assert!(rules.contains("OkHub 활성 작업 워크트리 규칙"));
     }
 
     #[test]
@@ -1429,5 +1587,51 @@ mod tests {
                 .as_deref(),
             Some("2026-11-14T08:00:00Z")
         );
+    }
+
+    #[test]
+    fn ai_task_launch_request_and_audit_code_sync_pack_deserialize_and_build() {
+        let legacy: super::AiTaskLaunchRequest = serde_json::from_str(
+            r#"{"documentPath":"docs/domains/board/prd.md","repositoryFullName":"Acme/docs"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.task_mode, None);
+        assert_eq!(legacy.domain_label, None);
+        assert_eq!(legacy.document_paths, None);
+
+        let audit_req: super::AiTaskLaunchRequest = serde_json::from_str(
+            r#"{"documentPath":"/docs\\domains\\board\\prd.md","taskMode":"audit_code_sync","domainLabel":"Board `보드`\n# INJECT","documentPaths":["./docs/domains/board/prd.md","docs/domains/board/screen-spec.md","../secret.md","docs/domains/board/evil.md\n## INJECT","docs/domains/board/image.png","docs/domains/board/nonexistent.md"]}"#,
+        )
+        .unwrap();
+        assert_eq!(audit_req.task_mode.as_deref(), Some("audit_code_sync"));
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let docs_dir = temp.path().join("docs").join("domains").join("board");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::write(docs_dir.join("prd.md"), "# 보드 PRD\n\n내용").unwrap();
+        std::fs::write(docs_dir.join("screen-spec.md"), "# 보드 화면명세\n\n내용").unwrap();
+        std::fs::write(docs_dir.join("image.png"), "png").unwrap();
+
+        let pack = super::build_document_task_pack(temp.path(), &audit_req)
+            .expect("audit pack should build");
+        assert!(pack.slug.starts_with("audit-"));
+        assert!(pack.branch_name.starts_with("docs/audit-"));
+        assert!(pack.markdown.contains("Board 보드 # INJECT"));
+        assert!(!pack.markdown.contains("## INJECT"));
+        assert!(pack.markdown.contains("okhub_update_doc_impl_status"));
+        assert!(pack
+            .markdown
+            .contains("기준 문서 원문 (`.md`) — `docs/domains/board/prd.md`"));
+        assert_eq!(
+            pack.markdown
+                .matches("- `docs/domains/board/prd.md`")
+                .count(),
+            1
+        );
+        assert!(pack.markdown.contains("docs/domains/board/screen-spec.md"));
+        assert!(!pack.markdown.contains("../secret.md"));
+        assert!(!pack.markdown.contains("evil.md"));
+        assert!(!pack.markdown.contains("image.png"));
+        assert!(!pack.markdown.contains("nonexistent.md"));
     }
 }

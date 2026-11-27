@@ -23,6 +23,7 @@ import {
 import {
   BOARD_LAYERS,
   BOARD_STATUSES,
+  boardStatusTone,
   layerName,
   statusName,
   type BoardIssue,
@@ -106,7 +107,7 @@ export function ProjectIssueDrawer({
                     <span className="text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-muted)]">
                       #{issue.number}
                     </span>
-                    <StatusBadge tone="neutral">
+                    <StatusBadge tone={boardStatusTone(effectiveStatus)}>
                       {statusName(effectiveStatus)}
                     </StatusBadge>
                     <StatusBadge tone="info">

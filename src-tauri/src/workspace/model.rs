@@ -27,7 +27,7 @@ pub struct WorkspaceConfigV1 {
 
 /// 역할별 담당자 목록(기획·디자인·프론트엔드·백엔드).
 /// 각 역할 값은 단일 문자열 또는 문자열 목록을 모두 읽으며, 저장 시 1명이면 단일 문자열, 2명 이상이면 목록으로 쓴다.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceAssignees {
     #[serde(
         default,

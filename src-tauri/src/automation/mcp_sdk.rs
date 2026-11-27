@@ -55,6 +55,9 @@ pub(super) fn is_write_tool(name: &str) -> bool {
             | "okhub_board_update_status"
             | "okhub_pr_create"
             | "okhub_pr_approve_merge"
+            | "okhub_update_doc_impl_status"
+            | "okhub_board_create_backlog_tree"
+            | "okhub_board_update_issue"
     )
 }
 
@@ -73,7 +76,7 @@ pub(super) fn tool_definitions(advanced: bool) -> Vec<Value> {
         ) || (advanced
             && matches!(
                 t["name"].as_str(),
-                Some("okhub_doc_validate" | "okhub_pr_list")
+                Some("okhub_doc_validate" | "okhub_pr_list" | "okhub_board_get_schema")
             ))
     });
     for tool in &mut tools {
@@ -88,7 +91,7 @@ pub(super) fn tool_definitions(advanced: bool) -> Vec<Value> {
         }
         if matches!(
             name.as_str(),
-            "okhub_get_active_context" | "okhub_board_list"
+            "okhub_get_active_context" | "okhub_board_list" | "okhub_board_get_schema"
         ) {
             props.insert("projectId".into(), json!({"type":"string","minLength":1}));
         }
@@ -217,6 +220,14 @@ pub(super) fn tool_definitions(advanced: bool) -> Vec<Value> {
 }
 
 pub(super) fn validate_tool_args(name: &str, args: &Value, advanced: bool) -> Result<(), AppError> {
+    if matches!(
+        name,
+        "okhub_update_doc_impl_status"
+            | "okhub_board_create_backlog_tree"
+            | "okhub_board_update_issue"
+    ) {
+        return Err(error("이 쓰기 도구의 MCP 승인·멱등 실행 경로는 아직 지원하지 않습니다. CLI·앱 기능은 유지됩니다."));
+    }
     let aliases = [
         "okhub_board_ready",
         "okhub_board_create_issue",
@@ -746,6 +757,60 @@ mod tests {
         assert_eq!(requests.len(), 5);
     }
 
+    #[tokio::test]
+    async fn unsupported_main_writes_fail_closed_before_elicitation_or_external_access() {
+        for (name, args) in [
+            (
+                "okhub_update_doc_impl_status",
+                json!({"path":"docs/prd.md","implStatus":"synced"}),
+            ),
+            (
+                "okhub_board_create_backlog_tree",
+                json!({"items":[{"title":"Create issue"}]}),
+            ),
+            (
+                "okhub_board_update_issue",
+                json!({"issueNumber":7,"state":"closed","comment":"Done"}),
+            ),
+        ] {
+            assert!(is_write_tool(name));
+            assert!(validate_tool_args(name, &args, false).is_err());
+            assert!(validate_tool_args(name, &args, true).is_err());
+            assert!(!tool_definitions(true)
+                .iter()
+                .any(|tool| tool["name"] == name));
+            let (result, requests, shown) =
+                confirmed_tool_request(name, true, ElicitationAction::Accept, false, vec![], args)
+                    .await;
+            assert_eq!(result.is_error, Some(true), "{name}: {result:?}");
+            assert!(requests.is_empty(), "{name} accessed GitHub");
+            assert!(shown.is_empty(), "{name} elicited an unsupported operation");
+        }
+    }
+
+    #[test]
+    fn advanced_board_schema_is_readonly_and_accepts_scoped_selection_only() {
+        assert!(!is_write_tool("okhub_board_get_schema"));
+        assert!(validate_tool_args(
+            "okhub_board_get_schema",
+            &json!({"workspaceId":"A","projectId":"P"}),
+            true
+        )
+        .is_ok());
+        assert!(validate_tool_args("okhub_board_get_schema", &json!({}), false).is_err());
+        assert!(validate_tool_args(
+            "okhub_board_get_schema",
+            &json!({"workspaceDir":"/tmp/arbitrary"}),
+            true
+        )
+        .is_err());
+        let tool = tool_definitions(true)
+            .into_iter()
+            .find(|tool| tool["name"] == "okhub_board_get_schema")
+            .unwrap();
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+    }
+
     fn completion_replies(prs: Value, truncated: bool, will_apply: bool) -> Replies {
         let repository = json!({"node_id":"R_docs","name":"docs","full_name":"acme/docs","owner":{"login":"acme"},"default_branch":"main","clone_url":"https://github.com/acme/docs.git","permissions":{"push":true}});
         let schema = json!({"data":{"organization":{"projectV2":{"id":"P","title":"Demo","fields":{"nodes":[{"__typename":"ProjectV2SingleSelectField","id":"STATUS","name":"Status","options":[{"id":"PROGRESS","name":"In progress"},{"id":"DONE","name":"Done"}]}]}}}}});
@@ -1006,7 +1071,7 @@ mod tests {
     #[test]
     fn advanced_pr_tools_are_unified_and_merge_never_defaults_a_method() {
         let tools = tool_definitions(true);
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 11);
         assert!(tools.iter().any(|tool| tool["name"] == "okhub_pr_manage"));
         assert!(!tools
             .iter()

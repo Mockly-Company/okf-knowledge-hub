@@ -160,19 +160,37 @@ pub fn extract_referenced_doc_paths(text: &str) -> Vec<String> {
                 '`' | '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | ';'
             )
     }) {
-        let clean = token
-            .trim_matches(|ch: char| ch == '.' || ch == ':')
+        let normalized = token.replace('\\', "/");
+        if normalized.contains("..") {
+            continue;
+        }
+        let lower_raw = normalized.to_ascii_lowercase();
+        if lower_raw.starts_with("http://") || lower_raw.starts_with("https://") {
+            continue;
+        }
+        let stripped = normalized
+            .trim_start_matches(':')
+            .trim_start_matches("./")
+            .trim_start_matches('/')
             .split('#')
             .next()
-            .unwrap_or_default();
-        if clean.ends_with(".md")
-            && !clean.contains("..")
-            && !clean.starts_with("http://")
-            && !clean.starts_with("https://")
-            && (clean.starts_with("docs/") || clean.starts_with(".okf/"))
-            && !found.iter().any(|existing| existing == clean)
+            .unwrap_or_default()
+            .trim_end_matches(['.', ':']);
+        let canonical = if stripped.len() >= 5
+            && stripped.as_bytes()[stripped.len() - 5..].eq_ignore_ascii_case(b".html")
         {
-            found.push(clean.to_owned());
+            format!("{}.md", &stripped[..stripped.len() - 5])
+        } else {
+            stripped.to_owned()
+        };
+        let lower = canonical.to_ascii_lowercase();
+        if lower.ends_with(".md")
+            && (lower.starts_with("docs/") || lower.starts_with(".okf/"))
+            && !found
+                .iter()
+                .any(|existing: &String| existing.eq_ignore_ascii_case(&canonical))
+        {
+            found.push(canonical);
         }
     }
     found
@@ -376,6 +394,7 @@ mod tests {
             kind: Some("작업".to_owned()),
             priority: None,
             depends_on,
+            linked_doc_paths: Vec::new(),
             sub_issues: Vec::new(),
             assignees: Vec::new(),
             created_at: None,
@@ -429,6 +448,7 @@ mod tests {
                 full_name: "Acme-Org/acme-web".to_owned(),
                 local_path: Some("/work/acme-web".to_owned()),
             }],
+            assignees: None,
             current_user_login: Some("YoonCarrot".to_owned()),
         };
 
@@ -465,6 +485,29 @@ mod tests {
                 .contains("현재 로그인한 GitHub 사용자: `@YoonCarrot`"),
             "{}",
             design_pack.markdown_summary
+        );
+    }
+
+    #[test]
+    fn extract_referenced_doc_paths_normalizes_prefixes_html_and_separators() {
+        let body = r#"
+- 기본: `docs/domains/board/prd.md`
+- 현재경로: ./docs/domains/board/screen-spec.html#sec-2
+- 윈도우: docs\domains\board\prd.md
+- 루트슬래시: /docs/domains/auth/prd.md
+- 워크스페이스 규칙: .okf/AGENTS.md, ./.okf/guide.md.
+- 차단: docs/../secrets.md https://example.com/docs/a.md
+"#;
+        let extracted = super::extract_referenced_doc_paths(body);
+        assert_eq!(
+            extracted,
+            vec![
+                "docs/domains/board/prd.md",
+                "docs/domains/board/screen-spec.md",
+                "docs/domains/auth/prd.md",
+                ".okf/AGENTS.md",
+                ".okf/guide.md",
+            ]
         );
     }
 }

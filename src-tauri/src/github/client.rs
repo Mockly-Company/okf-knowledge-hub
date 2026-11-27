@@ -13,11 +13,11 @@ use crate::auth::service::AuthService;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 use crate::github::model::{
     parse_depends_on, BoardAssignee, CreateProjectIssueInput, CreatePullRequestInput,
-    CreatedProjectIssue, DocsPullRequestSummary, DraftPullRequest, DraftPullRequestRequest,
-    GithubProjectFieldOption, GithubProjectItem, GithubProjectListItem, GithubProjectSchema,
-    GithubProjectSingleSelectField, GithubProjectSummary, GithubRepositoryDetail,
-    GithubRepositorySummary, GithubSubIssue, Page, PullRequestChangedFile, UpdateProjectItemInput,
-    UpdatedProjectItem,
+    CreatedIssueComment, CreatedProjectIssue, DocsPullRequestSummary, DraftPullRequest,
+    DraftPullRequestRequest, GithubProjectFieldOption, GithubProjectItem, GithubProjectListItem,
+    GithubProjectSchema, GithubProjectSingleSelectField, GithubProjectSummary,
+    GithubRepositoryDetail, GithubRepositorySummary, GithubSubIssue, Page, PullRequestChangedFile,
+    UpdateProjectItemInput, UpdatedIssue, UpdatedProjectItem,
 };
 use crate::project_board::model::{BoardStatus, ProjectOwnerScope};
 
@@ -421,6 +421,22 @@ struct GithubRestAssigneeResponse {
     login: String,
     #[serde(default)]
     avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubRestIssueResponse {
+    number: u64,
+    title: String,
+    html_url: String,
+    state: String,
+}
+
+#[derive(Deserialize)]
+struct GithubRestCommentResponse {
+    id: u64,
+    html_url: String,
+    #[serde(default)]
+    body: String,
 }
 
 #[derive(Deserialize)]
@@ -1452,6 +1468,89 @@ impl GithubHttpClient {
                 Some(json!({ "assignees": cleaned_logins })),
             )
             .await?;
+        parse_issue_assignees_response(response)
+    }
+
+    /// 이슈 담당자를 지정한 목록으로 교체한다. 빈 slice를 주면 기존 담당자를 모두 해제한다.
+    pub async fn set_issue_assignees(
+        &self,
+        repository_full_name: &str,
+        issue_number: u64,
+        logins: &[String],
+    ) -> Result<Vec<BoardAssignee>, AppError> {
+        if issue_number == 0 {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "이슈 번호는 1 이상이어야 합니다.",
+            ));
+        }
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let mut seen_logins = HashSet::new();
+        let cleaned_logins: Vec<String> = logins
+            .iter()
+            .map(|login| login.trim().trim_start_matches('@').to_owned())
+            .filter(|login| !login.is_empty() && seen_logins.insert(login.to_ascii_lowercase()))
+            .collect();
+        let issue_number_str = issue_number.to_string();
+        let response = self
+            .send(
+                HttpMethod::Patch,
+                &["repos", owner, name, "issues", &issue_number_str],
+                &[],
+                Some(json!({ "assignees": cleaned_logins })),
+            )
+            .await?;
+        parse_issue_assignees_response(response)
+    }
+
+    pub async fn update_issue(
+        &self,
+        repository_full_name: &str,
+        issue_number: u64,
+        title: Option<&str>,
+        body: Option<&str>,
+        state: Option<&str>,
+    ) -> Result<UpdatedIssue, AppError> {
+        if issue_number == 0 {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "이슈 번호는 1 이상이어야 합니다.",
+            ));
+        }
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let mut payload = serde_json::Map::new();
+        if let Some(next_title) = title.map(str::trim).filter(|s| !s.is_empty()) {
+            payload.insert("title".to_owned(), json!(next_title));
+        }
+        if let Some(next_body) = body.map(str::trim).filter(|s| !s.is_empty()) {
+            payload.insert("body".to_owned(), json!(next_body));
+        }
+        if let Some(next_state) = state.map(str::trim).filter(|s| !s.is_empty()) {
+            let normalized = next_state.to_ascii_lowercase();
+            if !matches!(normalized.as_str(), "open" | "closed") {
+                return Err(AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "이슈 상태(state)는 `open` 또는 `closed`여야 합니다.",
+                ));
+            }
+            payload.insert("state".to_owned(), json!(normalized));
+        }
+        if payload.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "수정할 제목, 본문, 또는 상태 중 하나 이상을 입력해 주세요.",
+            ));
+        }
+
+        let number_str = issue_number.to_string();
+        let response = self
+            .send(
+                HttpMethod::Patch,
+                &["repos", owner, name, "issues", &number_str],
+                &[],
+                Some(serde_json::Value::Object(payload)),
+            )
+            .await?;
         if !(200..300).contains(&response.status) {
             return Err(map_http_error(
                 HttpFailureContext::Repository,
@@ -1459,27 +1558,59 @@ impl GithubHttpClient {
                 &response.headers,
             ));
         }
-        let parsed: GithubIssueAssigneesResponse =
+        let parsed: GithubRestIssueResponse =
             deserialize_response(response).map_err(|_| github_unavailable_error())?;
-        Ok(parsed
-            .assignees
-            .into_iter()
-            .filter_map(|item| {
-                let login = item.login.trim().to_owned();
-                if login.is_empty() {
-                    return None;
-                }
-                let avatar_url = item
-                    .avatar_url
-                    .map(|raw| raw.trim().to_owned())
-                    .filter(|s| !s.is_empty());
-                Some(BoardAssignee {
-                    login,
-                    avatar_url,
-                    name: None,
-                })
-            })
-            .collect())
+        Ok(UpdatedIssue {
+            number: parsed.number,
+            title: parsed.title,
+            url: parsed.html_url,
+            state: parsed.state,
+        })
+    }
+
+    pub async fn create_issue_comment(
+        &self,
+        repository_full_name: &str,
+        issue_number: u64,
+        body: &str,
+    ) -> Result<CreatedIssueComment, AppError> {
+        if issue_number == 0 {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "이슈 번호는 1 이상이어야 합니다.",
+            ));
+        }
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                "코멘트 본문을 입력해 주세요.",
+            ));
+        }
+        let (owner, name) = split_repository_full_name(repository_full_name)?;
+        let number_str = issue_number.to_string();
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &["repos", owner, name, "issues", &number_str, "comments"],
+                &[],
+                Some(json!({ "body": trimmed })),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        let parsed: GithubRestCommentResponse =
+            deserialize_response(response).map_err(|_| github_unavailable_error())?;
+        Ok(CreatedIssueComment {
+            id: parsed.id,
+            url: parsed.html_url,
+            body: parsed.body,
+        })
     }
 
     pub async fn resolve_project(
@@ -1676,6 +1807,11 @@ impl GithubHttpClient {
                     }
                 }
                 let depends_on = parse_depends_on(content.body.as_deref());
+                let linked_doc_paths = content
+                    .body
+                    .as_deref()
+                    .map(crate::automation::context_pack::extract_referenced_doc_paths)
+                    .unwrap_or_default();
                 let repository_full_name = content
                     .repository
                     .and_then(|repo| repo.name_with_owner)
@@ -1728,6 +1864,7 @@ impl GithubHttpClient {
                     kind,
                     priority,
                     depends_on,
+                    linked_doc_paths,
                     sub_issues,
                     assignees,
                     created_at,
@@ -2600,6 +2737,21 @@ impl GithubHttpClient {
             }
         }
 
+        let cleaned_assignees: Vec<String> = input
+            .assignees
+            .iter()
+            .map(|login| login.trim().trim_start_matches('@').to_owned())
+            .filter(|login| !login.is_empty())
+            .collect();
+        if !cleaned_assignees.is_empty() {
+            self.add_issue_assignees(
+                &format!("{repo_owner}/{repo_name}"),
+                issue_number,
+                &cleaned_assignees,
+            )
+            .await?;
+        }
+
         Ok(CreatedProjectIssue {
             id: issue_id,
             item_id,
@@ -3152,6 +3304,37 @@ impl GithubHttpClient {
             body,
         })
     }
+}
+
+fn parse_issue_assignees_response(response: HttpResponse) -> Result<Vec<BoardAssignee>, AppError> {
+    if !(200..300).contains(&response.status) {
+        return Err(map_http_error(
+            HttpFailureContext::Repository,
+            response.status,
+            &response.headers,
+        ));
+    }
+    let parsed: GithubIssueAssigneesResponse =
+        deserialize_response(response).map_err(|_| github_unavailable_error())?;
+    Ok(parsed
+        .assignees
+        .into_iter()
+        .filter_map(|item| {
+            let login = item.login.trim().to_owned();
+            if login.is_empty() {
+                return None;
+            }
+            let avatar_url = item
+                .avatar_url
+                .map(|raw| raw.trim().to_owned())
+                .filter(|s| !s.is_empty());
+            Some(BoardAssignee {
+                login,
+                avatar_url,
+                name: None,
+            })
+        })
+        .collect())
 }
 
 fn deserialize_response<T: DeserializeOwned>(
@@ -4662,6 +4845,7 @@ mod tests {
                 priority: None,
                 parent_issue_number: Some(10),
                 parent_issue_repository: None,
+                assignees: Vec::new(),
             })
             .await
             .unwrap();
@@ -4946,5 +5130,111 @@ mod tests {
 
         assert_eq!(err.code, ErrorCode::WorkspaceInvalid);
         assert!(transport.requests().is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_issue_patches_fields_and_create_comment_posts_body() {
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"number":77,"title":"새 제목","html_url":"https://github.com/Acme-Org/acme-web/issues/77","state":"closed"}"#,
+            ),
+            response(
+                201,
+                r#"{"id":501,"html_url":"https://github.com/Acme-Org/acme-web/issues/77#issuecomment-501","body":"검토 코멘트"}"#,
+            ),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let updated = service
+            .update_issue(
+                "Acme-Org/acme-web",
+                77,
+                Some("새 제목"),
+                Some("수정 본문"),
+                Some("closed"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.number, 77);
+        assert_eq!(updated.title, "새 제목");
+        assert_eq!(updated.state, "closed");
+
+        let commented = service
+            .create_issue_comment("Acme-Org/acme-web", 77, "  검토 코멘트  ")
+            .await
+            .unwrap();
+        assert_eq!(commented.id, 501);
+        assert_eq!(commented.body, "검토 코멘트");
+
+        let empty_patch_err = service
+            .update_issue("Acme-Org/acme-web", 77, None, Some("   "), None)
+            .await
+            .unwrap_err();
+        assert_eq!(empty_patch_err.code, ErrorCode::WorkspaceInvalid);
+
+        let reqs = transport.requests();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0].method, HttpMethod::Patch);
+        assert_eq!(
+            reqs[0].url,
+            "https://api.example.test/repos/Acme-Org/acme-web/issues/77"
+        );
+        assert_eq!(
+            reqs[0].body,
+            Some(serde_json::json!({
+                "title": "새 제목",
+                "body": "수정 본문",
+                "state": "closed"
+            }))
+        );
+        assert_eq!(reqs[1].method, HttpMethod::Post);
+        assert_eq!(
+            reqs[1].url,
+            "https://api.example.test/repos/Acme-Org/acme-web/issues/77/comments"
+        );
+        assert_eq!(
+            reqs[1].body,
+            Some(serde_json::json!({ "body": "검토 코멘트" }))
+        );
+    }
+
+    #[tokio::test]
+    async fn set_issue_assignees_replaces_and_clears_via_patch() {
+        let transport = RecordingTransport::with_responses(vec![
+            response(
+                200,
+                r#"{"assignees":[{"login":"KANCHOEUN","avatar_url":null}]}"#,
+            ),
+            response(200, r#"{"assignees":[]}"#),
+        ]);
+        let service = client(SequenceTokenProvider::default(), transport.clone());
+
+        let replaced = service
+            .set_issue_assignees(
+                "Acme-Org/acme-web",
+                77,
+                &[" @KANCHOEUN ".into(), "kanchoeun".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(replaced.len(), 1);
+        assert_eq!(replaced[0].login, "KANCHOEUN");
+
+        let cleared = service
+            .set_issue_assignees("Acme-Org/acme-web", 77, &[])
+            .await
+            .unwrap();
+        assert!(cleared.is_empty());
+
+        let reqs = transport.requests();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0].method, HttpMethod::Patch);
+        assert_eq!(
+            reqs[0].body,
+            Some(serde_json::json!({ "assignees": ["KANCHOEUN"] }))
+        );
+        assert_eq!(reqs[1].method, HttpMethod::Patch);
+        assert_eq!(reqs[1].body, Some(serde_json::json!({ "assignees": [] })));
     }
 }

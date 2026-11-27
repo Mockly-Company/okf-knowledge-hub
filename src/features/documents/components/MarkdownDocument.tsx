@@ -11,8 +11,12 @@ import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown"
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { useDocuments } from "../DocumentsProvider";
-import type { DocumentContent, TableOfContentsItem } from "../model";
+import { useOptionalDocuments } from "../DocumentsProvider";
+import type {
+  DocumentAsset,
+  DocumentContent,
+  TableOfContentsItem,
+} from "../model";
 import { displayDocumentPath, documentLocation } from "../document-location";
 import { remarkLiteralHtml } from "../remark-literal-html";
 import { remarkOkfFrontmatter } from "../remark-okf-frontmatter";
@@ -432,17 +436,72 @@ export interface MarkdownDocumentProps {
   document: DocumentContent;
   hideHeader?: boolean;
   suppressSourceTitle?: boolean;
+  onSelectDocument?: (
+    path: string,
+    preferredViewMode?: "html" | "markdown",
+  ) => void;
+  readAsset?: (documentPath: string, assetPath: string) => Promise<DocumentAsset>;
+  onOpenExternal?: (url: string) => Promise<void> | void;
+  onCopyText?: (value: string) => Promise<void>;
 }
+
+const unavailableMarkdownAsset = async (): Promise<DocumentAsset> => {
+  throw new Error("이미지 에셋 리더를 사용할 수 없습니다.");
+};
 
 export function MarkdownDocument({
   document,
   hideHeader = false,
   suppressSourceTitle = false,
+  onSelectDocument,
+  readAsset: readAssetProp,
+  onOpenExternal,
+  onCopyText,
 }: MarkdownDocumentProps) {
-  const { selectDocument, readAsset, openExternal, copyText, state } = useDocuments();
+  const docsContext = useOptionalDocuments();
+  const ctxSelectDocument = docsContext?.selectDocument;
+  const ctxReadAsset = docsContext?.readAsset;
+  const ctxOpenExternal = docsContext?.openExternal;
+  const ctxCopyText = docsContext?.copyText;
+  const selectDocument = useMemo(
+    () =>
+      onSelectDocument
+        ? (
+            path: string,
+            _searchMatch?: unknown,
+            preferredViewMode?: "html" | "markdown",
+          ) => onSelectDocument(path, preferredViewMode)
+        : ctxSelectDocument
+          ? (
+              path: string,
+              searchMatch?: { matchField: "title" | "body" | "path"; matchText: string },
+              preferredViewMode?: "html" | "markdown",
+            ) => ctxSelectDocument(path, searchMatch, preferredViewMode)
+          : () => {},
+    [ctxSelectDocument, onSelectDocument],
+  );
+  const readAsset = readAssetProp ?? ctxReadAsset ?? unavailableMarkdownAsset;
+  const openExternal = useMemo(
+    () =>
+      onOpenExternal
+        ? async (url: string) => {
+            await onOpenExternal(url);
+          }
+        : ctxOpenExternal ?? (async () => {}),
+    [ctxOpenExternal, onOpenExternal],
+  );
+  const copyText = useMemo(
+    () =>
+      onCopyText ??
+      ctxCopyText ??
+      (async (value: string) => {
+        await navigator.clipboard?.writeText(value);
+      }),
+    [ctxCopyText, onCopyText],
+  );
   const articleRef = useRef<HTMLElement>(null);
   const [unsupportedLinkNotice, setUnsupportedLinkNotice] = useState<string | null>(null);
-  const searchMatch = state.selectedSearchMatch;
+  const searchMatch = docsContext?.state.selectedSearchMatch ?? null;
   const bodySearchQuery = searchMatch?.matchField === "body" ? searchMatch.matchText : "";
 
   useEffect(() => {

@@ -4,6 +4,7 @@ import { StatusBadge } from "@/components/patterns/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { IssueAssigneeBadge } from "@/features/project-board/IssueAssigneeBadge";
 import {
+  boardStatusTone,
   layerName,
   statusName,
   type BoardIssue,
@@ -127,7 +128,7 @@ function IssueTitle({ issue, label }: { issue: BoardIssue; label: string }) {
 
 function OmittedNote({ issue }: { issue: BoardIssue }) {
   return issue.childrenTruncated ? (
-    <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+    <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
       하위 항목 생략됨
     </span>
   ) : null;
@@ -217,7 +218,7 @@ function ProgressBar({ progress }: { progress: EpicProgress }) {
           style={{ width: `${progress.percent}%` }}
         />
       </div>
-      <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+      <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
         {progress.done}/{progress.total} · {progress.percent}%
       </span>
     </div>
@@ -242,18 +243,18 @@ function LeafRow({
       style={{ marginInlineStart: `${depth * 12}px` }}
     >
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-        <span aria-hidden="true" className="text-[var(--text-muted)]">
+        <span aria-hidden="true" className="text-[var(--color-text-muted)]">
           ·
         </span>
         <IssueTitle
           issue={issue}
           label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
         />
-        <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+        <StatusBadge tone={boardStatusTone(issue.status)}>{statusName(issue.status)}</StatusBadge>
         <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
         <IssueAssigneeBadge assignees={issue.assignees} />
         {issue.kind ? (
-          <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+          <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
             {issue.kind}
           </span>
         ) : null}
@@ -297,7 +298,7 @@ function LayerGroup({
   }
   return (
     <section aria-labelledby={headingId} className="grid min-w-0 gap-[var(--space-2)]">
-      <h3 id={headingId} className="m-0 text-[var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--text-muted)]">
+      <h3 id={headingId} className="m-0 text-[length:var(--font-meta-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-muted)]">
         {name}
       </h3>
       <div className="grid gap-[var(--space-2)]">
@@ -407,7 +408,7 @@ function FlowNodeCard({
   return (
     <article
       aria-label={`${kindLabel(issue.kind)} #${issue.number} ${issue.title}`}
-      className={`grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)] ${isBranch ? "ring-1 ring-[var(--color-primary-action)]" : ""}`}
+      className={`grid content-start gap-[var(--space-2)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)] ${isBranch ? "ring-1 ring-[var(--color-primary-action)]" : ""}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-[var(--space-2)]">
         <h3 className="m-0 text-[length:inherit] font-[number:var(--font-weight-control)]">
@@ -419,10 +420,10 @@ function FlowNodeCard({
         <DetailActionButton issue={issue} onSelectIssue={onSelectIssue} />
       </div>
       <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-        <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+        <StatusBadge tone={boardStatusTone(issue.status)}>{statusName(issue.status)}</StatusBadge>
         <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
         <IssueAssigneeBadge assignees={issue.assignees} />
-        <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+        <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
           {layerName(issue.layer)}
           {issue.kind ? ` · ${issue.kind}` : null}
         </span>
@@ -686,7 +687,7 @@ function EpicCard({
   return (
     <article
       aria-label={`에픽 #${issue.number} ${issue.title}`}
-      className="grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-4)]"
+      className="grid gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)]"
     >
       <div className="grid gap-[var(--space-2)]">
         <div className="flex flex-wrap items-center gap-[var(--space-2)]">
@@ -705,17 +706,17 @@ function EpicCard({
               <ChevronRight aria-hidden="true" />
             )}
           </Button>
-          <h2 className="m-0 font-[number:var(--font-weight-control)] text-[length:var(--font-h3-size,1rem)]">
+          <h2 className="m-0 font-[number:var(--font-weight-control)] text-[length:var(--font-group-size)] leading-[var(--font-group-line)]">
             <IssueTitle
               issue={issue}
               label={`에픽 #${issue.number} ${issue.title}`}
             />
           </h2>
-          <StatusBadge tone="neutral">{statusName(issue.status)}</StatusBadge>
+          <StatusBadge tone={boardStatusTone(issue.status)}>{statusName(issue.status)}</StatusBadge>
           <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
           <IssueAssigneeBadge assignees={issue.assignees} />
           {issue.kind ? (
-            <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+            <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
               {issue.kind}
             </span>
           ) : null}
@@ -774,7 +775,7 @@ export function ProjectTree({
   }, [issues]);
   if (epics.length === 0 && singles.length === 0) {
     return (
-      <p className="m-0 text-[var(--text-muted)]">연결된 Issue 없음</p>
+      <p className="m-0 text-[var(--color-text-muted)]">연결된 Issue 없음</p>
     );
   }
   const autoExpand = epics.length <= EPIC_AUTO_EXPAND_LIMIT;
@@ -784,7 +785,7 @@ export function ProjectTree({
       role="region"
       aria-label="계층 보기"
     >
-      <p className="m-0 text-[var(--font-meta-size)] text-[var(--text-muted)]">
+      <p className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
         아래 트리에서 순서와 갈래를 한눈에 볼 수 있습니다. 본문에{" "}
         <code>이전 단계: #N</code>을 적으면 흐름으로 이어서 보여줍니다.
         묶음 위·아래 순서는 진행 순서가 아닙니다.
@@ -800,7 +801,12 @@ export function ProjectTree({
       ))}
       {singles.length > 0 ? (
         <section aria-labelledby={singlesHeadingId}>
-          <h2 id={singlesHeadingId} className="m-0 mb-[var(--space-3)]">단일 항목</h2>
+          <h2
+            id={singlesHeadingId}
+            className="m-0 mb-[var(--space-3)] text-[length:var(--font-section-size)] leading-[var(--font-section-line)] font-[number:var(--font-weight-section-title)] text-[var(--color-text-strong)]"
+          >
+            단일 항목
+          </h2>
           <FlowSteps
             steps={singleFlow.steps}
             label="단일 항목 흐름 요약"
@@ -814,15 +820,15 @@ export function ProjectTree({
                 <article
                   key={key}
                   aria-label={`단일 항목 #${issue.number} ${issue.title}`}
-                  className="flex flex-wrap items-center gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-[var(--space-3)]"
+                  className="flex flex-wrap items-center gap-[var(--space-2)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-3)]"
                 >
                   <IssueTitle issue={issue} label={`#${issue.number} ${issue.title}`} />
-                  <StatusBadge tone="neutral">
+                  <StatusBadge tone={boardStatusTone(issue.status)}>
                     {statusName(issue.status)}
                   </StatusBadge>
                   <ReadinessBadge issue={issue} readinessIndex={readinessIndex} />
                   <IssueAssigneeBadge assignees={issue.assignees} />
-                  <span className="text-[var(--font-meta-size)] text-[var(--text-muted)]">
+                  <span className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                     {layerName(issue.layer)}
                   </span>
                   <OmittedNote issue={issue} />

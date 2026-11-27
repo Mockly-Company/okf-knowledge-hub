@@ -30,6 +30,8 @@ export interface BoardIssue {
   kind: string | null;
   /** 같은 부모 아래 선행 이슈 번호. 본문 `이전 단계: #N`에서 온다. */
   dependsOn?: number | null;
+  /** 이슈 본문에서 참조한 문서 저장소 상대 경로(`.md` 정규화). */
+  linkedDocPaths?: string[];
   /** 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시. 구 캐시에는 없음. */
   childrenTruncated?: boolean;
   assignees?: BoardAssignee[];
@@ -91,6 +93,23 @@ export function layerName(layer: BoardLayer): string {
 
 export function statusName(status: BoardStatus): string {
   return BOARD_STATUSES.find((entry) => entry.id === status)?.name ?? status;
+}
+
+export function boardStatusTone(
+  status: BoardStatus,
+): "neutral" | "info" | "warning" | "success" {
+  switch (status) {
+    case "done":
+      return "success";
+    case "in_progress":
+    case "in_review":
+      return "info";
+    case "ready":
+      return "warning";
+    case "backlog":
+    default:
+      return "neutral";
+  }
 }
 
 /** GitHub 계정(조직 또는 개인). 프로젝트 목록의 owner 필터 단위. */

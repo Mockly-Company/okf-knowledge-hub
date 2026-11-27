@@ -1071,7 +1071,8 @@ mod tests {
         let runtime = AutomationRuntime::load(&super::super::AutomationOverrides {
             app_data_dir: Some(dir.path().to_path_buf()),
             ..Default::default()
-        }).unwrap();
+        })
+        .unwrap();
         let args = json!({"requestId":"shared-id","repository":"acme/docs","number":7});
         let preview = json!({"tool":"first-tool","project":{"id":"P"},"changes":args});
         let mut first = Journal::open(&runtime, &preview).unwrap();

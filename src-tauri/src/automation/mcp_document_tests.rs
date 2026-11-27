@@ -26,7 +26,7 @@ fn runtime(
             }
             let base = format!("/repos/{repo}");
             if scenario != "read" {
-                replies.push((format!("{base}"),json!({"default_branch":"main","node_id":if repo=="acme/other"{"R_OTHER"}else{"R_DOCS"}})));
+                replies.push((base.clone(),json!({"default_branch":"main","node_id":if repo=="acme/other"{"R_OTHER"}else{"R_DOCS"}})));
                 let current = if scenario == "page_move" && run == 1 {
                     "cccccccccccccccccccccccccccccccccccccccc"
                 } else {

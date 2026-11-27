@@ -228,6 +228,36 @@ function sameFrontmatterStatus(
   );
 }
 
+function sameWireframes(
+  left: DocumentSummary["wireframes"],
+  right: DocumentSummary["wireframes"],
+): boolean {
+  const a = left ?? [];
+  const b = right ?? [];
+  if (a.length !== b.length) return false;
+  return a.every(
+    (item, index) =>
+      item.title === b[index]?.title && item.image === b[index]?.image,
+  );
+}
+
+function sameDesigns(
+  left: DocumentSummary["designs"],
+  right: DocumentSummary["designs"],
+): boolean {
+  const a = left ?? [];
+  const b = right ?? [];
+  if (a.length !== b.length) return false;
+  return a.every(
+    (item, index) =>
+      item.title === b[index]?.title &&
+      item.url === b[index]?.url &&
+      item.image === b[index]?.image &&
+      item.status === b[index]?.status &&
+      item.wireframe === b[index]?.wireframe,
+  );
+}
+
 function sameDocumentSummary(
   left: DocumentSummary,
   right: DocumentSummary,
@@ -239,6 +269,11 @@ function sameDocumentSummary(
     left.documentId === right.documentId &&
     left.modifiedAtUnixMs === right.modifiedAtUnixMs &&
     left.size === right.size &&
+    left.hasCompanionHtml === right.hasCompanionHtml &&
+    left.implStatus === right.implStatus &&
+    left.implNote === right.implNote &&
+    sameWireframes(left.wireframes, right.wireframes) &&
+    sameDesigns(left.designs, right.designs) &&
     sameFrontmatterStatus(left.frontmatterStatus, right.frontmatterStatus)
   );
 }

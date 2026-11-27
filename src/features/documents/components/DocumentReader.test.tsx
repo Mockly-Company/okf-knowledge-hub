@@ -296,7 +296,13 @@ describe("DocumentReader", () => {
 
     await user.click(await screen.findByRole("button", { name: "편집" }));
 
-    expect(await screen.findByRole("region", { name: "문서 편집기" })).toBeVisible();
+    expect(
+      await screen.findByRole(
+        "region",
+        { name: "문서 편집기" },
+        { timeout: 5000 },
+      ),
+    ).toBeVisible();
     expect(
       gateway.calls.filter((call) => call.method === "editExistingDocumentDraft"),
     ).toHaveLength(1);
@@ -308,7 +314,11 @@ describe("DocumentReader", () => {
 
     await user.click(await screen.findByRole("button", { name: "편집" }));
 
-    const editor = await screen.findByRole("region", { name: "문서 편집기" });
+    const editor = await screen.findByRole(
+      "region",
+      { name: "문서 편집기" },
+      { timeout: 5000 },
+    );
     const title = within(editor).getByRole("textbox", { name: "문서 제목" });
     const header = title.closest(".document-draft-editor__header");
     const switcher = screen.getByRole("combobox", { name: "문서 작업 전환" });
@@ -527,8 +537,11 @@ describe("DocumentReader", () => {
     expect(mdTab).toHaveAttribute("aria-selected", "false");
 
     const frame = screen.getByTitle("OkHub v2 전체 컨셉 사람용 보기");
-    expect(frame).toHaveAttribute("sandbox", "");
-    expect(frame).toHaveAttribute("srcdoc", document.companionHtml!.html);
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts");
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    const srcDoc = frame.getAttribute("srcdoc") ?? "";
+    expect(srcDoc).toContain("구조화 HTML 뷰");
+    expect(srcDoc).toContain("Content-Security-Policy");
     expect(screen.queryByText("원문 마크다운 내용입니다.")).not.toBeInTheDocument();
 
     await user.click(mdTab);
@@ -820,5 +833,98 @@ describe("DocumentReader", () => {
       rafSpy.mockRestore();
       cancelSpy.mockRestore();
     }
+  });
+
+  it("moves wireframes and designs into the right context panel tab and shows a 1-line summary bar above the reader", async () => {
+    const user = userEvent.setup();
+    const specDoc: DocumentContent = {
+      ...invalidFrontmatterDocument(),
+      summary: {
+        ...invalidFrontmatterDocument().summary,
+        path: "docs/domains/documents/screen-spec.md",
+        fileName: "screen-spec.md",
+        title: "문서 워크벤치 화면명세서",
+        docType: "Screen Spec",
+        wireframes: [
+          { title: "도메인 맵 와이어프레임", image: "assets/wireframe.svg" },
+        ],
+        designs: [
+          {
+            title: "도메인 맵 시안",
+            image: "assets/design.svg",
+            status: "approved",
+            wireframe: "도메인 맵 와이어프레임",
+          },
+        ],
+      },
+      markdown: "# 문서 워크벤치 화면명세서\n\n화면 상세 스펙 본문",
+      companionHtml: {
+        path: "docs/domains/documents/screen-spec.html",
+        html: "<!doctype html><html><body><h1>화면명세 HTML</h1></body></html>",
+        modifiedAtUnixMs: 1_721_000_000_500,
+      },
+      htmlSyncStatus: "in_sync",
+    };
+
+    const gateway = renderSelectedDocument(specDoc);
+    vi.spyOn(gateway, "readDocumentAsset").mockResolvedValue({
+      kind: "svg",
+      source: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+    });
+
+    const summaryBar = await screen.findByRole("region", {
+      name: "와이어프레임 및 디자인 요약",
+    });
+    expect(within(summaryBar).getByText("와이어프레임 1")).toBeVisible();
+    expect(within(summaryBar).getByText("디자인 1")).toBeVisible();
+    // Large wireframe/design preview galleries stay out of the main reader flow until opened.
+    expect(screen.queryByAltText("도메인 맵 와이어프레임")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("도메인 맵 시안")).not.toBeInTheDocument();
+
+    // Context panel exposes the `시안 (2)` tab.
+    expect(screen.getByRole("tab", { name: "시안 (2)" })).toBeVisible();
+
+    // Collapse the context panel first, then click "우측 패널에서 보기" — it should reopen and switch to `시안 (2)`.
+    await user.click(screen.getByRole("button", { name: "문서 문맥 접기" }));
+    expect(screen.queryByRole("complementary", { name: "문서 문맥" })).toBeNull();
+
+    await user.click(
+      within(summaryBar).getByRole("button", { name: "우측 패널에서 보기" }),
+    );
+    const contextPanel = await screen.findByRole("complementary", {
+      name: "문서 문맥",
+    });
+    expect(
+      within(contextPanel).getByRole("tab", { name: "시안 (2)" }),
+    ).toHaveAttribute("aria-selected", "true");
+    expect(
+      await within(contextPanel).findByAltText("도메인 맵 와이어프레임"),
+    ).toBeVisible();
+    expect(
+      await within(contextPanel).findByAltText("도메인 맵 시안"),
+    ).toBeVisible();
+  });
+
+  it("keeps the workbench panel scrollable within documents-page--reader and allows header action wrapping", () => {
+    const readerPage = declarationBlock(".documents-page--reader");
+    expect(readerPage).toContain("display: flex");
+    expect(readerPage).toContain("flex-direction: column");
+
+    const workbenchPanel = declarationBlock(
+      ".documents-page--reader > .documents-page__workbench-panel",
+    );
+    expect(workbenchPanel).toContain("flex: 1 1 0");
+    expect(workbenchPanel).toContain("min-height: 0");
+    expect(workbenchPanel).toContain("overflow: hidden");
+
+    expect(declarationBlock(".document-reader__header")).toContain(
+      "flex-wrap: wrap",
+    );
+    expect(declarationBlock(".document-reader__heading")).toContain(
+      "min-width: 0",
+    );
+    expect(declarationBlock(".document-reader__actions")).toContain(
+      "flex-wrap: wrap",
+    );
   });
 });

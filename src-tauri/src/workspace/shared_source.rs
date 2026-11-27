@@ -224,7 +224,7 @@ async fn read_blob(
         .chars()
         .filter(|c| !c.is_ascii_whitespace())
         .collect::<String>();
-    if compact.len() > ((SHARED_FILE_LIMIT as usize + 2) / 3 * 4) {
+    if compact.len() > (SHARED_FILE_LIMIT as usize).div_ceil(3) * 4 {
         return Err(invalid("파일 크기가 제한을 초과했습니다."));
     }
     let bytes = STANDARD

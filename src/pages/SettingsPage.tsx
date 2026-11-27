@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useInRouterContext, useSearchParams } from "react-router-dom";
 import { Check } from "lucide-react";
 import { PageHeader } from "@/components/patterns/PageHeader";
 import { SectionHeader } from "@/components/patterns/SectionHeader";
@@ -18,7 +19,6 @@ import type { CodeRepositoriesGateway } from "@/features/code-repositories/CodeR
 
 const settingsCategories = [
   "외부 연결",
-  "문서",
   "작업 방식",
   "화면",
   "AI 연동",
@@ -39,11 +39,11 @@ function resolveSettingsCategory(value: string | null): string {
   ) {
     return "외부 연결";
   }
-  if (key === "document" || key === "documents" || key === "문서") {
-    return "문서";
-  }
   if (
     key === "workflow" ||
+    key === "document" ||
+    key === "documents" ||
+    key === "문서" ||
     key === "작업 방식" ||
     key === "작업방식"
   ) {
@@ -64,6 +64,22 @@ function resolveSettingsCategory(value: string | null): string {
     return "앱 정보";
   }
   return "화면";
+}
+
+function categoryToParam(category: string): string {
+  switch (category) {
+    case "외부 연결":
+      return "external";
+    case "작업 방식":
+      return "workflow";
+    case "AI 연동":
+      return "ai";
+    case "앱 정보":
+      return "app-info";
+    case "화면":
+    default:
+      return "display";
+  }
 }
 
 /**
@@ -103,17 +119,79 @@ const options: Array<{
 
 const defaultBuildInfoGateway = createBuildInfoGateway();
 
-export function SettingsPage({
-  buildInfoGateway = defaultBuildInfoGateway,
-  aiGateway,
-  codeRepositoriesGateway,
-}: {
+interface SettingsPageProps {
   buildInfoGateway?: BuildInfoGateway;
   aiGateway?: AiGateway;
   codeRepositoriesGateway?: CodeRepositoriesGateway;
+}
+
+export function SettingsPage(props: SettingsPageProps) {
+  const inRouterContext = useInRouterContext();
+  return inRouterContext ? (
+    <RouterSettingsPage {...props} />
+  ) : (
+    <StandaloneSettingsPage {...props} />
+  );
+}
+
+function RouterSettingsPage(props: SettingsPageProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawCategory = searchParams.get("category");
+  const [activeCategory, setActiveCategory] = useState(() =>
+    rawCategory !== null
+      ? resolveSettingsCategory(rawCategory)
+      : readInitialSettingsCategory(),
+  );
+
+  useEffect(() => {
+    if (rawCategory !== null) {
+      setActiveCategory(resolveSettingsCategory(rawCategory));
+    }
+  }, [rawCategory]);
+
+  const handleCategorySelect = (nextCategory: string) => {
+    setActiveCategory(nextCategory);
+    setSearchParams(
+      (prev) => {
+        const nextParams = new URLSearchParams(prev);
+        nextParams.set("category", categoryToParam(nextCategory));
+        return nextParams;
+      },
+      { replace: true },
+    );
+  };
+
+  return (
+    <SettingsPageView
+      {...props}
+      activeCategory={activeCategory}
+      onSelectCategory={handleCategorySelect}
+    />
+  );
+}
+
+function StandaloneSettingsPage(props: SettingsPageProps) {
+  const [activeCategory, setActiveCategory] = useState(readInitialSettingsCategory);
+  return (
+    <SettingsPageView
+      {...props}
+      activeCategory={activeCategory}
+      onSelectCategory={setActiveCategory}
+    />
+  );
+}
+
+function SettingsPageView({
+  buildInfoGateway = defaultBuildInfoGateway,
+  aiGateway,
+  codeRepositoriesGateway,
+  activeCategory,
+  onSelectCategory,
+}: SettingsPageProps & {
+  activeCategory: string;
+  onSelectCategory: (category: string) => void;
 }) {
   const { displayDensity, isLoading, setDisplayDensity } = usePreferences();
-  const [activeCategory, setActiveCategory] = useState(readInitialSettingsCategory);
 
   return (
     <section
@@ -136,7 +214,7 @@ export function SettingsPage({
                 <Button
                   type="button"
                   variant="ghost"
-                  onClick={() => setActiveCategory(item)}
+                  onClick={() => onSelectCategory(item)}
                   aria-current={item === activeCategory ? "page" : undefined}
                   className={cn(
                     "w-full justify-start",

@@ -164,4 +164,86 @@ describe("DocumentsFollowActiveProject", () => {
     );
     expect(client.getQueryState(aiKeys.agentsMd)?.isInvalidated).toBe(true);
   });
+
+  it("does not reset the initial Documents session when active workspace finishes initial hydration", async () => {
+    const client = createTestQueryClient();
+    client.setQueryData(currentDocsRepositoryKey, { status: "connected" });
+    client.setQueryData(aiKeys.agentsMd, { workspace_path: "a" });
+
+    vi.spyOn(ActiveProjectModule, "useOptionalActiveProject").mockReturnValue({
+      isListing: true,
+      activeWorkspaceId: null,
+      activeProjectId: null,
+      activeWorkspace: null,
+    } as unknown as ActiveProjectModule.ActiveProjectContextValue);
+
+    const documents = documentsGateway();
+    const view = render(
+      <QueryClientProvider client={client}>
+        <DocumentsProvider gateway={documents} searchDebounceMs={0}>
+          <DocumentsFollowActiveProject />
+        </DocumentsProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        documents.calls.filter((call) => call.method === "startSession"),
+      ).toHaveLength(1),
+    );
+
+    vi.spyOn(ActiveProjectModule, "useOptionalActiveProject").mockReturnValue({
+      isListing: false,
+      activeWorkspaceId: "repo:R_1",
+      activeProjectId: null,
+      activeWorkspace: {
+        id: "repo:R_1",
+        title: "specs",
+        project: null,
+        docsRepository: { repositoryId: "R_1", fullName: "Mockly/specs" },
+      },
+    } as unknown as ActiveProjectModule.ActiveProjectContextValue);
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentsProvider gateway={documents} searchDebounceMs={0}>
+          <DocumentsFollowActiveProject />
+        </DocumentsProvider>
+      </QueryClientProvider>,
+    );
+
+    expect(client.getQueryState(currentDocsRepositoryKey)?.isInvalidated).toBe(false);
+    expect(client.getQueryState(aiKeys.agentsMd)?.isInvalidated).toBe(false);
+    expect(
+      documents.calls.filter((call) => call.method === "startSession"),
+    ).toHaveLength(1);
+
+    vi.spyOn(ActiveProjectModule, "useOptionalActiveProject").mockReturnValue({
+      isListing: false,
+      activeWorkspaceId: "repo:R_2",
+      activeProjectId: null,
+      activeWorkspace: {
+        id: "repo:R_2",
+        title: "guides",
+        project: null,
+        docsRepository: { repositoryId: "R_2", fullName: "Mockly/guides" },
+      },
+    } as unknown as ActiveProjectModule.ActiveProjectContextValue);
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <DocumentsProvider gateway={documents} searchDebounceMs={0}>
+          <DocumentsFollowActiveProject />
+        </DocumentsProvider>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(client.getQueryState(currentDocsRepositoryKey)?.isInvalidated).toBe(true),
+    );
+    expect(client.getQueryState(aiKeys.agentsMd)?.isInvalidated).toBe(true);
+    await waitFor(() =>
+      expect(
+        documents.calls.filter((call) => call.method === "startSession"),
+      ).toHaveLength(2),
+    );
+  });
 });

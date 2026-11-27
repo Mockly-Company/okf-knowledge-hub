@@ -75,18 +75,33 @@ function propertyLabel(name: string): string {
   const labels: Record<string, string> = {
     type: "유형", owner: "담당", title: "제목", description: "설명",
     status: "상태", domain: "도메인", tags: "태그", related_docs: "관련 문서",
-    designs: "디자인", wireframes: "와이어프레임", image: "파일",
+    designs: "디자인 시안", wireframes: "와이어프레임", image: "파일",
     wireframe: "연결 와이어프레임", timestamp: "작성일", okf_hub_id: "문서 ID",
+    impl_status: "코드 반영 상태", impl_note: "코드 반영 메모",
+    updated: "업데이트", updated_at: "업데이트", code_refs: "코드 참조",
   };
-  return labels[name] ?? name;
+  return Object.hasOwn(labels, name) ? labels[name] : name;
 }
 
-function PropertyValue({ value }: { value: unknown }) {
-  if (value === null || value === undefined) return <>없음</>;
+const IMPL_STATUS_LABELS: Record<string, string> = {
+  synced: "코드 반영 완료",
+  partial: "일부 수정 필요",
+  unimplemented: "미반영",
+};
+
+function PropertyValue({ value, name, ancestors = [] }: {
+  value: unknown;
+  name?: string;
+  ancestors?: readonly object[];
+}) {
+  if (value === null) return <>없음</>;
+  if (value === undefined) return <>-</>;
+  if (typeof value === "object" && ancestors.includes(value)) return <>-</>;
+  const nestedAncestors = typeof value === "object" ? [...ancestors, value] : ancestors;
   if (Array.isArray(value)) {
     return value.length === 0 ? <>없음</> : (
       <ul className="document-property-value__list">
-        {value.map((item, index) => <li key={index}><PropertyValue value={item} /></li>)}
+        {value.map((item, index) => <li key={index}><PropertyValue value={item} ancestors={nestedAncestors} /></li>)}
       </ul>
     );
   }
@@ -96,12 +111,14 @@ function PropertyValue({ value }: { value: unknown }) {
       <dl className="document-property-value__object">
         {entries.map(([key, item]) => <div key={key}>
           <dt>{propertyLabel(key)}</dt>
-          <dd><PropertyValue value={item} /></dd>
+          <dd><PropertyValue value={item} name={key} ancestors={nestedAncestors} /></dd>
         </div>)}
       </dl>
     );
   }
-  return <>{String(value)}</>;
+  return <>{name === "impl_status" && typeof value === "string"
+    && Object.hasOwn(IMPL_STATUS_LABELS, value)
+    ? IMPL_STATUS_LABELS[value] : String(value)}</>;
 }
 
 function propertyEntries(properties: unknown): Array<[string, unknown]> {
@@ -266,7 +283,7 @@ export function DocumentOverview({
             {entries.map(([name, value]) => (
               <div key={name}>
                 <dt>{propertyLabel(name)}</dt>
-                <dd><PropertyValue value={value} /></dd>
+                <dd><PropertyValue value={value} name={name} /></dd>
               </div>
             ))}
           </dl>
@@ -277,7 +294,7 @@ export function DocumentOverview({
           className="mt-[var(--space-4)] grid gap-[var(--space-2)]"
           aria-label="연결된 코드 참조"
         >
-          <h2 className="m-0 text-[length:var(--text-sm)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
+          <h2 className="m-0 text-[length:var(--font-ui-size)] font-[number:var(--font-weight-control)] text-[var(--color-text-strong)]">
             연결된 코드 참조
           </h2>
           <div className="grid gap-[var(--space-1)]">
@@ -288,7 +305,7 @@ export function DocumentOverview({
                 variant="secondary"
                 loading={loadingCodeRef === ref.raw}
                 onClick={() => void toggleCodeReference(ref)}
-                className="justify-start font-mono text-[length:var(--text-xs)]"
+                className="justify-start font-mono text-[length:var(--font-meta-size)]"
               >
                 {ref.raw}
               </Button>
@@ -298,7 +315,7 @@ export function DocumentOverview({
             <p
               role="status"
               aria-live="polite"
-              className="m-0 text-[length:var(--text-xs)] text-[var(--color-text-muted)]"
+              className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]"
             >
               코드 스니펫을 불러오는 중…
             </p>
@@ -306,18 +323,18 @@ export function DocumentOverview({
           {codePreviewError && (
             <p
               role="alert"
-              className="m-0 text-[length:var(--text-xs)] text-[var(--color-error-text)]"
+              className="m-0 text-[length:var(--font-meta-size)] text-[var(--color-error)]"
             >
               {codePreviewError}
             </p>
           )}
           {codePreview && (
-            <div className="grid gap-[var(--space-1)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-muted)] p-[var(--space-2)]">
-              <div className="text-[length:var(--text-xs)] text-[var(--color-text-muted)]">
+            <div className="grid gap-[var(--space-1)] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-canvas)] p-[var(--space-2)]">
+              <div className="text-[length:var(--font-meta-size)] text-[var(--color-text-muted)]">
                 {codePreview.repositoryFullName} · {codePreview.filePath} (L
                 {codePreview.startLine}–L{codePreview.endLine})
               </div>
-              <pre className="m-0 overflow-x-auto font-mono text-[length:var(--text-xs)] text-[var(--color-text-strong)]">
+              <pre className="m-0 overflow-x-auto font-mono text-[length:var(--font-meta-size)] text-[var(--color-text-strong)]">
                 <code>{codePreview.content}</code>
               </pre>
             </div>

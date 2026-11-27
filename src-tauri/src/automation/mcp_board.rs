@@ -368,6 +368,14 @@ fn dependency_ref(body: &str, own_repo: &str) -> Result<Option<(String, u64)>, A
     Ok(None)
 }
 
+pub(super) fn validate_date(date: &str) -> Result<(), AppError> {
+    let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+        .map_err(|e| error(e.to_string()))?;
+    time::Date::parse(date, &format)
+        .map(|_| ())
+        .map_err(|_| error("날짜는 유효한 YYYY-MM-DD여야 합니다."))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -397,6 +405,7 @@ mod tests {
             assignees: vec![],
             created_at: None,
             updated_at: None,
+            linked_doc_paths: vec![],
         }
     }
     #[test]
@@ -463,12 +472,4 @@ mod tests {
             "satisfied"
         );
     }
-}
-
-pub(super) fn validate_date(date: &str) -> Result<(), AppError> {
-    let format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
-        .map_err(|e| error(e.to_string()))?;
-    time::Date::parse(date, &format)
-        .map(|_| ())
-        .map_err(|_| error("날짜는 유효한 YYYY-MM-DD여야 합니다."))
 }

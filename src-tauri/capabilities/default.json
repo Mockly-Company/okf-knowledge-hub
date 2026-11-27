@@ -20,6 +20,48 @@
         },
         {
           "url": "https://github.com/Mockly-Company/okf-knowledge-hub/releases"
+        },
+        {
+          "url": "https://github.com/*/*/pull/*"
+        },
+        {
+          "url": "https://github.com/*/*/issues/*"
+        },
+        {
+          "url": "https://github.com/orgs/*/projects/*"
+        },
+        {
+          "url": "https://github.com/users/*/projects/*"
+        },
+        {
+          "url": "https://www.figma.com/design/*"
+        },
+        {
+          "url": "https://www.figma.com/file/*"
+        },
+        {
+          "url": "https://www.figma.com/proto/*"
+        },
+        {
+          "url": "https://www.figma.com/board/*"
+        },
+        {
+          "url": "https://figma.com/design/*"
+        },
+        {
+          "url": "https://figma.com/file/*"
+        },
+        {
+          "url": "https://docs.google.com/document/*"
+        },
+        {
+          "url": "https://docs.google.com/spreadsheets/*"
+        },
+        {
+          "url": "https://docs.google.com/presentation/*"
+        },
+        {
+          "url": "https://miro.com/app/board/*"
         }
       ]
     },

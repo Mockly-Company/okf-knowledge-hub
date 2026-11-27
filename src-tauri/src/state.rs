@@ -96,8 +96,8 @@ impl DocumentCommandSessionContext {
     pub(crate) fn initialize(
         &self,
         workspace: DocumentCommandWorkspaceContext,
-    ) -> Result<(), DocumentCommandWorkspaceContext> {
-        self.workspace.set(workspace)
+    ) -> Result<(), Box<DocumentCommandWorkspaceContext>> {
+        self.workspace.set(workspace).map_err(Box::new)
     }
 
     pub(crate) fn workspace(&self) -> &DocumentCommandWorkspaceContext {

@@ -571,6 +571,7 @@ fn build_tree(
                 children: std::mem::take(&mut child_issues),
                 kind: item.kind.clone(),
                 depends_on: item.depends_on,
+                linked_doc_paths: item.linked_doc_paths.clone(),
                 // 깊이 제한으로 잘린 노드는 프론트가 "하위 항목 생략됨"으로 표시한다.
                 // 자식이 없으면 잘릴 게 없으므로 리프로 둔다.
                 // 예산 절단으로 통째로 빠진 자식이 있으면 부모에도 표시한다.
@@ -950,6 +951,8 @@ pub struct CreateBoardIssueRequest {
     pub parent_batch_index: Option<usize>,
     pub depends_on: Option<u64>,
     pub depends_on_batch_index: Option<usize>,
+    #[serde(default)]
+    pub assignees: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1276,6 +1279,7 @@ pub async fn create_project_board_issues(
                 priority: req.priority,
                 parent_issue_number: resolved_parent_num,
                 parent_issue_repository: resolved_parent_repo,
+                assignees: req.assignees,
             })
             .await?;
         created.push(item);
@@ -2315,6 +2319,7 @@ mod tests {
             kind: None,
             priority: None,
             depends_on: None,
+            linked_doc_paths: Vec::new(),
             sub_issues: sub_urls
                 .iter()
                 .enumerate()
@@ -3073,6 +3078,7 @@ mod tests {
                         children: vec![],
                         kind: Some("작업".into()),
                         depends_on: None,
+                        linked_doc_paths: vec![],
                         children_truncated: false,
                         assignees: vec![],
                         created_at: None,
@@ -3080,6 +3086,7 @@ mod tests {
                     }],
                     kind: Some("기능".into()),
                     depends_on: None,
+                    linked_doc_paths: vec![],
                     children_truncated: false,
                     assignees: vec![],
                     created_at: None,

@@ -14,7 +14,13 @@ import {
   type DocumentCategoryFilter,
   type DocumentGroup,
   type DocumentGroupMode,
+  type DocumentImplStatusFilter,
 } from "../document-taxonomy";
+import {
+  buildProjectProgressSummary,
+  canonicalDocumentKey,
+  matchesImplStatusFilter,
+} from "../domain-progress";
 import {
   normalizeDocumentPath,
   type AppError,
@@ -22,8 +28,13 @@ import {
   type IndexStatus,
   type SearchResult,
 } from "../model";
+import type { BoardIssue } from "@/features/project-board/model";
 import type { AsyncStatus } from "../documents-reducer";
 import { displayDocumentPath, documentLocation } from "../document-location";
+import { DocumentDomainMap } from "./DocumentDomainMap";
+import { DocumentIsometricOverview } from "./DocumentIsometricOverview";
+import { DocumentProgressOverview } from "./DocumentProgressOverview";
+import { ScreenSpecDeck } from "./ScreenSpecDeck";
 
 interface DocumentSearchProps {
   query: string;
@@ -32,15 +43,29 @@ interface DocumentSearchProps {
   searchStatus: AsyncStatus;
   searchError: AppError | null;
   indexStatus: IndexStatus;
+  defaultGroupMode?: DocumentGroupMode;
+  boardIssues?: readonly BoardIssue[];
   onQueryChange(query: string): void;
-  onSelectDocument(path: string): void;
+  onSelectDocument(
+    path: string,
+    preferredViewMode?: "html" | "markdown",
+  ): void;
   onSelectResult(result: SearchResult): void;
   onRetry(): void;
+  onAuditCodeSync?: (group: DocumentGroup) => void;
   onNewDocumentInFolder?: (folderPath: string) => void;
+  onOpenInNewWindow?: (
+    path: string,
+    viewMode?: "html" | "markdown",
+    title?: string,
+  ) => void;
   toolbarAction?: ReactNode;
 }
 
 const GROUP_MODE_OPTIONS: ReadonlyArray<{ mode: DocumentGroupMode; label: string }> = [
+  { mode: "map", label: "도메인 맵" },
+  { mode: "overview", label: "전체 조망 (2.5D)" },
+  { mode: "screen_specs", label: "화면명세 보드" },
   { mode: "domain", label: "도메인별" },
   { mode: "type", label: "문서 유형별" },
   { mode: "flat", label: "전체 목록" },
@@ -81,16 +106,26 @@ export function DocumentSearch({
   results,
   searchStatus,
   searchError,
+  defaultGroupMode = "domain",
+  boardIssues,
   onQueryChange,
   onSelectDocument,
   onSelectResult,
   onRetry,
+  onAuditCodeSync,
   onNewDocumentInFolder,
+  onOpenInNewWindow,
   toolbarAction,
 }: DocumentSearchProps) {
-  const [groupMode, setGroupMode] = useState<DocumentGroupMode>("domain");
+  const [groupMode, setGroupMode] = useState<DocumentGroupMode>(defaultGroupMode);
+  const [screenSpecDomain, setScreenSpecDomain] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] =
     useState<DocumentCategoryFilter>("all");
+  const [statusFilter, setStatusFilter] =
+    useState<DocumentImplStatusFilter>("all");
+  const [selectedDomainKey, setSelectedDomainKey] = useState<string | null>(
+    null,
+  );
 
   const documentByPath = useMemo(() => {
     const exact = new Map<string, DocumentSummary>();
@@ -135,6 +170,41 @@ export function DocumentSearch({
           ),
     [documents, categoryFilter],
   );
+  const isOverviewOrMap =
+    !isSearching && (groupMode === "map" || groupMode === "overview");
+  const progressSummary = useMemo(
+    () =>
+      isOverviewOrMap
+        ? buildProjectProgressSummary(filteredDocuments, boardIssues)
+        : null,
+    [isOverviewOrMap, filteredDocuments, boardIssues],
+  );
+  const effectiveDomainKey = useMemo(() => {
+    if (selectedDomainKey === null || !progressSummary) return null;
+    return progressSummary.domains.some(
+      (domain) => domain.group.key === selectedDomainKey,
+    )
+      ? selectedDomainKey
+      : null;
+  }, [progressSummary, selectedDomainKey]);
+  const scopedMapDocuments = useMemo(() => {
+    if (!progressSummary || (statusFilter === "all" && effectiveDomainKey === null)) {
+      return filteredDocuments;
+    }
+    return filteredDocuments.filter((doc) => {
+      const item = progressSummary.itemsByKey.get(canonicalDocumentKey(doc.path));
+      if (!item) return false;
+      if (effectiveDomainKey !== null && item.domainKey !== effectiveDomainKey) {
+        return false;
+      }
+      return matchesImplStatusFilter(item.bucket, statusFilter);
+    });
+  }, [
+    effectiveDomainKey,
+    filteredDocuments,
+    progressSummary,
+    statusFilter,
+  ]);
   const unfilteredTitleAndPathMatches = useMemo(
     () =>
       isSearching
@@ -212,7 +282,12 @@ export function DocumentSearch({
         <UnstyledButton
           className="document-search__result-row"
           onClick={() =>
-            result ? onSelectResult(result) : onSelectDocument(item.path)
+            result
+              ? onSelectResult(result)
+              : onSelectDocument(
+                  item.path,
+                  hasCompanionHtml ? "html" : "markdown",
+                )
           }
         >
           <FileText aria-hidden="true" />
@@ -297,33 +372,35 @@ export function DocumentSearch({
               ))}
             </div>
           ) : null}
-          <div
-            className="document-search__category-filters"
-            role="group"
-            aria-label="문서 종류 필터"
-          >
-            <UnstyledButton
-              type="button"
-              className="document-search__filter-chip"
-              data-active={categoryFilter === "all"}
-              aria-pressed={categoryFilter === "all"}
-              onClick={() => setCategoryFilter("all")}
+          {isSearching || groupMode !== "screen_specs" ? (
+            <div
+              className="document-search__category-filters"
+              role="group"
+              aria-label="문서 종류 필터"
             >
-              전체
-            </UnstyledButton>
-            {DOCUMENT_CATEGORY_ORDER.map((category) => (
               <UnstyledButton
-                key={category}
                 type="button"
                 className="document-search__filter-chip"
-                data-active={categoryFilter === category}
-                aria-pressed={categoryFilter === category}
-                onClick={() => setCategoryFilter(category)}
+                data-active={categoryFilter === "all"}
+                aria-pressed={categoryFilter === "all"}
+                onClick={() => setCategoryFilter("all")}
               >
-                {DOCUMENT_CATEGORY_LABELS[category]}
+                전체
               </UnstyledButton>
-            ))}
-          </div>
+              {DOCUMENT_CATEGORY_ORDER.map((category) => (
+                <UnstyledButton
+                  key={category}
+                  type="button"
+                  className="document-search__filter-chip"
+                  data-active={categoryFilter === category}
+                  aria-pressed={categoryFilter === category}
+                  onClick={() => setCategoryFilter(category)}
+                >
+                  {DOCUMENT_CATEGORY_LABELS[category]}
+                </UnstyledButton>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -341,6 +418,101 @@ export function DocumentSearch({
           >
             <p>검색 결과를 불러오지 못했습니다.</p>
           </StatusFeedback>
+        ) : !isSearching && groupMode === "screen_specs" ? (
+          <ScreenSpecDeck
+            documents={documents}
+            initialDomainFilter={screenSpecDomain}
+            onSelectDocument={onSelectDocument}
+            onOpenInNewWindow={onOpenInNewWindow}
+          />
+        ) : isOverviewOrMap && progressSummary !== null ? (
+          items.length === 0 ? (
+            categoryFilter !== "all" && unfilteredSearchCount > 0 ? (
+              <div className="document-search__filtered-empty">
+                <p className="document-search__empty">
+                  선택한 분류에 해당하는 문서가 없습니다.
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    setCategoryFilter("all");
+                    setStatusFilter("all");
+                    setSelectedDomainKey(null);
+                  }}
+                >
+                  필터 초기화
+                </Button>
+              </div>
+            ) : (
+              <p className="document-search__empty">
+                표시할 문서가 없습니다.
+              </p>
+            )
+          ) : (
+            <div className="document-search__overview-stack">
+              <DocumentProgressOverview
+                summary={progressSummary}
+                statusFilter={statusFilter}
+                selectedDomainKey={effectiveDomainKey}
+                defaultDomainsExpanded={groupMode === "map"}
+                onStatusFilterChange={setStatusFilter}
+                onSelectDomainKey={setSelectedDomainKey}
+              />
+              {scopedMapDocuments.length === 0 ? (
+                <div className="document-search__filtered-empty">
+                  <p className="document-search__empty">
+                    선택한 조건에 해당하는 문서가 없습니다.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setStatusFilter("all");
+                      setSelectedDomainKey(null);
+                      setCategoryFilter("all");
+                    }}
+                  >
+                    필터 초기화
+                  </Button>
+                </div>
+              ) : groupMode === "map" ? (
+                <DocumentDomainMap
+                  documents={scopedMapDocuments}
+                  allDocuments={documents}
+                  boardIssues={boardIssues}
+                  hideLegend
+                  onSelectDocument={onSelectDocument}
+                  onSelectScreenSpecs={(domainKey) => {
+                    setScreenSpecDomain(domainKey);
+                    setGroupMode("screen_specs");
+                  }}
+                  onAuditCodeSync={onAuditCodeSync}
+                  onOpenInNewWindow={onOpenInNewWindow}
+                  onNewDocumentInFolder={onNewDocumentInFolder}
+                />
+              ) : (
+                <DocumentIsometricOverview
+                  documents={scopedMapDocuments}
+                  allDocuments={documents}
+                  boardIssues={boardIssues}
+                  precomputedSummary={
+                    statusFilter === "all" && effectiveDomainKey === null
+                      ? progressSummary
+                      : undefined
+                  }
+                  selectedDomainKey={effectiveDomainKey}
+                  onSelectDocument={onSelectDocument}
+                  onOpenDomainMap={(domainKey) => {
+                    setSelectedDomainKey(domainKey);
+                    setGroupMode("map");
+                  }}
+                  onOpenInNewWindow={onOpenInNewWindow}
+                  onAuditCodeSync={onAuditCodeSync}
+                />
+              )}
+            </div>
+          )
         ) : isAwaitingSearch && items.length === 0 ? null : items.length === 0 ? (
           categoryFilter !== "all" && unfilteredSearchCount > 0 ? (
             <div className="document-search__filtered-empty">
@@ -350,7 +522,11 @@ export function DocumentSearch({
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => setCategoryFilter("all")}
+                onClick={() => {
+                  setCategoryFilter("all");
+                  setStatusFilter("all");
+                  setSelectedDomainKey(null);
+                }}
               >
                 필터 초기화
               </Button>

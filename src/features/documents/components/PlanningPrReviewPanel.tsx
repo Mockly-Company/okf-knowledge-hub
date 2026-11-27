@@ -10,8 +10,13 @@ import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UnstyledButton } from "@/components/ui/unstyled-button";
 import { useDocuments } from "../DocumentsProvider";
 import { compareDocumentLines, type DocumentDiffLine } from "../document-diff";
-import type { DocumentContent, PlanningPrDocumentChange } from "../model";
+import {
+  normalizeDocumentPath,
+  type DocumentContent,
+  type PlanningPrDocumentChange,
+} from "../model";
 import { documentsKeys } from "../queryKeys";
+import { CompanionHtmlFrame } from "./CompanionHtmlFrame";
 import { MarkdownDocument } from "./MarkdownDocument";
 import "./DocumentPublicationDialog.css";
 
@@ -140,6 +145,7 @@ export function PlanningPrReviewSection() {
     getDocsPullRequestDetail,
     approveAndMergeDocsPullRequest,
     openExternal,
+    selectDocument,
   } = useDocuments();
   const sessionId = state.activeSessionId;
   const ready = state.status === "ready" && sessionId !== null;
@@ -566,12 +572,35 @@ export function PlanningPrReviewSection() {
                       {viewTab === "html" &&
                       activeDoc.hasCompanionHtml &&
                       activeDoc.companionHtml ? (
-                        <iframe
-                          className="document-reader__html-frame"
-                          sandbox=""
-                          referrerPolicy="no-referrer"
-                          srcDoc={activeDoc.companionHtml}
+                        <CompanionHtmlFrame
+                          html={activeDoc.companionHtml}
                           title={`${activeDoc.title} 사람용 보기`}
+                          documentPath={activeDoc.path}
+                          onNavigateDocument={(target) => {
+                            const normalizedTarget = normalizeDocumentPath(
+                              target.path,
+                            );
+                            const matchedPrDoc = detail.documents.find(
+                              (item) =>
+                                normalizeDocumentPath(item.path).toLowerCase() ===
+                                normalizedTarget.toLowerCase(),
+                            );
+                            if (matchedPrDoc) {
+                              setSelectedDocPath(matchedPrDoc.path);
+                              setViewTab(
+                                target.view === "html" &&
+                                  matchedPrDoc.hasCompanionHtml &&
+                                  matchedPrDoc.companionHtml
+                                  ? "html"
+                                  : matchedPrDoc.headMarkdown !== null
+                                    ? "markdown"
+                                    : "diff",
+                              );
+                              return;
+                            }
+                            selectDocument(normalizedTarget, undefined, target.view);
+                          }}
+                          onOpenExternal={(url) => void openExternal(url)}
                         />
                       ) : viewTab === "markdown" &&
                         activeDoc.headMarkdown !== null ? (

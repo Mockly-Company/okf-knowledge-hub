@@ -85,13 +85,16 @@ MCP를 통한 모든 쓰기는 변경안을 준비한 뒤 Form Elicitation을 �
 
 ## 고급 도구와 호환 호출
 
-서버 환경에 `OKHUB_MCP_ADVANCED_TOOLS=1`을 명시하면 다음 3개를 추가 노출합니다. 고급 쓰기도 사용자 확인이 필요합니다.
+서버 환경에 `OKHUB_MCP_ADVANCED_TOOLS=1`을 명시하면 다음 4개를 추가 노출합니다. 고급 쓰기도 사용자 확인이 필요합니다.
 
 | 도구 | 역할 |
 | --- | --- |
 | `okhub_doc_validate` | 로컬 문서의 작성 형식 검사. 내용의 옳고 그름 판정·수정은 하지 않음 |
 | `okhub_pr_list` | 열린 PR 기본 조회. 저장소·상태·작성자·리뷰 요청 대상·리뷰 결과·초안·검색어 필터 |
 | `okhub_pr_manage` | 단건 `create`, `update`, `request_review`, `review`, `close`, `reopen`, `mark_ready`, `convert_to_draft`, `merge` |
+| `okhub_board_get_schema` | 선택한 Project의 필드·선택지 조회. 읽기 전용 |
+
+앱·CLI의 `create_backlog_tree`, `update_board_issue`, `update_doc_impl_status` 구현은 유지합니다. 대응하는 신규 MCP 이름(`okhub_board_create_backlog_tree`, `okhub_board_update_issue`, `okhub_update_doc_impl_status`)은 승인·완료 검사·저널과 연결되기 전까지 노출·실행하지 않습니다. 백로그 변경에는 확인 절차가 있는 `okhub_board_manage`를 사용합니다.
 
 PR 요약은 상태·초안·리뷰 결과·검사 요약·업데이트 시간·head 커밋을 제공합니다. 알 수 없는 리뷰/검사 상태는 정상 통과로 표시하지 않습니다. `review`는 의견·승인·수정 요청이며 병합과 별개입니다. `merge`에는 `mergeMethod: "merge" | "squash" | "rebase"`를 반드시 명시하고, AI가 사용자에게 방식을 확인해야 합니다. 저장소에서 금지한 방식을 다른 방식으로 자동 대체하지 않습니다. 서버는 브랜치 생성·커밋·push·보호 규칙 우회를 하지 않습니다. 일괄 처리는 제공하지 않습니다.
 

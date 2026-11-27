@@ -6,6 +6,7 @@ import { DocumentsPage } from "@/pages/DocumentsPage";
 import { HomePage } from "@/pages/HomePage";
 import { ProjectPage } from "@/pages/ProjectPage";
 import { SettingsPage } from "@/pages/SettingsPage";
+import { StandaloneDocumentWindowPage } from "@/pages/StandaloneDocumentWindowPage";
 import { DesignSystemPage } from "@/pages/DesignSystemPage";
 import { WorkspaceGate } from "@/features/workspace-connection/WorkspaceGate";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
@@ -130,6 +131,12 @@ export function AppRoutes({
   return (
     <Routes>
       <Route element={<WorkspaceGate />}>
+        <Route
+          path="doc-window"
+          element={
+            <StandaloneDocumentWindowPage documentsGateway={documentsGateway} />
+          }
+        />
         <Route
           element={
             <ConnectedAppShell

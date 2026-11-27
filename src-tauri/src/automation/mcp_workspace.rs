@@ -373,6 +373,7 @@ impl AutomationRuntime {
                 },
             );
             super::mcp_documents::validate_scopes(&scopes)?;
+            self.ai_context.assignees = cfg.assignees.clone();
             self.mcp_document_roots = Some(
                 scopes
                     .first()
@@ -463,6 +464,7 @@ impl AutomationRuntime {
                 docs_root_rel: self.docs_root_rel.clone(),
                 active_project: target.project.clone(),
                 ai_context: self.ai_context.clone(),
+                connected_workspaces: self.connected_workspaces.clone(),
                 #[cfg(test)]
                 test_github: self.test_github.clone(),
             });
@@ -513,6 +515,7 @@ impl AutomationRuntime {
                 })
                 .collect(),
             current_user_login: None,
+            assignees: cfg.as_ref().and_then(|config| config.assignees.clone()),
         };
         Ok(Self {
             mcp_projects: target.workspace.projects.clone(),
@@ -544,6 +547,7 @@ impl AutomationRuntime {
             docs_root_rel,
             active_project: target.project.clone(),
             ai_context,
+            connected_workspaces: self.connected_workspaces.clone(),
             #[cfg(test)]
             test_github: self.test_github.clone(),
         })

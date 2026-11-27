@@ -141,6 +141,8 @@ pub struct GithubProjectItem {
     pub priority: Option<String>,
     /// 본문 `이전 단계: #N`에서 읽은 선행 이슈 번호. 없으면 `None`.
     pub depends_on: Option<u64>,
+    #[serde(default)]
+    pub linked_doc_paths: Vec<String>,
     pub sub_issues: Vec<GithubSubIssue>,
     pub assignees: Vec<BoardAssignee>,
     pub created_at: Option<String>,
@@ -293,6 +295,7 @@ pub struct CreateProjectIssueInput {
     pub priority: Option<String>,
     pub parent_issue_number: Option<u64>,
     pub parent_issue_repository: Option<String>,
+    pub assignees: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -330,6 +333,23 @@ pub struct UpdatedProjectItem {
     pub area: Option<String>,
     pub kind: Option<String>,
     pub priority: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatedIssue {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatedIssueComment {
+    pub id: u64,
+    pub url: String,
+    pub body: String,
 }
 
 /// 이슈 본문에서 순서 약속을 읽는다.

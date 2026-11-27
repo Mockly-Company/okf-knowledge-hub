@@ -27,6 +27,7 @@ import type {
   PublishDocumentDraftRequest,
   PublishDocumentDraftResponse,
   ApproveAndMergeDocsPrResponse,
+  StandaloneDocumentPayload,
 } from "@/features/documents/model";
 
 const guideSummary = {
@@ -138,9 +139,15 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   readonly copiedValues: string[] = [];
   readonly openedUrls: string[] = [];
   openPullRequests: DocsPullRequestSummary[] = [];
+  readonly documentsByPath = new Map<string, DocumentContent>();
   readonly pullRequestDetails = new Map<number, DocsPullRequestDetail>();
   readonly approvedPullRequests: Array<{ number: number; comment?: string }> = [];
   readonly publishedDrafts: PublishDocumentDraftRequest[] = [];
+  readonly openedWindows: Array<{
+    path: string;
+    viewMode?: "html" | "markdown";
+    title?: string;
+  }> = [];
   unlistenCount = 0;
 
   private readonly listeners = new Set<
@@ -364,16 +371,20 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   ): Promise<DocumentContent> {
     this.record("readDocument", sessionId, requestId, path);
     const sequence = ++this.latestReadSequence;
+    const preset = this.documentsByPath.get(path);
     const summary =
+      preset?.summary ??
       this.sessionSnapshot.catalog.documents.find((document) => document.path === path) ??
       (path === apiSummary.path ? apiSummary : guideSummary);
-    const content: DocumentContent = {
-      summary: { ...summary, path },
-      markdown: this.markdownByPath[path] ?? `# ${summary.title}`,
-      properties: {},
-      tableOfContents: [],
-      lastCommit: null,
-    };
+    const content: DocumentContent = preset
+      ? { ...preset, summary: { ...preset.summary, path } }
+      : {
+          summary: { ...summary, path },
+          markdown: this.markdownByPath[path] ?? `# ${summary.title}`,
+          properties: {},
+          tableOfContents: [],
+          lastCommit: null,
+        };
     if (this.deferReads) {
       return new Promise((resolve) => {
         this.pendingReads.set(requestId, {
@@ -612,5 +623,57 @@ export class FakeDocumentsGateway implements DocumentsGateway {
       mergeSha: "mergedsha",
       reviewSubmitted: true,
     };
+  }
+
+  async openDocumentWindow(
+    path: string,
+    viewMode?: "html" | "markdown",
+    title?: string,
+    workspaceId?: string | null,
+  ): Promise<void> {
+    this.record("openDocumentWindow", path, viewMode, title, workspaceId);
+    this.openedWindows.push({ path, viewMode, title });
+  }
+
+  async readStandaloneDocument(
+    workspaceId: string | null,
+    path: string,
+  ): Promise<StandaloneDocumentPayload> {
+    this.record("readStandaloneDocument", workspaceId, path);
+    const normalized = path.replace(/\.html$/i, ".md");
+    const preset = this.documentsByPath.get(normalized);
+    const summary =
+      preset?.summary ??
+      this.sessionSnapshot.catalog.documents.find(
+        (document) => document.path.toLowerCase() === normalized.toLowerCase(),
+      ) ??
+      guideSummary;
+    const document: DocumentContent = preset ?? {
+      summary: { ...summary, path: normalized },
+      markdown: `# ${summary.title}`,
+      properties: {},
+      tableOfContents: [],
+      lastCommit: null,
+    };
+    return {
+      workspaceId: workspaceId ?? this.sessionSnapshot.workspaceId,
+      workspaceTitle: "OkHub",
+      repositoryFullName: this.sessionSnapshot.repositoryFullName,
+      document,
+    };
+  }
+
+  async readStandaloneDocumentAsset(
+    workspaceId: string | null,
+    documentPath: string,
+    assetPath: string,
+  ): Promise<DocumentAsset> {
+    this.record(
+      "readStandaloneDocumentAsset",
+      workspaceId,
+      documentPath,
+      assetPath,
+    );
+    return this.asset;
   }
 }

@@ -56,9 +56,12 @@ export const MultipleRepositories: Story = {
   }, router: { initialEntries: ["/documents"] } })],
   render: () => <MultiRepositoryDocumentsPreview />,
   play: async ({ canvas, userEvent }) => {
+    // Home opens the domain map; path labels belong to the searchable result rows.
+    const search = await canvas.findByRole("searchbox", { name: "문서 검색" });
+    await expect(canvas.getByRole("button", { name: "도메인 맵" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.type(search, "API");
     await expect(await canvas.findByText("docs/api/guide.md")).toBeVisible();
     await expect(canvas.getByText("team/handbook · docs/api/guide.md")).toBeVisible();
-    await userEvent.type(canvas.getByRole("searchbox", { name: "문서 검색" }), "API");
     await expect(await canvas.findByRole("button", { name: /API 안내 · 기준 저장소/ })).toBeVisible();
     await userEvent.click(await canvas.findByRole("button", { name: /API 안내 · Handbook/ }));
     await expect(await canvas.findByText("읽기 전용")).toBeVisible();
@@ -89,8 +92,9 @@ export const Home: Story = {
     await userEvent.tab();
     await expect(newDocument).toHaveFocus();
     await userEvent.tab();
+    // "도메인 맵" is the first grouping mode chip (and the default view).
     await expect(
-      canvas.getByRole("button", { name: "도메인별" }),
+      canvas.getByRole("button", { name: "도메인 맵" }),
     ).toHaveFocus();
     await expect(
       canvas.getByRole("button", { name: /지도 검색 API 계약/ }),

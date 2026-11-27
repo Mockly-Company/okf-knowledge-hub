@@ -163,6 +163,40 @@ const examples: Record<string, { title: string; lines: string[] }> = {
       "> [!NOTE]", "> 담당자·기한·추적 작업 링크는 실제 회고에서 지정합니다. 이 문서는 가상 작성 예시입니다.",
     ],
   },
+  prd: {
+    title: "알림 확인 체크 PRD",
+    lines: [
+      "# 알림 확인 체크 PRD", "", "## 이번 변경 요약", "",
+      "- [NEW] 대시보드 기획 변경 알림의 개별 확인 토글과 미확인 필터를 정의합니다.", "",
+      "## 1. 배경 및 목표 (Problem & Goal)", "",
+      "- 검토자가 읽은 변경 알림과 아직 확인하지 않은 알림을 구분할 수 있도록 합니다.", "",
+      "## 4. 상세 기능 요구사항 및 예외 정책", "",
+      "| 요구사항 ID | 구분 | 상세 규칙 | 예외 / 경계 조건 |",
+      "| --- | --- | --- | --- |",
+      "| REQ-01 | 확인 토글 | 카드별 확인 버튼으로 상태를 저장 | 저장 실패 시 이전 상태 복원 및 오류 배너 표시 |", "",
+      "## 6. 완료 조건 (Acceptance Criteria)", "",
+      "- [ ] 확인 클릭 시 즉시 미확인 배지 수가 감소함",
+    ],
+  },
+  screen_spec: {
+    title: "대시보드 알림 화면명세서",
+    lines: [
+      "# 대시보드 알림 화면명세서", "", "## 이번 변경 요약", "",
+      "- [NEW] 알림 패널 저충실도 SVG 와이어프레임과 상태별 UI 규칙을 정의합니다.", "",
+      "## 1. 화면 개요 및 연결 문서", "",
+      "- **기준 PRD**: `docs/domains/dashboard/prd.md`",
+      "- **화면 목적**: 변경 알림 확인 상태 전환 및 문서 뷰 바로 이동", "",
+      "## 2. 화면 와이어프레임 (필수)", "",
+      "- frontmatter `wireframes:` 항목과 본문 SVG 이미지를 함께 연결합니다.", "",
+      "![알림 패널 와이어프레임](assets/dashboard-notifications-wireframe.svg)", "",
+      "## 4. 상태별 화면 규칙 (State Matrix)", "",
+      "| 상태 | 화면 표시 및 피드백 | 활성/비활성 제어 |",
+      "| --- | --- | --- |",
+      "| 기본 (Loaded) | 카드 목록 및 확인 체크 버튼 표시 | 미확인만 보기 토글 활성 |",
+      "| 빈 화면 (Empty) | 미확인 알림 없음 안내 | 전체 알림 보기 버튼 제공 |",
+      "| 오류 (Error) | 상단 오류 배너 표시 | 다시 시도 가능 |",
+    ],
+  },
   "team:product-spec": {
     title: "기획 PR 승인 워크플로우",
     lines: [
@@ -194,11 +228,30 @@ const examples: Record<string, { title: string; lines: string[] }> = {
       "## 결정 결과", "", "AI는 `.md`만 읽고 쓰며, 사람 열람 편의를 위해 동명 `.html`을 함께 생성합니다.",
     ],
   },
+  "team:screen-spec": {
+    title: "화면명세 보드 화면명세서",
+    lines: [
+      "# 화면명세 보드 화면명세서", "", "## 이번 변경 요약", "",
+      "- [NEW] 화면마다 SVG 와이어프레임을 연결해 화면명세 보드에서 함께 열람합니다.", "",
+      "## 1. 화면 개요 및 연결 문서", "",
+      "- **기준 PRD**: `docs/domains/documents/prd.md`", "",
+      "## 2. 화면 와이어프레임 (필수)", "",
+      "![화면명세 보드 와이어프레임](assets/screen-spec-deck-wireframe.svg)", "",
+      "## 4. 상태별 화면 규칙 (State Matrix)", "",
+      "| 상태 | 화면 표시 및 피드백 | 활성/비활성 제어 |",
+      "| --- | --- | --- |",
+      "| 기본 (Loaded) | 좌측 명세 뷰어 + 우측 와이어프레임/시안 2열 표시 | 도메인 필터 전환 가능 |",
+    ],
+  },
 };
 
 export function getDocumentTemplateExample(templateId: string): DocumentTemplateExample | null {
-  if (examples[templateId]) {
-    const teamExample = examples[templateId];
+  const normalizedTeamId =
+    templateId.startsWith("team:") && templateId.toLowerCase().endsWith(".md")
+      ? templateId.slice(0, -3)
+      : templateId;
+  const teamExample = examples[templateId] ?? examples[normalizedTeamId];
+  if (teamExample) {
     return { title: teamExample.title, markdown: teamExample.lines.join("\n") };
   }
   if (!templateId.startsWith("builtin:")) return null;

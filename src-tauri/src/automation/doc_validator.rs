@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::documents::reader::extract_local_stylesheet_hrefs;
+use crate::documents::frontmatter::{normalize_impl_status, parse_document};
+use crate::documents::reader::{extract_local_stylesheet_hrefs, is_reserved_markdown_path};
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -46,6 +47,15 @@ pub struct DocValidationReport {
     pub highlighted_markdown_files: Vec<String>,
     pub highlighted_html_files: Vec<String>,
     pub issues: Vec<DocValidationIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocImplStatusUpdateResult {
+    pub path: String,
+    pub impl_status: Option<String>,
+    pub impl_note: Option<String>,
+    pub checked_at: Option<String>,
 }
 
 pub fn list_workspace_docs(
@@ -223,10 +233,335 @@ fn read_workspace_doc_inner(
     })
 }
 
+fn split_leading_frontmatter(source: &str) -> Result<(&str, Option<&str>, &str), String> {
+    let (bom, rest) = if let Some(stripped) = source.strip_prefix('\u{feff}') {
+        ("\u{feff}", stripped)
+    } else {
+        ("", source)
+    };
+    let after_open = if let Some(s) = rest.strip_prefix("---\r\n") {
+        s
+    } else if let Some(s) = rest.strip_prefix("---\n") {
+        s
+    } else if rest == "---" || rest == "---\r" {
+        return Err("YAML frontmatter 닫힘 구분선(`---`)이 누락되었습니다.".to_owned());
+    } else {
+        return Ok((bom, None, rest));
+    };
+
+    if let Some(after_empty) = after_open
+        .strip_prefix("---\r\n")
+        .or_else(|| after_open.strip_prefix("---\n"))
+    {
+        return Ok((bom, Some(""), after_empty));
+    }
+    if after_open == "---" || after_open == "---\r" {
+        return Ok((bom, Some(""), ""));
+    }
+
+    if let Some(idx) = after_open.find("\r\n---\r\n") {
+        return Ok((bom, Some(&after_open[..idx]), &after_open[idx + 7..]));
+    }
+    if let Some(idx) = after_open.find("\n---\n") {
+        return Ok((bom, Some(&after_open[..idx]), &after_open[idx + 5..]));
+    }
+    if let Some(idx) = after_open.find("\n---\r\n") {
+        return Ok((bom, Some(&after_open[..idx]), &after_open[idx + 6..]));
+    }
+    if let Some(yaml) = after_open.strip_suffix("\r\n---") {
+        return Ok((bom, Some(yaml), ""));
+    }
+    if let Some(yaml) = after_open.strip_suffix("\n---") {
+        return Ok((bom, Some(yaml), ""));
+    }
+
+    Err("YAML frontmatter 닫힘 구분선(`---`)이 누락되었습니다.".to_owned())
+}
+
+fn set_yaml_string(map: &mut serde_yaml_ng::Mapping, key: &str, value: Option<String>) {
+    let yaml_key = serde_yaml_ng::Value::String(key.to_owned());
+    match value {
+        Some(v) => {
+            map.insert(yaml_key, serde_yaml_ng::Value::String(v));
+        }
+        None => {
+            map.remove(yaml_key);
+        }
+    }
+}
+
+const MAX_IMPL_NOTE_CHARS: usize = 300;
+const MAX_CHECKED_AT_LEN: usize = 64;
+
+fn sanitize_impl_note(raw: &str) -> Option<String> {
+    let cleaned = raw
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let truncated: String = cleaned.chars().take(MAX_IMPL_NOTE_CHARS).collect();
+    if truncated.is_empty() {
+        None
+    } else {
+        Some(truncated)
+    }
+}
+
+fn validate_checked_at(raw: &str) -> Result<Option<String>, AppError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.len() <= MAX_CHECKED_AT_LEN {
+        if trimmed.len() == 10
+            && trimmed.as_bytes()[4] == b'-'
+            && trimmed.as_bytes()[7] == b'-'
+            && trimmed
+                .bytes()
+                .enumerate()
+                .all(|(i, b)| i == 4 || i == 7 || b.is_ascii_digit())
+        {
+            if let (Ok(year), Ok(month), Ok(day)) = (
+                trimmed[0..4].parse::<i32>(),
+                trimmed[5..7].parse::<u8>(),
+                trimmed[8..10].parse::<u8>(),
+            ) {
+                if let Ok(m) = time::Month::try_from(month) {
+                    if time::Date::from_calendar_date(year, m, day).is_ok() {
+                        return Ok(Some(trimmed.to_owned()));
+                    }
+                }
+            }
+        } else if time::OffsetDateTime::parse(
+            trimmed,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .is_ok()
+        {
+            return Ok(Some(trimmed.to_owned()));
+        }
+    }
+    Err(AppError::new(
+        ErrorCode::WorkspaceInvalid,
+        "checkedAt은 YYYY-MM-DD 또는 RFC 3339 형식이어야 합니다.",
+    ))
+}
+
+pub fn update_doc_impl_status(
+    workspace_root: &Path,
+    doc_path: &str,
+    status_input: &str,
+    note: Option<&str>,
+    checked_at: Option<&str>,
+) -> Result<DocImplStatusUpdateResult, AppError> {
+    let normalized = normalize_workspace_rel_path(doc_path).map_err(|_| {
+        AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            "유효한 워크스페이스 상대 문서 경로를 입력해 주세요.",
+        )
+        .with_recovery(RecoveryAction::Retry)
+    })?;
+    if !normalized.to_ascii_lowercase().ends_with(".md") {
+        return Err(AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            format!("Markdown(.md) 문서만 코드 반영 상태를 갱신할 수 있습니다: {normalized}"),
+        ));
+    }
+    let trimmed_status = status_input.trim();
+    let is_clear = matches!(
+        trimmed_status.to_ascii_lowercase().as_str(),
+        "clear" | "reset" | "unset"
+    ) || matches!(trimmed_status, "초기화" | "해제");
+
+    let target_status = if is_clear {
+        None
+    } else {
+        let Some(norm) = normalize_impl_status(trimmed_status) else {
+            return Err(AppError::new(
+                ErrorCode::WorkspaceInvalid,
+                format!(
+                    "지원하지 않는 implStatus 값입니다(synced|partial|unimplemented|clear): {status_input}"
+                ),
+            ));
+        };
+        Some(norm)
+    };
+
+    let canonical_root = workspace_root.canonicalize().map_err(|_| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            "워크스페이스 폴더를 찾을 수 없습니다.",
+        )
+    })?;
+    let full_md = workspace_root.join(&normalized);
+    let canonical_md = full_md.canonicalize().map_err(|_| {
+        AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            format!("문서 파일을 찾을 수 없습니다: {normalized}"),
+        )
+    })?;
+    if !canonical_md.starts_with(&canonical_root) || !canonical_md.is_file() {
+        return Err(AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            "워크스페이스 바깥 경로는 수정할 수 없습니다.",
+        ));
+    }
+
+    let original = fs::read_to_string(&canonical_md).map_err(|err| {
+        AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            format!("문서를 읽지 못했습니다: {normalized}"),
+        )
+        .with_detail("reason", err.to_string())
+    })?;
+    let line_ending = if original.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+
+    let (bom, existing_yaml, body) = split_leading_frontmatter(&original).map_err(|reason| {
+        AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            format!("{normalized}: {reason}"),
+        )
+    })?;
+
+    let mut map = match existing_yaml {
+        Some(yaml_str) if !yaml_str.trim().is_empty() => {
+            let parsed: serde_yaml_ng::Value =
+                serde_yaml_ng::from_str(yaml_str).map_err(|err| {
+                    AppError::new(
+                        ErrorCode::DocumentPathInvalid,
+                        format!("{normalized}: YAML frontmatter 문법 오류: {err}"),
+                    )
+                })?;
+            match parsed {
+                serde_yaml_ng::Value::Mapping(m) => m,
+                serde_yaml_ng::Value::Null => serde_yaml_ng::Mapping::new(),
+                _ => {
+                    return Err(AppError::new(
+                        ErrorCode::DocumentPathInvalid,
+                        format!("{normalized}: YAML frontmatter 최상위 값은 매핑(key-value)이어야 합니다."),
+                    ));
+                }
+            }
+        }
+        _ => serde_yaml_ng::Mapping::new(),
+    };
+
+    // 기존 별칭 키 정리 후 정본 키(impl_status/impl_note/impl_checked_at)만 기록한다.
+    for alias in [
+        "implementation_status",
+        "code_sync",
+        "implementation_note",
+        "code_sync_note",
+    ] {
+        map.remove(serde_yaml_ng::Value::String(alias.to_owned()));
+    }
+
+    let final_note = if is_clear {
+        None
+    } else {
+        note.and_then(sanitize_impl_note)
+    };
+    let final_checked_at = if is_clear {
+        None
+    } else {
+        match checked_at {
+            Some(raw) => validate_checked_at(raw)?,
+            None => None,
+        }
+    };
+
+    set_yaml_string(&mut map, "impl_status", target_status.clone());
+    if is_clear {
+        set_yaml_string(&mut map, "impl_note", None);
+        set_yaml_string(&mut map, "impl_checked_at", None);
+    } else {
+        if note.is_some() {
+            set_yaml_string(&mut map, "impl_note", final_note.clone());
+        }
+        if checked_at.is_some() {
+            set_yaml_string(&mut map, "impl_checked_at", final_checked_at.clone());
+        }
+    }
+
+    let updated = if map.is_empty() {
+        format!("{bom}{body}")
+    } else {
+        let serialized = serde_yaml_ng::to_string(&serde_yaml_ng::Value::Mapping(map.clone()))
+            .map_err(|err| {
+                AppError::new(
+                    ErrorCode::DocumentPathInvalid,
+                    format!("frontmatter 직렬화 실패: {err}"),
+                )
+            })?;
+        let trimmed_yaml = serialized
+            .trim_start_matches("---\r\n")
+            .trim_start_matches("---\n")
+            .trim_end_matches('\n')
+            .trim_end_matches('\r');
+        let yaml_block = if line_ending == "\r\n" {
+            trimmed_yaml.replace('\n', "\r\n")
+        } else {
+            trimmed_yaml.to_owned()
+        };
+        if body.is_empty() {
+            format!("{bom}---{line_ending}{yaml_block}{line_ending}---{line_ending}")
+        } else {
+            format!("{bom}---{line_ending}{yaml_block}{line_ending}---{line_ending}{body}")
+        }
+    };
+
+    validate_frontmatter_if_present(&updated).map_err(|reason| {
+        AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            format!("갱신된 frontmatter 검증 실패: {reason}"),
+        )
+    })?;
+
+    fs::write(&canonical_md, updated.as_bytes()).map_err(|err| {
+        AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            format!("문서 저장 실패: {normalized}"),
+        )
+        .with_detail("reason", err.to_string())
+    })?;
+
+    let read_back_note = map
+        .get(serde_yaml_ng::Value::String("impl_note".to_owned()))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let read_back_checked = map
+        .get(serde_yaml_ng::Value::String("impl_checked_at".to_owned()))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+
+    Ok(DocImplStatusUpdateResult {
+        path: normalized,
+        impl_status: target_status,
+        impl_note: read_back_note,
+        checked_at: read_back_checked,
+    })
+}
+
 pub fn validate_workspace_docs(
     workspace_root: &Path,
     docs_root_rel: &str,
 ) -> Result<DocValidationReport, AppError> {
+    let canonical_root = workspace_root.canonicalize().map_err(|err| {
+        AppError::new(
+            ErrorCode::WorkspaceInvalid,
+            format!(
+                "문서 워크스페이스 루트 경로를 확인할 수 없습니다: {}",
+                workspace_root.display()
+            ),
+        )
+        .with_detail("reason", err.to_string())
+    })?;
     let md_files = collect_markdown_files(workspace_root, docs_root_rel)?;
     let mut issues = Vec::new();
     let mut highlighted_markdown_files = Vec::new();
@@ -261,11 +596,79 @@ pub fn validate_workspace_docs(
             highlighted_markdown_files.push(rel_path.clone());
         }
 
+        let file_name = Path::new(rel_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(rel_path);
+        let is_reserved = is_reserved_markdown_path(rel_path, file_name);
+
+        let parsed_doc = parse_document(&markdown, file_name);
+        if is_screen_spec_document(rel_path, file_name, parsed_doc.doc_type.as_deref())
+            && parsed_doc.wireframes.is_empty()
+        {
+            issues.push(DocValidationIssue {
+                severity: "error".to_owned(),
+                path: rel_path.clone(),
+                code: "screen_spec_wireframe_missing".to_owned(),
+                message: format!(
+                    "화면명세서 `{rel_path}`에 `wireframes` frontmatter(화면별 SVG 와이어프레임)가 없습니다."
+                ),
+            });
+        }
+
+        let doc_parent = full_md.parent().unwrap_or(workspace_root);
+        for wf in &parsed_doc.wireframes {
+            if !local_asset_exists(&canonical_root, doc_parent, &wf.image) {
+                issues.push(DocValidationIssue {
+                    severity: "error".to_owned(),
+                    path: rel_path.clone(),
+                    code: "asset_file_missing".to_owned(),
+                    message: format!(
+                        "`{rel_path}`의 와이어프레임 에셋 `{}` 파일을 찾을 수 없습니다.",
+                        wf.image
+                    ),
+                });
+            }
+        }
+        for design in &parsed_doc.designs {
+            if let Some(image) = design.image.as_deref() {
+                if !local_asset_exists(&canonical_root, doc_parent, image) {
+                    issues.push(DocValidationIssue {
+                        severity: "error".to_owned(),
+                        path: rel_path.clone(),
+                        code: "asset_file_missing".to_owned(),
+                        message: format!(
+                            "`{rel_path}`의 디자인 시안 에셋 `{image}` 파일을 찾을 수 없습니다."
+                        ),
+                    });
+                }
+            }
+            if let Some(ref_wf) = design.wireframe.as_deref() {
+                let target = ref_wf.trim();
+                if !target.is_empty()
+                    && !parsed_doc
+                        .wireframes
+                        .iter()
+                        .any(|w| w.title.trim().eq_ignore_ascii_case(target))
+                {
+                    issues.push(DocValidationIssue {
+                        severity: "warning".to_owned(),
+                        path: rel_path.clone(),
+                        code: "design_wireframe_unknown".to_owned(),
+                        message: format!(
+                            "`{rel_path}`의 디자인 시안 `{}`이(가) 참조하는 와이어프레임 `{target}`을 `wireframes`에서 찾을 수 없습니다.",
+                            design.title
+                        ),
+                    });
+                }
+            }
+        }
+
         let html_rel = companion_html_rel_path(rel_path);
         let full_html = workspace_root.join(&html_rel);
         let sync_status = compute_html_sync_status(&full_md, &full_html);
         match sync_status.as_str() {
-            "missing" => {
+            "missing" if !is_reserved => {
                 issues.push(DocValidationIssue {
                     severity: "warning".to_owned(),
                     path: html_rel.clone(),
@@ -538,12 +941,69 @@ fn detect_markdown_change_markers(markdown: &str) -> Vec<String> {
     markers
 }
 
+fn is_screen_spec_document(rel_path: &str, file_name: &str, doc_type: Option<&str>) -> bool {
+    if let Some(raw_type) = doc_type {
+        let norm = raw_type.trim().to_ascii_lowercase();
+        if matches!(
+            norm.as_str(),
+            "screen spec" | "screen-spec" | "screen_spec" | "화면명세" | "화면명세서"
+        ) {
+            return true;
+        }
+    }
+    let lower_name = file_name.to_ascii_lowercase();
+    let lower_path = rel_path.to_ascii_lowercase();
+    lower_name == "screen-spec.md"
+        || lower_name.ends_with("-screen-spec.md")
+        || lower_path.ends_with("/screen-spec.md")
+}
+
+fn local_asset_exists(canonical_root: &Path, doc_parent: &Path, raw_asset: &str) -> bool {
+    let clean = raw_asset
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(raw_asset)
+        .trim()
+        .replace('\\', "/");
+    if clean.is_empty() {
+        return false;
+    }
+    let candidate = doc_parent.join(&clean);
+    if !candidate.is_file() {
+        return false;
+    }
+    candidate
+        .canonicalize()
+        .is_ok_and(|canon| canon.starts_with(canonical_root))
+}
+
+fn strip_style_blocks(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0;
+    while let Some(rel_start) = lower[cursor..].find("<style") {
+        let abs_start = cursor + rel_start;
+        out.push_str(&html[cursor..abs_start]);
+        if let Some(rel_end) = lower[abs_start..].find("</style>") {
+            cursor = abs_start + rel_end + "</style>".len();
+        } else {
+            cursor = html.len();
+            break;
+        }
+    }
+    if cursor < html.len() {
+        out.push_str(&html[cursor..]);
+    }
+    out
+}
+
 fn detect_html_change_markers(html: &str) -> Vec<String> {
+    let stripped = strip_style_blocks(html);
     let mut markers = Vec::new();
-    if html.contains("is-new") {
+    if stripped.contains("is-new") {
         markers.push("is-new".to_owned());
     }
-    if html.contains("is-changed") {
+    if stripped.contains("is-changed") {
         markers.push("is-changed".to_owned());
     }
     markers
@@ -575,7 +1035,11 @@ fn contains_external_stylesheet(lower_html: &str) -> bool {
 mod tests {
     use tempfile::TempDir;
 
-    use super::{list_workspace_docs, read_workspace_doc, validate_workspace_docs};
+    use super::{
+        list_workspace_docs, read_workspace_doc, update_doc_impl_status, validate_workspace_docs,
+    };
+    use crate::documents::frontmatter::parse_document;
+    use crate::error::ErrorCode;
 
     #[test]
     fn validates_dual_md_html_sync_frontmatter_and_rolling_markers() {
@@ -636,5 +1100,204 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.code == "html_forbidden_script"));
+    }
+
+    #[test]
+    fn skips_reserved_markdown_and_validates_screen_spec_wireframes_and_style_blocks() {
+        let temp = TempDir::new().unwrap();
+        let domain_dir = temp.path().join("docs").join("domains").join("board");
+        let assets_dir = domain_dir.join("assets");
+        std::fs::create_dir_all(&assets_dir).unwrap();
+        std::fs::write(temp.path().join("docs").join("index.md"), "# Index\n").unwrap();
+        std::fs::write(temp.path().join("docs").join("log.md"), "# Log\n").unwrap();
+        std::fs::write(
+            assets_dir.join("board-wireframe.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        )
+        .unwrap();
+
+        // Missing wireframes on screen spec -> error
+        std::fs::write(
+            domain_dir.join("screen-spec.md"),
+            "---\nokf_hub_id: 11111111-1111-4111-8111-111111111111\ntype: \"Screen Spec\"\ntitle: 보드 화면명세\n---\n# 보드 화면명세\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.html"),
+            "<html><head><style>.is-new { color: green; }</style></head><body><h1>보드 화면명세</h1></body></html>",
+        )
+        .unwrap();
+
+        let missing_report = validate_workspace_docs(temp.path(), "docs").unwrap();
+        assert!(!missing_report.valid);
+        assert!(missing_report
+            .issues
+            .iter()
+            .any(|i| i.code == "screen_spec_wireframe_missing"));
+        assert!(!missing_report
+            .issues
+            .iter()
+            .any(|i| i.code == "companion_html_missing"));
+        // CSS selector `.is-new` inside <style> must not trigger a false-positive marker mismatch.
+        assert!(!missing_report
+            .issues
+            .iter()
+            .any(|i| i.code == "change_marker_mismatch"));
+
+        // Valid wireframe + linked design -> valid
+        std::fs::write(
+            domain_dir.join("screen-spec.md"),
+            "---\nokf_hub_id: 11111111-1111-4111-8111-111111111111\ntype: \"Screen Spec\"\ntitle: 보드 화면명세\nwireframes:\n  - title: 보드 와이어프레임\n    image: assets/board-wireframe.svg\ndesigns:\n  - title: 보드 시안\n    image: assets/missing-mock.svg\n    wireframe: 없는 와이어프레임\n---\n# 보드 화면명세\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.html"),
+            "<html><body><h1>보드 화면명세</h1></body></html>",
+        )
+        .unwrap();
+        let asset_report = validate_workspace_docs(temp.path(), "docs").unwrap();
+        assert!(!asset_report.valid);
+        assert!(asset_report
+            .issues
+            .iter()
+            .any(|i| i.code == "asset_file_missing"));
+        assert!(asset_report
+            .issues
+            .iter()
+            .any(|i| i.code == "design_wireframe_unknown"));
+    }
+
+    #[test]
+    fn rejects_path_traversal_assets_outside_workspace_root() {
+        let outer = TempDir::new().unwrap();
+        let workspace = outer.path().join("ws");
+        let domain_dir = workspace.join("docs").join("domains").join("board");
+        std::fs::create_dir_all(&domain_dir).unwrap();
+        std::fs::write(
+            outer.path().join("outside.svg"),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.md"),
+            "---\nokf_hub_id: 11111111-1111-4111-8111-111111111111\ntype: \"Screen Spec\"\ntitle: 탈출 테스트\nwireframes:\n  - title: 외부 탈출\n    image: ../../../../outside.svg\n---\n# 탈출 테스트\n",
+        )
+        .unwrap();
+        std::fs::write(
+            domain_dir.join("screen-spec.html"),
+            "<html><body><h1>탈출 테스트</h1></body></html>",
+        )
+        .unwrap();
+
+        let report = validate_workspace_docs(&workspace, "docs").unwrap();
+        assert!(!report.valid);
+        assert!(report.issues.iter().any(|i| i.code == "asset_file_missing"));
+    }
+
+    #[test]
+    fn fails_fast_when_workspace_root_cannot_be_canonicalized() {
+        let missing = TempDir::new().unwrap().path().join("nonexistent-workspace");
+        let err = validate_workspace_docs(&missing, "docs").unwrap_err();
+        assert_eq!(err.code, ErrorCode::WorkspaceInvalid);
+    }
+
+    #[test]
+    fn updates_and_clears_doc_impl_status_while_blocking_traversal() {
+        let outer = TempDir::new().unwrap();
+        let workspace = outer.path().join("ws");
+        let docs_dir = workspace.join("docs").join("domains").join("board");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::write(outer.path().join("outside.md"), "# outside\n").unwrap();
+        std::fs::write(
+            docs_dir.join("prd.md"),
+            "---\ntitle: 보드 PRD\ndomain: board\n---\n\n# 보드 PRD\n\n본문 유지\n",
+        )
+        .unwrap();
+
+        let res = update_doc_impl_status(
+            &workspace,
+            "./docs/domains/board/prd.md",
+            "partial",
+            Some("모바일 반응형 누락"),
+            Some("2026-11-20"),
+        )
+        .unwrap();
+        assert_eq!(res.path, "docs/domains/board/prd.md");
+        assert_eq!(res.impl_status.as_deref(), Some("partial"));
+        assert_eq!(res.impl_note.as_deref(), Some("모바일 반응형 누락"));
+        assert_eq!(res.checked_at.as_deref(), Some("2026-11-20"));
+
+        let after_update = std::fs::read_to_string(docs_dir.join("prd.md")).unwrap();
+        assert!(after_update.contains("\n# 보드 PRD\n\n본문 유지\n"));
+        let parsed = parse_document(&after_update, "prd.md");
+        assert_eq!(parsed.title, "보드 PRD");
+        assert_eq!(parsed.impl_status.as_deref(), Some("partial"));
+        assert_eq!(parsed.impl_note.as_deref(), Some("모바일 반응형 누락"));
+
+        let cleared =
+            update_doc_impl_status(&workspace, "docs/domains/board/prd.md", "clear", None, None)
+                .unwrap();
+        assert_eq!(cleared.impl_status, None);
+        assert_eq!(cleared.impl_note, None);
+        let after_clear = std::fs::read_to_string(docs_dir.join("prd.md")).unwrap();
+        let reparsed = parse_document(&after_clear, "prd.md");
+        assert_eq!(reparsed.impl_status, None);
+        assert!(after_clear.contains("본문 유지"));
+
+        let traversal =
+            update_doc_impl_status(&workspace, "../outside.md", "synced", None, None).unwrap_err();
+        assert_eq!(traversal.code, ErrorCode::DocumentPathInvalid);
+    }
+
+    #[test]
+    fn sanitizes_impl_note_and_validates_checked_at_formats() {
+        let temp = TempDir::new().unwrap();
+        let docs_dir = temp.path().join("docs").join("domains").join("board");
+        std::fs::create_dir_all(&docs_dir).unwrap();
+        std::fs::write(
+            docs_dir.join("prd.md"),
+            "---\ntitle: 보드 PRD\n---\n\n# 본문\n",
+        )
+        .unwrap();
+
+        let long_note = format!("개행\n포함  {}", "가".repeat(350));
+        let updated = update_doc_impl_status(
+            temp.path(),
+            "docs/domains/board/prd.md",
+            "synced",
+            Some(&long_note),
+            Some("2026-11-20T01:00:00Z"),
+        )
+        .unwrap();
+        let note_val = updated.impl_note.as_deref().unwrap();
+        assert_eq!(note_val.chars().count(), 300);
+        assert!(!note_val.contains('\n'));
+        assert!(note_val.starts_with("개행 포함 "));
+        assert_eq!(updated.checked_at.as_deref(), Some("2026-11-20T01:00:00Z"));
+
+        let bad_date = update_doc_impl_status(
+            temp.path(),
+            "docs/domains/board/prd.md",
+            "partial",
+            Some("정상 노트"),
+            Some("2026-02-30"),
+        )
+        .unwrap_err();
+        assert_eq!(bad_date.code, ErrorCode::WorkspaceInvalid);
+
+        let not_date = update_doc_impl_status(
+            temp.path(),
+            "docs/domains/board/prd.md",
+            "partial",
+            Some("정상 노트"),
+            Some("invalid-timestamp\ninjected: true"),
+        )
+        .unwrap_err();
+        assert_eq!(not_date.code, ErrorCode::WorkspaceInvalid);
+
+        // File must still contain the previous valid state untouched.
+        let disk = std::fs::read_to_string(docs_dir.join("prd.md")).unwrap();
+        let parsed = parse_document(&disk, "prd.md");
+        assert_eq!(parsed.impl_status.as_deref(), Some("synced"));
     }
 }

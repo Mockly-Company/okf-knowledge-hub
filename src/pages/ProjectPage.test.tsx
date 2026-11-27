@@ -2073,4 +2073,33 @@ describe("ProjectPage project switching", () => {
     expect(within(card32 as HTMLElement).getByText("@alice")).toBeVisible();
     view5.unmount();
   });
+
+  it("shows empty guidance when hideDone hides all completed issues and reveals them on action", async () => {
+    const user = userEvent.setup();
+    const gateway = FakeProjectBoardGateway.withIssues([
+      {
+        number: 81,
+        title: "완료된 기획 작업",
+        url: "https://example.test/issues/81",
+        layer: "planning",
+        status: "done",
+        children: [],
+        kind: "작업",
+      },
+    ]);
+
+    render(<ProjectPage gateway={gateway} />);
+
+    const emptySection = await screen.findByRole("region", { name: "필터 결과 없음" });
+    expect(
+      within(emptySection).getByText(
+        "열린 작업이 없습니다. 완료된 항목을 보려면 완료 숨기기를 해제하세요.",
+      ),
+    ).toBeVisible();
+
+    await user.click(
+      within(emptySection).getByRole("button", { name: "완료 항목 포함 보기" }),
+    );
+    expect(await screen.findByText(/#81 완료된 기획 작업/)).toBeVisible();
+  });
 });

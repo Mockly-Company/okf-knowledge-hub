@@ -104,6 +104,9 @@ pub struct BoardIssue {
     /// 같은 부모 아래에서의 선행 이슈 번호. 본문 `이전 단계: #N`에서 온다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depends_on: Option<u64>,
+    /// 이슈 본문에서 참조한 문서 저장소 상대 경로(`.md` 정규화). 구 캐시에는 없어 빈 배열로 읽힌다.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub linked_doc_paths: Vec<String>,
     /// 깊이 제한으로 잘린 하위 트리가 있음. 프론트는 "하위 항목 생략됨"으로 표시.
     /// 구 캐시에는 없어 `false`로 읽힌다.
     #[serde(default)]
@@ -298,6 +301,7 @@ mod tests {
                     children: Vec::new(),
                     kind: Some("작업".to_owned()),
                     depends_on: Some(12),
+                    linked_doc_paths: Vec::new(),
                     children_truncated: false,
                     assignees: Vec::new(),
                     created_at: None,
@@ -305,6 +309,7 @@ mod tests {
                 }],
                 kind: Some("기능".to_owned()),
                 depends_on: None,
+                linked_doc_paths: vec!["docs/domains/board/prd.md".to_owned()],
                 children_truncated: false,
                 assignees: Vec::new(),
                 created_at: None,
@@ -318,6 +323,7 @@ mod tests {
         assert!(json.contains("\"fetchedAt\""));
         assert!(json.contains("\"children\""));
         assert!(json.contains("\"childrenTruncated\""));
+        assert!(json.contains("\"linkedDocPaths\""));
         assert!(json.contains("\"dependsOn\":12"));
         let restored: ProjectBoard = serde_json::from_str(&json).expect("board parses");
         assert_eq!(restored, board);

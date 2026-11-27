@@ -2,18 +2,57 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::fs;
-use std::io::BufReader;
+use std::io::{BufRead, BufReader, Read, Seek};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::error::{AppError, ErrorCode};
 
-use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry};
-use super::frontmatter::parse_document_reader;
+use super::contract::{DocumentCatalog, DocumentSummary, DocumentTreeEntry, FrontmatterStatus};
+use super::frontmatter::{parse_document_reader, MAX_UNTERMINATED_FRONTMATTER_BYTES};
 use super::reader::{
-    is_reserved_markdown_path, lower_stem_key, resolve_companion_html,
-    sort_companion_html_candidates, validate_companion_html_path,
+    is_reserved_markdown_path, lower_stem_key, resolve_companion_html, scan_markdown_preview,
+    sort_companion_html_candidates, validate_companion_html_path, MAX_PREVIEW_SCAN_BYTES,
 };
+
+/// Advances `reader` past a leading `---` … `---`/`...` block, mirroring
+/// `strip_leading_frontmatter` without buffering the block. Returns `false` when the block has
+/// no closing delimiter within `MAX_UNTERMINATED_FRONTMATTER_BYTES` (reader position is then
+/// unspecified).
+fn skip_leading_frontmatter_block<R: BufRead>(reader: &mut R) -> bool {
+    let is_marker = |line: &[u8], markers: &[&[u8]]| {
+        let end = line
+            .iter()
+            .rposition(|byte| !matches!(byte, b'\r' | b'\n'))
+            .map_or(0, |index| index + 1);
+        markers.contains(&&line[..end])
+    };
+    let mut line = Vec::new();
+    let mut consumed = 0usize;
+    let mut first = true;
+    loop {
+        line.clear();
+        let remaining = MAX_UNTERMINATED_FRONTMATTER_BYTES.saturating_sub(consumed);
+        if remaining == 0 {
+            return false;
+        }
+        match (&mut *reader)
+            .take(remaining as u64)
+            .read_until(b'\n', &mut line)
+        {
+            Ok(0) | Err(_) => return false,
+            Ok(read) => consumed += read,
+        }
+        if first {
+            if !is_marker(&line, &[b"---"]) {
+                return false;
+            }
+            first = false;
+        } else if is_marker(&line, &[b"---", b"..."]) {
+            return true;
+        }
+    }
+}
 
 pub fn discover_documents(
     repository_root: &Path,
@@ -220,7 +259,48 @@ fn summarize_document(
         .and_then(OsStr::to_str)
         .unwrap_or_default()
         .to_owned();
-    let parsed = parse_document_reader(&mut BufReader::new(file), &file_name);
+    let mut reader = BufReader::new(file);
+    let parsed = parse_document_reader(&mut reader, &file_name);
+    let relative_path = portable_path(repository_root, path);
+    let (fallback_description, preview_headings, linked_paths) = match parsed.frontmatter_status {
+        FrontmatterStatus::Invalid { .. } => {
+            // The parser stopped somewhere inside the broken block, so re-read from the start and
+            // drop the delimited block the same way `document_content_from_bytes` does; otherwise
+            // YAML lines such as `title: [broken` become the fallback description. The block is
+            // skipped line by line (no buffering of the whole block) up to the parser's limit.
+            let _ = reader.rewind();
+            if skip_leading_frontmatter_block(&mut reader) {
+                scan_markdown_preview(
+                    &mut reader,
+                    MAX_PREVIEW_SCAN_BYTES,
+                    &relative_path,
+                    &parsed.frontmatter_links,
+                )
+            } else {
+                // Without a closing delimiter the body cannot be told apart from YAML lines, so
+                // keep headings/links but never derive a description from it.
+                let _ = reader.rewind();
+                let (_, headings, links) = scan_markdown_preview(
+                    &mut reader,
+                    MAX_PREVIEW_SCAN_BYTES,
+                    &relative_path,
+                    &parsed.frontmatter_links,
+                );
+                (None, headings, links)
+            }
+        }
+        _ => {
+            if matches!(parsed.frontmatter_status, FrontmatterStatus::Missing) {
+                let _ = reader.rewind();
+            }
+            scan_markdown_preview(
+                &mut reader,
+                MAX_PREVIEW_SCAN_BYTES,
+                &relative_path,
+                &parsed.frontmatter_links,
+            )
+        }
+    };
     let modified_at_unix_ms = match metadata.modified() {
         Ok(modified) => match modified.duration_since(UNIX_EPOCH) {
             Ok(duration) => duration.as_millis().min(i64::MAX as u128) as i64,
@@ -229,7 +309,6 @@ fn summarize_document(
         Err(_) => 0,
     };
 
-    let relative_path = portable_path(repository_root, path);
     let has_companion_html = !is_reserved_markdown_path(&relative_path, &file_name)
         && match sibling_html_candidates {
             Some(candidates) => candidates.iter().any(|candidate| {
@@ -247,6 +326,13 @@ fn summarize_document(
         doc_type: parsed.doc_type,
         domain: parsed.domain,
         status: parsed.status,
+        impl_status: parsed.impl_status,
+        impl_note: parsed.impl_note,
+        description: parsed.description.or(fallback_description),
+        preview_headings,
+        linked_paths,
+        designs: parsed.designs,
+        wireframes: parsed.wireframes,
         has_companion_html,
         modified_at_unix_ms,
         size: metadata.len(),
@@ -648,6 +734,60 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn discovery_extracts_preview_headings_links_and_designs_without_breaking_frontmatter_bounds() {
+        let repo = fixture_repo(&[
+            (
+                "docs/domains/dashboard/prd.md",
+                "---\ntitle: 대시보드 PRD\ntype: Product Spec\ndomain: dashboard\nrelated_docs:\n  - ./screen-spec.html\n  - ../../architecture/adr-001.md\n  - ../../index.md\n  - ../../../../outside.md\n---\n\n대시보드 핵심 요구사항 요약 문장입니다.\n\n## [NEW] 1. 배경 및 목표\n\n### 2. 상세 규칙\n\n함께 보는 [화면명세](./screen-spec.md) 및 [외부](https://example.com) 링크.\n",
+            ),
+            (
+                "docs/domains/dashboard/screen-spec.md",
+                "---\ntitle: 대시보드 화면명세\ntype: Screen Spec\ndomain: dashboard\nwireframes:\n  - title: 대시보드 기본\n    image: assets/dashboard-wireframe.svg\ndesigns:\n  - title: 대시보드 목업\n    image: assets/dashboard-mock.svg\n    status: approved\n    wireframe: 대시보드 기본\n---\n\n## 1. 화면 구성\n",
+            ),
+            (
+                "docs/architecture/adr-001.md",
+                "---\ntitle: 문서 구조 ADR\ntype: ADR\n---\n\n## 결정\n",
+            ),
+        ]);
+
+        let catalog = discover_documents(repo.path(), &["docs".into()]).unwrap();
+        let prd = catalog
+            .documents
+            .iter()
+            .find(|doc| doc.path == "docs/domains/dashboard/prd.md")
+            .unwrap();
+        assert_eq!(
+            prd.description.as_deref(),
+            Some("대시보드 핵심 요구사항 요약 문장입니다.")
+        );
+        assert_eq!(prd.preview_headings, ["1. 배경 및 목표", "2. 상세 규칙"]);
+        assert_eq!(
+            prd.linked_paths,
+            [
+                "docs/domains/dashboard/screen-spec.md",
+                "docs/architecture/adr-001.md"
+            ]
+        );
+
+        let spec = catalog
+            .documents
+            .iter()
+            .find(|doc| doc.path == "docs/domains/dashboard/screen-spec.md")
+            .unwrap();
+        assert_eq!(spec.designs.len(), 1);
+        assert_eq!(spec.designs[0].title, "대시보드 목업");
+        assert_eq!(
+            spec.designs[0].image.as_deref(),
+            Some("assets/dashboard-mock.svg")
+        );
+        assert_eq!(spec.designs[0].status.as_deref(), Some("approved"));
+        assert_eq!(spec.designs[0].wireframe.as_deref(), Some("대시보드 기본"));
+        assert_eq!(spec.wireframes.len(), 1);
+        assert_eq!(spec.wireframes[0].title, "대시보드 기본");
+        assert_eq!(spec.wireframes[0].image, "assets/dashboard-wireframe.svg");
+    }
+
     #[cfg(unix)]
     fn try_create_file_symlink(original: &std::path::Path, link: &std::path::Path) -> bool {
         std::os::unix::fs::symlink(original, link).unwrap();
@@ -717,5 +857,98 @@ mod tests {
             self.bytes_consumed += amount;
             self.inner.consume(amount);
         }
+    }
+
+    #[test]
+    fn discovery_rewinds_and_extracts_preview_when_frontmatter_is_invalid() {
+        let repo = fixture_repo(&[(
+            "docs/invalid.md",
+            "---\ntitle: [broken\n---\n# 실제 제목\n\n## 핵심 흐름\n\n본문과 [연결 문서](other.md) 설명\n",
+        )]);
+        let catalog = discover_documents(repo.path(), &["docs".to_owned()]).unwrap();
+        let item = catalog
+            .documents
+            .iter()
+            .find(|doc| doc.path == "docs/invalid.md")
+            .unwrap();
+
+        assert!(matches!(
+            item.frontmatter_status,
+            FrontmatterStatus::Invalid { .. }
+        ));
+        assert!(item
+            .preview_headings
+            .iter()
+            .any(|heading| heading == "핵심 흐름"));
+        assert!(item.linked_paths.iter().any(|link| link == "docs/other.md"));
+        let description = item.description.as_deref().unwrap_or_default();
+        assert!(
+            description.starts_with("본문과"),
+            "invalid frontmatter must not leak into description: {description:?}"
+        );
+    }
+
+    #[test]
+    fn discovery_skips_large_invalid_frontmatter_and_drops_description_when_unterminated() {
+        // ~120 KiB broken block (still under the 256 KiB unterminated limit) followed by a body.
+        let mut large = String::from("---\ntitle: [broken\n");
+        while large.len() < 120 * 1024 {
+            large.push_str("note: filler value that keeps the yaml block large\n");
+        }
+        large.push_str("---\n# 제목\n\n큰 블록 뒤의 실제 본문 설명입니다\n");
+        let repo = fixture_repo(&[
+            ("docs/large.md", large.as_str()),
+            (
+                "docs/unterminated.md",
+                "---\ntitle: [broken frontmatter value\n## 남은 제목\n",
+            ),
+        ]);
+        let catalog = discover_documents(repo.path(), &["docs".to_owned()]).unwrap();
+        let find = |path: &str| {
+            catalog
+                .documents
+                .iter()
+                .find(|doc| doc.path == path)
+                .unwrap()
+                .clone()
+        };
+
+        let large = find("docs/large.md");
+        assert!(matches!(
+            large.frontmatter_status,
+            FrontmatterStatus::Invalid { .. }
+        ));
+        assert_eq!(
+            large.description.as_deref(),
+            Some("큰 블록 뒤의 실제 본문 설명입니다")
+        );
+
+        let unterminated = find("docs/unterminated.md");
+        assert!(matches!(
+            unterminated.frontmatter_status,
+            FrontmatterStatus::Invalid { .. }
+        ));
+        assert_eq!(unterminated.description, None);
+        assert!(unterminated
+            .preview_headings
+            .iter()
+            .any(|heading| heading == "남은 제목"));
+    }
+
+    #[test]
+    fn skip_leading_frontmatter_block_streams_to_the_closing_delimiter() {
+        use std::io::{Cursor, Read};
+
+        let mut crlf = Cursor::new(b"---\r\ntitle: [x\r\n...\r\nbody\r\n".to_vec());
+        assert!(super::skip_leading_frontmatter_block(&mut crlf));
+        let mut rest = String::new();
+        crlf.read_to_string(&mut rest).unwrap();
+        assert_eq!(rest, "body\r\n");
+
+        let mut unterminated = Cursor::new(b"---\ntitle: [x\n# heading\n".to_vec());
+        assert!(!super::skip_leading_frontmatter_block(&mut unterminated));
+
+        let mut no_frontmatter = Cursor::new(b"# heading\n---\n".to_vec());
+        assert!(!super::skip_leading_frontmatter_block(&mut no_frontmatter));
     }
 }

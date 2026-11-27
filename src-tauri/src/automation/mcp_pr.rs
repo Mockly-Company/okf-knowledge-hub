@@ -237,7 +237,7 @@ pub(super) async fn list(runtime: &AutomationRuntime, args: &Value) -> Result<Va
                 loaded += 1;
             }
             if page["pageInfo"]["hasNextPage"] != true
-                || loaded >= offset + limit + 1
+                || loaded > offset.saturating_add(limit)
                 || loaded >= 1000
             {
                 break;
@@ -494,9 +494,9 @@ pub(super) async fn prepare(runtime: &AutomationRuntime, args: &Value) -> Result
                         &[],
                     )
                     .await?;
-                if !permission["permission"]
+                if permission["permission"]
                     .as_str()
-                    .is_some_and(|p| p != "none")
+                    .is_none_or(|p| p == "none")
                 {
                     return Err(error("저장소에 접근할 수 없는 리뷰 대상입니다."));
                 }

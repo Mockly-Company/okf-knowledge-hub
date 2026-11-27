@@ -8,8 +8,20 @@ export type DocumentCategory =
   | "guide"
   | "reference";
 
-export type DocumentGroupMode = "domain" | "type" | "flat";
+export type DocumentGroupMode =
+  | "map"
+  | "overview"
+  | "screen_specs"
+  | "domain"
+  | "type"
+  | "flat";
 export type DocumentCategoryFilter = "all" | DocumentCategory;
+export type DocumentImplStatusFilter =
+  | "all"
+  | "unimplemented"
+  | "partial"
+  | "synced"
+  | "unaudited";
 
 export const DOCUMENT_CATEGORY_ORDER: readonly DocumentCategory[] = [
   "prd",
@@ -70,6 +82,23 @@ export function isAuxiliaryDocument(
   return isReservedDocumentFileName(rawFileName);
 }
 
+const OVERVIEW_STEMS = new Set(["index", "readme"]);
+
+/** `index.md` / `README.md` outside `.okf/`: the entry point that introduces a domain folder. */
+export function isOverviewDocument(
+  doc: Pick<DocumentSummary, "fileName" | "path">,
+): boolean {
+  const normalizedPath = normalizePortablePath(doc.path).toLowerCase();
+  if (normalizedPath.startsWith(".okf/")) return false;
+  const fileName = normalizedPath.split("/").pop() ?? "";
+  const dotIndex = fileName.lastIndexOf(".");
+  if (dotIndex <= 0) return false;
+  return (
+    OVERVIEW_STEMS.has(fileName.slice(0, dotIndex)) &&
+    RESERVED_EXTENSIONS.has(fileName.slice(dotIndex + 1))
+  );
+}
+
 function classifyByDocType(docType: string | null | undefined): DocumentCategory | null {
   const normalized = docType?.trim().toLowerCase();
   if (!normalized) return null;
@@ -77,6 +106,7 @@ function classifyByDocType(docType: string | null | undefined): DocumentCategory
   if (
     normalized === "product spec" ||
     normalized === "prd" ||
+    normalized === "feature_design" ||
     normalized === "feature_spec" ||
     normalized === "product-spec" ||
     normalized === "기획서"

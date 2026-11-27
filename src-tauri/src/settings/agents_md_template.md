@@ -17,10 +17,17 @@
 
 ## 1. 아이디어 → PRD · 화면명세서 및 문서 2벌 원칙 (`.md` = AI 원본 / `.html` = 사람용 뷰)
 
-- **도메인 우선 폴더 구조 (`docs/domains/<domain>/`)**: 제품 기능 기획서(PRD)와 화면명세서는 도메인별 폴더(`docs/domains/<domain>/prd.md`, `screen-spec.md`)에 작성하고, 시스템 공통 원칙과 ADR은 `docs/architecture/`에 둡니다. Frontmatter에는 `type`과 권장 `domain` 키를 명시합니다.
+- **도메인 우선 폴더 구조 (`docs/domains/<domain>/`)**: 제품 기능 기획서(PRD)와 화면명세서는 도메인별 폴더(`docs/domains/<domain>/prd.md`, `screen-spec.md`)에 작성하고, 시스템 공통 원칙과 ADR은 `docs/architecture/`에 둡니다. Frontmatter에는 `type`, `domain`, 권장 `description`(1~2문장 핵심 요약), `related_docs`(연결 문서 `.md` 상대/저장소 경로 목록)를 명시합니다.
+- **문서 흐름 (개요 → 기획 → 화면명세 → 디자인)**: 도메인 폴더의 `index.md`(개요)에서 시작해 PRD(무엇을·왜) → 화면명세서(화면별 와이어프레임 + 상태별 UI·인터랙션) → 디자인 시안 순서로 이어지게 작성합니다. PRD에는 와이어프레임을 넣지 않고 요구사항·정책만 적습니다.
+- **화면명세서 와이어프레임 필수(`wireframes`)**: 화면명세서는 **화면마다 와이어프레임을 최소 1개** 포함해야 합니다. 와이어프레임은 같은 폴더의 `assets/<화면>-wireframe.svg`(권장: 회색 박스·텍스트 라벨로 그린 저충실도 SVG)로 저장하고, frontmatter에 `wireframes: [{ title, image }]`로 등록한 뒤 본문 해당 화면 섹션에도 이미지로 삽입합니다. 와이어프레임이 없는 화면명세서는 완료로 보지 않습니다.
+- **디자인 시안은 와이어프레임에 연결(`designs`)**: 화면명세서의 frontmatter에는 `designs: [{ title, image, url, status, wireframe }]`를 연결할 수 있으며, `image`는 같은 폴더의 `assets/*.svg|png|webp` 시안 파일 경로를, `wireframe`은 시안이 기반으로 한 `wireframes[].title`을 가리킵니다.
 - **아이디어 구체화 산출물**: 아이디어를 받으면 기능 성격에 맞춰 **기획서/PRD**(`.okf/templates/product-spec.md`), **화면명세서**(`.okf/templates/screen-spec.md`), **설계/결정 기록**(`.okf/templates/design-doc.md`, `decision-record.md`)을 작성한다.
 - **AI는 `.md`만 읽고 수정한다**: 모든 지식의 유일한 원본은 `docs/**/*.md`이며, AI는 `.html`을 역파싱하지 않는다.
-- **사람을 위해 동반 `.html`을 항상 함께 생성·갱신한다**: 예약 파일(`index.md`, `log.md`, `README.md`)을 제외한 일반 문서를 작성·수정할 때는 같은 이름의 `<문서명>.html`을 표준 골격(`.okf/templates/human-view.html` + `docs/_assets/okf-doc.css`)으로 함께 생성·갱신한다.
+- **사람을 위해 동반 `.html`을 항상 함께 생성·갱신한다**: 예약 파일(`index.md`, `log.md`, `README.md`)을 제외한 일반 문서를 작성·수정할 때는 같은 이름의 `<문서명>.html`을 표준 골격(일반 문서는 `.okf/templates/human-view.html`, 화면명세서는 `.okf/templates/screen-spec-view.html` + `docs/_assets/okf-doc.css`)으로 함께 생성·갱신한다.
+- **깔끔한 `.html` 작성 · 연결 규칙**:
+  - `.html`의 메타 알약·사이드바·푸터에 raw 저장소 경로(`docs/...`, `AI 단일 원본`)를 장황하게 노출하지 않는다.
+  - 본문 텍스트에 마크다운 백틱(`` ` ``) 기호를 그대로 남기지 않고 의미에 맞는 HTML 태그(`<code>` 등) 또는 자연어로 렌더링한다.
+  - 다른 문서를 링크할 때는 raw 경로 대신 **문서 제목**을 앵커 텍스트로 두고 상대 `.html` 경로(`<문서명>.html`, `../other/prd.html`)로 바로 이동 가능하게 연결한다.
 
 ## 2. 이번 PR 변경점 표시 · 교체 규칙 (`Reset → Mark`)
 
@@ -39,6 +46,16 @@
    - AI는 `[디자인]` 이슈를 수행해 화면 구성·상태별 UI·인터랙션이 담긴 **화면명세서**(`.md` + `.html`)를 완성하고, 같은 Epic 아래의 `[프론트엔드]` 개발 백로그(`이전 단계: #<디자인이슈>`)에 화면명세서 링크와 완료 조건을 보강한다.
 4. **개발자 백로그(`[백엔드]` · `[프론트엔드]`)에서 정지 (코드 구현 금지)**
    - `[기획]`·`[디자인]` 문서 PR 제출과 개발자 백로그 정리가 끝나면 작업을 완료한다. **`[백엔드]`·`[프론트엔드]` 이슈의 실제 코딩·구현 PR은 수행하지 않고 개발자에게 핸드오프한다.**
+
+## 3-1. 원샷 파이프라인 실행 절차 (MCP 우선)
+
+사용자가 새로운 기능이나 개선 아이디어를 한 번에 기획·디자인·백로그까지 완성해 달라고 요청하면 아래 순서로 자율 수행한다(`okhub-cli mcp` 도구 우선 사용):
+
+1. **컨텍스트 · 스키마 · 코드 읽기 전용 파악**: `okhub_get_active_context`로 활성 Project, 문서 저장소, 연결 코드 저장소(로컬 읽기 경로), `.okf/workspace.yml` 역할별 담당자(`assignees`)를 확인하고 `okhub_board_get_schema`로 Project 필드 옵션을 조회한다. 기존 구현 파악이 필요할 때는 연결된 코드 저장소를 **읽기 전용**으로만 확인한다.
+2. **직군별 전체 백로그 트리 한 번에 생성**: `okhub_board_create_backlog_tree`로 `[Epic]`(`기능`) 아래 `[기획]` → `[디자인]` → `[백엔드]` → `[프론트엔드]`(`작업`, `parentBatchIndex`·`dependsOnBatchIndex`로 `이전 단계: #N` 체인 및 역할별 `assignees` 자동 배정)를 동적으로 등록한다.
+3. **`[기획]` 문서 완성 (PRD 2벌)**: 문서 저장소 격리 worktree에서 `docs/domains/<domain>/prd.md` + `prd.html`을 작성·갱신(`Reset → Mark`)한다.
+4. **`[디자인]` 문서 완성 (화면명세서 2벌 + 순수 SVG 와이어프레임)**: 같은 폴더 `assets/<화면>-wireframe.svg`(인라인 presentation attribute만 사용, `<style>`/`style="..."`·`<script>` 금지)를 만들고 `screen-spec.md` frontmatter `wireframes: [{ title, image }]` + 본문 `## 화면 와이어프레임` + `screen-spec.html`(`.wireframe-showcase`)까지 2벌로 완성한다.
+5. **검증 · PR 생성 · 개발자 백로그 보강**: `okhub_doc_validate`로 0 에러(`valid: true`)를 확인하고 `okhub_pr_create`로 문서 저장소 PR(`Closes #<기획·디자인 이슈>`)을 연 뒤, `okhub_board_update_issue`로 `[백엔드]`·`[프론트엔드]` 이슈 본문에 확정 문서 링크·완료 조건·검증 기준을 보강하고 `okhub_board_update_status`로 완료/검토 상태를 최신화한다. (**외부 코드 저장소의 소스 코드는 수정하지 않는다.**)
 
 ## 4. 이슈 및 안전 규칙
 
