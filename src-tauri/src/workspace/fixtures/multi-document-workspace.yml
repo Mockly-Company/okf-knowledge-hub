@@ -1,0 +1,19 @@
+schema_version: 1
+workspace:
+  id: d5b90530-6041-47e3-a348-2bff3642d5fb
+  name: Multiple document repositories
+documents:
+  # Legacy primary scope; repository omitted means the configuration source.
+  roots:
+    - path: docs
+      # Repository-relative paths. Exclusions include all descendants.
+      exclude: [docs/archive]
+      custom_root: preserved
+  repositories:
+    - repository: {id: R_API, full_name: team/api-specs}
+      roots:
+        - path: specs
+          exclude: [specs/internal]
+      custom_repo: preserved
+custom_workspace:
+  keep: true

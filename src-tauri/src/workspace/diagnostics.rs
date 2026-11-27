@@ -16,6 +16,15 @@ impl From<ValidationDiagnostic> for WorkspaceDiagnostic {
     fn from(item: ValidationDiagnostic) -> Self {
         Self {
             code: match item.code {
+                ValidationDiagnosticCode::DocumentExclusionInvalid => {
+                    WorkspaceDiagnosticCode::DocumentExclusionInvalid
+                }
+                ValidationDiagnosticCode::DocumentRepositoryInvalid => {
+                    WorkspaceDiagnosticCode::DocumentRepositoryInvalid
+                }
+                ValidationDiagnosticCode::DuplicateDocumentRepository => {
+                    WorkspaceDiagnosticCode::DuplicateDocumentRepository
+                }
                 ValidationDiagnosticCode::WorkspaceIdNotV4 => {
                     WorkspaceDiagnosticCode::WorkspaceIdNotV4
                 }

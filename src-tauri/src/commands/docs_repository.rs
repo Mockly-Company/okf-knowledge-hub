@@ -15,6 +15,16 @@ use crate::settings::service::LocalSettingsService;
 use crate::state::AppServices;
 use crate::workspace::service::{WorkspaceInspection, WorkspaceService};
 
+/// Stage-A backend preview, deliberately not registered as a Tauri command yet.
+/// The caller supplies an explicit source; personal settings are not consulted.
+pub async fn preview_shared_workspace_definition(
+    github: &crate::github::GithubService,
+    source: &crate::workspace::shared::WorkspaceSourceRef,
+    commit: Option<&str>,
+) -> Result<crate::workspace::shared::SharedWorkspaceLookup, AppError> {
+    crate::workspace::shared_read::read_shared_workspace(github, source, commit).await
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreparedDocsRepository {

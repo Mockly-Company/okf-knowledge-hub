@@ -326,7 +326,13 @@ pub struct WorkspaceIdentity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DocumentsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<GithubRepositoryRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub roots: Vec<DocumentRoot>,
+    /// Additional document repositories. The legacy repository/roots remain intact.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<DocumentRepository>,
     #[serde(flatten)]
     pub extra: IndexMap<String, Value>,
 }
@@ -334,17 +340,42 @@ pub struct DocumentsConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct DocumentRoot {
     pub path: String,
+    /// Repository-relative descendant folders; their entire subtrees are excluded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
     #[serde(flatten)]
     pub extra: IndexMap<String, Value>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentRepository {
+    pub repository: GithubRepositoryRef,
+    pub roots: Vec<DocumentRoot>,
+    #[serde(flatten)]
+    pub extra: IndexMap<String, Value>,
+}
+
+#[path = "document_scopes.rs"]
+pub(crate) mod document_scopes;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LinkedRepository {
     pub key: String,
     pub label: String,
     pub github: GithubRepositoryRef,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<WorkspaceRepositoryRole>,
     #[serde(flatten)]
     pub extra: IndexMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceRepositoryRole {
+    Planning,
+    Design,
+    Frontend,
+    Backend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -524,6 +555,21 @@ fn invalid_workspace_error(message: impl Into<String>) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_link_fields_reject_unknown_roles_and_malformed_document_repository() {
+        let base = "schema_version: 1\nworkspace:\n  id: d5b90530-6041-47e3-a348-2bff3642d5fb\n  name: Team\ndocuments:\n  roots: [{path: docs}]\n";
+        for suffix in [
+            "repositories:\n  - key: app\n    label: App\n    github: {id: R_APP, full_name: team/app}\n    roles: [admin]\n",
+            "repositories:\n  - key: app\n    label: App\n    github: {id: R_APP, full_name: team/app}\n    roles: frontend\n",
+        ] {
+            assert!(super::WorkspaceDocument::parse(&format!("{base}{suffix}")).is_err());
+        }
+        assert!(super::WorkspaceDocument::parse(&base.replace(
+            "roots: [{path: docs}]",
+            "roots: [{path: docs}]\n  repository: invalid"
+        ))
+        .is_err());
+    }
     use super::*;
     use crate::error::ErrorCode;
 

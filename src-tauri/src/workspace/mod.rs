@@ -6,4 +6,7 @@ pub mod model;
 mod path_safety;
 mod references;
 pub mod service;
+pub mod shared;
+pub mod shared_read;
+pub mod shared_source;
 pub mod validation;

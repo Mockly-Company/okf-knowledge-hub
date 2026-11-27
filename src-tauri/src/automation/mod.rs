@@ -2,6 +2,7 @@ pub mod cli;
 pub mod context_pack;
 pub mod doc_validator;
 pub mod mcp;
+pub use crate::workspace::shared_read::read_shared_workspace as inspect_shared_workspace_definition;
 
 use std::collections::BTreeMap;
 use std::fs;
