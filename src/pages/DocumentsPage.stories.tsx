@@ -1,6 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, waitFor, within } from "storybook/test";
-import { withAppProviders } from "@/stories/decorators/AppProviders";
+import { withAppProviders, useStorybookProviderBoundary } from "@/stories/decorators/AppProviders";
+import { documentFixtures } from "@/stories/fixtures/documents";
+import { useDocuments } from "@/features/documents/DocumentsProvider";
+import { DocumentTree } from "@/features/documents/components/DocumentTree";
+import { Button } from "@/components/ui/button";
 import { DocumentsPage } from "./DocumentsPage";
 
 const meta = {
@@ -14,6 +18,58 @@ const meta = {
 export default meta;
 
 type Story = StoryObj<typeof meta>;
+
+const primaryGuide = { ...documentFixtures.mapSearchApi(), path: "docs/api/guide.md", title: "API 안내 · 기준 저장소", fileName: "guide.md" };
+const secondaryGuide = { ...primaryGuide, path: "repo:team/handbook/docs/api/guide.md", title: "API 안내 · Handbook", documentId: "handbook-guide" };
+const multiRepositoryCatalog = {
+  documents: [primaryGuide, secondaryGuide],
+  roots: [
+    { kind: "folder" as const, name: "기준 저장소", path: "docs", children: [{ kind: "document" as const, summary: primaryGuide }] },
+    { kind: "folder" as const, name: "team/handbook", path: "repo:team/handbook", children: [{ kind: "document" as const, summary: secondaryGuide }] },
+  ],
+};
+
+function MultiRepositoryDocumentsPreview() {
+  const { state, selectDocument, showDocumentsHome, openNewDocument } = useDocuments();
+  const { documents } = useStorybookProviderBoundary();
+  documents.markdownByPath = {
+    [primaryGuide.path]: `# ${primaryGuide.title}\n\n기준 저장소에서 관리하는 API 계약입니다.\n\n## 요청 규칙\n\n요청에는 프로젝트 식별자를 포함합니다.`,
+    [secondaryGuide.path]: `# ${secondaryGuide.title}\n\nHandbook 저장소에서 불러온 운영 안내입니다.\n\n## 운영 절차\n\nAPI 변경 전 담당자 검토를 요청합니다.`,
+  };
+  documents.historyPage = { items: [{ commitOid: "aabbccddeeff0011223344556677889900112233", shortOid: "aabbccd", authorName: "Lee", authoredAtUnix: 1_795_737_600,
+    message: "Handbook API 안내 갱신", pathAtCommit: secondaryGuide.path }], nextCursor: null };
+  return <div className="flex min-h-screen bg-[var(--color-canvas)] text-[var(--color-text-default)]">
+    <aside aria-label="통합 문서 탐색" className="w-64 shrink-0 border-r border-[var(--color-border)] p-[var(--space-4)]">
+      <Button variant="ghost" onClick={showDocumentsHome}>문서 목록</Button>
+      <DocumentTree entries={state.catalog.roots} selectedPath={state.selectedPath} onSelectDocument={selectDocument} onNewDocument={openNewDocument} />
+    </aside>
+    <main className="min-w-0 flex-1 p-[var(--space-6)]"><DocumentsPage /></main>
+  </div>;
+}
+
+export const MultipleRepositories: Story = {
+  name: "여러 저장소 · 통합 문서",
+  decorators: [withAppProviders({ documents: {
+    catalog: multiRepositoryCatalog,
+    repositoryFullName: "team/knowledge",
+    searchResults: [primaryGuide, secondaryGuide].map(summary => ({ path: summary.path, title: summary.title, matchField: "body" as const, matchText: "API", snippet: "API 안내 문서입니다." })),
+  }, router: { initialEntries: ["/documents"] } })],
+  render: () => <MultiRepositoryDocumentsPreview />,
+  play: async ({ canvas, userEvent }) => {
+    await expect(await canvas.findByText("docs/api/guide.md")).toBeVisible();
+    await expect(canvas.getByText("team/handbook · docs/api/guide.md")).toBeVisible();
+    await userEvent.type(canvas.getByRole("searchbox", { name: "문서 검색" }), "API");
+    await expect(await canvas.findByRole("button", { name: /API 안내 · 기준 저장소/ })).toBeVisible();
+    await userEvent.click(await canvas.findByRole("button", { name: /API 안내 · Handbook/ }));
+    await expect(await canvas.findByText("읽기 전용")).toBeVisible();
+    await expect(await canvas.findByText("Handbook 저장소에서 불러온 운영 안내입니다.")).toBeVisible();
+    await expect(canvas.queryByText("기준 저장소에서 관리하는 API 계약입니다.")).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "편집" })).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "AI로 작업 시작" })).not.toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("tab", { name: "History" }));
+    await expect(await canvas.findByText("Handbook API 안내 갱신")).toBeVisible();
+  },
+};
 
 export const Home: Story = {
   decorators: [

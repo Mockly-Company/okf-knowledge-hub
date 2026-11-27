@@ -57,17 +57,19 @@ function renderMarkdown(
   return { gateway, ...view };
 }
 
-function ReadyMarkdown({ markdown }: { markdown: string }) {
+function ReadyMarkdown({ markdown, documentPath }: { markdown: string; documentPath?: string }) {
   const { state } = useDocuments();
-  return state.status === "ready" ? <MarkdownDocument document={content(markdown)} /> : null;
+  const document = content(markdown);
+  if (documentPath) document.summary.path = documentPath;
+  return state.status === "ready" ? <MarkdownDocument document={document} /> : null;
 }
 
-function renderReadyMarkdown(markdown: string) {
+function renderReadyMarkdown(markdown: string, documentPath?: string) {
   const gateway = new FakeDocumentsGateway();
   const view = render(
     <TestQueryProvider>
       <DocumentsProvider gateway={gateway} createId={() => "session-id"}>
-        <ReadyMarkdown markdown={markdown} />
+        <ReadyMarkdown markdown={markdown} documentPath={documentPath} />
       </DocumentsProvider>
     </TestQueryProvider>,
   );
@@ -105,6 +107,19 @@ function renderSearchMatchedMarkdown(markdown: string, matchText: string) {
 }
 
 describe("MarkdownDocument", () => {
+  it("keeps secondary relative links inside their own repository root", async () => {
+    const { gateway } = renderReadyMarkdown(
+      "[API](../api.md) [escape](../../../other/docs.md)",
+      "repo:team/handbook/docs/guides/guide.md",
+    );
+    const user = userEvent.setup();
+    expect(await screen.findByRole("link", { name: "escape" })).toHaveAttribute("href", "#");
+    expect(screen.getByText("team/handbook · docs/guides/guide.md")).toBeVisible();
+    await user.click(screen.getByRole("link", { name: "API" }));
+    await waitFor(() => expect(gateway.calls).toContainEqual({
+      method: "readDocument", args: ["session-id", "session-id", "repo:team/handbook/docs/api.md"],
+    }));
+  });
   it("keeps both GFM footnote directions linked to existing sanitized IDs", () => {
     const { container } = renderMarkdown("Reference[^distance]\n\n[^distance]: Distance in meters");
     const reference = container.querySelector<HTMLAnchorElement>("a[data-footnote-ref]")!;

@@ -23,6 +23,7 @@ import {
   type SearchResult,
 } from "../model";
 import type { AsyncStatus } from "../documents-reducer";
+import { displayDocumentPath, documentLocation } from "../document-location";
 
 interface DocumentSearchProps {
   query: string;
@@ -217,7 +218,7 @@ export function DocumentSearch({
           <FileText aria-hidden="true" />
           <span className="document-search__result-copy">
             <strong>{item.title}</strong>
-            <small>{item.path}</small>
+            <small>{displayDocumentPath(item.path)}</small>
             {result?.snippet ? (
               <span>
                 <HighlightedSnippet
@@ -380,6 +381,7 @@ export function DocumentSearch({
                     </div>
                     {groupMode === "domain" &&
                     folderPath &&
+                    !documentLocation(folderPath).repository &&
                     onNewDocumentInFolder ? (
                       <Button
                         type="button"

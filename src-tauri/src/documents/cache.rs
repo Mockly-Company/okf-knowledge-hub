@@ -137,6 +137,30 @@ impl DocumentCache {
             .optional()?)
     }
 
+    /// Cache identity includes the repository collection and its visibility policy.
+    pub fn bind_scope(&mut self, fingerprint: &str) -> Result<(), CacheError> {
+        let previous: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'scope_fingerprint'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if previous
+            .as_deref()
+            .is_some_and(|previous| previous != fingerprint)
+        {
+            self.reconcile_metadata(&[])?;
+            self.set_last_opened_path(None)?;
+        }
+        self.connection.execute(
+            "INSERT INTO meta (key, value) VALUES ('scope_fingerprint', ?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![fingerprint],
+        )?;
+        Ok(())
+    }
+
     pub fn set_last_opened_path(&self, path: Option<&str>) -> Result<(), CacheError> {
         match path {
             Some(path) => self.connection.execute(

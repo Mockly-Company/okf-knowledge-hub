@@ -124,6 +124,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
   };
   historyPage: HistoryPage = { items: [], nextCursor: null };
   searchResults: SearchResult[] = [];
+  markdownByPath: Record<string, string> = {};
   startError: unknown | null = null;
   asset: DocumentAsset = { kind: "svg", source: "<svg />" };
   deferSubscription = false;
@@ -368,7 +369,7 @@ export class FakeDocumentsGateway implements DocumentsGateway {
       (path === apiSummary.path ? apiSummary : guideSummary);
     const content: DocumentContent = {
       summary: { ...summary, path },
-      markdown: `# ${summary.title}`,
+      markdown: this.markdownByPath[path] ?? `# ${summary.title}`,
       properties: {},
       tableOfContents: [],
       lastCommit: null,

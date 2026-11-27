@@ -9,11 +9,12 @@ use uuid::{Uuid, Variant};
 use crate::error::{AppError, ErrorCode, RecoveryAction};
 
 use super::cache::{CacheError, DocumentCache};
+pub use super::collection::DocumentRepositoryWorkspace;
 use super::contract::{
     DocumentCatalog, DocumentEvent, DocumentSessionSnapshot, IndexStatus, SearchResponse,
 };
-use super::discovery::discover_documents;
-use super::indexer::{catalog_from_summaries, BodyReadCoordinator};
+use super::discovery::discover_documents_with_exclusions;
+use super::indexer::BodyReadCoordinator;
 use super::reconcile::{ReconcileDecision, ReconcileGate};
 use super::watcher::{
     native_watcher_factory, WatcherFactory, WatcherGuard, WatcherMessage, WATCH_COALESCE_WINDOW,
@@ -24,6 +25,9 @@ pub struct DocumentWorkspace {
     pub workspace_id: Uuid,
     pub repository_root: PathBuf,
     pub document_roots: Vec<String>,
+    pub excluded_paths: Vec<String>,
+    pub additional_repositories: Vec<DocumentRepositoryWorkspace>,
+    pub source_config: Option<(PathBuf, String)>,
     pub cache_path: PathBuf,
 }
 
@@ -67,7 +71,35 @@ pub struct FileSystemDocumentSource;
 #[async_trait]
 impl DocumentSource for FileSystemDocumentSource {
     fn discover(&self, workspace: &DocumentWorkspace) -> Result<DocumentCatalog, AppError> {
-        discover_documents(&workspace.repository_root, &workspace.document_roots)
+        workspace.ensure_current_configuration()?;
+        let mut catalog = discover_documents_with_exclusions(
+            &workspace.repository_root,
+            &workspace.document_roots,
+            &workspace.excluded_paths,
+        )?;
+        for repository in &workspace.additional_repositories {
+            let mut additional = discover_documents_with_exclusions(
+                &repository.repository_root,
+                &repository.document_roots,
+                &repository.excluded_paths,
+            )?;
+            let prefix = format!("repo:{}/", repository.full_name);
+            for summary in &mut additional.documents {
+                summary.path = format!("{prefix}{}", summary.path);
+            }
+            for root in &mut additional.roots {
+                super::collection::qualify_tree(root, &prefix);
+            }
+            catalog.documents.extend(additional.documents);
+            catalog
+                .roots
+                .push(super::contract::DocumentTreeEntry::Folder {
+                    name: repository.full_name.clone(),
+                    path: prefix.trim_end_matches('/').into(),
+                    children: additional.roots,
+                });
+        }
+        Ok(catalog)
     }
 
     async fn read_body(
@@ -75,7 +107,16 @@ impl DocumentSource for FileSystemDocumentSource {
         workspace: &DocumentWorkspace,
         path: &str,
     ) -> Result<Vec<u8>, AppError> {
-        let full_path = workspace.repository_root.join(path);
+        workspace.ensure_current_configuration()?;
+        let resolved = workspace.resolve_path(path)?;
+        let full_path = resolved.repository_root.join(&resolved.path);
+        let reader = resolved.reader()?;
+        if !reader.allows_path(&full_path) {
+            return Err(AppError::new(
+                ErrorCode::DocumentPathInvalid,
+                "문서 조회 범위 밖의 경로입니다.",
+            ));
+        }
         tokio::fs::read(&full_path).await.map_err(|error| {
             AppError::new(
                 ErrorCode::DocumentPathInvalid,
@@ -425,6 +466,7 @@ impl DocumentRuntime {
         let state = self.inner.state.lock().expect("document runtime poisoned");
         match state.generation.as_ref() {
             Some(Generation::Active(session)) if session.owner.session_id == session_id => {
+                session.workspace.ensure_current_configuration()?;
                 Ok(session.snapshot.clone())
             }
             _ => Err(session_conflict()),
@@ -460,6 +502,7 @@ impl DocumentRuntime {
         let state = self.inner.state.lock().expect("document runtime poisoned");
         match state.generation.as_ref() {
             Some(Generation::Active(session)) if session.owner.session_id == session_id => {
+                session.workspace.ensure_current_configuration()?;
                 session.cache.search(query, limit).map_err(cache_error)
             }
             _ => Err(session_conflict()),
@@ -668,6 +711,7 @@ impl DocumentRuntime {
         if session.owner != owner {
             return Ok(());
         }
+        session.workspace.ensure_current_configuration()?;
         session
             .cache
             .apply_reconcile(&catalog.documents, &contents)
@@ -767,11 +811,34 @@ impl DocumentRuntime {
             return;
         };
         let (sender, receiver) = mpsc::unbounded_channel();
-        match (self.inner.watcher_factory)(
-            &workspace.repository_root,
-            &workspace.document_roots,
-            sender,
-        ) {
+        let start_watchers = || {
+            let mut watched_roots = workspace.document_roots.clone();
+            if let Some((configuration, _)) = &workspace.source_config {
+                if let Some(parent) = configuration
+                    .parent()
+                    .and_then(|parent| parent.strip_prefix(&workspace.repository_root).ok())
+                {
+                    let path = parent.to_string_lossy().into_owned();
+                    if !watched_roots.contains(&path) {
+                        watched_roots.push(path);
+                    }
+                }
+            }
+            let mut watchers = vec![(self.inner.watcher_factory)(
+                &workspace.repository_root,
+                &watched_roots,
+                sender.clone(),
+            )?];
+            for repository in &workspace.additional_repositories {
+                watchers.push((self.inner.watcher_factory)(
+                    &repository.repository_root,
+                    &repository.document_roots,
+                    sender.clone(),
+                )?);
+            }
+            Ok::<Box<dyn WatcherGuard>, notify::Error>(Box::new(watchers))
+        };
+        match start_watchers() {
             Ok(watcher) => {
                 let cancellation = {
                     let mut state = self.inner.state.lock().expect("document runtime poisoned");
@@ -899,10 +966,16 @@ impl DocumentRuntime {
             .map_err(join_error)?
             .map_err(cache_error)?
         };
-        let cached = cache.cached_summaries().map_err(cache_error)?;
+        cache
+            .bind_scope(&workspace.scope_fingerprint())
+            .map_err(cache_error)?;
+        let mut cached = cache.cached_summaries().map_err(cache_error)?;
         let warm_start = !cached.is_empty();
+        if !workspace.excluded_paths.is_empty() || !workspace.additional_repositories.is_empty() {
+            cached.retain(|summary| workspace.allows_cached_path(&summary.path));
+        }
         let catalog = if warm_start {
-            catalog_from_summaries(&workspace.document_roots, cached)
+            workspace.cached_catalog(cached)
         } else {
             Self::discover(self.inner.source.clone(), workspace.clone()).await?
         };
@@ -924,7 +997,9 @@ impl DocumentRuntime {
                     .documents
                     .iter()
                     .any(|document| document.path == path)
-                    && workspace.repository_root.join(&path).is_file() =>
+                    && workspace.resolve_path(&path).is_ok_and(|resolved| {
+                        resolved.repository_root.join(&resolved.path).is_file()
+                    }) =>
             {
                 Some(path)
             }
@@ -1065,6 +1140,14 @@ fn reconcile_open_document(
     let Some(open_path) = session.snapshot.last_opened_path.clone() else {
         return Ok(None);
     };
+    let repository_key = |path: &str| -> String {
+        if path.starts_with("repo:") {
+            path.split('/').take(2).collect::<Vec<_>>().join("/")
+        } else {
+            String::new()
+        }
+    };
+    let open_repository = repository_key(&open_path);
     if catalog
         .documents
         .iter()
@@ -1086,15 +1169,18 @@ fn reconcile_open_document(
                 .catalog
                 .documents
                 .iter()
-                .filter(|document| document.document_id == Some(*document_id))
+                .filter(|document| {
+                    document.document_id == Some(*document_id)
+                        && repository_key(&document.path) == open_repository
+                })
                 .count()
                 == 1
         });
     let renamed_path = previous_id.and_then(|document_id| {
-        let mut matches = catalog
-            .documents
-            .iter()
-            .filter(|document| document.document_id == Some(document_id));
+        let mut matches = catalog.documents.iter().filter(|document| {
+            document.document_id == Some(document_id)
+                && repository_key(&document.path) == open_repository
+        });
         let first = matches.next()?;
         matches.next().is_none().then(|| first.path.clone())
     });
@@ -1136,6 +1222,87 @@ mod tests {
         Generation, ReconcileWorkerPause, StartupReservationPause,
     };
 
+    #[tokio::test]
+    async fn filesystem_collection_keeps_same_paths_distinct_and_excludes_secondary_secrets() {
+        let temp = TempDir::new().unwrap();
+        let mut workspace = workspace(&temp);
+        std::fs::write(
+            workspace.repository_root.join("docs/guide.md"),
+            "---\nokf_hub_id: 9f9e8ac7-cf5a-4f83-b716-0b52e69fb9d6\n---\n# Primary needle",
+        )
+        .unwrap();
+        let secondary = temp.path().join("secondary");
+        std::fs::create_dir_all(secondary.join("docs/private")).unwrap();
+        std::fs::write(
+            secondary.join("docs/guide.md"),
+            "---\nokf_hub_id: 9f9e8ac7-cf5a-4f83-b716-0b52e69fb9d6\n---\n# Secondary needle",
+        )
+        .unwrap();
+        std::fs::write(secondary.join("docs/private/secret.md"), "# Hidden needle").unwrap();
+        workspace
+            .additional_repositories
+            .push(super::DocumentRepositoryWorkspace {
+                full_name: "team/secondary".into(),
+                repository_root: secondary,
+                document_roots: vec!["docs".into()],
+                excluded_paths: vec!["docs/private".into()],
+            });
+        let runtime = DocumentRuntime::new();
+        let mut events = runtime.subscribe();
+        let id = Uuid::new_v4();
+        let snapshot = runtime.start_session(id, workspace.clone()).await.unwrap();
+        assert_eq!(
+            snapshot
+                .catalog
+                .documents
+                .iter()
+                .map(|doc| doc.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/guide.md", "repo:team/secondary/docs/guide.md"]
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                while let Ok(event) = events.try_recv() {
+                    if let DocumentEvent::Failed { error, .. } = event {
+                        panic!("collection indexing failed: {error:?}");
+                    }
+                }
+                let snapshot = runtime.snapshot(id).unwrap();
+                if matches!(
+                    snapshot.index_status,
+                    IndexStatus::Ready | IndexStatus::Degraded { .. }
+                ) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "collection index status: {:?}",
+                runtime.snapshot(id).unwrap().index_status
+            )
+        });
+        let results = runtime.search(id, "needle", 20).await.unwrap();
+        assert_eq!(results.items.len(), 2);
+        assert!(results
+            .items
+            .iter()
+            .any(|item| item.path == "repo:team/secondary/docs/guide.md"));
+        assert_eq!(
+            snapshot.catalog.documents[0].document_id,
+            snapshot.catalog.documents[1].document_id
+        );
+        runtime.set_open_document(id, "docs/guide.md").unwrap();
+        runtime.stop_session(id).await.unwrap();
+        let warm_id = Uuid::new_v4();
+        let warm = runtime.start_session(warm_id, workspace).await.unwrap();
+        assert!(warm.catalog.roots.iter().any(|root| matches!(root,
+            DocumentTreeEntry::Folder { name, .. } if name == "team/secondary")));
+        runtime.stop_session(warm_id).await.unwrap();
+    }
+
     #[test]
     fn effective_status_suppresses_identical_degradation_but_publishes_message_changes() {
         let mut current = IndexStatus::Ready;
@@ -1167,6 +1334,54 @@ mod tests {
             Some(degraded_b.clone())
         );
         assert_eq!(current, degraded_b);
+    }
+
+    #[tokio::test]
+    async fn changed_exclusions_remove_cached_search_and_selection_before_publication() {
+        let temp = TempDir::new().unwrap();
+        let mut workspace = workspace(&temp);
+        std::fs::create_dir_all(workspace.repository_root.join("docs/private")).unwrap();
+        std::fs::write(
+            workspace.repository_root.join("docs/private/secret.md"),
+            "# private cached needle",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.repository_root.join("docs/public.md"),
+            "# public content",
+        )
+        .unwrap();
+        let runtime = DocumentRuntime::new();
+        let first = Uuid::new_v4();
+        runtime
+            .start_session(first, workspace.clone())
+            .await
+            .unwrap();
+        wait_until_idle(&runtime, first).await;
+        runtime
+            .set_open_document(first, "docs/private/secret.md")
+            .unwrap();
+        runtime.stop_session(first).await.unwrap();
+        workspace.excluded_paths = vec!["docs/private".into()];
+        let second = Uuid::new_v4();
+        let snapshot = runtime.start_session(second, workspace).await.unwrap();
+        assert_eq!(
+            snapshot
+                .catalog
+                .documents
+                .iter()
+                .map(|doc| doc.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/public.md"]
+        );
+        assert_eq!(snapshot.last_opened_path, None);
+        assert!(runtime
+            .search(second, "private cached", 20)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        runtime.stop_session(second).await.unwrap();
     }
 
     #[derive(Clone)]
@@ -3503,6 +3718,9 @@ mod tests {
             workspace_id: Uuid::parse_str("9f9e8ac7-cf5a-4f83-b716-0b52e69fb9d6").unwrap(),
             repository_root,
             document_roots: vec!["docs".to_owned()],
+            excluded_paths: Vec::new(),
+            additional_repositories: Vec::new(),
+            source_config: None,
             cache_path: temp.path().join("search.sqlite3"),
         }
     }

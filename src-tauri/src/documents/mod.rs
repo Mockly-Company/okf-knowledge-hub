@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod collection;
 pub mod contract;
 pub mod discovery;
 pub mod frontmatter;

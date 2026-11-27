@@ -74,6 +74,7 @@ struct DocumentReadOwnership {
 }
 
 pub(crate) struct DocumentCommandWorkspaceContext {
+    pub(crate) document_scope: crate::documents::runtime::DocumentWorkspace,
     pub(crate) workspace_id: Uuid,
     pub(crate) repository_root: PathBuf,
     pub(crate) document_roots: Vec<String>,

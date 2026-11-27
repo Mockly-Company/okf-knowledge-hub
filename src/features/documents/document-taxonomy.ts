@@ -1,4 +1,5 @@
 import { normalizeDocumentPath, type DocumentSummary } from "./model";
+import { documentLocation } from "./document-location";
 
 export type DocumentCategory =
   | "prd"
@@ -43,7 +44,7 @@ const RESERVED_STEMS = new Set(["index", "log", "readme", "agents"]);
 const RESERVED_EXTENSIONS = new Set(["md", "html"]);
 
 function normalizePortablePath(path: string): string {
-  return normalizeDocumentPath(path);
+  return normalizeDocumentPath(documentLocation(path).path);
 }
 
 function isReservedDocumentFileName(fileName: string): boolean {
@@ -191,6 +192,16 @@ function parentDirectory(normalizedPath: string): string {
 export function resolveDocumentDomain(
   doc: Pick<DocumentSummary, "domain" | "path">,
 ): ResolvedDocumentDomain {
+  const location = documentLocation(doc.path);
+  if (location.repository) {
+    const domain = resolveDocumentDomain({ ...doc, path: location.path });
+    return {
+      ...domain,
+      key: `repo:${location.repository}/${domain.key}`,
+      label: `${location.repository} · ${domain.label}`,
+      folderPath: `repo:${location.repository}/${domain.folderPath}`,
+    };
+  }
   const normalizedPath = normalizePortablePath(doc.path);
   const parentDir = parentDirectory(normalizedPath);
   const segments = normalizedPath.split("/").filter(Boolean);

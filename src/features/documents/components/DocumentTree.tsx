@@ -253,7 +253,7 @@ export function DocumentTree({
                   </>
                 )}
                 <span className="document-tree__label">{label}</span>
-                {isFolder && onNewDocument ? (
+                {isFolder && !entry.path.startsWith("repo:") && onNewDocument ? (
                   <IconButton
                     className="document-tree__folder-create"
                     label={`${label}에 새 문서`}
