@@ -72,7 +72,7 @@ async fn execute_args(raw_args: Vec<String>) -> ExitCode {
 
     if positionals[0] == "mcp" {
         if let Err(err) = mcp::serve_stdio(overrides).await {
-            emit_error(&err, json_output);
+            eprintln!("MCP error: {}", err.message);
             return ExitCode::from(1);
         }
         return ExitCode::SUCCESS;

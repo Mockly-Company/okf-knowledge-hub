@@ -2,7 +2,18 @@ pub mod cli;
 pub mod context_pack;
 pub mod doc_validator;
 pub mod mcp;
-pub use crate::workspace::shared_read::read_shared_workspace as inspect_shared_workspace_definition;
+mod mcp_board;
+#[cfg(test)]
+mod mcp_document_tests;
+mod mcp_documents;
+mod mcp_paging;
+mod mcp_pr;
+mod mcp_rules;
+mod mcp_sdk;
+mod mcp_sources;
+mod mcp_workspace;
+mod mcp_write;
+pub use mcp_workspace::inspect_shared_workspace_definition;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -22,8 +33,7 @@ use crate::automation::context_pack::{
     IssueContextPack, ReadyBoardItem,
 };
 use crate::automation::doc_validator::{
-    list_workspace_docs, read_workspace_doc, validate_workspace_docs, AutomationDocDetail,
-    AutomationDocEntry, DocValidationReport,
+    validate_workspace_docs, AutomationDocDetail, AutomationDocEntry, DocValidationReport,
 };
 use crate::commands::code_repositories::resolve_code_repositories_for_workspace;
 use crate::error::{AppError, ErrorCode, RecoveryAction};
@@ -61,6 +71,9 @@ pub struct ActiveAutomationContextSummary {
     pub docs_repository_full_name: Option<String>,
     pub project: Option<AutomationProjectSummary>,
     pub code_repositories: Vec<AutomationCodeRepoSummary>,
+    pub rules: String,
+    pub rule_sources: Vec<mcp_rules::RuleSource>,
+    pub rule_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,11 +244,19 @@ pub fn default_app_data_dir() -> PathBuf {
 }
 
 pub struct AutomationRuntime {
+    mcp_workspace_id: String,
+    mcp_target_fingerprint: String,
+    mcp_document_roots: Option<Vec<String>>,
+    mcp_document_scopes: Option<Vec<crate::workspace::model::DocumentRepository>>,
+    mcp_remote_rules: Option<(String, String)>,
+    mcp_projects: Vec<AutomationProjectSummary>,
     app_data_dir: PathBuf,
     workspace_dir: Option<PathBuf>,
     docs_root_rel: String,
     active_project: Option<AutomationProjectSummary>,
     ai_context: ActiveWorkspaceAiContext,
+    #[cfg(test)]
+    test_github: Option<GithubService>,
 }
 
 impl AutomationRuntime {
@@ -261,6 +282,13 @@ impl AutomationRuntime {
             .ok()
             .map(|s| s.trim().to_owned())
             .filter(|s| !s.is_empty());
+
+        let mcp_explicit_target = overrides.workspace_dir.is_some()
+            || overrides.docs_repo.is_some()
+            || overrides.project_url.is_some()
+            || env_workspace_dir.is_some()
+            || env_docs_repo.is_some()
+            || env_project_url.is_some();
 
         let active_hub_workspace = settings.load_active_hub_workspace().ok().flatten();
         let active_linked_project = settings.load_active_project().ok().flatten();
@@ -394,16 +422,31 @@ impl AutomationRuntime {
             current_user_login: None,
         };
 
+        let mcp_workspace_id = active_hub_workspace
+            .as_ref()
+            .filter(|_| !mcp_explicit_target)
+            .map(|workspace| workspace.id.clone())
+            .unwrap_or_else(|| mcp_workspace::launch_id(&workspace_dir, &ai_context));
+
         Ok(Self {
+            mcp_projects: active_project.clone().into_iter().collect(),
+            mcp_document_roots: None,
+            mcp_document_scopes: None,
+            mcp_remote_rules: None,
+            mcp_target_fingerprint: mcp_workspace_id.clone(),
+            mcp_workspace_id,
             app_data_dir,
             workspace_dir,
             docs_root_rel,
             active_project,
             ai_context,
+            #[cfg(test)]
+            test_github: None,
         })
     }
 
     pub fn active_context_summary(&self) -> ActiveAutomationContextSummary {
+        let (rules, rule_sources, rule_warnings) = mcp_rules::read_rules(self);
         ActiveAutomationContextSummary {
             app_data_dir: self.app_data_dir.display().to_string(),
             workspace_dir: self.workspace_dir.as_ref().map(|p| p.display().to_string()),
@@ -422,6 +465,9 @@ impl AutomationRuntime {
                     local_path: repo.local_path.clone(),
                 })
                 .collect(),
+            rules,
+            rule_sources,
+            rule_warnings,
         }
     }
 
@@ -436,6 +482,11 @@ impl AutomationRuntime {
     }
 
     pub fn require_project(&self) -> Result<&AutomationProjectSummary, AppError> {
+        if self.active_project.is_none() && self.mcp_projects.len() > 1 {
+            return Err(mcp_sdk::error(
+                "연결 Project가 여러 개입니다. projectId를 지정하세요.",
+            ));
+        }
         self.active_project.as_ref().ok_or_else(|| {
             AppError::new(
                 ErrorCode::WorkspaceInvalid,
@@ -473,14 +524,38 @@ impl AutomationRuntime {
             return Ok(repo.to_owned());
         }
         if matches!(layer, Some(BoardLayer::Frontend | BoardLayer::Backend)) {
-            if let Some(code_repo) = self.ai_context.code_repositories.first() {
-                return Ok(code_repo.full_name.clone());
+            let aliases = if layer == Some(BoardLayer::Frontend) {
+                ["frontend", "front", "fe", "web"]
+            } else {
+                ["backend", "back", "be", "api"]
+            };
+            let candidates: Vec<_> = self
+                .ai_context
+                .code_repositories
+                .iter()
+                .filter(|repo| {
+                    aliases.contains(&repo.key.to_ascii_lowercase().as_str())
+                        || repo.label.to_ascii_lowercase().contains(aliases[0])
+                })
+                .collect();
+            if candidates.len() == 1 {
+                return Ok(candidates[0].full_name.clone());
             }
+            if self.ai_context.code_repositories.len() == 1 {
+                return Ok(self.ai_context.code_repositories[0].full_name.clone());
+            }
+            return Err(mcp_sdk::error(
+                "직군별 저장소 연결이 없거나 모호합니다. repository를 지정하세요.",
+            ));
         }
         self.resolve_target_repository(None)
     }
 
     pub fn build_github_service(&self) -> Result<GithubService, AppError> {
+        #[cfg(test)]
+        if let Some(github) = &self.test_github {
+            return Ok(github.clone());
+        }
         let client_id = crate::github_client_id();
         let env_token = std::env::var("GH_TOKEN")
             .ok()
@@ -515,12 +590,67 @@ impl AutomationRuntime {
 
     pub fn list_docs(&self) -> Result<Vec<AutomationDocEntry>, AppError> {
         let root = self.require_workspace_dir()?;
-        list_workspace_docs(root, &self.docs_root_rel)
+        let scope = self.document_scope(self.ai_context.docs_repository_full_name.as_deref())?;
+        let docs = doc_validator::list_scoped_workspace_docs(root, &scope)?;
+        Ok(docs)
+    }
+
+    pub(super) fn document_roots(&self) -> Result<Vec<String>, AppError> {
+        let config_path = self
+            .workspace_dir
+            .as_ref()
+            .map(|root| root.join(".okf/workspace.yml"));
+        let roots = if let Some(roots) = &self.mcp_document_roots {
+            roots.clone()
+        } else if let Some(config_path) = config_path.filter(|p| p.exists()) {
+            let source =
+                fs::read_to_string(config_path).map_err(|e| mcp_sdk::error(e.to_string()))?;
+            let config: WorkspaceConfigV1 =
+                serde_yaml_ng::from_str(&source).map_err(|e| mcp_sdk::error(e.to_string()))?;
+            config
+                .documents
+                .roots
+                .into_iter()
+                .map(|r| r.path)
+                .collect::<Vec<_>>()
+        } else {
+            vec![self.docs_root_rel.clone()]
+        };
+        for path in &roots {
+            if path != "." {
+                mcp_sources::safe_path(path.trim_end_matches('/'))?;
+            }
+        }
+        Ok(roots)
     }
 
     pub fn read_doc(&self, doc_path: &str) -> Result<AutomationDocDetail, AppError> {
         let root = self.require_workspace_dir()?;
-        read_workspace_doc(root, doc_path)
+        mcp_sources::safe_path(doc_path)?;
+        let scope = self.document_scope(self.ai_context.docs_repository_full_name.as_deref())?;
+        if !scope.includes_path(doc_path) {
+            return Err(mcp_sdk::error("문서 조회 범위에서 제외된 경로입니다."));
+        }
+        let canonical_root = root
+            .canonicalize()
+            .map_err(|e| mcp_sdk::error(e.to_string()))?;
+        let canonical_file = root
+            .join(doc_path)
+            .canonicalize()
+            .map_err(|e| mcp_sdk::error(e.to_string()))?;
+        let relative = canonical_file
+            .strip_prefix(&canonical_root)
+            .map_err(|_| mcp_sdk::error("워크스페이스 밖 경로입니다."))?;
+        let relative = mcp_sources::relative_git_path(relative)?;
+        if !relative.ends_with(".md")
+            || !scope.includes_path(&relative)
+            || !mcp_sources::in_document_roots(&relative, &self.document_roots()?)
+        {
+            return Err(mcp_sdk::error(
+                "설정된 문서 루트의 Markdown 파일만 읽을 수 있습니다.",
+            ));
+        }
+        doc_validator::read_scoped_workspace_doc(root, doc_path, &scope)
     }
 
     pub fn validate_docs(&self) -> Result<DocValidationReport, AppError> {

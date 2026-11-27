@@ -87,6 +87,59 @@ pub fn read_workspace_doc(
     workspace_root: &Path,
     doc_path: &str,
 ) -> Result<AutomationDocDetail, AppError> {
+    read_workspace_doc_inner(workspace_root, doc_path, None)
+}
+
+pub(super) fn list_scoped_workspace_docs(
+    workspace_root: &Path,
+    scope: &crate::workspace::model::DocumentRepository,
+) -> Result<Vec<AutomationDocEntry>, AppError> {
+    let roots = scope
+        .roots
+        .iter()
+        .map(|root| root.path.clone())
+        .collect::<Vec<_>>();
+    let excluded = scope
+        .roots
+        .iter()
+        .flat_map(|root| root.exclude.clone())
+        .collect::<Vec<_>>();
+    let catalog = crate::documents::discovery::discover_documents_with_exclusions(
+        workspace_root,
+        &roots,
+        &excluded,
+    )?;
+    catalog
+        .documents
+        .into_iter()
+        .map(|entry| {
+            let detail = read_scoped_workspace_doc(workspace_root, &entry.path, scope)?;
+            Ok(AutomationDocEntry {
+                path: detail.path,
+                title: detail.title,
+                html_companion_path: detail.html_companion_path,
+                html_sync_status: detail.html_sync_status,
+                has_change_markers: !detail.md_markers.is_empty()
+                    || !detail.html_markers.is_empty(),
+            })
+        })
+        .collect()
+}
+
+pub(super) fn read_scoped_workspace_doc(
+    workspace_root: &Path,
+    doc_path: &str,
+    scope: &crate::workspace::model::DocumentRepository,
+) -> Result<AutomationDocDetail, AppError> {
+    super::mcp_documents::local_relative(scope, workspace_root, doc_path)?;
+    read_workspace_doc_inner(workspace_root, doc_path, Some(scope))
+}
+
+fn read_workspace_doc_inner(
+    workspace_root: &Path,
+    doc_path: &str,
+    scope: Option<&crate::workspace::model::DocumentRepository>,
+) -> Result<AutomationDocDetail, AppError> {
     let normalized = normalize_workspace_rel_path(doc_path)?;
     let canonical_root = workspace_root.canonicalize().map_err(|_| {
         AppError::new(
@@ -107,6 +160,20 @@ pub fn read_workspace_doc(
             "워크스페이스 바깥 경로는 읽을 수 없습니다.",
         ));
     }
+    if let Some(scope) = scope {
+        let relative = super::mcp_sources::relative_git_path(
+            canonical_md.strip_prefix(&canonical_root).map_err(|_| {
+                AppError::new(ErrorCode::DocumentPathInvalid, "문서 저장소 밖 경로입니다.")
+            })?,
+        )?;
+        super::mcp_sources::safe_path(&relative)?;
+        if !scope.includes_path(&normalized) || !scope.includes_path(&relative) {
+            return Err(AppError::new(
+                ErrorCode::DocumentPathInvalid,
+                "제외된 문서는 읽을 수 없습니다.",
+            ));
+        }
+    }
     let markdown = fs::read_to_string(&canonical_md).map_err(|err| {
         AppError::new(
             ErrorCode::DocumentPathInvalid,
@@ -117,10 +184,31 @@ pub fn read_workspace_doc(
     let title = extract_doc_title(&markdown, &normalized);
     let html_rel = companion_html_rel_path(&normalized);
     let full_html = workspace_root.join(&html_rel);
-    let html_sync_status = compute_html_sync_status(&canonical_md, &full_html);
+    let html_allowed = scope.is_none_or(|scope| {
+        full_html
+            .canonicalize()
+            .ok()
+            .and_then(|path| {
+                path.strip_prefix(&canonical_root)
+                    .ok()
+                    .map(|p| p.to_path_buf())
+            })
+            .and_then(|path| super::mcp_sources::relative_git_path(&path).ok())
+            .is_some_and(|path| {
+                scope.includes_path(&path) && super::mcp_sources::safe_path(&path).is_ok()
+            })
+    });
+    let html_sync_status = if html_allowed {
+        compute_html_sync_status(&canonical_md, &full_html)
+    } else {
+        "missing".into()
+    };
     let md_markers = detect_markdown_change_markers(&markdown);
-    let html_markers = fs::read_to_string(&full_html)
+    let html_markers = html_allowed
+        .then(|| fs::read_to_string(&full_html))
+        .transpose()
         .ok()
+        .flatten()
         .map(|html| detect_html_change_markers(&html))
         .unwrap_or_default();
 
