@@ -87,3 +87,21 @@ export const OutdatedHtmlNotice: Story = {
     ).toBeVisible();
   },
 };
+
+export const LongTitleAndProperties: Story = {
+  args: { document: {
+    ...dualViewDoc,
+    summary: { ...dualViewDoc.summary, title: "내 대시보드 기획·화면명세 알림 및 확인 체크 화면명세서" },
+    properties: { tags: ["dashboard", "notifications"], designs: [{ title: "알림 시안", image: "assets/dashboard.svg", status: "approved" }] },
+  } },
+  render: (args) => <div style={{ width: "min(960px, 100%)", height: "100vh" }}><ReaderHarness {...args} /></div>,
+  play: async ({ canvas }) => {
+    const edit = await canvas.findByRole("button", { name: "편집" });
+    const reader = canvas.getByRole("region", { name: "문서 읽기 영역" });
+    for (const control of [edit, canvas.getByRole("button", { name: "AI로 작업 시작" }), canvas.getByRole("button", { name: "더보기" }), canvas.getByRole("tab", { name: "원문 (.md)" })]) {
+      await expect(control.getBoundingClientRect().right).toBeLessThanOrEqual(reader.getBoundingClientRect().right);
+      await expect(control.getBoundingClientRect().left).toBeGreaterThanOrEqual(reader.getBoundingClientRect().left);
+    }
+    await expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1);
+  },
+};

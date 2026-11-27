@@ -71,11 +71,37 @@ function extractCodeReferences(properties: unknown): ParsedCodeReference[] {
     .filter((item): item is ParsedCodeReference => item !== null);
 }
 
-function displayProperty(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  return JSON.stringify(value);
+function propertyLabel(name: string): string {
+  const labels: Record<string, string> = {
+    type: "유형", owner: "담당", title: "제목", description: "설명",
+    status: "상태", domain: "도메인", tags: "태그", related_docs: "관련 문서",
+    designs: "디자인", wireframes: "와이어프레임", image: "파일",
+    wireframe: "연결 와이어프레임", timestamp: "작성일", okf_hub_id: "문서 ID",
+  };
+  return labels[name] ?? name;
+}
+
+function PropertyValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return <>없음</>;
+  if (Array.isArray(value)) {
+    return value.length === 0 ? <>없음</> : (
+      <ul className="document-property-value__list">
+        {value.map((item, index) => <li key={index}><PropertyValue value={item} /></li>)}
+      </ul>
+    );
+  }
+  if (typeof value === "object") {
+    const entries = propertyEntries(value);
+    return entries.length === 0 ? <>없음</> : (
+      <dl className="document-property-value__object">
+        {entries.map(([key, item]) => <div key={key}>
+          <dt>{propertyLabel(key)}</dt>
+          <dd><PropertyValue value={item} /></dd>
+        </div>)}
+      </dl>
+    );
+  }
+  return <>{String(value)}</>;
 }
 
 function propertyEntries(properties: unknown): Array<[string, unknown]> {
@@ -239,8 +265,8 @@ export function DocumentOverview({
           <dl>
             {entries.map(([name, value]) => (
               <div key={name}>
-                <dt>{name === "type" ? "유형" : name === "owner" ? "담당" : name}</dt>
-                <dd>{displayProperty(value)}</dd>
+                <dt>{propertyLabel(name)}</dt>
+                <dd><PropertyValue value={value} /></dd>
               </div>
             ))}
           </dl>
