@@ -2389,7 +2389,8 @@ fn resolve_asset_path(document_path: &str, asset_path: &str) -> CommandResult<St
     }
     resolved
         .to_str()
-        .map(str::to_owned)
+        // Repository/API paths use Git's separator, not the host filesystem's.
+        .map(|path| path.replace(std::path::MAIN_SEPARATOR, "/"))
         .ok_or_else(|| document_path_invalid(asset_path))
 }
 
@@ -4545,6 +4546,33 @@ mod tests {
         stop_document_session_inner(&fixture.services, session_id)
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn asset_paths_use_git_slashes_on_every_platform() {
+        for (document, asset, expected) in [
+            ("docs/view.html", "public.css", "docs/public.css"),
+            ("docs/product/view.html", "../public.css", "docs/public.css"),
+            (
+                "docs/view.html",
+                "./styles/theme.css",
+                "docs/styles/theme.css",
+            ),
+            ("view.html", "styles/theme.css", "styles/theme.css"),
+            ("docs/기획/view.html", "../공통.css", "docs/공통.css"),
+        ] {
+            assert_eq!(
+                super::resolve_asset_path(document, asset).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn asset_path_serialization_does_not_allow_repository_escape() {
+        for asset in ["../../secret.css", "/secret.css", "..\\secret.css"] {
+            assert!(super::resolve_asset_path("docs/view.html", asset).is_err());
+        }
     }
 
     #[tokio::test]
