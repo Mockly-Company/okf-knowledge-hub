@@ -74,6 +74,7 @@ struct DocumentReadOwnership {
 }
 
 pub(crate) struct DocumentCommandWorkspaceContext {
+    pub(crate) document_scope: crate::documents::runtime::DocumentWorkspace,
     pub(crate) workspace_id: Uuid,
     pub(crate) repository_root: PathBuf,
     pub(crate) document_roots: Vec<String>,
@@ -95,8 +96,8 @@ impl DocumentCommandSessionContext {
     pub(crate) fn initialize(
         &self,
         workspace: DocumentCommandWorkspaceContext,
-    ) -> Result<(), DocumentCommandWorkspaceContext> {
-        self.workspace.set(workspace)
+    ) -> Result<(), Box<DocumentCommandWorkspaceContext>> {
+        self.workspace.set(workspace).map_err(Box::new)
     }
 
     pub(crate) fn workspace(&self) -> &DocumentCommandWorkspaceContext {

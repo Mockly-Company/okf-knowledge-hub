@@ -410,6 +410,9 @@ mod tests {
             workspace_id: uuid::Uuid::new_v4(),
             repository_root: temp.path().join("repository"),
             document_roots: vec!["docs".to_owned()],
+            excluded_paths: Vec::new(),
+            additional_repositories: Vec::new(),
+            source_config: None,
             cache_path: temp.path().join("search.sqlite3"),
         };
         let documents = (0..6)
@@ -454,6 +457,9 @@ mod tests {
             workspace_id: uuid::Uuid::new_v4(),
             repository_root: temp.path().join("repository"),
             document_roots: vec!["docs".to_owned()],
+            excluded_paths: Vec::new(),
+            additional_repositories: Vec::new(),
+            source_config: None,
             cache_path: temp.path().join("search.sqlite3"),
         };
         let first_documents = (0..8)
@@ -523,6 +529,9 @@ mod tests {
             workspace_id: uuid::Uuid::new_v4(),
             repository_root: temp.path().join("repository"),
             document_roots: vec!["docs".to_owned()],
+            excluded_paths: Vec::new(),
+            additional_repositories: Vec::new(),
+            source_config: None,
             cache_path: temp.path().join("search.sqlite3"),
         };
         let documents = (0..100)
@@ -701,6 +710,9 @@ mod tests {
             workspace_id: uuid::Uuid::new_v4(),
             repository_root: temp.path().join("repository"),
             document_roots: vec!["docs".to_owned()],
+            excluded_paths: Vec::new(),
+            additional_repositories: Vec::new(),
+            source_config: None,
             cache_path: temp.path().join("search.sqlite3"),
         }
     }

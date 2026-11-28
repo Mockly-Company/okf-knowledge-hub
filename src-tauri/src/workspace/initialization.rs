@@ -137,8 +137,11 @@ fn generated_workspace_content(
             extra: Default::default(),
         },
         documents: DocumentsConfig {
+            repository: None,
+            repositories: Vec::new(),
             roots: vec![DocumentRoot {
                 path: "docs".into(),
+                exclude: Vec::new(),
                 extra: Default::default(),
             }],
             extra: Default::default(),

@@ -21,10 +21,19 @@ const MAX_ASSET_BYTES: u64 = 10 * 1024 * 1024;
 pub struct DocumentReader {
     repository_root: PathBuf,
     document_roots: Vec<PathBuf>,
+    excluded_paths: Vec<PathBuf>,
 }
 
 impl DocumentReader {
     pub fn new(repository_root: &Path, document_roots: &[String]) -> Result<Self, AppError> {
+        Self::with_exclusions(repository_root, document_roots, &[])
+    }
+
+    pub fn with_exclusions(
+        repository_root: &Path,
+        document_roots: &[String],
+        exclusions: &[String],
+    ) -> Result<Self, AppError> {
         let repository_root = repository_root
             .canonicalize()
             .map_err(|error| path_error(repository_root, error.to_string()))?;
@@ -59,10 +68,41 @@ impl DocumentReader {
             canonical_roots.push(canonical_root);
         }
 
+        let mut excluded_paths = Vec::new();
+        for exclusion in exclusions {
+            let relative = validate_relative_path(exclusion)?;
+            let path = repository_root.join(relative);
+            excluded_paths.push(path.clone());
+            if let Ok(canonical) = path.canonicalize() {
+                excluded_paths.push(canonical);
+            }
+        }
         Ok(Self {
             repository_root,
             document_roots: canonical_roots,
+            excluded_paths,
         })
+    }
+
+    pub(crate) fn allows_path(&self, path: &Path) -> bool {
+        if self
+            .excluded_paths
+            .iter()
+            .any(|excluded| path.starts_with(excluded))
+        {
+            return false;
+        }
+        let Ok(canonical) = path.canonicalize() else {
+            return false;
+        };
+        let Ok(repository_root) = self.repository_root.canonicalize() else {
+            return false;
+        };
+        canonical.starts_with(&repository_root)
+            && !self
+                .excluded_paths
+                .iter()
+                .any(|excluded| canonical.starts_with(excluded))
     }
 
     pub fn read_document(
@@ -161,6 +201,7 @@ impl DocumentReader {
         let metadata =
             fs::metadata(&canonical).map_err(|error| path_error(&canonical, error.to_string()))?;
         if !canonical.starts_with(&self.repository_root)
+            || !self.allows_path(&joined)
             || is_git_path(&self.repository_root, &canonical)
             || !metadata.is_file()
         {
@@ -193,6 +234,9 @@ impl DocumentReader {
         else {
             return (None, HtmlSyncStatus::Missing);
         };
+        if !self.allows_path(&canonical) {
+            return (None, HtmlSyncStatus::Missing);
+        }
         let Ok(bytes) = fs::read(&canonical) else {
             return (None, HtmlSyncStatus::Missing);
         };
@@ -232,6 +276,7 @@ impl DocumentReader {
             let canonical_css = css_candidate.canonicalize().ok()?;
             let metadata = fs::metadata(&canonical_css).ok()?;
             if !canonical_css.starts_with(canonical_root)
+                || !self.allows_path(&css_candidate)
                 || is_git_path(canonical_root, &canonical_css)
                 || !metadata.is_file()
                 || !is_extension(&canonical_css, "css")
@@ -1140,6 +1185,28 @@ mod tests {
     use crate::error::ErrorCode;
 
     #[test]
+    fn excluded_subtrees_cannot_be_read_through_aliases_or_assets() {
+        let repo = fixture_repo(&[
+            ("docs/private/secret.md", "# Secret"),
+            ("docs/private/pixel.svg", "<svg/>"),
+            ("docs/public.md", "# Public"),
+        ]);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("private", repo.path().join("docs/alias")).unwrap();
+        let reader = DocumentReader::with_exclusions(
+            repo.path(),
+            &["docs".into()],
+            &["docs/private".into()],
+        )
+        .unwrap();
+        assert!(reader.read_document("docs/public.md").is_ok());
+        assert!(reader.read_document("docs/private/secret.md").is_err());
+        assert!(reader.read_asset("docs/private/pixel.svg").is_err());
+        #[cfg(unix)]
+        assert!(reader.read_document("docs/alias/secret.md").is_err());
+    }
+
+    #[test]
     fn reader_rejects_paths_outside_the_repository_and_non_markdown_documents() {
         let repo = fixture_repo(&[("docs/guide.md", "# Guide"), ("docs/data.json", "{}")]);
         let reader = reader(&repo);
@@ -1568,6 +1635,7 @@ mod tests {
         let uncanonical_reader = DocumentReader {
             repository_root: repo_alias.clone(),
             document_roots: vec![repo_real.join("docs")],
+            excluded_paths: Vec::new(),
         };
         let (uncanon_companion, uncanon_status) = uncanonical_reader.load_companion_html(
             &repo_alias.join("docs/regular.md"),

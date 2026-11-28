@@ -1,5 +1,4 @@
-use std::io::{BufRead, Write};
-
+#[cfg(test)]
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -7,80 +6,14 @@ use crate::automation::context_pack::{parse_board_layer_arg, parse_board_status_
 use crate::automation::{AutomationOverrides, AutomationRuntime, BacklogTreeItemInput};
 use crate::error::AppError;
 
-const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+#[cfg(test)]
+const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 pub async fn serve_stdio(overrides: AutomationOverrides) -> Result<(), AppError> {
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    let mut reader = std::io::BufReader::new(stdin.lock());
-
-    while let Some(raw_message) = read_next_rpc_message(&mut reader) {
-        if raw_message.trim().is_empty() {
-            continue;
-        }
-        let parsed: Value = match serde_json::from_str(&raw_message) {
-            Ok(val) => val,
-            Err(err) => {
-                let err_resp = json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": {
-                        "code": -32700,
-                        "message": format!("Parse error: {err}"),
-                    }
-                });
-                write_rpc_line(&stdout, &err_resp);
-                continue;
-            }
-        };
-
-        if let Some(response) = handle_mcp_request(&overrides, parsed).await {
-            write_rpc_line(&stdout, &response);
-        }
-    }
-    Ok(())
+    super::mcp_sdk::serve_stdio(overrides).await
 }
 
-fn read_next_rpc_message<R: BufRead>(reader: &mut R) -> Option<String> {
-    let mut line = String::new();
-    loop {
-        line.clear();
-        let bytes = reader.read_line(&mut line).ok()?;
-        if bytes == 0 {
-            return None;
-        }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if let Some(rest) = trimmed
-            .strip_prefix("Content-Length:")
-            .or_else(|| trimmed.strip_prefix("content-length:"))
-        {
-            let length: usize = rest.trim().parse().ok()?;
-            loop {
-                line.clear();
-                let header_bytes = reader.read_line(&mut line).ok()?;
-                if header_bytes == 0 || line.trim().is_empty() {
-                    break;
-                }
-            }
-            let mut buf = vec![0u8; length];
-            reader.read_exact(&mut buf).ok()?;
-            return String::from_utf8(buf).ok();
-        }
-        return Some(trimmed.to_owned());
-    }
-}
-
-fn write_rpc_line(stdout: &std::io::Stdout, value: &Value) {
-    if let Ok(serialized) = serde_json::to_string(value) {
-        let mut handle = stdout.lock();
-        let _ = writeln!(handle, "{serialized}");
-        let _ = handle.flush();
-    }
-}
-
+#[cfg(test)]
 pub async fn handle_mcp_request(overrides: &AutomationOverrides, request: Value) -> Option<Value> {
     let id = request.get("id").cloned();
     let method = request
@@ -139,6 +72,7 @@ pub async fn handle_mcp_request(overrides: &AutomationOverrides, request: Value)
     }
 }
 
+#[cfg(test)]
 fn rpc_ok(id: Value, result: Value) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -147,6 +81,7 @@ fn rpc_ok(id: Value, result: Value) -> Value {
     })
 }
 
+#[cfg(test)]
 fn tool_success_result<T: Serialize>(payload: &T) -> Value {
     let text = serde_json::to_string_pretty(payload).unwrap_or_else(|_| "{}".to_owned());
     json!({
@@ -160,6 +95,7 @@ fn tool_success_result<T: Serialize>(payload: &T) -> Value {
     })
 }
 
+#[cfg(test)]
 fn tool_error_result(error: &AppError) -> Value {
     let text = serde_json::to_string_pretty(error)
         .unwrap_or_else(|_| format!("{{\"message\":\"{}\"}}", error.message));
@@ -174,46 +110,53 @@ fn tool_error_result(error: &AppError) -> Value {
     })
 }
 
+#[cfg(test)]
 async fn dispatch_tool_call(
     overrides: &AutomationOverrides,
     tool_name: &str,
     args: &Value,
 ) -> Result<Value, AppError> {
+    super::mcp_sdk::validate_tool_args(tool_name, args, true)?;
+    if super::mcp_sdk::is_write_tool(tool_name) {
+        return Err(super::mcp_sdk::error(
+            "SDK 사용자 확인 경로로 호출해야 합니다.",
+        ));
+    }
     let mut effective_overrides = overrides.clone();
     if let Some(ws_id) = args.get("workspaceId").and_then(Value::as_str) {
         if !ws_id.trim().is_empty() {
             effective_overrides.workspace_id = Some(ws_id.trim().to_owned());
         }
     }
-    if let Some(ws) = args.get("workspaceDir").and_then(Value::as_str) {
-        if !ws.trim().is_empty() {
-            effective_overrides.workspace_dir = Some(ws.trim().into());
-        }
-    }
-    if let Some(project_url) = args.get("projectUrl").and_then(Value::as_str) {
-        if !project_url.trim().is_empty() {
-            effective_overrides.project_url = Some(project_url.trim().to_owned());
-        }
-    }
+    // Workspace selection is explicit; hidden filesystem overrides remain forbidden.
     let runtime = AutomationRuntime::load(&effective_overrides)?;
+    dispatch_runtime_tool_call(&runtime, tool_name, args).await
+}
 
+pub(super) async fn dispatch_runtime_tool_call(
+    runtime: &AutomationRuntime,
+    tool_name: &str,
+    args: &Value,
+) -> Result<Value, AppError> {
+    if matches!(
+        tool_name,
+        "okhub_update_doc_impl_status"
+            | "okhub_board_create_backlog_tree"
+            | "okhub_board_update_issue"
+    ) {
+        return Err(super::mcp_sdk::error("이 쓰기 도구는 사용자 확인·완료 검사 경로로 통합되기 전까지 MCP에서 실행할 수 없습니다."));
+    }
     match tool_name {
         "okhub_get_active_context" => {
             Ok(serde_json::to_value(runtime.active_context_summary()).unwrap_or(Value::Null))
         }
-        "okhub_doc_list" => {
-            let docs = runtime.list_docs()?;
-            Ok(serde_json::to_value(docs).unwrap_or(Value::Null))
-        }
-        "okhub_doc_read" => {
-            let path = required_str(args, "path")?;
-            let detail = runtime.read_doc(path)?;
-            Ok(serde_json::to_value(detail).unwrap_or(Value::Null))
-        }
+        "okhub_doc_list" => super::mcp_sources::list_docs(runtime, args).await,
+        "okhub_doc_read" => super::mcp_sources::read_doc(runtime, args).await,
         "okhub_doc_validate" => {
             let report = runtime.validate_docs()?;
             Ok(serde_json::to_value(report).unwrap_or(Value::Null))
         }
+        "okhub_pr_list" => super::mcp_pr::list(runtime, args).await,
         "okhub_update_doc_impl_status" => {
             let path = required_str(args, "path")?;
             let impl_status = required_str(args, "implStatus")?;
@@ -222,11 +165,6 @@ async fn dispatch_tool_call(
             let updated =
                 runtime.update_doc_impl_status(path, impl_status, impl_note, checked_at)?;
             Ok(serde_json::to_value(updated).unwrap_or(Value::Null))
-        }
-        "okhub_pr_list" => {
-            let repo = args.get("repository").and_then(Value::as_str);
-            let prs = runtime.list_pull_requests(repo).await?;
-            Ok(serde_json::to_value(prs).unwrap_or(Value::Null))
         }
         "okhub_pr_create" => {
             let repo = args.get("repository").and_then(Value::as_str);
@@ -249,16 +187,11 @@ async fn dispatch_tool_call(
                 .await?;
             Ok(serde_json::to_value(outcome).unwrap_or(Value::Null))
         }
-        "okhub_board_list" => {
-            let layer = optional_layer_arg(args, "layer")?;
-            let status = optional_status_arg(args, "status")?;
-            let items = runtime.list_board_items(layer, status).await?;
-            Ok(serde_json::to_value(items).unwrap_or(Value::Null))
-        }
+        "okhub_board_list" => super::mcp_board::list(runtime, args).await,
         "okhub_board_ready" => {
-            let layer = optional_layer_arg(args, "layer")?;
-            let ready = runtime.list_ready_items(layer).await?;
-            Ok(serde_json::to_value(ready).unwrap_or(Value::Null))
+            let mut args = args.clone();
+            args["readyOnly"] = json!(true);
+            super::mcp_board::list(runtime, &args).await
         }
         "okhub_board_create_issue" => {
             let repo = args.get("repository").and_then(Value::as_str);
@@ -344,11 +277,7 @@ async fn dispatch_tool_call(
                 .await?;
             Ok(serde_json::to_value(updated).unwrap_or(Value::Null))
         }
-        "okhub_context_issue" => {
-            let number = required_u64(args, "number")?;
-            let pack = runtime.build_issue_context(number).await?;
-            Ok(serde_json::to_value(pack).unwrap_or(Value::Null))
-        }
+        "okhub_context_issue" => super::mcp_sources::context(runtime, args).await,
         _ => Err(AppError::new(
             crate::error::ErrorCode::WorkspaceInvalid,
             format!("알 수 없는 MCP 도구입니다: {tool_name}"),
@@ -578,6 +507,10 @@ fn parse_backlog_tree_items(args: &Value) -> Result<Vec<BacklogTreeItemInput>, A
 }
 
 pub fn mcp_tool_definitions() -> Vec<Value> {
+    super::mcp_sdk::tool_definitions(false)
+}
+
+pub(super) fn legacy_tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "okhub_get_active_context",
@@ -889,26 +822,25 @@ mod tests {
             .iter()
             .filter_map(|t| t["name"].as_str())
             .collect();
-        assert_eq!(tool_names.len(), 17);
-        assert!(tool_names.contains(&"okhub_doc_validate"));
-        assert!(tool_names.contains(&"okhub_update_doc_impl_status"));
-        assert!(tool_names.contains(&"okhub_board_ready"));
-        assert!(tool_names.contains(&"okhub_board_get_schema"));
-        assert!(tool_names.contains(&"okhub_board_create_backlog_tree"));
-        assert!(tool_names.contains(&"okhub_board_update_issue"));
+        assert_eq!(tool_names.len(), 7);
+        assert!(!tool_names.contains(&"okhub_doc_validate"));
+        assert!(!tool_names.contains(&"okhub_board_ready"));
+        assert!(tool_names.contains(&"okhub_board_manage"));
+        assert!(!tool_names.contains(&"okhub_update_doc_impl_status"));
+        assert!(!tool_names.contains(&"okhub_board_create_backlog_tree"));
+        assert!(!tool_names.contains(&"okhub_board_update_issue"));
         assert!(tool_names.contains(&"okhub_context_issue"));
 
-        let create_issue_tool = tools["result"]["tools"]
-            .as_array()
-            .unwrap()
+        let advanced = super::super::mcp_sdk::tool_definitions(true);
+        let create_issue_tool = advanced
             .iter()
-            .find(|t| t["name"] == "okhub_board_create_issue")
+            .find(|t| t["name"] == "okhub_board_manage")
             .unwrap();
         assert!(create_issue_tool["inputSchema"]["properties"]
             .get("assignees")
             .is_some());
         assert!(create_issue_tool["inputSchema"]["properties"]
-            .get("parentIssueRepository")
+            .get("parentIssueNumber")
             .is_some());
 
         let bad_tree_call = handle_mcp_request(
@@ -989,6 +921,8 @@ mod tests {
             .unwrap();
         assert!(validate_text.contains("\"valid\": true"));
 
+        let root = overrides.workspace_dir.as_ref().unwrap();
+        let before_impl = std::fs::read_to_string(root.join("docs/overview.md")).unwrap();
         let impl_call = handle_mcp_request(
             &overrides,
             json!({
@@ -1008,9 +942,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(impl_call["result"]["isError"], false);
-        let impl_text = impl_call["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(impl_text.contains("\"implStatus\": \"synced\""));
-        assert!(impl_text.contains("코드 반영 확인됨"));
+        assert_eq!(impl_call["result"]["isError"], true);
+        assert_eq!(
+            std::fs::read_to_string(root.join("docs/overview.md")).unwrap(),
+            before_impl
+        );
     }
 }

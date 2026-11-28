@@ -71,21 +71,17 @@ function extractCodeReferences(properties: unknown): ParsedCodeReference[] {
     .filter((item): item is ParsedCodeReference => item !== null);
 }
 
-const PROPERTY_LABELS: Record<string, string> = {
-  type: "유형",
-  owner: "담당",
-  status: "상태",
-  domain: "도메인",
-  tags: "태그",
-  related_docs: "관련 문서",
-  wireframes: "와이어프레임",
-  designs: "디자인 시안",
-  impl_status: "코드 반영 상태",
-  impl_note: "코드 반영 메모",
-  updated: "업데이트",
-  updated_at: "업데이트",
-  code_refs: "코드 참조",
-};
+function propertyLabel(name: string): string {
+  const labels: Record<string, string> = {
+    type: "유형", owner: "담당", title: "제목", description: "설명",
+    status: "상태", domain: "도메인", tags: "태그", related_docs: "관련 문서",
+    designs: "디자인 시안", wireframes: "와이어프레임", image: "파일",
+    wireframe: "연결 와이어프레임", timestamp: "작성일", okf_hub_id: "문서 ID",
+    impl_status: "코드 반영 상태", impl_note: "코드 반영 메모",
+    updated: "업데이트", updated_at: "업데이트", code_refs: "코드 참조",
+  };
+  return Object.hasOwn(labels, name) ? labels[name] : name;
+}
 
 const IMPL_STATUS_LABELS: Record<string, string> = {
   synced: "코드 반영 완료",
@@ -93,52 +89,36 @@ const IMPL_STATUS_LABELS: Record<string, string> = {
   unimplemented: "미반영",
 };
 
-function displayProperty(value: unknown, key?: string): string {
-  if (value === null) return "null";
-  if (value === undefined) return "-";
-  if (typeof value === "string") {
-    if (key === "impl_status" && Object.hasOwn(IMPL_STATUS_LABELS, value)) {
-      return IMPL_STATUS_LABELS[value] ?? value;
-    }
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
+function PropertyValue({ value, name, ancestors = [] }: {
+  value: unknown;
+  name?: string;
+  ancestors?: readonly object[];
+}) {
+  if (value === null) return <>없음</>;
+  if (value === undefined) return <>-</>;
+  if (typeof value === "object" && ancestors.includes(value)) return <>-</>;
+  const nestedAncestors = typeof value === "object" ? [...ancestors, value] : ancestors;
   if (Array.isArray(value)) {
-    if (value.length === 0) return "없음";
-    if (key === "wireframes" || key === "designs") {
-      return `${value.length}건 (시안 탭에서 보기)`;
-    }
-    if (
-      value.every(
-        (item) =>
-          typeof item === "string" ||
-          typeof item === "number" ||
-          typeof item === "boolean",
-      )
-    ) {
-      return value.map(String).join(", ");
-    }
-    const namedTitles = value
-      .map((item) => {
-        if (!item || typeof item !== "object") return null;
-        const record = item as Record<string, unknown>;
-        if (typeof record.title === "string") return record.title;
-        if (typeof record.name === "string") return record.name;
-        return null;
-      })
-      .filter((item): item is string => item !== null);
-    if (namedTitles.length === value.length) {
-      return namedTitles.join(", ");
-    }
-    return `${value.length}건`;
+    return value.length === 0 ? <>없음</> : (
+      <ul className="document-property-value__list">
+        {value.map((item, index) => <li key={index}><PropertyValue value={item} ancestors={nestedAncestors} /></li>)}
+      </ul>
+    );
   }
-  try {
-    return JSON.stringify(value) ?? "-";
-  } catch {
-    return "-";
+  if (typeof value === "object") {
+    const entries = propertyEntries(value);
+    return entries.length === 0 ? <>없음</> : (
+      <dl className="document-property-value__object">
+        {entries.map(([key, item]) => <div key={key}>
+          <dt>{propertyLabel(key)}</dt>
+          <dd><PropertyValue value={item} name={key} ancestors={nestedAncestors} /></dd>
+        </div>)}
+      </dl>
+    );
   }
+  return <>{name === "impl_status" && typeof value === "string"
+    && Object.hasOwn(IMPL_STATUS_LABELS, value)
+    ? IMPL_STATUS_LABELS[value] : String(value)}</>;
 }
 
 function propertyEntries(properties: unknown): Array<[string, unknown]> {
@@ -302,12 +282,8 @@ export function DocumentOverview({
           <dl>
             {entries.map(([name, value]) => (
               <div key={name}>
-                <dt>
-                  {Object.hasOwn(PROPERTY_LABELS, name)
-                    ? (PROPERTY_LABELS[name] ?? name)
-                    : name}
-                </dt>
-                <dd>{displayProperty(value, name)}</dd>
+                <dt>{propertyLabel(name)}</dt>
+                <dd><PropertyValue value={value} name={name} /></dd>
               </div>
             ))}
           </dl>

@@ -997,6 +997,8 @@
 
 .document-reader__heading {
   display: grid;
+  flex: 1 1 20rem;
+  min-width: 0;
   gap: var(--space-2);
   min-width: 0;
   flex: 1 1 260px;
@@ -1004,6 +1006,7 @@
 
 .document-reader__heading h1 {
   margin: 0;
+  overflow-wrap: anywhere;
   color: var(--color-text-strong);
   font-size: var(--font-h1-size);
   font-weight: var(--font-weight-page-title);
@@ -1043,6 +1046,7 @@
 .document-reader__actions {
   position: relative;
   display: flex;
+  flex: 0 1 auto;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
@@ -1183,11 +1187,11 @@
   padding: 0;
 }
 
-.document-overview__properties dl > div {
+.document-overview__properties > dl > div {
   display: grid;
-  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: baseline;
-  gap: var(--space-3);
+  gap: var(--space-1);
 }
 
 .document-overview__properties dt {
@@ -1204,6 +1208,19 @@
   font-weight: var(--font-weight-body);
   font-size: var(--font-ui-size);
   line-height: var(--font-ui-line);
+}
+
+.document-property-value__list {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: grid;
+  gap: var(--space-2);
+}
+
+.document-overview__properties .document-property-value__object > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
 }
 
 .document-overview__toc ol {
@@ -2015,6 +2032,8 @@
 
 .document-reader__view-tabs {
   flex: 0 0 auto;
+  max-width: 100%;
+  flex-wrap: wrap;
   width: auto;
 }
 

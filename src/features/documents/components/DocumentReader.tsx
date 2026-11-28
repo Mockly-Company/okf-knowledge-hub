@@ -29,6 +29,7 @@ import {
 import { MarkdownDocument } from "./MarkdownDocument";
 import { DocumentHistory } from "./DocumentHistory";
 import { DocumentOverview } from "./DocumentOverview";
+import { displayDocumentPath, documentLocation } from "../document-location";
 
 function ReaderRouterRedirect({
   to,
@@ -101,6 +102,8 @@ export function DocumentReader({
     seq: number;
   } | null>(null);
   const normalizedDocPath = normalizeDocumentPath(document.summary.path);
+  const location = documentLocation(document.summary.path);
+  const readOnly = location.repository !== null;
   const hasCompanionNow = Boolean(document.companionHtml);
   const matchingPreferredView =
     preferredViewTargetPath !== null &&
@@ -267,8 +270,9 @@ export function DocumentReader({
   const branch = state.branch ?? "main";
   const sourceLabel = state.selectedVersion
     ? `커밋 · ${state.selectedVersion.commitOid.slice(0, 7)}`
-    : `${authoringState.activeChangeId === null ? "확정본" : "로컬 초안"} · ${branch}`;
-  const githubUrl = `https://github.com/${state.repositoryFullName}/blob/${branch}/${encodeURIComponent(document.summary.path)}`;
+    : readOnly ? "읽기 전용" : `${authoringState.activeChangeId === null ? "확정본" : "로컬 초안"} · ${branch}`;
+  const sourceRef = state.selectedVersion?.commitOid ?? (readOnly ? document.lastCommit?.commitOid ?? "HEAD" : branch);
+  const githubUrl = `https://github.com/${location.repository ?? state.repositoryFullName}/blob/${sourceRef}/${encodeURIComponent(location.path)}`;
   const firstTocEntry = document.tableOfContents[0];
   const readerTitleId =
     firstTocEntry?.level === 1 &&
@@ -368,6 +372,7 @@ export function DocumentReader({
           <h1 id={readerTitleId}>{document.summary.title}</h1>
           <div className="document-reader__meta">
             <p>{versionLabel ?? sourceLabel}</p>
+            {readOnly ? <small>{displayDocumentPath(document.summary.path)}</small> : null}
             <small>{lastModifiedSummary(document)}</small>
           </div>
         </div>
@@ -391,7 +396,7 @@ export function DocumentReader({
               </TabsTrigger>
             </TabsList>
           ) : null}
-          {state.selectedVersion === null ? (
+          {state.selectedVersion === null && !readOnly ? (
             <>
               <Button
                 type="button"
@@ -454,10 +459,10 @@ export function DocumentReader({
                   </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-              <DropdownMenuItem onSelect={() => void copyText(`[${document.summary.title}](${document.summary.path})`)}>
+              <DropdownMenuItem onSelect={() => void copyText(`[${document.summary.title}](${readOnly ? githubUrl : document.summary.path})`)}>
                 문서 링크 복사
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void copyText(document.summary.path)}>
+              <DropdownMenuItem onSelect={() => void copyText(location.path)}>
                 Git 파일 경로 복사
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => void openExternal(githubUrl)}>

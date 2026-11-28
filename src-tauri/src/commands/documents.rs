@@ -24,7 +24,6 @@ use crate::documents::drafts::{
 use crate::documents::history::{DocumentHistory, DEFAULT_HISTORY_PAGE_LIMIT};
 use crate::documents::reader::{
     extract_local_stylesheet_hrefs, normalize_portable_doc_path, sanitize_and_inline_html,
-    DocumentReader,
 };
 use crate::documents::runtime::{DocumentRuntime, DocumentRuntimeGeneration, DocumentWorkspace};
 use crate::error::{AppError, CommandResult, ErrorCode, RecoveryAction};
@@ -289,8 +288,10 @@ where
     })
     .await?;
 
+    let runtime_workspace = load_document_collection(services, &workspace, cache_path).await?;
     context
         .initialize(DocumentCommandWorkspaceContext {
+            document_scope: runtime_workspace.clone(),
             workspace_id: workspace.workspace_id,
             repository_root: workspace.repository_root.clone(),
             document_roots: workspace.document_roots.clone(),
@@ -323,12 +324,6 @@ where
         }
     }
 
-    let runtime_workspace = DocumentWorkspace {
-        workspace_id: workspace.workspace_id,
-        repository_root: workspace.repository_root,
-        document_roots: workspace.document_roots,
-        cache_path,
-    };
     let mut receiver = services.document_runtime.subscribe();
     let runtime_start = services
         .document_runtime
@@ -415,7 +410,11 @@ pub(crate) async fn stop_document_session_inner(
 ) -> CommandResult<()> {
     validate_client_id(session_id, "문서 세션")?;
     let _mutation = services.document_sessions.lock_mutation().await;
-    let context = active_context(services, session_id)?;
+    // Stale configuration blocks reads, but must never prevent releasing a session.
+    let context = services
+        .document_sessions
+        .active_context(session_id)
+        .ok_or_else(document_session_stale)?;
     let active = services
         .document_sessions
         .take_if(&context)
@@ -490,7 +489,9 @@ pub(crate) async fn validate_document_creation_inner(
     file_name: String,
 ) -> CommandResult<DocumentTargetValidation> {
     validate_client_id(session_id, "문서 세션")?;
+    require_primary_document_path(&folder)?;
     let context = active_context(services, session_id)?;
+    reject_excluded_document_path(&context, &folder)?;
     let repository_root = context.workspace().repository_root.clone();
     let document_roots = context.workspace().document_roots.clone();
     let validation = run_blocking(move || {
@@ -538,9 +539,11 @@ pub(crate) async fn create_document_draft_inner(
     authenticated_author_login: &str,
 ) -> CommandResult<CreateDocumentDraftResponse> {
     validate_client_id(request.session_id, "문서 세션")?;
+    require_primary_document_path(&request.folder)?;
     validate_client_id(request.request_id, "문서 생성 요청")?;
     let _mutation = services.document_sessions.lock_mutation().await;
     let context = active_context(services, request.session_id)?;
+    reject_excluded_document_path(&context, &request.folder)?;
     let workspace_id = context.workspace().workspace_id;
     let template_root = context.workspace().repository_root.clone();
     let settings = services.local_settings.clone();
@@ -628,9 +631,11 @@ pub(crate) async fn edit_existing_document_draft_inner(
     authenticated_author_login: &str,
 ) -> CommandResult<CreateDocumentDraftResponse> {
     validate_client_id(request.session_id, "문서 세션")?;
+    require_primary_document_path(&request.path)?;
     validate_client_id(request.request_id, "기존 문서 편집 요청")?;
     let _mutation = services.document_sessions.lock_mutation().await;
     let context = active_context(services, request.session_id)?;
+    reject_excluded_document_path(&context, &request.path)?;
     let workspace_id = context.workspace().workspace_id;
     let settings = services.local_settings.clone();
     let manager = services.document_drafts.clone();
@@ -922,9 +927,11 @@ pub(crate) async fn save_document_draft_inner(
     markdown: String,
 ) -> CommandResult<SaveDocumentDraftResponse> {
     validate_client_id(session_id, "문서 세션")?;
+    require_primary_document_path(&path)?;
     validate_client_id(request_id, "문서 저장 요청")?;
     let _mutation = services.document_sessions.lock_mutation().await;
     let context = active_context(services, session_id)?;
+    reject_excluded_document_path(&context, &path)?;
     let workspace_id = context.workspace().workspace_id;
     let manager = services.document_drafts.clone();
     let result = run_blocking(move || {
@@ -1047,16 +1054,14 @@ where
         let read_owner = context.register_document_read(request_id);
         (context, read_owner)
     };
-    let repository_root = context.workspace().repository_root.clone();
-    let document_roots = context.workspace().document_roots.clone();
-    let read_path = path.clone();
+    let resolved = context.workspace().document_scope.resolve_path(&path)?;
     let content = run_blocking(move || {
-        let reader = DocumentReader::new(&repository_root, &document_roots)?;
-        let mut content = reader.read_document(&read_path)?;
-        let history = DocumentHistory::open(&repository_root)?;
+        let reader = resolved.reader()?;
+        let mut content = reader.read_document(&resolved.path)?;
+        let history = DocumentHistory::open(&resolved.repository_root)?;
         content.last_commit =
             history.latest_change(&content.summary.path, content.summary.document_id)?;
-        Ok(content)
+        Ok(resolved.qualify_content(content))
     })
     .await;
 
@@ -1112,17 +1117,15 @@ where
 {
     validate_client_id(session_id, "문서 세션")?;
     let context = active_context(services, session_id)?;
-    let repository_root = context.workspace().repository_root.clone();
-    let document_roots = context.workspace().document_roots.clone();
+    let resolved = context
+        .workspace()
+        .document_scope
+        .resolve_path(&document_path)?;
     let preparation = require_current_document(services, session_id, &document_path)
-        .and_then(|_| resolve_asset_path(&document_path, &asset_path));
+        .and_then(|_| resolve_asset_path(&resolved.path, &asset_path));
     let asset = match preparation {
         Ok(resolved_asset_path) => {
-            run_blocking(move || {
-                DocumentReader::new(&repository_root, &document_roots)?
-                    .read_asset(&resolved_asset_path)
-            })
-            .await
+            run_blocking(move || resolved.reader()?.read_asset(&resolved_asset_path)).await
         }
         Err(error) => Err(error),
     };
@@ -1258,19 +1261,30 @@ pub(crate) async fn read_standalone_document_inner(
     let (normalized_path, _) = normalize_standalone_doc_path(&path)?;
     let local_settings = services.local_settings.clone();
     let app_data = app_data.to_path_buf();
+    let (connected, workspace_title) = run_blocking(move || {
+        resolve_registered_document_workspace(&local_settings, &app_data, workspace_id)
+    })
+    .await?;
+    let collection = load_standalone_document_collection(services, &connected).await?;
     run_blocking(move || {
-        let (connected, workspace_title) =
-            resolve_registered_document_workspace(&local_settings, &app_data, workspace_id)?;
-        let reader = DocumentReader::new(&connected.repository_root, &connected.document_roots)?;
-        let mut document = reader.read_document(&normalized_path)?;
-        let history = DocumentHistory::open(&connected.repository_root)?;
+        collection.ensure_current_configuration()?;
+        let resolved = collection.resolve_path(&normalized_path)?;
+        let mut document = resolved.reader()?.read_document(&resolved.path)?;
+        let history = DocumentHistory::open(&resolved.repository_root)?;
         document.last_commit =
             history.latest_change(&document.summary.path, document.summary.document_id)?;
+        collection.ensure_current_configuration()?;
+        let repository_full_name = resolved
+            .prefix
+            .strip_prefix("repo:")
+            .and_then(|prefix| prefix.strip_suffix('/'))
+            .unwrap_or(&connected.repository_full_name)
+            .to_owned();
         Ok(StandaloneDocumentPayload {
             workspace_id: connected.workspace_id,
             workspace_title,
-            repository_full_name: connected.repository_full_name,
-            document,
+            repository_full_name,
+            document: resolved.qualify_content(document),
         })
     })
     .await
@@ -1285,17 +1299,50 @@ pub(crate) async fn read_standalone_document_asset_inner(
     asset_path: String,
 ) -> CommandResult<DocumentAsset> {
     let (normalized_doc, _) = normalize_standalone_doc_path(&document_path)?;
-    let resolved_asset_path = resolve_asset_path(&normalized_doc, &asset_path)?;
     let local_settings = services.local_settings.clone();
     let app_data = app_data.to_path_buf();
+    let (connected, _) = run_blocking(move || {
+        resolve_registered_document_workspace(&local_settings, &app_data, workspace_id)
+    })
+    .await?;
+    let collection = load_standalone_document_collection(services, &connected).await?;
     run_blocking(move || {
-        let (connected, _) =
-            resolve_registered_document_workspace(&local_settings, &app_data, workspace_id)?;
-        DocumentReader::new(&connected.repository_root, &connected.document_roots)?
-            .read_asset(&resolved_asset_path)
+        collection.ensure_current_configuration()?;
+        let resolved = collection.resolve_path(&normalized_doc)?;
+        let reader = resolved.reader()?;
+        reader.read_document(&resolved.path)?;
+        let resolved_asset_path = resolve_asset_path(&resolved.path, &asset_path)?;
+        let asset = reader.read_asset(&resolved_asset_path)?;
+        collection.ensure_current_configuration()?;
+        Ok(asset)
     })
     .await
     .map_err(sanitize_document_error)
+}
+
+async fn load_standalone_document_collection(
+    services: &AppServices,
+    connected: &ConnectedDocumentWorkspace,
+) -> CommandResult<DocumentWorkspace> {
+    let cache_path = services.document_cache_root.join("standalone.sqlite3");
+    if connected
+        .repository_root
+        .join(".okf/workspace.yml")
+        .exists()
+    {
+        return load_document_collection(services, connected, cache_path).await;
+    }
+    // Preserve ordinary repository viewing when no shared definition exists.
+    // Invalid existing definitions never fall back to an unrestricted scope.
+    Ok(DocumentWorkspace {
+        workspace_id: connected.workspace_id,
+        repository_root: connected.repository_root.clone(),
+        document_roots: connected.document_roots.clone(),
+        excluded_paths: Vec::new(),
+        additional_repositories: Vec::new(),
+        cache_path,
+        source_config: None,
+    })
 }
 
 fn doc_viewer_window_label(workspace_id: Uuid, normalized_path: &str) -> String {
@@ -1449,17 +1496,41 @@ where
 {
     validate_client_id(session_id, "문서 세션")?;
     let context = active_context(services, session_id)?;
-    let repository_root = context.workspace().repository_root.clone();
+    let resolved = context.workspace().document_scope.resolve_path(&path)?;
     let document_id = require_current_document(services, session_id, &path);
     let page = match document_id {
         Ok(document_id) => {
             run_blocking(move || {
-                DocumentHistory::open(&repository_root)?.history_page(
-                    &path,
+                let cursor = cursor.map(|mut cursor| {
+                    cursor.tracked_path = cursor
+                        .tracked_path
+                        .strip_prefix(&resolved.prefix)
+                        .unwrap_or(&cursor.tracked_path)
+                        .to_owned();
+                    cursor
+                });
+                let mut page = DocumentHistory::open(&resolved.repository_root)?.history_page(
+                    &resolved.path,
                     document_id,
                     cursor,
                     DEFAULT_HISTORY_PAGE_LIMIT,
-                )
+                )?;
+                page.items
+                    .retain(|item| !resolved.excludes(&item.path_at_commit));
+                if page
+                    .next_cursor
+                    .as_ref()
+                    .is_some_and(|cursor| resolved.excludes(&cursor.tracked_path))
+                {
+                    page.next_cursor = None;
+                }
+                for item in &mut page.items {
+                    item.path_at_commit = format!("{}{}", resolved.prefix, item.path_at_commit);
+                }
+                if let Some(cursor) = page.next_cursor.as_mut() {
+                    cursor.tracked_path = format!("{}{}", resolved.prefix, cursor.tracked_path);
+                }
+                Ok(page)
             })
             .await
         }
@@ -1524,11 +1595,16 @@ where
         context.register_document_read(request_id);
         context
     };
-    let repository_root = context.workspace().repository_root.clone();
+    let resolved = context
+        .workspace()
+        .document_scope
+        .resolve_path(&path_at_commit)?;
     let authorized = context.version_was_issued(&commit_oid, &path_at_commit);
-    let content = if authorized {
+    let content = if authorized && !resolved.excludes(&resolved.path) {
         run_blocking(move || {
-            DocumentHistory::open(&repository_root)?.read_version(&commit_oid, &path_at_commit)
+            let content = DocumentHistory::open(&resolved.repository_root)?
+                .read_version(&commit_oid, &resolved.path)?;
+            Ok(resolved.qualify_content(content))
         })
         .await
     } else {
@@ -1744,56 +1820,96 @@ pub async fn get_docs_pull_request_detail(
     let files = github
         .list_pull_request_files(&repository_full_name, number)
         .await?;
-    let targets = group_planning_pr_document_targets(&files);
+    let documents = read_planning_pr_documents(
+        github,
+        &repository_full_name,
+        &context.workspace().document_scope,
+        &pull_request.base_sha,
+        &pull_request.head_sha,
+        &files,
+    )
+    .await?;
+    ensure_active_context(&state, &context)?;
+    Ok(DocsPullRequestDetail {
+        pull_request,
+        viewer_login,
+        documents,
+    })
+}
+
+/// Remote PR additions need not exist locally. Authorize against the configured
+/// logical primary scope, never canonicalize a local candidate to decide access.
+fn allows_primary_remote_document_path(scope: &DocumentWorkspace, path: &str) -> bool {
+    use crate::workspace::model::document_scopes::{normalized_path, within};
+    let Some(path) = normalized_path(path).filter(|path| path != ".") else {
+        return false;
+    };
+    let included = scope
+        .document_roots
+        .iter()
+        .any(|root| normalized_path(root).is_some_and(|root| within(&path, &root)));
+    included
+        && !scope.excluded_paths.iter().any(|excluded| {
+            normalized_path(excluded).is_none_or(|excluded| within(&path, &excluded))
+        })
+}
+
+async fn read_planning_pr_documents(
+    github: &crate::github::GithubService,
+    repository_full_name: &str,
+    scope: &DocumentWorkspace,
+    base_sha: &str,
+    head_sha: &str,
+    files: &[PullRequestChangedFile],
+) -> CommandResult<Vec<PlanningPrDocumentChange>> {
+    let targets = group_planning_pr_document_targets(files);
 
     let mut css_cache: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
     let mut documents = Vec::with_capacity(targets.len());
 
     for target in targets {
+        if !allows_primary_remote_document_path(scope, &target.md_path) {
+            continue;
+        }
         let base_markdown = if target.status == "added" {
             None
         } else {
             github
-                .read_repository_text_file_at_ref(
-                    &repository_full_name,
-                    &target.md_path,
-                    &pull_request.base_sha,
-                )
+                .read_repository_text_file_at_ref(repository_full_name, &target.md_path, base_sha)
                 .await?
         };
         let head_markdown = if target.status == "removed" {
             None
         } else {
             github
-                .read_repository_text_file_at_ref(
-                    &repository_full_name,
-                    &target.md_path,
-                    &pull_request.head_sha,
-                )
+                .read_repository_text_file_at_ref(repository_full_name, &target.md_path, head_sha)
                 .await?
         };
         let companion_html = if target.status == "removed" {
             None
-        } else if let Some(html_path) = &target.html_path {
+        } else if let Some(html_path) = target
+            .html_path
+            .as_ref()
+            .filter(|path| allows_primary_remote_document_path(scope, path))
+        {
             let raw_html = github
-                .read_repository_text_file_at_ref(
-                    &repository_full_name,
-                    html_path,
-                    &pull_request.head_sha,
-                )
+                .read_repository_text_file_at_ref(repository_full_name, html_path, head_sha)
                 .await?;
             if let Some(raw_html) = raw_html {
                 for href in extract_local_stylesheet_hrefs(&raw_html) {
                     if let Ok(resolved_css) = resolve_asset_path(html_path, &href) {
+                        if !allows_primary_remote_document_path(scope, &resolved_css) {
+                            continue;
+                        }
                         if let std::collections::hash_map::Entry::Vacant(entry) =
                             css_cache.entry(resolved_css)
                         {
                             let css = github
                                 .read_repository_text_file_at_ref(
-                                    &repository_full_name,
+                                    repository_full_name,
                                     entry.key(),
-                                    &pull_request.head_sha,
+                                    head_sha,
                                 )
                                 .await
                                 .ok()
@@ -1803,7 +1919,12 @@ pub async fn get_docs_pull_request_detail(
                     }
                 }
                 Some(sanitize_and_inline_html(&raw_html, |clean_href| {
-                    let resolved = resolve_asset_path(html_path, clean_href).ok()?;
+                    let resolved = match resolve_asset_path(html_path, clean_href) {
+                        Ok(path) if allows_primary_remote_document_path(scope, &path) => path,
+                        // An empty replacement removes the denied link instead
+                        // of leaving a stylesheet URL in the rendered preview.
+                        _ => return Some(String::new()),
+                    };
                     css_cache.get(&resolved).and_then(|v| v.clone())
                 }))
             } else {
@@ -1828,11 +1949,7 @@ pub async fn get_docs_pull_request_detail(
         });
     }
 
-    Ok(DocsPullRequestDetail {
-        pull_request,
-        viewer_login,
-        documents,
-    })
+    Ok(documents)
 }
 
 #[tauri::command]
@@ -1997,6 +2114,165 @@ pub async fn approve_and_merge_docs_pull_request(
     })
 }
 
+async fn load_document_collection(
+    services: &AppServices,
+    workspace: &ConnectedDocumentWorkspace,
+    cache_path: PathBuf,
+) -> CommandResult<DocumentWorkspace> {
+    let workspace = workspace.clone();
+    let settings = services.local_settings.clone();
+    let git = services.repository_git.clone();
+    let managed_app_data = (services
+        .document_cache_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        == Some("document-search"))
+    .then(|| services.document_cache_root.parent().map(Path::to_path_buf))
+    .flatten();
+    run_blocking(move || {
+        use crate::documents::runtime::DocumentRepositoryWorkspace;
+        use crate::workspace::model::{GithubRepositoryRef, WorkspaceDocument};
+        let source = std::fs::read_to_string(workspace.repository_root.join(".okf/workspace.yml"))
+            .map_err(|_| document_workspace_unavailable())?;
+        let config = WorkspaceDocument::parse(&source)?.config;
+        if !crate::workspace::validation::validate_workspace(&config).is_empty() {
+            return Err(document_workspace_unavailable());
+        }
+        let source_repository = GithubRepositoryRef {
+            id: String::new(),
+            full_name: workspace.repository_full_name.clone(),
+            extra: Default::default(),
+        };
+        let repositories = config.documents.resolved_repositories(&source_repository);
+        let mut collection = DocumentWorkspace {
+            workspace_id: workspace.workspace_id,
+            repository_root: workspace.repository_root.clone(),
+            document_roots: Vec::new(),
+            excluded_paths: Vec::new(),
+            additional_repositories: Vec::new(),
+            cache_path,
+            source_config: Some((
+                workspace.repository_root.join(".okf/workspace.yml"),
+                crate::documents::collection::configuration_fingerprint(source.as_bytes()),
+            )),
+        };
+        let mut seen_repositories = std::collections::HashSet::new();
+        for repository in repositories {
+            let full_name = &repository.repository.full_name;
+            if !seen_repositories.insert(full_name.to_ascii_lowercase()) {
+                return Err(AppError::new(
+                    ErrorCode::WorkspaceInvalid,
+                    "문서 저장소 범위가 중복되었습니다.",
+                )
+                .with_detail("repository", full_name));
+            }
+            let roots = repository
+                .roots
+                .iter()
+                .map(|root| root.path.clone())
+                .collect();
+            let exclusions = repository
+                .roots
+                .iter()
+                .flat_map(|root| root.exclude.clone())
+                .collect();
+            if full_name.eq_ignore_ascii_case(&workspace.repository_full_name) {
+                collection.document_roots = roots;
+                collection.excluded_paths = exclusions;
+                continue;
+            }
+            let root = settings
+                .code_repository_local_path(full_name)?
+                .or_else(|| {
+                    managed_app_data.as_ref().and_then(|app_data| {
+                        crate::repository::managed::managed_clone_dir(app_data, full_name).ok()
+                    })
+                })
+                .ok_or_else(|| document_repository_unavailable(full_name))?;
+            let snapshot = git
+                .inspect(&root)
+                .map_err(|_| document_repository_unavailable(full_name))?;
+            let canonical_root = root
+                .canonicalize()
+                .map_err(|_| document_repository_unavailable(full_name))?;
+            if snapshot.root.canonicalize().ok().as_ref() != Some(&canonical_root)
+                || !document_origin_matches(snapshot.remote_url.as_deref(), full_name)
+            {
+                return Err(document_repository_unavailable(full_name));
+            }
+            collection
+                .additional_repositories
+                .push(DocumentRepositoryWorkspace {
+                    full_name: full_name.clone(),
+                    repository_root: canonical_root,
+                    document_roots: roots,
+                    excluded_paths: exclusions,
+                });
+        }
+        if collection.document_roots.is_empty() && collection.additional_repositories.is_empty() {
+            return Err(document_workspace_unavailable());
+        }
+        Ok(collection)
+    })
+    .await
+    .map_err(sanitize_document_error)
+}
+
+fn document_repository_unavailable(full_name: &str) -> AppError {
+    AppError::new(
+        ErrorCode::DocumentPathInvalid,
+        "문서 저장소의 검증된 로컬 복제본이 필요합니다.",
+    )
+    .with_detail("repository", full_name)
+}
+
+fn document_origin_matches(origin: Option<&str>, full_name: &str) -> bool {
+    let Some(origin) = origin else {
+        return false;
+    };
+    let path = origin
+        .strip_prefix("https://github.com/")
+        .or_else(|| origin.strip_prefix("git@github.com:"))
+        .or_else(|| origin.strip_prefix("ssh://git@github.com/"));
+    path.is_some_and(|path| {
+        let path = path.strip_suffix('/').unwrap_or(path);
+        path.strip_suffix(".git")
+            .unwrap_or(path)
+            .eq_ignore_ascii_case(full_name)
+    })
+}
+
+fn require_primary_document_path(path: &str) -> CommandResult<()> {
+    if path.starts_with("repo:") {
+        Err(AppError::new(
+            ErrorCode::DocumentPathInvalid,
+            "추가 문서 저장소는 읽기 전용입니다.",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_excluded_document_path(
+    context: &DocumentCommandSessionContext,
+    path: &str,
+) -> CommandResult<()> {
+    let resolved = context.workspace().document_scope.resolve_path(path)?;
+    if resolved.excludes(path) {
+        return Err(document_path_invalid(path));
+    }
+    let mut candidate = resolved.repository_root.join(&resolved.path);
+    while !candidate.exists() {
+        if !candidate.pop() {
+            return Err(document_path_invalid(path));
+        }
+    }
+    if !resolved.reader()?.allows_path(&candidate) {
+        return Err(document_path_invalid(path));
+    }
+    Ok(())
+}
+
 async fn load_document_workspace(
     services: &AppServices,
 ) -> CommandResult<(ConnectedDocumentWorkspace, String, String)> {
@@ -2041,10 +2317,15 @@ fn active_context(
     services: &AppServices,
     session_id: Uuid,
 ) -> CommandResult<Arc<DocumentCommandSessionContext>> {
-    services
+    let context = services
         .document_sessions
         .active_context(session_id)
-        .ok_or_else(document_session_stale)
+        .ok_or_else(document_session_stale)?;
+    context
+        .workspace()
+        .document_scope
+        .ensure_current_configuration()?;
+    Ok(context)
 }
 
 fn ensure_active_context(
@@ -2052,6 +2333,10 @@ fn ensure_active_context(
     context: &Arc<DocumentCommandSessionContext>,
 ) -> CommandResult<()> {
     if services.document_sessions.is_active(context) {
+        context
+            .workspace()
+            .document_scope
+            .ensure_current_configuration()?;
         Ok(())
     } else {
         Err(document_session_stale())
@@ -2104,7 +2389,8 @@ fn resolve_asset_path(document_path: &str, asset_path: &str) -> CommandResult<St
     }
     resolved
         .to_str()
-        .map(str::to_owned)
+        // Repository/API paths use Git's separator, not the host filesystem's.
+        .map(|path| path.replace(std::path::MAIN_SEPARATOR, "/"))
         .ok_or_else(|| document_path_invalid(asset_path))
 }
 
@@ -2540,6 +2826,157 @@ mod tests {
     };
 
     const REPOSITORY_FULL_NAME: &str = "Mockly-Company/mockly-knowledge";
+
+    #[test]
+    fn document_origins_match_one_git_suffix_and_never_url_anomalies() {
+        assert!(super::document_origin_matches(
+            Some("https://github.com/team/docs.git"),
+            "team/docs"
+        ));
+        assert!(super::document_origin_matches(
+            Some("git@github.com:team/docs.git"),
+            "team/docs"
+        ));
+        assert!(super::document_origin_matches(
+            Some("ssh://git@github.com/team/docs.git"),
+            "team/docs"
+        ));
+        for remote in [
+            "https://github.com/team/docs.git.git",
+            "https://github.com/team/docs?token=hidden",
+            "https://github.com/team/docs#fragment",
+            "https://user@github.com/team/docs.git",
+            "https://github.com.evil.test/team/docs.git",
+        ] {
+            assert!(
+                !super::document_origin_matches(Some(remote), "team/docs"),
+                "{remote}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn same_session_rejects_reads_search_and_refresh_after_scope_definition_changes() {
+        let fixture = DocumentServicesFixture::new();
+        let id = Uuid::new_v4();
+        start_document_session_inner(&fixture.services, id)
+            .await
+            .unwrap();
+        let config_path = fixture._repository.path().join(".okf/workspace.yml");
+        let yaml = fs::read_to_string(&config_path).unwrap().replace(
+            "    - path: docs\n",
+            "    - path: docs\n      exclude: [docs/private]\n",
+        );
+        fs::write(config_path, yaml).unwrap();
+        assert!(read_document_inner(
+            &fixture.services,
+            id,
+            "stale-read".into(),
+            "docs/guide.md".into()
+        )
+        .await
+        .is_err());
+        assert!(
+            search_documents_inner(&fixture.services, id, Uuid::new_v4(), "API".into(), 20)
+                .await
+                .is_err()
+        );
+        assert!(refresh_document_session_inner(&fixture.services, id)
+            .await
+            .is_err());
+        stop_document_session_inner(&fixture.services, id)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn document_commands_dispatch_secondary_reads_and_block_secondary_edits() {
+        let fixture = DocumentServicesFixture::new();
+        let secondary = TempDir::new().unwrap();
+        fs::create_dir_all(secondary.path().join("docs/private")).unwrap();
+        fs::write(
+            secondary.path().join("docs/guide.md"),
+            "# Secondary guide\n\nunique secondary token",
+        )
+        .unwrap();
+        fs::write(secondary.path().join("docs/private/secret.md"), "# Secret").unwrap();
+        initialize_repository(secondary.path());
+        Repository::open(secondary.path())
+            .unwrap()
+            .remote("origin", "https://github.com/team/secondary.git")
+            .unwrap();
+        fixture
+            .services
+            .local_settings
+            .set_code_repository_local_path("team/secondary", secondary.path())
+            .unwrap();
+        let config_path = fixture._repository.path().join(".okf/workspace.yml");
+        let yaml = fs::read_to_string(&config_path).unwrap().replace(
+            "    - path: docs\n", "    - path: docs\n  repositories:\n    - repository: {id: R_SECONDARY, full_name: team/secondary}\n      roots:\n        - path: docs\n          exclude: [docs/private]\n");
+        fs::write(config_path, yaml).unwrap();
+        let id = Uuid::new_v4();
+        let snapshot = start_document_session_inner(&fixture.services, id)
+            .await
+            .unwrap();
+        assert!(snapshot
+            .catalog
+            .documents
+            .iter()
+            .any(|doc| doc.path == "repo:team/secondary/docs/guide.md"));
+        let content = read_document_inner(
+            &fixture.services,
+            id,
+            "secondary-read".into(),
+            "repo:team/secondary/docs/guide.md".into(),
+        )
+        .await
+        .unwrap();
+        assert!(content.markdown.contains("unique secondary token"));
+        assert_eq!(content.summary.path, "repo:team/secondary/docs/guide.md");
+        assert!(read_document_inner(
+            &fixture.services,
+            id,
+            "secret-read".into(),
+            "repo:team/secondary/docs/private/secret.md".into()
+        )
+        .await
+        .is_err());
+        let history = list_document_history_inner(
+            &fixture.services,
+            id,
+            "repo:team/secondary/docs/guide.md".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        let version = &history.items[0];
+        assert_eq!(version.path_at_commit, "repo:team/secondary/docs/guide.md");
+        let historic = read_document_version_inner(
+            &fixture.services,
+            id,
+            "secondary-version".into(),
+            version.commit_oid.clone(),
+            version.path_at_commit.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(historic.markdown.contains("unique secondary token"));
+        let edit = edit_existing_document_draft_inner(
+            &fixture.services,
+            EditExistingDocumentDraftRequest {
+                session_id: id,
+                request_id: Uuid::new_v4(),
+                path: "repo:team/secondary/docs/guide.md".into(),
+                title: "Edit".into(),
+            },
+            "tester",
+        )
+        .await;
+        assert!(edit.is_err());
+        stop_document_session_inner(&fixture.services, id)
+            .await
+            .unwrap();
+    }
 
     #[derive(Clone, Default)]
     struct MemorySettings(Arc<Mutex<HashMap<String, String>>>);
@@ -4112,6 +4549,116 @@ mod tests {
     }
 
     #[test]
+    fn asset_paths_use_git_slashes_on_every_platform() {
+        for (document, asset, expected) in [
+            ("docs/view.html", "public.css", "docs/public.css"),
+            ("docs/product/view.html", "../public.css", "docs/public.css"),
+            (
+                "docs/view.html",
+                "./styles/theme.css",
+                "docs/styles/theme.css",
+            ),
+            ("view.html", "styles/theme.css", "styles/theme.css"),
+            ("docs/기획/view.html", "../공통.css", "docs/공통.css"),
+        ] {
+            assert_eq!(
+                super::resolve_asset_path(document, asset).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn asset_path_serialization_does_not_allow_repository_escape() {
+        for asset in ["../../secret.css", "/secret.css", "..\\secret.css"] {
+            assert!(super::resolve_asset_path("docs/view.html", asset).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn pr_preview_never_fetches_excluded_or_outside_scope_documents() {
+        use super::{DocumentWorkspace, PullRequestChangedFile};
+        let root = tempfile::tempdir().unwrap();
+        let scope = DocumentWorkspace {
+            workspace_id: Uuid::new_v4(),
+            repository_root: root.path().into(),
+            document_roots: vec!["docs".into()],
+            excluded_paths: vec!["docs/private".into()],
+            additional_repositories: vec![],
+            source_config: None,
+            cache_path: root.path().join("unused.sqlite3"),
+        };
+        let (github, requests) = crate::github::automation_test_support::fixture(vec![]);
+        let files = [
+            "docs/private/secret.md",
+            "outside/secret.md",
+            "docs/../secret.md",
+        ]
+        .map(|path| PullRequestChangedFile {
+            filename: path.into(),
+            status: "added".into(),
+            previous_filename: None,
+        });
+        let documents =
+            super::read_planning_pr_documents(&github, "acme/docs", &scope, "base", "head", &files)
+                .await
+                .unwrap();
+        assert!(documents.is_empty());
+        assert!(requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pr_preview_keeps_new_documents_but_never_fetches_excluded_companions_or_css() {
+        use super::{DocumentWorkspace, PullRequestChangedFile};
+        use base64::Engine;
+        let root = tempfile::tempdir().unwrap();
+        let scope = DocumentWorkspace {
+            workspace_id: Uuid::new_v4(),
+            repository_root: root.path().into(),
+            document_roots: vec!["docs".into()],
+            excluded_paths: vec!["docs/private".into(), "docs/no-companion.html".into()],
+            additional_repositories: vec![],
+            source_config: None,
+            cache_path: root.path().join("unused.sqlite3"),
+        };
+        let text = |source: &str| serde_json::json!({"type":"file","encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(source)});
+        let (github, requests) = crate::github::automation_test_support::fixture(vec![
+            ("/repos/acme/docs/contents/docs/new.md",text("# New remote document")),
+            ("/repos/acme/docs/contents/docs/new.html",text("<html><head><link rel=\"stylesheet\" href=\"private/secret.css\"><link rel=\"stylesheet\" href=\"public.css\"></head><body><h1>New</h1></body></html>")),
+            ("/repos/acme/docs/contents/docs/public.css",text("h1 { color: red; }")),
+            ("/repos/acme/docs/contents/docs/no-companion.md",text("# No companion")),
+        ]);
+        let files = ["docs/new.md", "docs/no-companion.md"].map(|path| PullRequestChangedFile {
+            filename: path.into(),
+            status: "added".into(),
+            previous_filename: None,
+        });
+        let documents =
+            super::read_planning_pr_documents(&github, "acme/docs", &scope, "base", "head", &files)
+                .await
+                .unwrap();
+        assert_eq!(documents.len(), 2);
+        let allowed = documents
+            .iter()
+            .find(|doc| doc.path == "docs/new.md")
+            .unwrap();
+        assert_eq!(
+            allowed.head_markdown.as_deref(),
+            Some("# New remote document")
+        );
+        let html = allowed.companion_html.as_deref().unwrap();
+        assert!(html.contains("color: red"));
+        assert!(!html.contains("secret.css"));
+        assert!(documents
+            .iter()
+            .find(|doc| doc.path == "docs/no-companion.md")
+            .unwrap()
+            .companion_html
+            .is_none());
+        assert_eq!(requests.lock().unwrap().len(), 4);
+    }
+
+    #[test]
     fn groups_paired_markdown_and_html_files_in_planning_pull_requests() {
         use crate::github::model::PullRequestChangedFile;
         let files = vec![
@@ -4260,6 +4807,41 @@ mod tests {
             crate::documents::reader::normalize_portable_doc_path("docs/../../outside.md"),
             ""
         );
+    }
+
+    #[tokio::test]
+    async fn standalone_read_and_assets_enforce_shared_folder_exclusions() {
+        let fixture = DocumentServicesFixture::new();
+        let root = fixture._repository.path();
+        let source = fs::read_to_string(root.join(".okf/workspace.yml")).unwrap();
+        fs::write(
+            root.join(".okf/workspace.yml"),
+            source.replace(
+                "- path: docs",
+                "- path: docs\n      exclude: [docs/private]",
+            ),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("docs/private")).unwrap();
+        fs::write(root.join("docs/private/secret.md"), "# Hidden").unwrap();
+        fs::write(root.join("docs/private/image.svg"), "<svg></svg>").unwrap();
+        assert!(super::read_standalone_document_inner(
+            &fixture.services,
+            fixture._cache.path(),
+            Some(fixture.workspace_id),
+            "docs/private/secret.md".into(),
+        )
+        .await
+        .is_err());
+        assert!(super::read_standalone_document_asset_inner(
+            &fixture.services,
+            fixture._cache.path(),
+            Some(fixture.workspace_id),
+            "docs/guide.md".into(),
+            "private/image.svg".into(),
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]

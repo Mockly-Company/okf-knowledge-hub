@@ -106,6 +106,36 @@ function renderSelectedDocument(document = invalidFrontmatterDocument(), localDr
 }
 
 describe("DocumentReader", () => {
+  it("copies secondary document links as supported commit-pinned GitHub URLs", async () => {
+    const user = userEvent.setup();
+    const document = invalidFrontmatterDocument();
+    document.summary.path = "repo:team/handbook/docs/guide.md";
+    const gateway = renderSelectedDocument(document);
+    await screen.findByRole("heading", { name: document.summary.title });
+    await user.click(screen.getByRole("button", { name: "더보기" }));
+    await user.click(screen.getByRole("menuitem", { name: "문서 링크 복사" }));
+    expect(gateway.copiedValues).toEqual([
+      "[읽을 수 있는 문서](https://github.com/team/handbook/blob/aabbccddeeff/docs%2Fguide.md)",
+    ]);
+  });
+  it("keeps secondary repository documents read-only and opens their own GitHub source", async () => {
+    const user = userEvent.setup();
+    const document = invalidFrontmatterDocument();
+    document.summary.path = "repo:team/handbook/docs/guide.md";
+    const gateway = renderSelectedDocument(document);
+    await screen.findByRole("heading", { name: document.summary.title });
+    expect(screen.getByText("team/handbook · docs/guide.md")).toBeVisible();
+    expect(screen.getByText("읽기 전용")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "편집" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "AI로 작업 시작" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "History" }));
+    await waitFor(() => expect(gateway.calls).toContainEqual({
+      method: "listDocumentHistory", args: [expect.any(String), "repo:team/handbook/docs/guide.md", null],
+    }));
+    await user.click(screen.getByRole("button", { name: "더보기" }));
+    await user.click(screen.getByRole("menuitem", { name: "GitHub에서 보기" }));
+    expect(gateway.openedUrls).toContain("https://github.com/team/handbook/blob/aabbccddeeff/docs%2Fguide.md");
+  });
   it.each([false, true])("labels the active document source accurately (local draft: %s)", async (localDraft) => {
     renderSelectedDocument(invalidFrontmatterDocument(), localDraft);
     expect(await screen.findByText(localDraft ? "로컬 초안 · draft/hyeeun/local-guide" : "확정본 · main")).toBeVisible();

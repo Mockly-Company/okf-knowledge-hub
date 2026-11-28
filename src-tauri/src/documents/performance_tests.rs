@@ -44,6 +44,9 @@ impl LargeWorkspace {
             workspace_id: self.workspace_id,
             repository_root: self.directory.path().to_owned(),
             document_roots: vec!["docs".to_owned()],
+            excluded_paths: Vec::new(),
+            additional_repositories: Vec::new(),
+            source_config: None,
             cache_path: self.directory.path().join("document-search.sqlite3"),
         }
     }
@@ -161,6 +164,9 @@ async fn discovery_read_search_and_history_leave_markdown_byte_for_byte_unchange
         workspace_id: Uuid::new_v4(),
         repository_root: fixture.path().to_owned(),
         document_roots: vec!["docs".to_owned()],
+        excluded_paths: Vec::new(),
+        additional_repositories: Vec::new(),
+        source_config: None,
         cache_path: fixture.path().join("document-search.sqlite3"),
     };
     let runtime = DocumentRuntime::new();

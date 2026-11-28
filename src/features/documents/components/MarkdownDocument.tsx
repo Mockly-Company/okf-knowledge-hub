@@ -17,6 +17,7 @@ import type {
   DocumentContent,
   TableOfContentsItem,
 } from "../model";
+import { displayDocumentPath, documentLocation } from "../document-location";
 import { remarkLiteralHtml } from "../remark-literal-html";
 import { remarkOkfFrontmatter } from "../remark-okf-frontmatter";
 import {
@@ -196,7 +197,8 @@ function resolveRepositoryPath(documentPath: string, value: string): string | nu
   if (!path || isAbsoluteUrl(path) || path.startsWith("/") || path.includes("\\")) {
     return null;
   }
-  const segments = documentPath.split("/").slice(0, -1);
+  const location = documentLocation(documentPath);
+  const segments = location.path.split("/").slice(0, -1);
   for (const segment of path.split("/")) {
     if (!segment || segment === ".") continue;
     if (segment === "..") {
@@ -207,7 +209,8 @@ function resolveRepositoryPath(documentPath: string, value: string): string | nu
     if (segment.includes(":")) return null;
     segments.push(segment);
   }
-  return segments.join("/") || null;
+  const relative = segments.join("/");
+  return relative ? (location.repository ? `repo:${location.repository}/${relative}` : relative) : null;
 }
 
 function safeMarkdownUrl(documentPath: string, url: string): string {
@@ -744,7 +747,7 @@ export function MarkdownDocument({
       {hideHeader ? null : (
         <header className="markdown-document__header">
           <h1>{document.summary.title}</h1>
-          <p>{document.summary.path}</p>
+          <p>{displayDocumentPath(document.summary.path)}</p>
         </header>
       )}
       {unsupportedLinkNotice ? (

@@ -638,6 +638,85 @@ fn map_project_error(status: u16) -> AppError {
     github_unavailable_error()
 }
 
+// Keep read diagnostics specific to the automation boundary. In particular,
+// GitHub can conceal an inaccessible private resource with HTTP 404.
+fn automation_read_http_error(
+    segments: &[&str],
+    status: u16,
+    response_headers: &HeaderMap,
+) -> AppError {
+    let resource = match segments {
+        ["repos", _, _, "git", "trees", _] | ["repos", _, _, "commits", _] => "commit",
+        ["repos", _, _, "contents", rest @ ..]
+            if rest.last().is_some_and(|p| p.ends_with(".md")) =>
+        {
+            "document"
+        }
+        ["repos", _, _, "contents", ..] => "file",
+        ["repos", _, _] => "repository",
+        _ => "resource",
+    };
+    let (error, reason) = if status == 401 {
+        (
+            map_http_error(HttpFailureContext::Repository, status, response_headers),
+            "authentication_required",
+        )
+    } else if is_rate_limited(status, response_headers) {
+        (
+            AppError::new(
+                ErrorCode::GithubUnavailable,
+                "GitHub API 요청 한도를 초과했습니다. 잠시 후 다시 시도해 주세요.",
+            )
+            .with_recovery(RecoveryAction::Retry),
+            "rate_limited",
+        )
+    } else if status == 403 {
+        (
+            AppError::new(
+                ErrorCode::GithubPermissionDenied,
+                "GitHub에서 조회를 거부했습니다. 저장소·조직·토큰의 조회 권한을 확인해 주세요.",
+            ),
+            "permission_denied",
+        )
+    } else if status == 404 || (resource == "commit" && matches!(status, 409 | 422)) {
+        let (code,message)=match resource {
+            "commit" if status!=404=>(ErrorCode::CommitNotFound,"지정한 SHA가 조회 가능한 커밋·트리를 가리키지 않습니다. 커밋 SHA를 확인해 주세요."),
+            "commit"=>(ErrorCode::CommitNotFound,"지정한 커밋을 찾을 수 없거나 해당 버전을 조회할 권한이 없습니다. 커밋 SHA와 저장소 조회 권한을 확인해 주세요."),
+            "document"=>(ErrorCode::DocumentNotFound,"지정한 경로·버전의 문서를 찾을 수 없거나 문서 조회 권한이 없습니다."),
+            _=>(ErrorCode::GithubResourceNotFound,"GitHub 리소스를 찾을 수 없거나 조회 권한이 없습니다. 대상과 접근 권한을 확인해 주세요."),
+        };
+        (
+            AppError::new(code, message),
+            if status == 404 {
+                "not_found_or_inaccessible"
+            } else {
+                "invalid_commit_or_tree"
+            },
+        )
+    } else if status >= 500 {
+        (
+            AppError::new(
+                ErrorCode::GithubUnavailable,
+                "GitHub 서버가 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+            )
+            .with_recovery(RecoveryAction::Retry),
+            "server_error",
+        )
+    } else {
+        (
+            AppError::new(
+                ErrorCode::GithubUnavailable,
+                "GitHub가 조회 요청을 거부했습니다. 요청 조건을 확인해 주세요.",
+            ),
+            "http_error",
+        )
+    };
+    error
+        .with_detail("httpStatus", status.to_string())
+        .with_detail("resourceType", resource)
+        .with_detail("reason", reason)
+}
+
 fn map_project_lookup_errors(errors: &[GithubProjectLookupError]) -> AppError {
     let forbidden = errors.iter().any(|error| {
         error.kind.as_deref() == Some("FORBIDDEN")
@@ -956,6 +1035,7 @@ impl HttpTransport for ReqwestHttpTransport {
     }
 }
 
+#[derive(Clone)]
 pub struct GithubHttpClient {
     auth: Arc<dyn AccessTokenProvider>,
     transport: Arc<dyn HttpTransport>,
@@ -1111,14 +1191,27 @@ impl GithubHttpClient {
     }
 
     pub async fn viewer_can_push_repository(&self, full_name: &str) -> Result<bool, AppError> {
+        self.automation_repository_write_identity(full_name)
+            .await
+            .map(|(_, allowed)| allowed)
+    }
+
+    pub(crate) async fn automation_repository_write_identity(
+        &self,
+        full_name: &str,
+    ) -> Result<(String, bool), AppError> {
         let (owner, name) = split_repository_full_name(full_name)?;
         let response: GithubRepositoryResponse = self
             .get_json(&["repos", owner, name], &[], HttpFailureContext::Repository)
             .await?;
+        let id = response.node_id;
         if let Some(permissions) = response.permissions {
-            return Ok(permissions.admin.unwrap_or(false)
-                || permissions.maintain.unwrap_or(false)
-                || permissions.push.unwrap_or(false));
+            return Ok((
+                id,
+                permissions.admin.unwrap_or(false)
+                    || permissions.maintain.unwrap_or(false)
+                    || permissions.push.unwrap_or(false),
+            ));
         }
 
         let query =
@@ -1131,7 +1224,7 @@ impl GithubHttpClient {
             .and_then(|repo| repo.get("viewerPermission"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or_default();
-        Ok(matches!(permission, "ADMIN" | "MAINTAIN" | "WRITE"))
+        Ok((id, matches!(permission, "ADMIN" | "MAINTAIN" | "WRITE")))
     }
 
     pub async fn list_assignable_team_members(
@@ -2911,7 +3004,7 @@ impl GithubHttpClient {
         Ok(())
     }
 
-    async fn graphql_value(
+    pub(crate) async fn graphql_value(
         &self,
         query: &str,
         variables: serde_json::Value,
@@ -2937,6 +3030,11 @@ impl GithubHttpClient {
             .and_then(serde_json::Value::as_array)
             .filter(|arr| !arr.is_empty())
         {
+            if query.trim_start().starts_with("mutation")
+                && parsed.get("data").is_some_and(|data| !data.is_null())
+            {
+                return Err(AppError::new(ErrorCode::GithubUnavailable,"GitHub가 변경 결과 일부와 오류를 함께 반환했습니다. 중복 실행 전 실제 적용 여부를 확인해야 합니다.").with_detail("mutationOutcome","unknown"));
+            }
             let mapped: Vec<GithubProjectLookupError> = errors
                 .iter()
                 .map(|err| GithubProjectLookupError {
@@ -2958,6 +3056,144 @@ impl GithubHttpClient {
             .cloned()
             .filter(|v| !v.is_null())
             .ok_or_else(github_unavailable_error)
+    }
+
+    pub(crate) async fn automation_get(
+        &self,
+        segments: &[&str],
+        query: &[(&str, String)],
+    ) -> Result<serde_json::Value, AppError> {
+        let request = self
+            .prepare_http_request(HttpMethod::Get, segments, query, None)
+            .await?;
+        let response = self.transport.send(request).await.map_err(|_| {
+            AppError::new(
+                ErrorCode::GithubNetworkError,
+                "GitHub와 통신하지 못했습니다. 네트워크 연결을 확인한 뒤 다시 시도해 주세요.",
+            )
+            .with_recovery(RecoveryAction::Retry)
+            .with_detail("reason", "network")
+        })?;
+        if !(200..300).contains(&response.status) {
+            let mut error =
+                automation_read_http_error(segments, response.status, &response.headers);
+            if response.status == 409 && segments.get(3) == Some(&"commits") {
+                let empty = serde_json::from_slice::<GithubErrorResponse>(&response.body)
+                    .is_ok_and(|body| {
+                        matches!(
+                            body.message.as_str(),
+                            "Git Repository is empty." | "This repository is empty."
+                        )
+                    });
+                if empty {
+                    error = error.with_detail("reason", "empty_repository");
+                }
+            }
+            return Err(error);
+        }
+        deserialize_response(response).map_err(|_| {
+            AppError::new(
+                ErrorCode::GithubUnavailable,
+                "GitHub 응답 형식을 해석할 수 없습니다.",
+            )
+            .with_detail("reason", "invalid_response")
+        })
+    }
+
+    pub(crate) async fn automation_pr_mutation(
+        &self,
+        repository: &str,
+        number: u64,
+        operation: crate::github::model::AutomationPrMutation,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, AppError> {
+        use crate::github::model::AutomationPrMutation::*;
+        let (owner, name) = split_repository_full_name(repository)?;
+        let number = number.to_string();
+        let mut segments = vec!["repos", owner, name, "pulls", number.as_str()];
+        let method = match operation {
+            Update => HttpMethod::Patch,
+            RequestReview => {
+                segments.push("requested_reviewers");
+                HttpMethod::Post
+            }
+            Review => {
+                segments.push("reviews");
+                HttpMethod::Post
+            }
+            Merge => {
+                segments.push("merge");
+                HttpMethod::Put
+            }
+        };
+        let response = self.send(method, &segments, &[], Some(payload)).await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        deserialize_response(response).map_err(|_| github_unavailable_error())
+    }
+
+    pub(crate) async fn automation_update_issue(
+        &self,
+        repository: &str,
+        number: u64,
+        changes: serde_json::Value,
+    ) -> Result<serde_json::Value, AppError> {
+        let (owner, name) = split_repository_full_name(repository)?;
+        let number = number.to_string();
+        let response = self
+            .send(
+                HttpMethod::Patch,
+                &["repos", owner, name, "issues", &number],
+                &[],
+                Some(changes),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        deserialize_response(response).map_err(|_| github_unavailable_error())
+    }
+
+    pub(crate) async fn automation_approve_pr_at_commit(
+        &self,
+        repository: &str,
+        number: u64,
+        commit: &str,
+        body: Option<&str>,
+    ) -> Result<(), AppError> {
+        let (owner, name) = split_repository_full_name(repository)?;
+        let response = self
+            .send(
+                HttpMethod::Post,
+                &[
+                    "repos",
+                    owner,
+                    name,
+                    "pulls",
+                    &number.to_string(),
+                    "reviews",
+                ],
+                &[],
+                Some(json!({"event":"APPROVE","commit_id":commit,"body":body.unwrap_or_default()})),
+            )
+            .await?;
+        if !(200..300).contains(&response.status) {
+            return Err(map_http_error(
+                HttpFailureContext::Repository,
+                response.status,
+                &response.headers,
+            ));
+        }
+        Ok(())
     }
 
     async fn list_installations(&self) -> Result<Vec<u64>, AppError> {
@@ -3025,6 +3261,22 @@ impl GithubHttpClient {
         query: &[(&str, String)],
         body: Option<serde_json::Value>,
     ) -> Result<HttpResponse, AppError> {
+        let request = self
+            .prepare_http_request(method, path_segments, query, body)
+            .await?;
+        self.transport
+            .send(request)
+            .await
+            .map_err(|_| github_unavailable_error())
+    }
+
+    async fn prepare_http_request(
+        &self,
+        method: HttpMethod,
+        path_segments: &[&str],
+        query: &[(&str, String)],
+        body: Option<serde_json::Value>,
+    ) -> Result<HttpRequest, AppError> {
         let mut url = self.api_base_url.clone();
         {
             let mut segments = url
@@ -3040,7 +3292,7 @@ impl GithubHttpClient {
             }
         }
         let access_token = self.auth.valid_access_token().await?;
-        let request = HttpRequest {
+        Ok(HttpRequest {
             method,
             url: url.into(),
             headers: headers(&[
@@ -3050,11 +3302,7 @@ impl GithubHttpClient {
             ]),
             access_token,
             body,
-        };
-        self.transport
-            .send(request)
-            .await
-            .map_err(|_| github_unavailable_error())
+        })
     }
 }
 
@@ -3164,6 +3412,92 @@ fn draft_pull_request_invalid_response(branch: &str) -> AppError {
 }
 
 #[cfg(test)]
+pub(crate) mod automation_test_support {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    pub(crate) type Requests = Arc<Mutex<Vec<(String, Option<serde_json::Value>)>>>;
+    pub(crate) type Replies = Vec<(&'static str, serde_json::Value)>;
+    struct FixtureAuth;
+    #[async_trait]
+    impl AccessTokenProvider for FixtureAuth {
+        async fn valid_access_token(&self) -> Result<AccessToken, AppError> {
+            Ok(AccessToken::from_secret(secrecy::SecretString::new(
+                "fixture-token".into(),
+            )))
+        }
+    }
+    struct FixtureTransport {
+        queue: Mutex<VecDeque<(&'static str, u16, serde_json::Value)>>,
+        requests: Requests,
+    }
+    #[async_trait]
+    impl HttpTransport for FixtureTransport {
+        async fn send(&self, request: HttpRequest) -> Result<HttpResponse, TransportError> {
+            let (path, status, response) = self
+                .queue
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("unexpected GitHub request");
+            let url = Url::parse(&request.url).unwrap();
+            assert_eq!(url.path(), path);
+            if let Some(query) = request
+                .body
+                .as_ref()
+                .and_then(|body| body["query"].as_str())
+            {
+                graphql_parser::parse_query::<String>(query)
+                    .expect("actual outgoing GraphQL must parse");
+            }
+            self.requests
+                .lock()
+                .unwrap()
+                .push((request.url, request.body));
+            Ok(HttpResponse::new(
+                status,
+                HeaderMap::new(),
+                serde_json::to_vec(&response).unwrap(),
+            ))
+        }
+    }
+    pub(crate) fn fixture(replies: Replies) -> (GithubService, Requests) {
+        fixture_http(
+            replies
+                .into_iter()
+                .map(|(path, value)| (path, 200, value))
+                .collect(),
+        )
+    }
+    pub(crate) fn fixture_http(
+        replies: Vec<(&'static str, u16, serde_json::Value)>,
+    ) -> (GithubService, Requests) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let transport = FixtureTransport {
+            queue: Mutex::new(replies.into()),
+            requests: requests.clone(),
+        };
+        (
+            GithubService::with_base_url(FixtureAuth, transport, "https://fixture.invalid/")
+                .unwrap(),
+            requests,
+        )
+    }
+
+    pub(crate) fn network_failure_fixture() -> GithubService {
+        struct Offline;
+        #[async_trait]
+        impl HttpTransport for Offline {
+            async fn send(&self, _: HttpRequest) -> Result<HttpResponse, TransportError> {
+                Err(TransportError::unavailable())
+            }
+        }
+        GithubService::with_base_url(FixtureAuth, Offline, "https://fixture.invalid/").unwrap()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
@@ -3269,6 +3603,126 @@ mod tests {
 
     fn response_with_headers(status: u16, values: &[(&str, &str)]) -> HttpResponse {
         HttpResponse::new(status, headers(values), Vec::new())
+    }
+
+    #[tokio::test]
+    async fn mcp_read_error_classifies_http_resources_without_exposing_response_bodies() {
+        let cases: Vec<(u16, Vec<&str>, &str, &str)> = vec![
+            (
+                404,
+                vec!["repos", "acme", "docs", "git", "trees", "missing"],
+                "commit_not_found",
+                "not_found_or_inaccessible",
+            ),
+            (
+                422,
+                vec!["repos", "acme", "docs", "git", "trees", "missing"],
+                "commit_not_found",
+                "invalid_commit_or_tree",
+            ),
+            (
+                404,
+                vec!["repos", "acme", "docs", "contents", "docs", "prd.md"],
+                "document_not_found",
+                "not_found_or_inaccessible",
+            ),
+            (
+                401,
+                vec!["repos", "acme", "docs"],
+                "reauthentication_required",
+                "authentication_required",
+            ),
+            (
+                403,
+                vec!["repos", "acme", "docs"],
+                "github_permission_denied",
+                "permission_denied",
+            ),
+            (
+                404,
+                vec!["repos", "acme", "docs"],
+                "github_resource_not_found",
+                "not_found_or_inaccessible",
+            ),
+            (
+                503,
+                vec!["repos", "acme", "docs"],
+                "github_unavailable",
+                "server_error",
+            ),
+        ];
+        for (status, path, code, reason) in cases {
+            let c = client(
+                SequenceTokenProvider::default(),
+                RecordingTransport::with_responses(vec![response(
+                    status,
+                    r#"{"message":"sensitive upstream text ghu_do_not_expose"}"#,
+                )]),
+            );
+            let e = c.automation_get(&path, &[]).await.unwrap_err();
+            let public = serde_json::to_value(&e).unwrap();
+            assert_eq!(public["code"], code, "HTTP {status}, {path:?}");
+            assert_eq!(public["details"]["reason"], reason);
+            assert_eq!(public["details"]["httpStatus"], status.to_string());
+            assert!(!public.to_string().contains("ghu_do_not_expose"));
+            if status == 404 {
+                assert!(e.message.contains("권한"));
+            }
+            if status == 422 {
+                assert!(e.message.contains("SHA"));
+                assert!(
+                    !e.message.contains("권한"),
+                    "422 commit lookup is not a permission denial"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mcp_read_error_network_rate_limit_and_invalid_response_are_not_permissions() {
+        let c = client(
+            SequenceTokenProvider::default(),
+            RecordingTransport::with_network_failure(),
+        );
+        let e = c
+            .automation_get(&["repos", "acme", "docs"], &[])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            serde_json::to_value(&e).unwrap()["code"],
+            "github_network_error"
+        );
+        assert_eq!(e.details.get("reason").map(String::as_str), Some("network"));
+        for status in [403, 429] {
+            let c = client(
+                SequenceTokenProvider::default(),
+                RecordingTransport::with_responses(vec![response_with_headers(
+                    status,
+                    &[("x-ratelimit-remaining", "0")],
+                )]),
+            );
+            let e = c
+                .automation_get(&["repos", "acme", "docs"], &[])
+                .await
+                .unwrap_err();
+            assert_eq!(e.code, ErrorCode::GithubUnavailable);
+            assert_eq!(
+                e.details.get("reason").map(String::as_str),
+                Some("rate_limited")
+            );
+        }
+        let c = client(
+            SequenceTokenProvider::default(),
+            RecordingTransport::with_responses(vec![response(200, "invalid JSON")]),
+        );
+        let e = c
+            .automation_get(&["repos", "acme", "docs"], &[])
+            .await
+            .unwrap_err();
+        assert_eq!(
+            e.details.get("reason").map(String::as_str),
+            Some("invalid_response")
+        );
     }
 
     #[test]

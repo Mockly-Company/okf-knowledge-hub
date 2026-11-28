@@ -8,6 +8,8 @@
 //! ```
 
 mod client;
+#[cfg(test)]
+pub(crate) use client::automation_test_support;
 pub mod model;
 
 pub use client::GithubService;

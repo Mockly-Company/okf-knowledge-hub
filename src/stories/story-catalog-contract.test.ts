@@ -28,6 +28,7 @@ describe("Storybook catalog", () => {
     expect(namedStories(DocumentStories)).toEqual([
       "EmptySearch",
       "Home",
+      "MultipleRepositories",
       "SearchResults",
     ]);
     expect(namedStories(DocumentDetailStories)).toEqual(["Default"]);

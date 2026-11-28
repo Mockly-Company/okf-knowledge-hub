@@ -67,6 +67,16 @@ afterEach(() => {
 });
 
 describe("DocumentTree", () => {
+  it("keeps secondary folders read-only without changing their document keys", async () => {
+    const user = userEvent.setup();
+    const onSelectDocument = vi.fn();
+    const secondary = { ...mapSummary, path: "repo:team/handbook/docs/api/map.md" };
+    render(<DocumentTree entries={[{ kind: "folder", name: "handbook", path: "repo:team/handbook", children: [{ kind: "document", summary: secondary }] }]}
+      selectedPath={secondary.path} onSelectDocument={onSelectDocument} onNewDocument={() => {}} />);
+    expect(screen.queryByRole("button", { name: "handbook에 새 문서" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("treeitem", { name: "지도 API" }));
+    expect(onSelectDocument).toHaveBeenCalledWith(secondary.path);
+  });
   it("expands folders without navigating and opens documents", async () => {
     const user = userEvent.setup();
     const onSelectDocument = vi.fn();

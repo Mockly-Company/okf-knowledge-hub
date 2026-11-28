@@ -58,19 +58,40 @@ pub fn discover_documents(
     repository_root: &Path,
     roots: &[String],
 ) -> Result<DocumentCatalog, AppError> {
+    discover_documents_with_exclusions(repository_root, roots, &[])
+}
+
+pub fn discover_documents_with_exclusions(
+    repository_root: &Path,
+    roots: &[String],
+    exclusions: &[String],
+) -> Result<DocumentCatalog, AppError> {
     let repository_root = repository_root.canonicalize().map_err(|error| {
         document_path_error(
             repository_root,
             format!("repository cannot be read: {error}"),
         )
     })?;
+    for root in roots {
+        resolve_root(&repository_root, root)?;
+    }
+    let visible_roots = roots
+        .iter()
+        .filter(|root| !contains_git_component(root))
+        .cloned()
+        .collect::<Vec<_>>();
+    let scope = super::reader::DocumentReader::with_exclusions(
+        &repository_root,
+        &visible_roots,
+        exclusions,
+    )?;
     let mut documents = Vec::new();
     let mut seen_documents = HashSet::new();
     let mut tree_roots = Vec::new();
 
     for root in roots {
         let root_path = resolve_root(&repository_root, root)?;
-        if contains_git_component(root) {
+        if contains_git_component(root) || !scope.allows_path(&root_path) {
             continue;
         }
         let mut visited_directories = HashSet::from([root_path.clone()]);
@@ -81,6 +102,7 @@ pub fn discover_documents(
             &mut visited_directories,
             &mut documents,
             &mut seen_documents,
+            &scope,
         )?;
         tree_roots.push(tree);
     }
@@ -134,6 +156,7 @@ fn discover_directory(
     visited_directories: &mut HashSet<PathBuf>,
     documents: &mut Vec<DocumentSummary>,
     seen_documents: &mut HashSet<PathBuf>,
+    scope: &super::reader::DocumentReader,
 ) -> Result<DocumentTreeEntry, AppError> {
     let mut children = Vec::new();
     let entries = fs::read_dir(directory)
@@ -166,6 +189,9 @@ fn discover_directory(
             continue;
         }
         let path = entry.path();
+        if !scope.allows_path(&path) {
+            continue;
+        }
         let canonical_path = path
             .canonicalize()
             .map_err(|error| document_path_error(&path, error.to_string()))?;
@@ -186,6 +212,7 @@ fn discover_directory(
                 visited_directories,
                 documents,
                 seen_documents,
+                scope,
             )?);
         } else if metadata.is_file() && is_markdown(&canonical_path) {
             let sibling_candidates = (canonical_path.parent() == Some(directory)).then(|| {

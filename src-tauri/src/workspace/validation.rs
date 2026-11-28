@@ -11,6 +11,9 @@ pub enum WorkspaceDiagnosticCode {
     DocumentRootsMissing,
     DocumentRootEmpty,
     DocumentRootOutsideRepository,
+    DocumentExclusionInvalid,
+    DocumentRepositoryInvalid,
+    DuplicateDocumentRepository,
     DuplicateRepositoryKey,
     DuplicateRepositoryLabel,
     RepositoryKeyEmpty,
@@ -47,29 +50,67 @@ pub fn validate_workspace(config: &WorkspaceConfigV1) -> Vec<WorkspaceDiagnostic
         ));
     }
 
-    if config.documents.roots.is_empty() {
+    if config.documents.roots.is_empty() && config.documents.repositories.is_empty() {
         diagnostics.push(diagnostic(
             WorkspaceDiagnosticCode::DocumentRootsMissing,
             "documents.roots",
-            "documents.roots에는 하나 이상의 문서 루트가 필요합니다.",
+            "하나 이상의 문서 저장소와 루트가 필요합니다.",
         ));
     }
-
-    for (index, root) in config.documents.roots.iter().enumerate() {
-        let path = format!("documents.roots[{index}].path");
-        if root.path.trim().is_empty() {
+    if config.documents.repository.is_some() && config.documents.roots.is_empty() {
+        diagnostics.push(diagnostic(
+            WorkspaceDiagnosticCode::DocumentRootsMissing,
+            "documents.roots",
+            "문서 저장소의 루트가 필요합니다.",
+        ));
+    }
+    validate_document_roots(&config.documents.roots, "documents.roots", &mut diagnostics);
+    let mut document_ids = HashSet::new();
+    let mut document_names = HashSet::new();
+    if let Some(repository) = &config.documents.repository {
+        document_ids.insert(repository.id.clone());
+        document_names.insert(repository.full_name.to_ascii_lowercase());
+    }
+    for (index, repository) in config.documents.repositories.iter().enumerate() {
+        let base = format!("documents.repositories[{index}]");
+        let identity = &repository.repository;
+        let name_parts: Vec<_> = identity.full_name.split('/').collect();
+        if identity.id.trim().is_empty()
+            || name_parts.len() != 2
+            || name_parts.iter().any(|part| {
+                part.is_empty()
+                    || !part
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-' | b'.'))
+            })
+        {
             diagnostics.push(diagnostic(
-                WorkspaceDiagnosticCode::DocumentRootEmpty,
-                path,
-                "문서 루트 경로는 비어 있을 수 없습니다.",
-            ));
-        } else if is_outside_repository_path(&root.path) {
-            diagnostics.push(diagnostic(
-                WorkspaceDiagnosticCode::DocumentRootOutsideRepository,
-                path,
-                "문서 루트는 저장소 내부의 상대 경로여야 합니다.",
+                WorkspaceDiagnosticCode::DocumentRepositoryInvalid,
+                format!("{base}.repository"),
+                "저장소 ID와 owner/repository를 확인해 주세요.",
             ));
         }
+        let duplicate_id = !document_ids.insert(identity.id.clone());
+        let duplicate_name = !document_names.insert(identity.full_name.to_ascii_lowercase());
+        if duplicate_id || duplicate_name {
+            diagnostics.push(diagnostic(
+                WorkspaceDiagnosticCode::DuplicateDocumentRepository,
+                format!("{base}.repository"),
+                "문서 저장소는 중복으로 연결할 수 없습니다.",
+            ));
+        }
+        if repository.roots.is_empty() {
+            diagnostics.push(diagnostic(
+                WorkspaceDiagnosticCode::DocumentRootsMissing,
+                format!("{base}.roots"),
+                "하나 이상의 문서 루트가 필요합니다.",
+            ));
+        }
+        validate_document_roots(
+            &repository.roots,
+            &format!("{base}.roots"),
+            &mut diagnostics,
+        );
     }
 
     let mut repository_keys = HashSet::new();
@@ -145,6 +186,44 @@ pub fn validate_workspace(config: &WorkspaceConfigV1) -> Vec<WorkspaceDiagnostic
     diagnostics
 }
 
+fn validate_document_roots(
+    roots: &[crate::workspace::model::DocumentRoot],
+    base: &str,
+    diagnostics: &mut Vec<WorkspaceDiagnostic>,
+) {
+    use crate::workspace::model::document_scopes::{normalized_path, within};
+    for (index, root) in roots.iter().enumerate() {
+        let path = format!("{base}[{index}].path");
+        let normalized = normalized_path(&root.path);
+        if root.path.trim().is_empty() {
+            diagnostics.push(diagnostic(
+                WorkspaceDiagnosticCode::DocumentRootEmpty,
+                path,
+                "문서 루트 경로는 비어 있을 수 없습니다.",
+            ));
+        } else if normalized.is_none() {
+            diagnostics.push(diagnostic(
+                WorkspaceDiagnosticCode::DocumentRootOutsideRepository,
+                path,
+                "문서 루트는 저장소 내부의 상대 경로여야 합니다.",
+            ));
+        }
+        for (excluded_index, exclude) in root.exclude.iter().enumerate() {
+            let valid = normalized
+                .as_ref()
+                .zip(normalized_path(exclude).as_ref())
+                .is_some_and(|(root, excluded)| excluded != root && within(excluded, root));
+            if !valid {
+                diagnostics.push(diagnostic(
+                    WorkspaceDiagnosticCode::DocumentExclusionInvalid,
+                    format!("{base}[{index}].exclude[{excluded_index}]"),
+                    "제외 폴더는 문서 루트 아래의 저장소 상대 경로여야 합니다.",
+                ));
+            }
+        }
+    }
+}
+
 fn diagnostic(
     code: WorkspaceDiagnosticCode,
     path: impl Into<String>,
@@ -155,18 +234,6 @@ fn diagnostic(
         path: path.into(),
         message: message.into(),
     }
-}
-
-fn is_outside_repository_path(path: &str) -> bool {
-    let normalized = path.replace('\\', "/");
-    normalized.starts_with('/')
-        || has_windows_prefix(&normalized)
-        || normalized.split('/').any(|component| component == "..")
-}
-
-fn has_windows_prefix(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn is_valid_repository_key(key: &str) -> bool {
@@ -188,6 +255,56 @@ mod tests {
         WorkspaceDocument::parse(include_str!("fixtures/valid-workspace.yml"))
             .unwrap()
             .config
+    }
+
+    #[test]
+    fn rejects_unsafe_paths_in_additional_document_repositories() {
+        let mut value: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(include_str!("fixtures/valid-workspace.yml")).unwrap();
+        value["documents"]["repositories"] = serde_yaml_ng::from_str(
+            "- repository: {id: R_OTHER, full_name: team/other}\n  roots: [{path: ../private}]\n",
+        )
+        .unwrap();
+        let config: WorkspaceConfigV1 = serde_yaml_ng::from_value(value).unwrap();
+        assert!(validate_workspace(&config)
+            .iter()
+            .any(|item| item.path == "documents.repositories[0].roots[0].path"));
+    }
+
+    #[test]
+    fn rejects_exclusions_outside_the_selected_document_root() {
+        for excluded in [
+            "../secrets",
+            "/private",
+            "C:/private",
+            "docs/../private",
+            "other",
+            "docs",
+            "",
+        ] {
+            let mut value: serde_yaml_ng::Value =
+                serde_yaml_ng::from_str(include_str!("fixtures/valid-workspace.yml")).unwrap();
+            value["documents"]["roots"][0]["exclude"] =
+                serde_yaml_ng::to_value(vec![excluded]).unwrap();
+            let config: WorkspaceConfigV1 = serde_yaml_ng::from_value(value).unwrap();
+            assert!(
+                validate_workspace(&config)
+                    .iter()
+                    .any(|item| item.path == "documents.roots[0].exclude[0]"),
+                "accepted {excluded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_document_repository_identities() {
+        let mut value: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(include_str!("fixtures/valid-workspace.yml")).unwrap();
+        value["documents"]["repositories"] = serde_yaml_ng::from_str("- repository: {id: R_OTHER, full_name: team/other}\n  roots: [{path: docs}]\n- repository: {id: R_OTHER, full_name: TEAM/OTHER}\n  roots: [{path: notes}]\n").unwrap();
+        let config: WorkspaceConfigV1 = serde_yaml_ng::from_value(value).unwrap();
+        assert!(validate_workspace(&config)
+            .iter()
+            .any(|item| item.path == "documents.repositories[1].repository"));
     }
 
     #[test]
@@ -255,6 +372,7 @@ mod tests {
             .roots
             .push(crate::workspace::model::DocumentRoot {
                 path: "/documents".into(),
+                exclude: Vec::new(),
                 extra: Default::default(),
             });
         config
@@ -262,6 +380,7 @@ mod tests {
             .roots
             .push(crate::workspace::model::DocumentRoot {
                 path: "C:\\documents".into(),
+                exclude: Vec::new(),
                 extra: Default::default(),
             });
 

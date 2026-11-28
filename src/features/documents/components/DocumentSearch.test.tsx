@@ -48,6 +48,18 @@ function KeyboardSearchHarness({ onQueryChange }: { onQueryChange(query: string)
 afterEach(cleanup);
 
 describe("DocumentSearch", () => {
+  it("shows readable secondary paths while preserving repository-qualified selection", async () => {
+    const user = userEvent.setup();
+    const secondary = { ...document, path: "repo:team/handbook/docs/api/map.md" };
+    const onSelectDocument = vi.fn();
+    render(<DocumentSearch query="" documents={[secondary]} results={[]} searchStatus="idle" searchError={null}
+      indexStatus={{ status: "ready" }} onQueryChange={() => {}} onSelectDocument={onSelectDocument}
+      onSelectResult={() => {}} onRetry={() => {}} onNewDocumentInFolder={() => {}} />);
+    expect(screen.getByText("team/handbook · docs/api/map.md")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /지도 API/ }));
+    expect(onSelectDocument).toHaveBeenCalledWith("repo:team/handbook/docs/api/map.md", "markdown");
+    expect(screen.queryByRole("button", { name: /폴더에 새 문서/ })).not.toBeInTheDocument();
+  });
   it("keeps title and path results available while body indexing is preparing", async () => {
     const user = userEvent.setup();
     const onQueryChange = vi.fn();

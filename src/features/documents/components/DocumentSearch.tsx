@@ -30,6 +30,7 @@ import {
 } from "../model";
 import type { BoardIssue } from "@/features/project-board/model";
 import type { AsyncStatus } from "../documents-reducer";
+import { displayDocumentPath, documentLocation } from "../document-location";
 import { DocumentDomainMap } from "./DocumentDomainMap";
 import { DocumentIsometricOverview } from "./DocumentIsometricOverview";
 import { DocumentProgressOverview } from "./DocumentProgressOverview";
@@ -292,7 +293,7 @@ export function DocumentSearch({
           <FileText aria-hidden="true" />
           <span className="document-search__result-copy">
             <strong>{item.title}</strong>
-            <small>{item.path}</small>
+            <small>{displayDocumentPath(item.path)}</small>
             {result?.snippet ? (
               <span>
                 <HighlightedSnippet
@@ -556,6 +557,7 @@ export function DocumentSearch({
                     </div>
                     {groupMode === "domain" &&
                     folderPath &&
+                    !documentLocation(folderPath).repository &&
                     onNewDocumentInFolder ? (
                       <Button
                         type="button"

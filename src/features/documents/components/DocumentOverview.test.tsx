@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CodeRepositoriesGateway } from "@/features/code-repositories/CodeRepositoriesGateway";
@@ -6,6 +6,30 @@ import type { DocumentContent } from "../model";
 import { DocumentOverview } from "./DocumentOverview";
 
 afterEach(cleanup);
+
+it("renders array and object properties as readable lists instead of JSON", () => {
+  render(<DocumentOverview document={{ properties: {
+    tags: ["dashboard", "notifications"],
+    related_docs: ["docs/dashboard/prd.md", "docs/documents/prd.md"],
+    designs: [{ title: "알림 시안", image: "assets/dashboard.svg", status: "approved" }],
+    custom: { count: 2, enabled: false },
+  }, tableOfContents: [] } as unknown as DocumentContent} />);
+  const properties = screen.getByRole("region", { name: "문서 속성" });
+  expect(within(properties).getByText("dashboard")).toBeVisible();
+  expect(within(properties).getByText("notifications")).toBeVisible();
+  expect(within(properties).getByText("docs/dashboard/prd.md")).toBeVisible();
+  expect(within(properties).getByText("알림 시안")).toBeVisible();
+  expect(within(properties).getByText("assets/dashboard.svg")).toBeVisible();
+  expect(within(properties).getByText("count")).toBeVisible();
+  expect(within(properties).getByText("2")).toBeVisible();
+  expect(within(properties).getByText("false")).toBeVisible();
+  expect(properties.textContent).not.toMatch(/[{}\[\]"]/);
+});
+
+it("keeps empty and missing structured values readable", () => {
+  render(<DocumentOverview document={{ properties: { tags: [], custom: {}, owner: null }, tableOfContents: [] } as unknown as DocumentContent} />);
+  expect(screen.getAllByText("없음")).toHaveLength(3);
+});
 
 it("uses readable names for known properties without losing custom keys", () => {
   render(<DocumentOverview document={{ properties: { type: "API 계약", owner: "Platform", custom: "보존" }, tableOfContents: [] } as unknown as DocumentContent} />);
@@ -115,13 +139,17 @@ it("formats wireframes, designs, tags, related_docs, and impl_status cleanly ins
   );
 
   expect(screen.getByText("와이어프레임")).toBeVisible();
-  expect(screen.getByText("1건 (시안 탭에서 보기)")).toBeVisible();
+  expect(screen.getByText("보드 와이어프레임")).toBeVisible();
+  expect(screen.getByText("assets/wf.svg")).toBeVisible();
   expect(screen.getByText("디자인 시안")).toBeVisible();
-  expect(screen.getByText("2건 (시안 탭에서 보기)")).toBeVisible();
+  expect(screen.getByText("시안 1")).toBeVisible();
+  expect(screen.getByText("시안 2")).toBeVisible();
   expect(screen.getByText("태그")).toBeVisible();
-  expect(screen.getByText("documents, ux")).toBeVisible();
+  expect(screen.getByText("documents")).toBeVisible();
+  expect(screen.getByText("ux")).toBeVisible();
   expect(screen.getByText("관련 문서")).toBeVisible();
-  expect(screen.getByText("docs/prd.md, docs/adr.md")).toBeVisible();
+  expect(screen.getByText("docs/prd.md")).toBeVisible();
+  expect(screen.getByText("docs/adr.md")).toBeVisible();
   expect(screen.getByText("코드 반영 상태")).toBeVisible();
   expect(screen.getByText("일부 수정 필요")).toBeVisible();
   expect(screen.getByText("custom_key")).toBeVisible();

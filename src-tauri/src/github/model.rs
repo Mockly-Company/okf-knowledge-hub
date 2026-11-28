@@ -98,6 +98,14 @@ pub struct DocsPullRequestSummary {
     pub merged_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AutomationPrMutation {
+    Update,
+    RequestReview,
+    Review,
+    Merge,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestChangedFile {
@@ -174,14 +182,14 @@ pub struct GithubSubIssue {
     pub url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubProjectFieldOption {
     pub id: String,
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubProjectSingleSelectField {
     pub id: String,
@@ -189,7 +197,7 @@ pub struct GithubProjectSingleSelectField {
     pub options: Vec<GithubProjectFieldOption>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GithubProjectSchema {
     pub project_id: String,
