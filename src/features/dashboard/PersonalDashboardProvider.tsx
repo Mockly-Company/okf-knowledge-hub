@@ -10,7 +10,13 @@ import {
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOptionalActiveProject } from "@/features/active-project/ActiveProjectProvider";
+import { projectBoardKeys } from "@/features/project-board/queryKeys";
 import { useOptionalWorkspaceConnection } from "@/features/workspace-connection/WorkspaceConnectionProvider";
+import {
+  BACKGROUND_SYNC_INTERVAL_MS,
+  WINDOW_FOCUS_SYNC_COOLDOWN_MS,
+  useWindowFocusAndIntervalSync,
+} from "@/infrastructure/sync/autoSyncPolicy";
 import type { PersonalDashboardGateway } from "./PersonalDashboardGateway";
 import {
   isDashboardNotificationChecked,
@@ -24,6 +30,10 @@ export interface PersonalDashboardContextValue {
   isLoading: boolean;
   isFetching: boolean;
   isMarkingSeen: boolean;
+  /** 대시보드가 로그인·포커스·주기 백그라운드 동기화를 담당 중이면 참이다. */
+  isAutoSyncActive: boolean;
+  /** 백그라운드 또는 수동 전체 동기화(forceSync)가 진행 중이면 참이다. */
+  isBackgroundSyncing: boolean;
   error: Error | null;
   assigneeFilter: string | null;
   setAssigneeFilter(next: string | null): void;
@@ -64,12 +74,16 @@ export function PersonalDashboardProvider({
   const activeProject = useOptionalActiveProject();
   const connection = useOptionalWorkspaceConnection();
   const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
+  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
   const pendingSyncByKeyRef = useRef<
     Map<
       string,
       { token: symbol; forceSync: boolean; retryWorkspaceId: string | null }
     >
   >(new Map());
+  const lastSyncedAtMsRef = useRef<number | null>(null);
+  const syncedLoginVersionRef = useRef<number>(0);
+  const lastBoardInvalidatedScopeRef = useRef<string | null>(null);
 
   const workspacesKey = useMemo(() => {
     const workspaces = activeProject?.workspaces ?? [];
@@ -83,6 +97,17 @@ export function PersonalDashboardProvider({
     connection?.account.status === "authenticated"
       ? connection.account.user.login
       : null;
+  const authSessionVersion = connection?.authSessionVersion ?? 0;
+  const authSessionOrigin = connection?.authSessionOrigin ?? null;
+
+  const authSessionVersionRef = useRef(authSessionVersion);
+  authSessionVersionRef.current = authSessionVersion;
+  const authSessionOriginRef = useRef(authSessionOrigin);
+  authSessionOriginRef.current = authSessionOrigin;
+  const workspacesKeyRef = useRef(workspacesKey);
+  workspacesKeyRef.current = workspacesKey;
+  const viewerLoginRef = useRef(viewerLogin);
+  viewerLoginRef.current = viewerLogin;
 
   const enabled =
     authStatus === "authenticated" &&
@@ -114,19 +139,53 @@ export function PersonalDashboardProvider({
       if (pending) {
         pendingSyncByKeyRef.current.delete(serialized);
       }
+      const isFreshLoginSync =
+        authSessionOriginRef.current === "login" &&
+        authSessionVersionRef.current > 0 &&
+        syncedLoginVersionRef.current !== authSessionVersionRef.current;
+      if (isFreshLoginSync) {
+        syncedLoginVersionRef.current = authSessionVersionRef.current;
+      }
+      const forceSync = Boolean(pending?.forceSync) || isFreshLoginSync;
+      const retryWorkspaceId = pending?.retryWorkspaceId ?? null;
       const rawFilter = typeof currentKey[2] === "string" ? currentKey[2] : "__me__";
       const resolvedFilter = rawFilter === "__me__" ? null : rawFilter;
-      return gateway.getPersonalDashboard({
-        assigneeFilter: resolvedFilter,
-        forceSync: pending?.forceSync ?? false,
-        retryWorkspaceId: pending?.retryWorkspaceId ?? null,
-      });
+      const currentScopeKey = `${authSessionVersionRef.current}::${workspacesKeyRef.current}::${viewerLoginRef.current ?? ""}`;
+      const isFirstFetchForScope =
+        lastBoardInvalidatedScopeRef.current !== currentScopeKey;
+
+      if (forceSync) {
+        setIsBackgroundSyncing(true);
+      }
+      try {
+        const result = await gateway.getPersonalDashboard({
+          assigneeFilter: resolvedFilter,
+          forceSync,
+          retryWorkspaceId,
+        });
+        lastSyncedAtMsRef.current = Date.now();
+        // 백엔드가 보드 캐시를 갱신할 수 있는 조회(세션 첫 로드·전체 동기화·워크스페이스 재시도)
+        // 직후에는 Board 화면 쿼리도 무효화해 화면 간 불일치를 없앤다.
+        if (forceSync || retryWorkspaceId !== null || isFirstFetchForScope) {
+          lastBoardInvalidatedScopeRef.current = currentScopeKey;
+          void queryClient.invalidateQueries({
+            queryKey: projectBoardKeys.boards,
+          });
+        }
+        return result;
+      } finally {
+        if (forceSync) {
+          setIsBackgroundSyncing(false);
+        }
+      }
     },
   });
 
   useEffect(() => {
     if (!enabled) {
       pendingSyncByKeyRef.current.clear();
+      lastSyncedAtMsRef.current = null;
+      lastBoardInvalidatedScopeRef.current = null;
     }
   }, [enabled]);
 
@@ -153,6 +212,41 @@ export function PersonalDashboardProvider({
     },
     [enabled, queryClient, queryKey],
   );
+
+  // 대화형 신규 로그인 직후 이미 같은 키의 캐시가 남아 있는 경우에도 1회 강제 동기화를 보장한다.
+  useEffect(() => {
+    if (
+      !enabled ||
+      authSessionOrigin !== "login" ||
+      authSessionVersion <= 0 ||
+      syncedLoginVersionRef.current === authSessionVersion ||
+      query.isFetching
+    ) {
+      return;
+    }
+    syncedLoginVersionRef.current = authSessionVersion;
+    void runSyncedRefetch({ forceSync: true, retryWorkspaceId: null });
+  }, [
+    authSessionOrigin,
+    authSessionVersion,
+    enabled,
+    query.isFetching,
+    runSyncedRefetch,
+  ]);
+
+  // 창 포커스 복귀(60초 쿨다운)와 5분 주기 백그라운드 동기화로 모든 워크스페이스 보드·알림을 최신화한다.
+  useWindowFocusAndIntervalSync({
+    enabled,
+    intervalMs: BACKGROUND_SYNC_INTERVAL_MS,
+    focusCooldownMs: WINDOW_FOCUS_SYNC_COOLDOWN_MS,
+    getLastSyncAtMs: () => lastSyncedAtMsRef.current,
+    onSync: () => {
+      if (query.isFetching) {
+        return;
+      }
+      void runSyncedRefetch({ forceSync: true, retryWorkspaceId: null });
+    },
+  });
 
   const refresh = useCallback(
     () => runSyncedRefetch({ forceSync: true, retryWorkspaceId: null }),
@@ -266,6 +360,8 @@ export function PersonalDashboardProvider({
       isLoading: query.isLoading,
       isFetching: query.isFetching,
       isMarkingSeen,
+      isAutoSyncActive: enabled,
+      isBackgroundSyncing,
       error: query.error ? toError(query.error) : null,
       assigneeFilter,
       setAssigneeFilter,
@@ -277,6 +373,8 @@ export function PersonalDashboardProvider({
     }),
     [
       assigneeFilter,
+      enabled,
+      isBackgroundSyncing,
       isMarkingSeen,
       markSeen,
       query.data,

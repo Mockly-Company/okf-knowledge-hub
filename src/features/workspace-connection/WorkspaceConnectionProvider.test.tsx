@@ -99,4 +99,62 @@ describe("WorkspaceConnectionProvider", () => {
 
     await waitFor(() => expect(gateway.listenerCount().auth).toBe(0));
   });
+
+  it("distinguishes initial session restore from interactive login and clears React Query cache on logout", async () => {
+    const { createTestQueryClient, TestQueryProvider } = await import(
+      "@/test/queryTestUtils"
+    );
+    const user = userEvent.setup();
+    const queryClient = createTestQueryClient();
+    queryClient.setQueryData(["projectBoard", "board", "PVT_alpha"], {
+      issues: [],
+      fetchedAt: "2026-11-26T00:00:00Z",
+    });
+    const gateway = FakeWorkspaceConnectionGateway.connected();
+
+    function SessionProbe() {
+      const connection = useWorkspaceConnection();
+      return (
+        <div>
+          <output aria-label="session-meta">
+            {`${connection.authSessionVersion}:${connection.authSessionOrigin ?? "none"}`}
+          </output>
+          <button onClick={() => void connection.logoutGithub()}>logout</button>
+          <button onClick={() => void connection.startLogin()}>login</button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider client={queryClient}>
+        <WorkspaceConnectionProvider gateway={gateway}>
+          <SessionProbe />
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    expect(await screen.findByLabelText("session-meta")).toHaveTextContent(
+      "1:initial",
+    );
+    expect(
+      queryClient.getQueryData(["projectBoard", "board", "PVT_alpha"]),
+    ).toBeDefined();
+
+    // Logout clears cached queries from previous session
+    await user.click(screen.getByRole("button", { name: "logout" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("session-meta")).toHaveTextContent("1:none"),
+    );
+    expect(
+      queryClient.getQueryData(["projectBoard", "board", "PVT_alpha"]),
+    ).toBeUndefined();
+
+    // Interactive login increments authSessionVersion with origin "login"
+    await user.click(screen.getByRole("button", { name: "login" }));
+    gateway.approveAuthentication();
+    await waitFor(() =>
+      expect(screen.getByLabelText("session-meta")).toHaveTextContent("2:login"),
+    );
+  });
 });
+

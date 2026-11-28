@@ -1273,4 +1273,133 @@ describe("HomePage (내 대시보드)", () => {
       getSpy.mockRestore();
     }
   });
+
+  it("forces a fresh sync on interactive login and invalidates board queries so Board reads fresh caches", async () => {
+    const user = userEvent.setup();
+    const queryClient = createTestQueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    const docsRepoGateway = await createDefaultDocsRepoGateway();
+    const connectionGateway = FakeWorkspaceConnectionGateway.disconnected();
+    const dashboardGateway = new FakePersonalDashboardGateway({
+      viewerLogin: "hyeeun",
+      tasks: [
+        makeTask({
+          issueNumber: 88,
+          title: "신규 로그인 후 동기화된 작업",
+          assignees: [{ login: "hyeeun" }],
+        }),
+      ],
+    });
+    const getSpy = vi.spyOn(dashboardGateway, "getPersonalDashboard");
+
+    const { useWorkspaceConnection } = await import(
+      "@/features/workspace-connection/WorkspaceConnectionProvider"
+    );
+    function LoginControls() {
+      const { account, startLogin } = useWorkspaceConnection();
+      return (
+        <div>
+          <span data-testid="dash-auth-status">{account.status}</span>
+          <button type="button" onClick={() => void startLogin()}>
+            dash-login
+          </button>
+        </div>
+      );
+    }
+
+    render(
+      <TestQueryProvider client={queryClient}>
+        <WorkspaceConnectionProvider gateway={connectionGateway}>
+          <ActiveProjectProvider
+            projectGateway={FakeProjectBoardGateway.empty()}
+            docsRepositoryGateway={docsRepoGateway}
+          >
+            <PersonalDashboardProvider gateway={dashboardGateway}>
+              <LoginControls />
+              <PersonalDashboardView />
+            </PersonalDashboardProvider>
+          </ActiveProjectProvider>
+        </WorkspaceConnectionProvider>
+      </TestQueryProvider>,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("dash-auth-status")).toHaveTextContent(
+        "signed_out",
+      ),
+    );
+    expect(getSpy).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "dash-login" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("dash-auth-status")).toHaveTextContent(
+        "waiting_for_user",
+      ),
+    );
+    await act(async () => {
+      connectionGateway.approveAuthentication();
+    });
+
+    expect(
+      await screen.findByText("#88 신규 로그인 후 동기화된 작업"),
+    ).toBeVisible();
+    expect(getSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ forceSync: true, retryWorkspaceId: null }),
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["projectBoard", "board"] }),
+    );
+  });
+
+  it("auto-syncs personal dashboard with forceSync on focus after 60s cooldown and every 5 minutes", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-11-26T12:00:00Z"));
+    try {
+      const docsRepoGateway = await createDefaultDocsRepoGateway();
+      const dashboardGateway = new FakePersonalDashboardGateway({
+        viewerLogin: "YoonDongGeun",
+        tasks: [makeTask({ issueNumber: 91, title: "자동 동기화 대시보드 작업" })],
+      });
+      const getSpy = vi.spyOn(dashboardGateway, "getPersonalDashboard");
+
+      renderDashboard({
+        dashboardGateway,
+        docsRepoGateway,
+      });
+
+      expect(
+        await screen.findByText("#91 자동 동기화 대시보드 작업"),
+      ).toBeVisible();
+      expect(getSpy).toHaveBeenCalledTimes(1);
+
+      // Within 60s cooldown -> focus ignored
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        window.dispatchEvent(new Event("focus"));
+      });
+      expect(getSpy).toHaveBeenCalledTimes(1);
+
+      // Past 60s cooldown -> focus triggers forceSync: true
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+        window.dispatchEvent(new Event("focus"));
+      });
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+      expect(getSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({ forceSync: true, retryWorkspaceId: null }),
+      );
+
+      // Advance 5 minutes -> periodic interval triggers forceSync: true
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300_000);
+      });
+      await waitFor(() => expect(getSpy).toHaveBeenCalledTimes(3));
+      expect(getSpy).toHaveBeenLastCalledWith(
+        expect.objectContaining({ forceSync: true, retryWorkspaceId: null }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+

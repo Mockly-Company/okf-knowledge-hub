@@ -6,8 +6,12 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type PropsWithChildren,
 } from "react";
+import { QueryClientContext } from "@tanstack/react-query";
+import { hubWorkspaceQueryKey } from "@/features/active-project/ActiveProjectProvider";
+import { projectBoardKeys } from "@/features/project-board/queryKeys";
 import type { WorkspaceConnectionGateway } from "./WorkspaceConnectionGateway";
 import {
   accountSessionReducer,
@@ -15,6 +19,8 @@ import {
   type AccountSessionState,
 } from "./account-session";
 import type { AppError, AuthState, AuthStatusEvent } from "./types";
+
+export type AuthSessionOrigin = "initial" | "login" | null;
 
 /**
  * GitHub 계정 연결 상태. 문서 저장소는 프로젝트별로 Documents 화면에서 고르므로
@@ -24,6 +30,10 @@ export interface WorkspaceConnectionContextValue {
   account: AccountSessionState;
   /** 처음 계정 상태를 읽는 동안 참이다. */
   isCurrentWorkspaceLoading: boolean;
+  /** 인증 세션이 수립될 때마다 증가한다(앱 시작 복원·신규 로그인). */
+  authSessionVersion: number;
+  /** 현재 인증 세션의 시작 원인. 앱 시작 복원이면 initial, 대화형 신규 로그인이면 login. */
+  authSessionOrigin: AuthSessionOrigin;
   startLogin(): Promise<void>;
   cancelLogin(): Promise<void>;
   logoutGithub(): Promise<void>;
@@ -86,11 +96,16 @@ export function WorkspaceConnectionProvider({
   gateway,
   children,
 }: WorkspaceConnectionProviderProps) {
+  const queryClient = useContext(QueryClientContext);
   const [account, dispatchAccount] = useReducer(
     accountSessionReducer,
     undefined,
     createInitialAccountSessionState,
   );
+  const [authSession, setAuthSession] = useState<{
+    version: number;
+    origin: AuthSessionOrigin;
+  }>({ version: 0, origin: null });
   const accountRef = useRef(account);
 
   // 같은 렌더 안에서 연달아 들어온 동작도 최신 상태 기준으로 받아들일지 정한다.
@@ -101,10 +116,58 @@ export function WorkspaceConnectionProvider({
       if (next === current) return false;
       accountRef.current = next;
       dispatchAccount(action);
+
+      const enteredAuthenticated =
+        next.status === "authenticated" &&
+        current.status !== "logging_out" &&
+        (current.status !== "authenticated" ||
+          current.user.id !== next.user.id ||
+          current.user.login !== next.user.login);
+      if (enteredAuthenticated) {
+        const origin: AuthSessionOrigin =
+          current.status === "loading" ? "initial" : "login";
+        setAuthSession((prev) => ({ version: prev.version + 1, origin }));
+      } else if (
+        (current.status === "authenticated" || current.status === "logging_out") &&
+        (next.status === "signed_out" || next.status === "reauthentication_required")
+      ) {
+        setAuthSession((prev) => ({ version: prev.version, origin: null }));
+      }
       return true;
     },
     [],
   );
+
+  const prevAccountStatusRef = useRef(account.status);
+  useEffect(() => {
+    const prevStatus = prevAccountStatusRef.current;
+    prevAccountStatusRef.current = account.status;
+    if (!queryClient) {
+      return;
+    }
+    const leftAuthenticated =
+      (prevStatus === "authenticated" || prevStatus === "logging_out") &&
+      (account.status === "signed_out" ||
+        account.status === "reauthentication_required");
+    if (leftAuthenticated) {
+      queryClient.clear();
+    }
+  }, [account.status, queryClient]);
+
+  const lastInvalidatedLoginVersionRef = useRef(0);
+  useEffect(() => {
+    if (
+      !queryClient ||
+      authSession.origin !== "login" ||
+      authSession.version === 0 ||
+      lastInvalidatedLoginVersionRef.current === authSession.version
+    ) {
+      return;
+    }
+    lastInvalidatedLoginVersionRef.current = authSession.version;
+    void queryClient.invalidateQueries({ queryKey: hubWorkspaceQueryKey });
+    void queryClient.invalidateQueries({ queryKey: projectBoardKeys.linkedProjects });
+  }, [authSession.origin, authSession.version, queryClient]);
 
   const startLogin = useCallback(async () => {
     const requestId = operationId();
@@ -191,12 +254,22 @@ export function WorkspaceConnectionProvider({
     () => ({
       account,
       isCurrentWorkspaceLoading: account.status === "loading",
+      authSessionVersion: authSession.version,
+      authSessionOrigin: authSession.origin,
       startLogin,
       cancelLogin,
       logoutGithub,
       openVerificationUrl,
     }),
-    [account, cancelLogin, logoutGithub, openVerificationUrl, startLogin],
+    [
+      account,
+      authSession.origin,
+      authSession.version,
+      cancelLogin,
+      logoutGithub,
+      openVerificationUrl,
+      startLogin,
+    ],
   );
 
   return (

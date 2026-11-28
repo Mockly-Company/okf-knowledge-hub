@@ -18,6 +18,7 @@ use crate::workspace::model::GithubProjectRef;
 
 const MAX_BOARD_DEPTH: usize = 32;
 const SEVEN_DAYS_SECS: i64 = 7 * 86_400;
+const BOARD_CACHE_STALE_SECS: i64 = 60;
 // GitHub rate-limit과 지연을 제어하기 위해 최신 알림 상위 20건(홈 알림 2페이지 분량)까지만
 // PR 변경 파일 목록을 추가 조회하고, 나머지는 기본 알림 정보만 노출한다(S22).
 const MAX_PR_FILES_FETCH: usize = 20;
@@ -857,19 +858,51 @@ async fn fetch_workspace_docs_notifications(
     Ok(DocsNotificationFetchOutcome { items, failure })
 }
 
+pub(crate) fn is_board_cache_stale(board: &ProjectBoard, now_unix: i64) -> bool {
+    if is_empty_board(board) {
+        return true;
+    }
+    let Some(fetched_unix) = parse_rfc3339_unix(board.fetched_at.as_deref()) else {
+        return true;
+    };
+    now_unix - fetched_unix >= BOARD_CACHE_STALE_SECS
+}
+
+struct BoardFetchOutcome {
+    board: Option<ProjectBoard>,
+    failure: Option<AppError>,
+}
+
+fn resolve_board_sync_outcome(
+    cached: Option<ProjectBoard>,
+    sync_result: CommandResult<ProjectBoard>,
+) -> BoardFetchOutcome {
+    match sync_result {
+        Ok(fresh) => BoardFetchOutcome {
+            board: Some(fresh),
+            failure: None,
+        },
+        Err(error) => BoardFetchOutcome {
+            board: cached,
+            failure: Some(error),
+        },
+    }
+}
+
 struct WorkspaceFetchOutcome {
     idx: usize,
     workspace: HubWorkspace,
-    board_result: Option<CommandResult<ProjectBoard>>,
+    board_result: Option<BoardFetchOutcome>,
     docs_result: Option<Result<DocsNotificationFetchOutcome, DashboardWorkspaceFailure>>,
 }
 
 fn join_error_outcome(idx: usize, workspace: HubWorkspace) -> WorkspaceFetchOutcome {
-    let board_result = workspace.project.as_ref().map(|_| {
-        Err(AppError::new(
+    let board_result = workspace.project.as_ref().map(|_| BoardFetchOutcome {
+        board: None,
+        failure: Some(AppError::new(
             ErrorCode::GithubUnavailable,
             "워크스페이스 대시보드 동기화 작업이 중단되었습니다.",
-        ))
+        )),
     });
     let docs_result = workspace.docs_repository.as_ref().map(|_| {
         Err(DashboardWorkspaceFailure {
@@ -944,27 +977,29 @@ async fn fetch_workspace_dashboard(
             scope: Some(project.scope),
             extra: Default::default(),
         };
-        let res = if should_sync {
-            sync_project_board_with_github(
+        let cached = match load_board_from_cache_root(&ctx.cache_root, &project_ref).await {
+            Ok(board) if !is_empty_board(&board) => Some(board),
+            _ => None,
+        };
+        let needs_sync = should_sync
+            || cached
+                .as_ref()
+                .is_none_or(|board| is_board_cache_stale(board, ctx.now_unix));
+        let outcome = if needs_sync {
+            let sync_result = sync_project_board_with_github(
                 ctx.cache_root.clone(),
                 Arc::clone(&ctx.github),
                 project_ref,
             )
-            .await
+            .await;
+            resolve_board_sync_outcome(cached, sync_result)
         } else {
-            match load_board_from_cache_root(&ctx.cache_root, &project_ref).await {
-                Ok(cached) if !is_empty_board(&cached) => Ok(cached),
-                _ => {
-                    sync_project_board_with_github(
-                        ctx.cache_root.clone(),
-                        Arc::clone(&ctx.github),
-                        project_ref,
-                    )
-                    .await
-                }
+            BoardFetchOutcome {
+                board: cached,
+                failure: None,
             }
         };
-        Some(res)
+        Some(outcome)
     };
 
     let docs_fut = async {
@@ -1087,26 +1122,24 @@ pub async fn get_personal_dashboard(
     let mut viewer_unread_new_count: u32 = 0;
 
     for outcome in outcomes {
-        if let Some(board_result) = outcome.board_result {
-            match board_result {
-                Ok(board) => {
-                    collect_workspace_tasks(
-                        &outcome.workspace,
-                        &board,
-                        &filter,
-                        &mut discovered_assignees,
-                        &mut viewer_unread_new_count,
-                        &mut tasks,
-                    );
-                }
-                Err(error) => {
-                    failures.push(DashboardWorkspaceFailure {
-                        workspace_id: outcome.workspace.id.clone(),
-                        workspace_title: outcome.workspace.title.clone(),
-                        scope: DashboardFailureScope::Board,
-                        message: error.message,
-                    });
-                }
+        if let Some(board_outcome) = outcome.board_result {
+            if let Some(board) = board_outcome.board {
+                collect_workspace_tasks(
+                    &outcome.workspace,
+                    &board,
+                    &filter,
+                    &mut discovered_assignees,
+                    &mut viewer_unread_new_count,
+                    &mut tasks,
+                );
+            }
+            if let Some(error) = board_outcome.failure {
+                failures.push(DashboardWorkspaceFailure {
+                    workspace_id: outcome.workspace.id.clone(),
+                    workspace_title: outcome.workspace.title.clone(),
+                    scope: DashboardFailureScope::Board,
+                    message: error.message,
+                });
             }
         }
         if let Some(docs_result) = outcome.docs_result {
@@ -1667,7 +1700,11 @@ mod tests {
     fn join_error_outcome_reports_both_board_and_docs_failures_when_present() {
         let ws = sample_workspace("okf", "OkHub");
         let outcome = super::join_error_outcome(0, ws);
-        assert!(matches!(outcome.board_result, Some(Err(_))));
+        let board_outcome = outcome
+            .board_result
+            .expect("board outcome should be present");
+        assert!(board_outcome.board.is_none());
+        assert!(board_outcome.failure.is_some());
         assert!(matches!(
             outcome.docs_result,
             Some(Err(DashboardWorkspaceFailure {
@@ -1675,6 +1712,74 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn is_board_cache_stale_respects_ttl_and_handles_missing_or_empty_boards() {
+        let now_unix = parse_rfc3339_unix(Some("2026-11-26T12:01:00Z")).unwrap();
+        let fresh_board = ProjectBoard {
+            issues: vec![],
+            fetched_at: Some("2026-11-26T12:00:01Z".into()),
+            skipped: 0,
+            truncated: false,
+        };
+        let exact_stale_board = ProjectBoard {
+            issues: vec![],
+            fetched_at: Some("2026-11-26T12:00:00Z".into()),
+            skipped: 0,
+            truncated: false,
+        };
+        let future_board = ProjectBoard {
+            issues: vec![],
+            fetched_at: Some("2026-11-26T12:05:00Z".into()),
+            skipped: 0,
+            truncated: false,
+        };
+        let invalid_ts_board = ProjectBoard {
+            issues: vec![],
+            fetched_at: Some("not-a-timestamp".into()),
+            skipped: 0,
+            truncated: false,
+        };
+
+        assert!(!super::is_board_cache_stale(&fresh_board, now_unix));
+        assert!(!super::is_board_cache_stale(&future_board, now_unix));
+        assert!(super::is_board_cache_stale(&exact_stale_board, now_unix));
+        assert!(super::is_board_cache_stale(&invalid_ts_board, now_unix));
+        assert!(super::is_board_cache_stale(
+            &ProjectBoard::empty(),
+            now_unix
+        ));
+    }
+
+    #[test]
+    fn resolve_board_sync_outcome_preserves_cached_board_when_sync_fails() {
+        let cached = ProjectBoard {
+            issues: vec![],
+            fetched_at: Some("2026-11-26T11:00:00Z".into()),
+            skipped: 0,
+            truncated: false,
+        };
+        let fresh = ProjectBoard {
+            issues: vec![],
+            fetched_at: Some("2026-11-26T12:00:00Z".into()),
+            skipped: 0,
+            truncated: false,
+        };
+
+        let failed = super::resolve_board_sync_outcome(
+            Some(cached.clone()),
+            Err(AppError::new(ErrorCode::GithubUnavailable, "offline")),
+        );
+        assert_eq!(failed.board, Some(cached.clone()));
+        assert_eq!(
+            failed.failure.as_ref().map(|e| e.message.as_str()),
+            Some("offline")
+        );
+
+        let succeeded = super::resolve_board_sync_outcome(Some(cached), Ok(fresh.clone()));
+        assert_eq!(succeeded.board, Some(fresh));
+        assert!(succeeded.failure.is_none());
     }
 
     #[test]
